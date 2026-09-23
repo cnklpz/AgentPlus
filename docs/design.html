@@ -1,0 +1,865 @@
+<title>AgentPlus 设计方案</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+:root {
+  --bg: #F4F6F9;
+  --surface: #FFFFFF;
+  --sunken: #ECEFF4;
+  --ink: #141B24;
+  --muted: #5A6573;
+  --faint: #8B95A2;
+  --line: #DCE1E8;
+  --accent: #2346C4;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #E5EAFB;
+  --fast: #A86200;
+  --fast-soft: #FFF0D2;
+  --ok: #1E8A5A;
+  --warn: #B54708;
+  --add: #1B7A4A;
+  --add-bg: #E3F4EA;
+  --del: #B42318;
+  --del-bg: #FBE7E5;
+  --term-bg: #10151C;
+  --term-ink: #D5DCE5;
+  --font-sans: "IBM Plex Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "Noto Sans SC", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0E1217;
+    --surface: #161B22;
+    --sunken: #11161C;
+    --ink: #E5E9EF;
+    --muted: #9AA4B1;
+    --faint: #6F7986;
+    --line: #29303A;
+    --accent: #8EA6FF;
+    --accent-ink: #0E1217;
+    --accent-soft: #1C2545;
+    --fast: #F0B24A;
+    --fast-soft: #36270C;
+    --ok: #4CC38A;
+    --warn: #F79009;
+    --add: #6FD39E;
+    --add-bg: #12301F;
+    --del: #FF8A80;
+    --del-bg: #3A1614;
+    --term-bg: #0A0D11;
+    --term-ink: #D5DCE5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0E1217;
+  --surface: #161B22;
+  --sunken: #11161C;
+  --ink: #E5E9EF;
+  --muted: #9AA4B1;
+  --faint: #6F7986;
+  --line: #29303A;
+  --accent: #8EA6FF;
+  --accent-ink: #0E1217;
+  --accent-soft: #1C2545;
+  --fast: #F0B24A;
+  --fast-soft: #36270C;
+  --ok: #4CC38A;
+  --warn: #F79009;
+  --add: #6FD39E;
+  --add-bg: #12301F;
+  --del: #FF8A80;
+  --del-bg: #3A1614;
+  --term-bg: #0A0D11;
+  --term-ink: #D5DCE5;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 15.5px;
+  line-height: 1.75;
+  padding-inline: 20px;
+  padding-block: 0 64px;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, pre, kbd { font-family: var(--font-mono); }
+code { font-size: 0.86em; background: var(--sunken); border: 1px solid var(--line); border-radius: 4px; padding: 0.05em 0.35em; overflow-wrap: anywhere; }
+pre { margin: 0; }
+
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 56px;
+}
+@media (max-width: 960px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .toc { display: none; }
+}
+
+/* TOC */
+.toc {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  align-self: start;
+  padding-top: 72px;
+  font-size: 13.5px;
+}
+.toc .brand { font-weight: 700; letter-spacing: 0.02em; margin-bottom: 14px; display: block; color: var(--ink); text-decoration: none; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: t; }
+.toc li { counter-increment: t; }
+.toc ol a { display: flex; gap: 10px; color: var(--muted); text-decoration: none; padding: 3px 0; }
+.toc ol a::before { content: counter(t, decimal-leading-zero); font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); padding-top: 2px; }
+.toc ol a:hover { color: var(--ink); }
+
+main { min-width: 0; }
+
+/* Header */
+header.doc {
+  padding-block: 72px 40px;
+  border-bottom: 1px solid var(--line);
+}
+.eyebrow { font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+h1 { font-size: clamp(34px, 5vw, 48px); line-height: 1.1; margin: 10px 0 14px; letter-spacing: -0.02em; font-weight: 700; }
+h1 .plus { color: var(--accent); }
+.lede { font-size: 18px; color: var(--muted); max-width: 40em; margin: 0; text-wrap: pretty; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0; margin: 32px 0 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.facts div { padding: 14px 18px; border-right: 1px solid var(--line); }
+.facts div:last-child { border-right: 0; }
+.facts dt { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+.facts dd { margin: 2px 0 0; font-weight: 600; font-size: 14.5px; line-height: 1.5; }
+@media (max-width: 720px) {
+  .facts div { border-right: 0; border-bottom: 1px solid var(--line); }
+  .facts div:last-child { border-bottom: 0; }
+}
+
+/* Sections */
+section { padding-block: 52px 8px; scroll-margin-top: 16px; }
+h2 { font-size: 26px; line-height: 1.3; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; display: flex; align-items: baseline; gap: 14px; }
+h2 .n { font-family: var(--font-mono); font-size: 14px; color: var(--accent); font-weight: 500; }
+.sub { color: var(--muted); margin: 0 0 24px; max-width: 44em; }
+h3 { font-size: 18px; margin: 34px 0 10px; text-wrap: balance; }
+h4 { font-size: 15px; margin: 20px 0 6px; }
+p, li { max-width: 46em; }
+p { margin: 0 0 14px; }
+ul, ol { padding-left: 1.3em; margin: 0 0 14px; }
+li { margin: 4px 0; }
+li::marker { color: var(--faint); }
+strong { font-weight: 600; }
+
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 8px 0 16px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; }
+.panel h4 { margin-top: 0; }
+.panel ul { margin-bottom: 0; }
+.panel.muted { background: transparent; border-style: dashed; }
+
+.note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 6px 6px 0; margin: 16px 0; font-size: 14.5px; max-width: 46em; }
+.note.warn { border-color: var(--fast); background: var(--fast-soft); }
+.note p:last-child { margin: 0; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; margin: 12px 0 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.6; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font-size: 12.5px; color: var(--muted); font-weight: 600; letter-spacing: 0.03em; background: var(--sunken); white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+td.name { font-weight: 600; white-space: nowrap; }
+td code { font-size: 12.5px; }
+.tag { display: inline-block; font-size: 11.5px; font-weight: 600; letter-spacing: 0.03em; padding: 1px 7px; border-radius: 999px; background: var(--sunken); color: var(--muted); border: 1px solid var(--line); white-space: nowrap; }
+.tag.m1 { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+.tag.fast { background: var(--fast-soft); color: var(--fast); border-color: transparent; }
+.tag.q { color: var(--warn); }
+
+/* Code */
+.code { position: relative; margin: 12px 0 18px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); overflow: hidden; }
+.code .cap { font-size: 12px; color: var(--muted); padding: 7px 14px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); display: flex; justify-content: space-between; gap: 12px; }
+.code pre { overflow-x: auto; padding: 14px 16px; font-size: 13px; line-height: 1.65; }
+.c { color: var(--faint); }
+.k { color: var(--accent); }
+.s { color: var(--add); }
+
+/* Architecture */
+.arch { display: grid; gap: 10px; margin: 18px 0 20px; }
+.layer { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.layer .lbl { font-size: 12.5px; color: var(--muted); font-weight: 600; padding-top: 10px; }
+.layer .lbl small { display: block; font-weight: 400; color: var(--faint); font-size: 11.5px; line-height: 1.4; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.chip { font-size: 13px; padding: 5px 10px; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); line-height: 1.4; }
+.chip small { color: var(--muted); font-family: var(--font-mono); font-size: 11px; display: block; }
+.layer.core .chips { border-color: var(--accent); background: var(--accent-soft); }
+.layer.core .chip { background: var(--surface); }
+.arrow { padding-left: 130px; color: var(--faint); font-size: 12px; font-family: var(--font-mono); line-height: 1; }
+@media (max-width: 640px) {
+  .layer { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .layer .lbl { padding-top: 0; }
+  .arrow { padding-left: 12px; }
+}
+
+/* Flow steps */
+.steps { list-style: none; padding: 0; margin: 14px 0 18px; display: grid; gap: 0; counter-reset: s; max-width: none; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; padding: 10px 0; border-bottom: 1px dashed var(--line); margin: 0; max-width: none; }
+.steps li:last-child { border-bottom: 0; }
+.steps li::before { content: counter(s); font-family: var(--font-mono); font-size: 12px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); background: var(--surface); color: var(--accent); font-weight: 500; }
+.steps b { font-weight: 600; }
+
+/* Roadmap */
+.road { display: grid; gap: 0; margin: 16px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.road > div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.road > div:last-child { border-bottom: 0; }
+.road .ms { font-family: var(--font-mono); font-weight: 500; color: var(--accent); font-size: 15px; }
+.road .ms small { display: block; font-family: var(--font-sans); color: var(--muted); font-size: 12px; font-weight: 400; }
+.road h4 { margin: 0 0 4px; }
+.road ul { margin: 0; font-size: 14.5px; }
+
+/* Mockup */
+.mock-wrap { overflow-x: auto; margin: 16px 0 10px; padding-bottom: 4px; }
+.win { min-width: 860px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; font-size: 13px; line-height: 1.5; box-shadow: 0 12px 32px -18px rgba(20, 27, 36, 0.35); }
+.titlebar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--sunken); font-size: 12px; color: var(--muted); }
+.titlebar i { width: 10px; height: 10px; border-radius: 50%; background: var(--line); display: inline-block; }
+.titlebar span { margin-left: 8px; }
+.wbody { display: grid; grid-template-columns: 210px minmax(0, 1fr) 270px; min-height: 440px; }
+.side { border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 14px; background: var(--sunken); }
+.profile { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 6px 10px; font-weight: 600; }
+.profile small { color: var(--muted); font-weight: 400; }
+.side .grp { font-size: 11px; color: var(--faint); letter-spacing: 0.06em; padding: 0 6px; }
+.agent { display: grid; grid-template-columns: 8px minmax(0, 1fr); gap: 8px; align-items: start; padding: 7px 8px; border-radius: 6px; }
+.agent.on { background: var(--surface); border: 1px solid var(--line); }
+.agent .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--ok); }
+.agent .dot.off { background: var(--line); }
+.agent b { font-weight: 600; display: flex; gap: 6px; align-items: center; }
+.agent small { color: var(--muted); font-family: var(--font-mono); font-size: 11px; display: block; }
+.agent.dim { opacity: 0.55; }
+.side .nav { margin-top: auto; display: grid; gap: 2px; color: var(--muted); padding: 0 6px; }
+.fastb { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 0 5px; border-radius: 3px; background: var(--fast-soft); color: var(--fast); }
+.center { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.center .hd { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.center .hd b { font-size: 16px; }
+.center .hd small { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.field > span { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; letter-spacing: 0.03em; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg em { font-style: normal; padding: 4px 12px; border-right: 1px solid var(--line); color: var(--muted); }
+.seg em:last-child { border-right: 0; }
+.seg em.sel { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.models { border: 1px solid var(--line); border-radius: 6px; }
+.models div { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.models div:last-child { border-bottom: 0; }
+.models .r { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--faint); }
+.models .sel .r { border: 4px solid var(--accent); }
+.models small { color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
+.models .lat { color: var(--ok); font-family: var(--font-mono); font-size: 11px; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--fast-soft); }
+.toggle-row small { color: var(--muted); display: block; }
+.sw { width: 34px; height: 20px; border-radius: 999px; background: var(--fast); position: relative; flex: none; }
+.sw::after { content: ""; position: absolute; right: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); }
+.term { background: var(--term-bg); color: var(--term-ink); font-family: var(--font-mono); font-size: 11.5px; border-radius: 6px; padding: 8px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.term .f { color: #F0B24A; }
+.term .d { color: #6F7986; }
+.right { border-left: 1px solid var(--line); padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
+.right b { font-size: 12.5px; }
+.diff { font-family: var(--font-mono); font-size: 11px; line-height: 1.6; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.diff div { padding: 0 8px; white-space: pre; }
+.diff .a { background: var(--add-bg); color: var(--add); }
+.diff .x { background: var(--del-bg); color: var(--del); }
+.diff .h { background: var(--sunken); color: var(--muted); }
+.btns { display: flex; gap: 8px; margin-top: auto; }
+.btn { flex: 1; text-align: center; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); font-weight: 600; }
+.btn.pri { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.caption { font-size: 13px; color: var(--muted); }
+
+.qa { display: grid; gap: 10px; margin: 14px 0; }
+.qa div { border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; background: var(--surface); }
+.qa b { display: block; margin-bottom: 2px; }
+.qa span { color: var(--muted); font-size: 14.5px; }
+
+.sources { font-size: 13.5px; color: var(--muted); }
+.sources li { max-width: none; }
+footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12.5px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+</style>
+
+<div class="page">
+  <nav class="toc" aria-label="目录">
+    <a class="brand" href="#top">AgentPlus</a>
+    <ol>
+      <li><a href="#goals">背景与目标</a></li>
+      <li><a href="#agents">支持的 Agent</a></li>
+      <li><a href="#model">核心概念</a></li>
+      <li><a href="#arch">架构</a></li>
+      <li><a href="#features">功能设计</a></li>
+      <li><a href="#multi">多端方案</a></li>
+      <li><a href="#ui">界面草图</a></li>
+      <li><a href="#safety">可靠性与密钥</a></li>
+      <li><a href="#stack">技术选型</a></li>
+      <li><a href="#repo">仓库结构</a></li>
+      <li><a href="#roadmap">路线图</a></li>
+      <li><a href="#risks">风险与待定</a></li>
+    </ol>
+  </nav>
+
+  <main id="top">
+    <header class="doc">
+      <div class="eyebrow">产品与技术方案 · 草案 v0.1 · 2026-09-23</div>
+      <h1>Agent<span class="plus">Plus</span></h1>
+      <p class="lede">一个地方管理 Claude Code、Codex、Gemini CLI、OpenCode 等编码 Agent 的服务商和模型。一键切换，改动先预览、可回滚；顺带把 Codex Fast、当前服务商这类"看不见的状态"显示出来。</p>
+      <dl class="facts">
+        <div><dt>首批 Agent</dt><dd>Claude Code · Codex CLI</dd></div>
+        <div><dt>后续 Agent</dt><dd>Gemini CLI · OpenCode · Qwen Code</dd></div>
+        <div><dt>形态</dt><dd>桌面 GUI + 托盘 + CLI</dd></div>
+        <div><dt>平台</dt><dd>Windows · macOS · Linux · WSL</dd></div>
+      </dl>
+    </header>
+
+    <!-- 1 -->
+    <section id="goals">
+      <h2><span class="n">01</span>背景与目标</h2>
+      <p class="sub">各家编码 Agent 都能换服务商、换模型，但每家的配置文件、字段名、协议都不一样。</p>
+
+      <div class="two">
+        <div class="panel">
+          <h4>现在的麻烦</h4>
+          <ul>
+            <li>JSON、TOML、环境变量三套写法，字段名各不相同，换一次中转要改好几个文件。</li>
+            <li>手改容易改坏：TOML 注释被覆盖，PowerShell 写出带 BOM 的文件导致解析失败。</li>
+            <li><code>/model</code> 选择器只列官方模型，自己服务商的模型选不到。</li>
+            <li>状态看不见：Codex 默认是否开了 Fast、Claude Code 这会儿走的是哪个服务商。</li>
+            <li>本机、WSL、服务器各一份配置，互相不同步。</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h4>AgentPlus 要做到</h4>
+          <ul>
+            <li>服务商和模型只录一次，按 Profile 一键应用到多个 Agent。</li>
+            <li>只改需要改的字段，其余内容（注释、顺序、换行风格）原样保留。</li>
+            <li>每次写入前给出 diff，写入后自动备份，随时回滚。</li>
+            <li>自定义模型列表能进入各 Agent 的模型选择流程。</li>
+            <li>桌面、命令行、WSL、多台设备用同一套配置。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="two">
+        <div class="panel muted">
+          <h4>不做（首版）</h4>
+          <ul>
+            <li>不做 Agent 本身，不包装、不替换 CLI。</li>
+            <li>不做 API 中转或计费平台。</li>
+            <li>不把密钥托管到任何云端。</li>
+          </ul>
+        </div>
+        <div class="panel muted">
+          <h4>和现有工具的区别</h4>
+          <p style="margin:0">开源的 cc-switch 已经做了 Claude Code / Codex 的服务商切换。AgentPlus 的差异在：更多 Agent 统一抽象、模型目录与选择器注入、状态可视化（Fast / 状态栏）、CLI + WSL + 多设备同步。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2 -->
+    <section id="agents">
+      <h2><span class="n">02</span>支持的 Agent 与配置落点</h2>
+      <p class="sub">每个 Agent 一个适配器。下表是适配器要读写的位置；带 <span class="tag q">待验证</span> 的字段需在开发时按当前版本核对。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Agent</th><th>配置文件</th><th>协议</th><th>模型相关字段</th><th>可增强</th><th>阶段</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">Claude Code</td>
+              <td><code>~/.claude/settings.json</code><br>项目 <code>.claude/settings.json</code></td>
+              <td>Anthropic Messages</td>
+              <td><code>env.ANTHROPIC_BASE_URL</code><br><code>env.ANTHROPIC_MODEL</code><br><code>env.ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL</code><br><code>model</code></td>
+              <td><code>apiKeyHelper</code> · <code>statusLine</code> · <code>availableModels</code></td>
+              <td><span class="tag m1">M1</span></td>
+            </tr>
+            <tr>
+              <td class="name">Codex CLI</td>
+              <td><code>~/.codex/config.toml</code><br><code>~/.codex/auth.json</code></td>
+              <td>OpenAI Responses<br><span class="caption">Chat Completions 已移除</span></td>
+              <td><code>model</code> · <code>model_provider</code><br><code>[model_providers.*]</code><br><code>[profiles.*]</code><br><code>model_reasoning_effort</code></td>
+              <td><code>service_tier</code> · <code>[features].fast_mode</code> · <code>[tui].status_line</code></td>
+              <td><span class="tag m1">M1</span></td>
+            </tr>
+            <tr>
+              <td class="name">Gemini CLI</td>
+              <td><code>~/.gemini/settings.json</code><br><code>~/.gemini/.env</code></td>
+              <td>Gemini API</td>
+              <td>模型字段、<code>GEMINI_API_KEY</code>、自定义 base URL <span class="tag q">待验证</span></td>
+              <td>—</td>
+              <td><span class="tag">M3</span></td>
+            </tr>
+            <tr>
+              <td class="name">OpenCode</td>
+              <td><code>~/.config/opencode/opencode.json</code></td>
+              <td>多协议（AI SDK）</td>
+              <td><code>model = "provider/model"</code><br><code>provider.&lt;id&gt;.models</code></td>
+              <td>原生支持自定义模型列表</td>
+              <td><span class="tag">M3</span></td>
+            </tr>
+            <tr>
+              <td class="name">Qwen Code</td>
+              <td><code>~/.qwen/settings.json</code></td>
+              <td>OpenAI 兼容</td>
+              <td><code>OPENAI_BASE_URL</code> / <code>OPENAI_MODEL</code> <span class="tag q">待验证</span></td>
+              <td>—</td>
+              <td><span class="tag">M3</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="caption">适配器按"检测到的 Agent 版本"选择写法；遇到不认识的字段一律原样保留，不删除。</p>
+    </section>
+
+    <!-- 3 -->
+    <section id="model">
+      <h2><span class="n">03</span>核心概念</h2>
+      <p class="sub">四个概念覆盖全部场景。关键设计：<strong>一个服务商可以有多个协议端点</strong>，适配器自己挑能用的那个。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>概念</th><th>是什么</th><th>例子</th></tr></thead>
+          <tbody>
+            <tr><td class="name">Provider 服务商</td><td>一个账号 + 若干协议端点 + 一把密钥</td><td>官方 Anthropic、官方 OpenAI、某中转站（同时有 Anthropic 和 Responses 端点）</td></tr>
+            <tr><td class="name">Model 模型</td><td>挂在服务商下，带显示名、上下文长度、能力标签</td><td><code>claude-sonnet-5</code>，标签"编码 / 长上下文"</td></tr>
+            <tr><td class="name">Profile 方案</td><td>一组"Agent → 服务商 + 模型 + 选项"的绑定</td><td>"日常"：Claude 走中转 A，Codex 走官方并开 Fast</td></tr>
+            <tr><td class="name">Adapter 适配器</td><td>把绑定翻译成某个 Agent 的具体配置改动</td><td>Codex 适配器把绑定写成 <code>config.toml</code> 的几行</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code">
+        <div class="cap"><span>~/.agentplus/store.json（示例）</span><span>不含明文密钥</span></div>
+<pre>{
+  <span class="k">"providers"</span>: [{
+    <span class="k">"id"</span>: <span class="s">"relay-a"</span>,
+    <span class="k">"name"</span>: <span class="s">"中转 A"</span>,
+    <span class="k">"endpoints"</span>: {
+      <span class="k">"anthropic"</span>:        <span class="s">"https://relay-a.example.com"</span>,
+      <span class="k">"openai_responses"</span>: <span class="s">"https://relay-a.example.com/v1"</span>
+    },
+    <span class="k">"key"</span>: <span class="s">"keyring:agentplus/relay-a"</span>,      <span class="c">// 只存引用，密钥在系统钥匙串</span>
+    <span class="k">"models"</span>: [
+      { <span class="k">"id"</span>: <span class="s">"claude-sonnet-5"</span>, <span class="k">"label"</span>: <span class="s">"Sonnet 5"</span>, <span class="k">"ctx"</span>: 200000, <span class="k">"tags"</span>: [<span class="s">"coding"</span>] },
+      { <span class="k">"id"</span>: <span class="s">"gpt-5-codex"</span>,     <span class="k">"label"</span>: <span class="s">"GPT-5 Codex"</span>, <span class="k">"efforts"</span>: [<span class="s">"low"</span>, <span class="s">"medium"</span>, <span class="s">"high"</span>] }
+    ]
+  }],
+  <span class="k">"profiles"</span>: [{
+    <span class="k">"id"</span>: <span class="s">"daily"</span>,
+    <span class="k">"bindings"</span>: {
+      <span class="k">"claude-code"</span>: { <span class="k">"provider"</span>: <span class="s">"relay-a"</span>, <span class="k">"model"</span>: <span class="s">"claude-sonnet-5"</span>,
+                       <span class="k">"slots"</span>: { <span class="k">"opus"</span>: <span class="s">"claude-opus-5-5"</span>, <span class="k">"haiku"</span>: <span class="s">"claude-haiku-4-5"</span> } },
+      <span class="k">"codex"</span>:       { <span class="k">"provider"</span>: <span class="s">"openai"</span>, <span class="k">"model"</span>: <span class="s">"gpt-5-codex"</span>,
+                       <span class="k">"effort"</span>: <span class="s">"high"</span>, <span class="k">"fast"</span>: true }
+    }
+  }]
+}</pre>
+      </div>
+      <p>应用 Profile 时，如果某个 Agent 需要的协议在该服务商下没有端点（比如 Codex 只认 Responses，而服务商只有 Anthropic 端点），界面直接置灰并说明原因，不让用户写出一份跑不起来的配置。</p>
+    </section>
+
+    <!-- 4 -->
+    <section id="arch">
+      <h2><span class="n">04</span>架构</h2>
+      <p class="sub">一个 Rust 核心库，被桌面端和 CLI 共用；所有文件读写只经过适配器。</p>
+
+      <div class="arch" role="img" aria-label="架构分层：入口层调用核心层，核心层通过适配器读写各 Agent 配置文件">
+        <div class="layer">
+          <div class="lbl">入口<small>同一核心的不同外壳</small></div>
+          <div class="chips">
+            <div class="chip">桌面 GUI<small>Tauri 2</small></div>
+            <div class="chip">系统托盘<small>快速切换</small></div>
+            <div class="chip">CLI<small>ap</small></div>
+            <div class="chip">移动端遥控<small>后期</small></div>
+          </div>
+        </div>
+        <div class="arrow">↓ 调用</div>
+        <div class="layer core">
+          <div class="lbl">核心<small>agentplus-core</small></div>
+          <div class="chips">
+            <div class="chip">服务商仓库</div>
+            <div class="chip">模型目录</div>
+            <div class="chip">Profile 引擎</div>
+            <div class="chip">密钥（系统钥匙串）</div>
+            <div class="chip">连通性检测</div>
+            <div class="chip">备份 / 回滚</div>
+            <div class="chip">冲突检测</div>
+            <div class="chip">同步</div>
+          </div>
+        </div>
+        <div class="arrow">↓ plan / apply</div>
+        <div class="layer">
+          <div class="lbl">适配器<small>每个 Agent 一个</small></div>
+          <div class="chips">
+            <div class="chip">Claude Code</div>
+            <div class="chip">Codex CLI</div>
+            <div class="chip">Gemini CLI</div>
+            <div class="chip">OpenCode</div>
+            <div class="chip">Qwen Code</div>
+          </div>
+        </div>
+        <div class="arrow">↓ 最小改动写入</div>
+        <div class="layer">
+          <div class="lbl">主机<small>本机 / 每个 WSL 发行版</small></div>
+          <div class="chips">
+            <div class="chip"><small>~/.claude/settings.json</small></div>
+            <div class="chip"><small>~/.codex/config.toml</small></div>
+            <div class="chip"><small>~/.gemini/settings.json</small></div>
+            <div class="chip"><small>~/.config/opencode/opencode.json</small></div>
+          </div>
+        </div>
+      </div>
+
+      <h3>适配器接口</h3>
+      <p>"计算改动"和"写入"分开，这样 GUI 能先展示 diff，CLI 能支持 <code>--dry-run</code>。</p>
+      <div class="code">
+        <div class="cap"><span>crates/core/src/adapter.rs</span></div>
+<pre><span class="k">pub trait</span> AgentAdapter {
+    <span class="k">fn</span> id(&amp;self) -&gt; AgentId;
+    <span class="k">fn</span> detect(&amp;self, host: &amp;Host) -&gt; Option&lt;Installation&gt;;        <span class="c">// 安装路径、版本、所在主机（本机 / WSL）</span>
+    <span class="k">fn</span> read(&amp;self, inst: &amp;Installation) -&gt; Result&lt;AgentState&gt;;     <span class="c">// 当前服务商、模型、Fast 等</span>
+    <span class="k">fn</span> plan(&amp;self, inst: &amp;Installation, b: &amp;Binding) -&gt; Result&lt;Patch&gt;; <span class="c">// 只计算，不落盘</span>
+    <span class="k">fn</span> apply(&amp;self, patch: Patch) -&gt; Result&lt;Receipt&gt;;              <span class="c">// 备份 + 原子写 + 回读校验</span>
+    <span class="k">fn</span> capabilities(&amp;self) -&gt; Caps;                                  <span class="c">// 支持的协议、是否有 Fast、状态栏等</span>
+}</pre>
+      </div>
+    </section>
+
+    <!-- 5 -->
+    <section id="features">
+      <h2><span class="n">05</span>功能设计</h2>
+      <p class="sub">五块：切换、模型列表、Codex Fast、状态栏、小工具。</p>
+
+      <h3>5.1 一键切换 Profile</h3>
+      <p>两种应用方式，用户按场景选：</p>
+      <div class="two">
+        <div class="panel">
+          <h4>写入模式（默认）</h4>
+          <p style="margin:0">把配置写进各 Agent 的配置文件，之后直接运行 <code>claude</code> / <code>codex</code> 就生效。适合"这段时间都用这个"。写完提示哪些正在运行的 Agent 需要重启。</p>
+        </div>
+        <div class="panel">
+          <h4>启动器模式</h4>
+          <p style="margin:0"><code>ap run codex -p fast-relay</code> 只给这一个进程注入环境变量和 <code>-c</code> 覆盖参数，不改任何文件。适合两个终端同时用不同服务商。</p>
+        </div>
+      </div>
+
+      <h3>5.2 自定义模型列表</h3>
+      <p>模型目录有三个来源：手动添加、从服务商的 <code>/v1/models</code> 拉取、内置常用预设。目录支持改显示名、排序、隐藏、打标签（快 / 便宜 / 长上下文）。难点在于怎么让它出现在各 Agent 里：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Agent</th><th>注入方式</th><th>限制</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="name">Claude Code</td>
+              <td>把 Opus / Sonnet / Haiku 三个槽位映射到 <code>ANTHROPIC_DEFAULT_*_MODEL</code>，在 <code>/model</code> 里选别名即落到自定义模型；需要整份列表时写 <code>availableModels</code>。额外单个模型可用 <code>ANTHROPIC_CUSTOM_MODEL_OPTION</code> <span class="tag q">待验证</span>。</td>
+              <td><code>availableModels</code> 是<strong>替换</strong>而非追加，写之前要把用户想保留的官方模型一并列进去。</td>
+            </tr>
+            <tr>
+              <td class="name">Codex CLI</td>
+              <td>每个模型生成一个 <code>[profiles.&lt;名字&gt;]</code>，<code>codex -p &lt;名字&gt;</code> 切换；AgentPlus 的托盘和 <code>ap</code> 提供快速选择。</td>
+              <td>Codex 的 <code>/model</code> 选择器目前不显示自定义服务商的模型（openai/codex#22160）。</td>
+            </tr>
+            <tr>
+              <td class="name">OpenCode</td>
+              <td>直接写 <code>provider.&lt;id&gt;.models</code>。</td>
+              <td>原生支持，无额外限制。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>5.3 Codex Fast 显示与开关</h3>
+      <p>Fast 用更高的额度消耗换更快的响应。AgentPlus 负责三件事：读出默认状态、一键开关、让 Codex 自己的状态栏也显示出来。</p>
+      <div class="code">
+        <div class="cap"><span>~/.codex/config.toml — AgentPlus 只改这几处</span></div>
+<pre><span class="k">service_tier</span> = <span class="s">"fast"</span>          <span class="c"># 默认开启 Fast</span>
+
+<span class="k">[features]</span>
+<span class="k">fast_mode</span> = true
+
+<span class="k">[tui]</span>
+<span class="c"># 在用户已有条目后追加 "fast-mode"，不打乱原有顺序</span>
+<span class="k">status_line</span> = [<span class="s">"model-with-reasoning"</span>, <span class="s">"context-remaining"</span>, <span class="s">"git-branch"</span>, <span class="s">"fast-mode"</span>]</pre>
+      </div>
+      <ul>
+        <li><strong>界面徽标：</strong>侧栏 Codex 条目旁显示 <span class="tag fast">FAST</span>，悬停说明"默认开启，来自 config.toml"。</li>
+        <li><strong>开关前检查：</strong>当前服务商不是 OpenAI 官方时置灰——第三方端点可能拒绝 <code>service_tier</code>，写进去反而报错。</li>
+        <li><strong>成本提示：</strong>开启时提示额度消耗高于 Standard，具体倍率链接到 OpenAI 的 Speed 说明页。</li>
+      </ul>
+      <div class="note warn">
+        <p>会话里用 <code>/fast</code> 临时切换是运行时状态，不写盘，AgentPlus 看不到。所以界面上统一写"默认值"，实时状态交给 Codex 状态栏里的 <code>fast-mode</code> 项显示。</p>
+      </div>
+
+      <h3>5.4 状态栏注入</h3>
+      <ul>
+        <li><strong>Claude Code：</strong>设置 <code>statusLine</code> 为 <code>ap statusline claude</code>，输出"服务商 · 模型 · 延迟"，一眼看出当前走哪条线路。</li>
+        <li><strong>Codex：</strong>状态栏只支持内置项，不能跑自定义命令（openai/codex#20244 仍在讨论）。AgentPlus 提供勾选列表，编辑 <code>[tui].status_line</code>。</li>
+      </ul>
+
+      <h3>5.5 小工具</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>功能</th><th>说明</th><th>阶段</th></tr></thead>
+          <tbody>
+            <tr><td class="name">导入现有配置</td><td>首次启动读取已有 Claude / Codex 配置，自动生成服务商和"当前"Profile，零迁移成本</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">冲突检测</td><td>系统环境变量 <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code>、<code>settings.local.json</code>、项目级配置会覆盖用户级设置，界面明确指出"实际生效的是哪一个"</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">编码守卫</td><td>写入统一 UTF-8 无 BOM，保留原文件的 CRLF / LF；TOML 用保留格式的编辑器，注释不丢</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">历史与回滚</td><td>每次应用生成一条记录，可按时间点一键恢复全部文件</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">连通性测试</td><td>对每个服务商 × 模型发最小请求，显示延迟和可用性</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">推理强度切换</td><td>Codex <code>model_reasoning_effort</code> 在托盘里一键切 low / medium / high</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">托盘 + 全局快捷键</td><td>不开主窗口就能换 Profile</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">余额 / 用量</td><td>对提供查询接口的服务商显示剩余额度</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">分享配置</td><td>导出 Profile 时自动去掉密钥，生成可发给同事的文件</td><td><span class="tag">M3</span></td></tr>
+            <tr><td class="name">MCP 同步</td><td>一份 MCP 服务器列表写到多个 Agent</td><td><span class="tag">M3</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 6 -->
+    <section id="multi">
+      <h2><span class="n">06</span>多端方案</h2>
+      <p class="sub">"多端"分四层：多个桌面系统、无界面环境、Windows 里的 WSL、多台设备之间。</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>端</th><th>做法</th><th>交付物</th></tr></thead>
+          <tbody>
+            <tr><td class="name">桌面</td><td>Tauri 2 一套代码打三个平台</td><td>Windows MSI / NSIS，macOS dmg（Universal），Linux AppImage / deb</td></tr>
+            <tr><td class="name">命令行</td><td>同一个核心库编译出 <code>ap</code>，用于 SSH 服务器、容器、CI</td><td>单文件二进制，<code>cargo install</code> / npm 包装 / 各平台包管理器</td></tr>
+            <tr><td class="name">WSL</td><td>Windows 端枚举 WSL 发行版，把每个发行版当作独立"主机"，通过 <code>\\wsl.localhost\&lt;发行版&gt;\home\&lt;用户&gt;</code> 读写；也可在 WSL 里直接用 Linux 版 <code>ap</code></td><td>桌面端"主机"切换器</td></tr>
+            <tr><td class="name">多设备同步</td><td>服务商、模型目录、Profile 加密后同步到 WebDAV、私有 Git 仓库或网盘文件夹；密钥默认不同步，可选用口令端到端加密后同步</td><td>设置页"同步"</td></tr>
+            <tr><td class="name">手机（后期）</td><td>不在手机上跑 Agent，只做遥控器：看各设备当前配置、通过同步通道下发 Profile 切换。Tauri 2 支持 iOS / Android，复用前端</td><td>M4 评估</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="code">
+        <div class="cap"><span>CLI 用法草案</span></div>
+<pre>ap ls                               <span class="c"># 列出检测到的 Agent 及当前服务商 / 模型 / Fast</span>
+ap use daily                        <span class="c"># 应用 Profile 到所有已绑定的 Agent</span>
+ap use daily --agent codex --dry-run  <span class="c"># 只看 diff</span>
+ap model codex gpt-5-codex --effort high
+ap fast codex on                    <span class="c"># 写 service_tier + features + status_line</span>
+ap run claude -p relay-b            <span class="c"># 启动器模式，不改文件</span>
+ap rollback                         <span class="c"># 回到上一次应用前</span>
+ap --host wsl:Ubuntu ls             <span class="c"># 操作 WSL 里的配置</span></pre>
+      </div>
+    </section>
+
+    <!-- 7 -->
+    <section id="ui">
+      <h2><span class="n">07</span>界面草图</h2>
+      <p class="sub">三栏：左侧 Agent 列表和状态，中间编辑当前 Agent，右侧实时 diff。窄屏可横向滚动查看。</p>
+
+      <div class="mock-wrap">
+        <div class="win" aria-label="主窗口草图">
+          <div class="titlebar"><i></i><i></i><i></i><span>AgentPlus</span></div>
+          <div class="wbody">
+            <aside class="side">
+              <div class="profile">日常 <small>Profile ▾</small></div>
+              <div class="grp">AGENT · 本机</div>
+              <div style="display:grid;gap:4px">
+                <div class="agent"><span class="dot"></span><div><b>Claude Code</b><small>relay-a · sonnet-5</small></div></div>
+                <div class="agent on"><span class="dot"></span><div><b>Codex CLI <span class="fastb">FAST</span></b><small>openai · gpt-5-codex</small></div></div>
+                <div class="agent"><span class="dot"></span><div><b>OpenCode</b><small>relay-a · 3 个模型</small></div></div>
+                <div class="agent dim"><span class="dot off"></span><div><b>Gemini CLI</b><small>未安装</small></div></div>
+              </div>
+              <div class="grp">主机</div>
+              <div style="padding:0 6px;color:var(--muted)">本机 · WSL: Ubuntu</div>
+              <div class="nav"><span>服务商</span><span>模型目录</span><span>历史</span><span>同步</span></div>
+            </aside>
+
+            <div class="center">
+              <div class="hd"><b>Codex CLI</b><small>v0.146 · ~/.codex/config.toml</small></div>
+              <div class="field"><span>服务商</span>
+                <div class="seg"><em class="sel">OpenAI 官方</em><em>中转 A</em><em>本地 Ollama</em></div>
+              </div>
+              <div class="field"><span>模型</span>
+                <div class="models">
+                  <div class="sel"><span class="r"></span><div>GPT-5 Codex <small>gpt-5-codex</small></div><span class="lat">312 ms</span></div>
+                  <div><span class="r"></span><div>GPT-5 <small>gpt-5</small></div><span class="lat">295 ms</span></div>
+                  <div><span class="r"></span><div>GPT-5 mini <small>gpt-5-mini · 便宜</small></div><span class="lat">188 ms</span></div>
+                </div>
+              </div>
+              <div class="field"><span>推理强度</span>
+                <div class="seg"><em>low</em><em>medium</em><em class="sel">high</em></div>
+              </div>
+              <div class="toggle-row">
+                <div><b>Fast 模式（默认值）</b><small>响应更快，额度消耗高于 Standard</small></div>
+                <span class="sw" aria-hidden="true"></span>
+              </div>
+              <div class="field"><span>Codex 状态栏预览</span>
+                <div class="term">gpt-5-codex high <span class="d">·</span> 72% left <span class="d">·</span> main <span class="d">·</span> <span class="f">fast</span></div>
+              </div>
+            </div>
+
+            <aside class="right">
+              <b>待写入 · config.toml</b>
+              <div class="diff">
+                <div class="h">@@ 顶层 @@</div>
+                <div class="x">-model_reasoning_effort = "medium"</div>
+                <div class="a">+model_reasoning_effort = "high"</div>
+                <div class="a">+service_tier = "fast"</div>
+                <div class="h">@@ [features] @@</div>
+                <div class="a">+fast_mode = true</div>
+                <div class="h">@@ [tui] @@</div>
+                <div class="x">-status_line = ["model-with-reasoning", …]</div>
+                <div class="a">+status_line = [ …, "fast-mode"]</div>
+              </div>
+              <div class="caption">注释和其余字段保持不变 · 写入前自动备份</div>
+              <div class="btns"><span class="btn">放弃</span><span class="btn pri">应用</span></div>
+            </aside>
+          </div>
+        </div>
+      </div>
+      <p class="caption">草图中的模型名和延迟是示意数据。</p>
+    </section>
+
+    <!-- 8 -->
+    <section id="safety">
+      <h2><span class="n">08</span>可靠性与密钥</h2>
+      <p class="sub">配置工具最怕的是把用户能用的环境改坏。每次写入都走同一条管线。</p>
+
+      <h3>写入管线</h3>
+      <ol class="steps">
+        <li><div><b>读取并解析</b>：保留格式地解析（TOML 用 <code>toml_edit</code>，JSON 保持键顺序），记下原编码、BOM、换行风格。</div></li>
+        <li><div><b>计算改动</b>：适配器只生成需要变化的字段，得到 Patch。</div></li>
+        <li><div><b>展示 diff</b>：GUI 右栏 / CLI <code>--dry-run</code>；检测到外部改动（文件监听）时重新计算。</div></li>
+        <li><div><b>备份</b>：原文件复制到 <code>~/.agentplus/backups/&lt;时间&gt;/</code>，保留最近 50 份。</div></li>
+        <li><div><b>原子写入</b>：先写同目录临时文件，再重命名替换，避免写到一半断电留下半个文件。</div></li>
+        <li><div><b>回读校验</b>：重新解析写好的文件，失败则自动从备份恢复并报告原因。</div></li>
+        <li><div><b>提示重启</b>：列出正在运行、需要重启才能生效的 Agent 进程。</div></li>
+      </ol>
+
+      <h3>密钥</h3>
+      <ul>
+        <li>存放在系统钥匙串：Windows 凭据管理器、macOS Keychain、Linux Secret Service。AgentPlus 自己的文件里只有引用。</li>
+        <li><strong>Claude Code：</strong>写 <code>apiKeyHelper</code> 指向 <code>ap key get relay-a</code>，由 Claude Code 运行时取密钥，<code>settings.json</code> 里不出现明文。</li>
+        <li><strong>Codex：</strong>服务商配置用 <code>env_key</code> 引用环境变量，由启动器模式注入；如果用户坚持写入 <code>auth.json</code>，界面明确提示这是明文。</li>
+        <li>日志、导出、同步内容一律脱敏，只显示密钥末 4 位。</li>
+      </ul>
+    </section>
+
+    <!-- 9 -->
+    <section id="stack">
+      <h2><span class="n">09</span>技术选型</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>部分</th><th>选择</th><th>理由 / 备选</th></tr></thead>
+          <tbody>
+            <tr><td class="name">桌面壳</td><td>Tauri 2</td><td>安装包小（约 10 MB 级，Electron 通常上百 MB）；Rust 核心可直接复用到 CLI；2.x 支持移动端，留出后路</td></tr>
+            <tr><td class="name">前端</td><td>React + TypeScript + Vite</td><td>生态最全；UI 组件用 shadcn/ui 类的无样式库，自己控制外观</td></tr>
+            <tr><td class="name">核心库</td><td>Rust workspace</td><td>桌面、CLI 共用；跨平台路径和钥匙串处理成熟</td></tr>
+            <tr><td class="name">TOML 编辑</td><td><code>toml_edit</code></td><td>保留注释、空行、键顺序，这是 Codex 适配器的关键</td></tr>
+            <tr><td class="name">JSON 编辑</td><td><code>serde_json</code>（preserve_order）</td><td>保持键顺序，diff 干净</td></tr>
+            <tr><td class="name">密钥</td><td><code>keyring</code></td><td>统一三平台钥匙串</td></tr>
+            <tr><td class="name">HTTP</td><td><code>reqwest</code></td><td>连通性测试、拉取模型列表</td></tr>
+            <tr><td class="name">文件监听</td><td><code>notify</code></td><td>用户在外部改了配置时刷新界面</td></tr>
+            <tr><td class="name">CLI</td><td><code>clap</code></td><td>子命令、补全脚本生成</td></tr>
+            <tr><td class="name">测试</td><td>快照测试 + 真实配置样本</td><td>每个适配器、每个支持的 Agent 版本各一组 fixture，输入 → 期望输出</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 10 -->
+    <section id="repo">
+      <h2><span class="n">10</span>仓库结构</h2>
+      <div class="code">
+        <div class="cap"><span>D:\xm\AgentPlus</span></div>
+<pre>AgentPlus/
+├─ crates/
+│  ├─ core/                 <span class="c"># 数据模型、Profile 引擎、写入管线、钥匙串、同步</span>
+│  ├─ adapters/
+│  │  ├─ claude_code/
+│  │  ├─ codex/
+│  │  ├─ gemini_cli/
+│  │  └─ opencode/
+│  └─ cli/                  <span class="c"># ap 命令</span>
+├─ app/
+│  ├─ src-tauri/            <span class="c"># Tauri 命令层，调用 core</span>
+│  └─ src/                  <span class="c"># React 界面</span>
+├─ fixtures/                <span class="c"># 各 Agent 各版本的真实配置样本</span>
+│  ├─ codex/0.146/
+│  └─ claude_code/2.x/
+├─ docs/
+│  └─ design.html           <span class="c"># 本文档</span>
+└─ Cargo.toml               <span class="c"># workspace</span></pre>
+      </div>
+    </section>
+
+    <!-- 11 -->
+    <section id="roadmap">
+      <h2><span class="n">11</span>路线图</h2>
+      <p class="sub">周期为一人全职的粗略估算，用于排序，不是承诺。</p>
+      <div class="road">
+        <div>
+          <div class="ms">M0<small>约 1 周</small></div>
+          <div><h4>骨架</h4><ul><li>Rust workspace + Tauri 2 + CLI 空壳</li><li>数据模型、钥匙串、写入管线（备份 / 原子写 / 回读校验）</li></ul></div>
+        </div>
+        <div>
+          <div class="ms">M1<small>约 2–3 周</small></div>
+          <div><h4>可用的 MVP</h4><ul><li>Claude Code、Codex 两个适配器</li><li>服务商 / Profile 管理，diff 预览，历史与回滚</li><li>导入现有配置、冲突检测、编码守卫</li></ul></div>
+        </div>
+        <div>
+          <div class="ms">M2<small>约 2 周</small></div>
+          <div><h4>模型与状态</h4><ul><li>自定义模型列表（拉取 <code>/v1/models</code>、槽位映射、Codex profiles）</li><li>Codex Fast 开关与状态栏、Claude Code 状态栏</li><li>托盘、启动器模式、连通性测试</li></ul></div>
+        </div>
+        <div>
+          <div class="ms">M3<small>约 3 周</small></div>
+          <div><h4>更多 Agent 与多端</h4><ul><li>Gemini CLI、OpenCode、Qwen Code 适配器</li><li>WSL 主机、多设备同步、MCP 同步、分享配置</li></ul></div>
+        </div>
+        <div>
+          <div class="ms">M4<small>待评估</small></div>
+          <div><h4>延伸</h4><ul><li>手机遥控端</li><li>可选的本地协议转换代理（让只支持 Responses 的 Codex 用上 Anthropic 端点的模型）</li></ul></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 -->
+    <section id="risks">
+      <h2><span class="n">12</span>风险与待定</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>风险</th><th>应对</th></tr></thead>
+          <tbody>
+            <tr><td class="name">Agent 配置格式变化快</td><td>适配器声明支持的版本范围；fixture 快照测试；不认识的字段原样保留；检测到未知版本时降级为只读并提示</td></tr>
+            <tr><td class="name">Codex 选择器不显示自定义模型</td><td>用 <code>[profiles.*]</code> + 托盘 / CLI 绕开；跟进 openai/codex#22160，官方支持后切换</td></tr>
+            <tr><td class="name">Fast 的会话态不可见</td><td>界面只称"默认值"，实时状态交给 Codex 状态栏</td></tr>
+            <tr><td class="name">第三方端点不认 <code>service_tier</code></td><td>非官方服务商时禁用 Fast 开关，并说明原因</td></tr>
+            <tr><td class="name">Agent 运行中改配置</td><td>检测进程，写后提示重启；启动器模式不受影响</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>需要你拍板</h3>
+      <div class="qa">
+        <div><b>首批只做 Claude Code + Codex，还是一开始就带上 OpenCode？</b><span>OpenCode 自带多服务商，适配成本低，但用户群和前两者重叠较少。</span></div>
+        <div><b>"多端"的重点是哪一层？</b><span>本方案按"三大桌面系统 + CLI + WSL + 多设备同步"设计，手机放在 M4。如果你更想要手机端或网页端，路线图要调整。</span></div>
+        <div><b>要不要做协议转换代理？</b><span>做了之后任何服务商都能给任何 Agent 用，但工具就从"配置管理"变成"网络服务"，复杂度和维护成本明显上升。</span></div>
+        <div><b>是否需要团队共享？</b><span>比如团队统一下发服务商和模型目录。需要的话同步层要从"个人加密"改成"带权限的共享"。</span></div>
+      </div>
+
+      <h3>参考资料</h3>
+      <ul class="sources">
+        <li><a href="https://developers.openai.com/codex/speed">OpenAI · Codex Speed（Fast 模式说明）</a></li>
+        <li><a href="https://github.com/openai/codex/issues/13660">openai/codex#13660 · 状态栏显示 Fast</a> · <a href="https://github.com/openai/codex/issues/22160">#22160 · 选择器暴露自定义模型</a> · <a href="https://github.com/openai/codex/issues/20244">#20244 · 自定义命令状态栏</a> · <a href="https://github.com/openai/codex/issues/27297">#27297 · service_tier 被拒</a></li>
+        <li><a href="https://codex.danielvaughan.com/2026/05/05/codex-cli-tui-customisation-keymaps-themes-status-lines/">Codex CLI TUI 定制：状态栏条目</a> · <a href="https://codex.danielvaughan.com/2026/04/23/codex-cli-custom-model-providers-configuration-guide/">Codex 自定义服务商配置</a></li>
+        <li><a href="https://code.claude.com/docs/en/model-config">Claude Code 文档 · Model configuration</a></li>
+        <li><a href="https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html">Gemini CLI Configuration</a> · <a href="https://opencode.ai/docs/models/">OpenCode Models</a></li>
+      </ul>
+    </section>
+
+    <footer>AgentPlus 设计方案 · 草案 v0.1 · 字段名以各 Agent 当时版本为准</footer>
+  </main>
+</div>

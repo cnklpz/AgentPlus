@@ -1,0 +1,35 @@
+[package]
+name = "agentplus"
+version = "0.1.0"
+description = "Manage providers and model lists for coding agents"
+edition = "2021"
+
+[lib]
+name = "agentplus_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+toml_edit = "0.22"
+regex = "1"
+chrono = "0.4"
+dirs = "5"
+anyhow = "1"
+base64 = "0.22"
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+tungstenite = "0.24"
+sysinfo = "0.32"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
