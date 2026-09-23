@@ -1,5 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { Provider } from "../api";
+import type { ViewProvider } from "../draft";
 
 export type Latency = number | "pending" | string | undefined;
 
@@ -52,7 +53,7 @@ export function Bars({ level }: { level: number }) {
 }
 
 interface Props {
-  p: Provider;
+  p: ViewProvider;
   mode: "single" | "multi";
   isCurrent: boolean;
   selected: boolean;
@@ -63,12 +64,16 @@ interface Props {
   onSelect: () => void;
   onAction: () => void;
   onModels: () => void;
+  /** Re-measure latency (click on the latency). */
+  onTest: () => void;
 }
 
-export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, latency, readonly, onSelect, onAction, onModels }: Props) {
+export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, latency, readonly, onSelect, onAction, onModels, onTest }: Props) {
   const off = mode === "multi" && !enabled;
   let tag: { text: string; cls: string } | null = null;
-  if (!p.compatible) tag = { text: "不兼容", cls: "tag-muted" };
+  if (p.isDeleted) tag = { text: "将删除", cls: "tag-del" };
+  else if (p.isNew) tag = { text: "新 · 未应用", cls: "tag-new" };
+  else if (!p.compatible) tag = { text: "不兼容", cls: "tag-muted" };
   else if (off) tag = { text: "已停用", cls: "tag-muted" };
   else if (isCurrent) tag = { text: "当前", cls: "tag-accent" };
   else if (p.builtin) tag = { text: "内置", cls: "tag-soft" };
@@ -78,9 +83,10 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
   const stop = (fn: () => void) => (e: MouseEvent) => { e.stopPropagation(); fn(); };
   const onKey = (e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } };
 
+  const pending = p.isNew || p.isDeleted;
   return (
     <div
-      className={`pcard${isCurrent ? " current" : ""}${selected ? " selected" : ""}${off || !p.compatible ? " dim" : ""}`}
+      className={`pcard${isCurrent ? " current" : ""}${selected ? " selected" : ""}${off || !p.compatible || p.isDeleted ? " dim" : ""}${p.isNew ? " fresh" : ""}`}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
@@ -100,14 +106,27 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
       </div>
       <div className="pcard-meta">
         {p.apis.map((a) => <span key={a} className="api-chip">{a}</span>)}
-        {total > 0 && p.compatible && (
+        {p.isEdited && !p.isDeleted && <span className="api-chip edited">已修改</span>}
+        {total > 0 && p.compatible && !pending && (
           <button className="link" onClick={stop(onModels)}>{visible}/{total} 个模型可见</button>
         )}
+        {p.isNew && <span className="tiny muted">{total} 个模型</span>}
       </div>
       <div className="pcard-foot">
-        <Bars level={lat.level} />
-        <span className={`lat${lat.live ? (lat.level >= 2 ? " good" : " slow") : ""}`}>{lat.text}</span>
-        {p.compatible && !(mode === "multi" && p.builtin) && (
+        {p.baseUrl && p.compatible && !off && !pending ? (
+          <button className="lat-btn" title="点一下重新测速" onClick={stop(onTest)} disabled={latency === "pending"}>
+            <Bars level={lat.level} />
+            <span className={`lat${lat.live ? (lat.level >= 2 ? " good" : " slow") : ""}`}>{lat.text}</span>
+            <span className="lat-re" aria-hidden="true">↻</span>
+          </button>
+        ) : (
+          <>
+            <Bars level={0} />
+            <span className="lat">{pending ? (p.isNew ? "应用后生效" : "应用后删除") : lat.text}</span>
+          </>
+        )}
+        <span className="grow" />
+        {p.compatible && !pending && !(mode === "multi" && p.builtin) && (
           mode === "single" ? (
             <button className={`pbtn${isCurrent ? " on" : ""}`} aria-pressed={isCurrent} disabled={readonly || isCurrent} onClick={stop(onAction)}>
               {isCurrent ? "正在使用" : "设为当前"}

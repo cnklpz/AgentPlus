@@ -93,7 +93,34 @@ fn processes_in(dir: &Path) -> Vec<sysinfo::Pid> {
         .collect()
 }
 
+/// True if any running process matches `pred(name, exe_path)`.
+pub fn any_process(pred: impl Fn(&str, &str) -> bool) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, true);
+    sys.processes().values().any(|p| {
+        let name = p.name().to_string_lossy();
+        let path = p.exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
+        pred(&name, &path)
+    })
+}
+
+/// Inside WSL only the Codex CLI exists; the desktop apps are Windows-only.
+fn detect_wsl(agent: &str) -> Install {
+    let mut inst = Install::default();
+    if agent != "codex" {
+        return inst;
+    }
+    let out = crate::env::wsl_sh("codex --version 2>/dev/null; pgrep -x codex >/dev/null && echo @running; true").unwrap_or_default();
+    inst.version = out.lines().find(|l| !l.starts_with('@')).map(|l| l.trim_start_matches("codex-cli").trim().to_string()).filter(|v| !v.is_empty());
+    inst.installed = inst.version.is_some() || crate::util::home().join(".codex").exists();
+    inst.running = out.lines().any(|l| l == "@running");
+    inst
+}
+
 pub fn detect(agent: &str) -> Install {
+    if crate::env::is_wsl() {
+        return detect_wsl(agent);
+    }
     let mut inst = Install::default();
     match agent {
         "codex" => {
@@ -167,6 +194,9 @@ fn activate(_: &str, _: &str) -> Result<u32> {
 
 /// Restarts the agent. `args` are passed to the new process (e.g. a debug port).
 pub fn restart(agent: &str, args: &str) -> Result<()> {
+    if crate::env::is_wsl() {
+        return Err(anyhow!("WSL 里的 Codex 是命令行工具，不用重启：新开的 codex 会话会读取新配置"));
+    }
     let inst = detect(agent);
     if !inst.installed {
         return Err(anyhow!("没有检测到安装"));
@@ -189,5 +219,11 @@ pub fn restart(agent: &str, args: &str) -> Result<()> {
 
 pub fn open_dir(dir: &str) -> Result<()> {
     Command::new("explorer.exe").arg(dir).spawn()?;
+    Ok(())
+}
+
+/// Opens Explorer with the file selected.
+pub fn reveal(path: &str) -> Result<()> {
+    Command::new("explorer.exe").arg(format!("/select,{path}")).spawn()?;
     Ok(())
 }

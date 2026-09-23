@@ -4,12 +4,14 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Home of the target environment (Windows user, or a WSL distro over \wsl.localhost).
 pub fn home() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+    crate::env::home()
 }
 
+/// AgentPlus data always stays on the Windows side.
 pub fn agentplus_dir() -> PathBuf {
-    home().join(".agentplus")
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".agentplus")
 }
 
 pub fn expand_tilde(p: &str) -> PathBuf {
@@ -77,17 +79,34 @@ pub fn write_text_atomic(path: &Path, text: &str, meta: TextMeta) -> Result<()> 
     Ok(())
 }
 
-/// Copies each file into `~/.agentplus/backups/<time>/<agent>/` before a write.
+/// Copies each file into `~/.agentplus/backups/<time>/<agent>/` before a write,
+/// with a `manifest.json` recording where each file came from (for rollback).
 pub fn backup(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
+    backup_tagged(agent, files, "应用配置")
+}
+
+pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    let dir = agentplus_dir().join("backups").join(stamp).join(agent);
+    let mut dir = agentplus_dir().join("backups").join(&stamp).join(agent);
+    // Two backups in the same second: add a suffix instead of overwriting.
+    let mut n = 2;
+    while dir.join("manifest.json").exists() {
+        dir = agentplus_dir().join("backups").join(format!("{stamp}-{n}")).join(agent);
+        n += 1;
+    }
     fs::create_dir_all(&dir)?;
+    let mut entries = vec![];
     for f in files {
         if f.exists() {
             let name = f.file_name().map(|n| n.to_owned()).unwrap_or_default();
-            fs::copy(f, dir.join(name)).with_context(|| format!("备份 {} 失败", f.display()))?;
+            fs::copy(f, dir.join(&name)).with_context(|| format!("备份 {} 失败", f.display()))?;
+            entries.push(serde_json::json!({ "name": name.to_string_lossy(), "path": f.to_string_lossy() }));
         }
     }
+    fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_string_pretty(&serde_json::json!({ "agent": agent, "reason": reason, "time": chrono::Local::now().to_rfc3339(), "files": entries }))?,
+    )?;
     Ok(dir)
 }
 

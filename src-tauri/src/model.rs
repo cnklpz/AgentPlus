@@ -24,6 +24,12 @@ pub struct AgentState {
     pub current: Vec<Kv>,
     pub notes: Vec<String>,
     pub readonly: bool,
+    /// Codex only: not on the fixed id yet, but could be (a custom provider is active).
+    #[serde(default)]
+    pub fixed_pending: bool,
+    /// Codex only: prefill "turn on fixed id" as a pending change (user hasn't declined).
+    #[serde(default)]
+    pub fixed_prompt: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -41,9 +47,14 @@ pub struct Provider {
     pub models: Vec<Model>,
     /// Extra facts for the detail panel. Never contains secret values.
     pub details: Vec<Kv>,
+    /// Editable through AgentPlus (false for built-in providers).
+    pub editable: bool,
+    /// "responses" | "chat" | "anthropic" (for the edit form).
+    pub api: String,
+    pub has_key: bool,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Model {
     pub id: String,
@@ -51,6 +62,12 @@ pub struct Model {
     pub readonly: bool,
     pub tags: Vec<String>,
     pub ctx: Option<String>,
+    /// Display name, when the agent stores one.
+    pub name: Option<String>,
+    /// Raw context window in tokens, for editing.
+    pub context: Option<u64>,
+    /// Can be removed from the list (custom / user-added models).
+    pub deletable: bool,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -64,6 +81,8 @@ pub struct Setting {
     pub kind: String,
     pub value: Value,
     pub options: Vec<String>,
+    /// One short explanation per option (same order), may be empty.
+    pub hints: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -89,6 +108,65 @@ pub enum Op {
     SetProviderEnabled { provider: String, enabled: bool },
     SetModelVisible { provider: String, model: String, visible: bool },
     SetSetting { key: String, value: Value },
+    /// Create (id = None) or edit a provider.
+    UpsertProvider { provider: ProviderInput },
+    DeleteProvider { provider: String },
+    /// Add a model to a provider's list, or edit its name / context window.
+    UpsertModel { provider: String, model: ModelInput },
+    DeleteModel { provider: String, model: String },
+    /// Copy a provider (address, key, visible models) from another agent, or from the
+    /// shared library (from_agent = "library"). Resolved in the backend so the key never
+    /// reaches the UI. `api` / `name` override what the source says.
+    #[serde(rename_all = "camelCase")]
+    ImportProvider {
+        from_agent: String,
+        provider: String,
+        #[serde(default)]
+        api: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderInput {
+    /// Existing provider id when editing; None creates a new one.
+    pub id: Option<String>,
+    pub name: String,
+    pub base_url: String,
+    /// "responses" | "chat" | "anthropic"
+    pub api: String,
+    /// None = keep the current key. Never echoed back or put in diffs.
+    pub api_key: Option<String>,
+    /// Initial model ids for a new provider.
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelInput {
+    pub id: String,
+    pub name: Option<String>,
+    pub context: Option<u64>,
+}
+
+/// Masks a secret for display: "••••abcd".
+pub fn mask_key(k: &str) -> String {
+    let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("••••{tail}")
+}
+
+/// Turns a display name into a config-safe id ("My Relay" -> "my-relay").
+pub fn slug(name: &str) -> String {
+    let s: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let s = s.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-");
+    if s.is_empty() { "provider".into() } else { s }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -136,6 +214,7 @@ pub fn bool_setting(key: &str, group: &str, label: &str, desc: &str, value: bool
         kind: "bool".into(),
         value: Value::Bool(value),
         options: vec![],
+        hints: vec![],
     }
 }
 
@@ -148,5 +227,13 @@ pub fn chips_setting(key: &str, group: &str, label: &str, desc: &str, value: Vec
         kind: "chips".into(),
         value: Value::from(value),
         options: options.iter().map(|s| s.to_string()).collect(),
+        hints: vec![],
+    }
+}
+
+impl Setting {
+    pub fn with_hints(mut self, hints: &[&str]) -> Self {
+        self.hints = hints.iter().map(|s| s.to_string()).collect();
+        self
     }
 }

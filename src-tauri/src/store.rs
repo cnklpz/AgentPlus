@@ -20,8 +20,17 @@ pub fn save(v: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Returns `store[agent][key]`, creating nested objects as needed.
-pub fn section<'a>(root: &'a mut Value, agent: &str, key: &str) -> &'a mut Map<String, Value> {
+/// Per-agent entries are kept apart per environment: "codex" on Windows, "codex@wsl:Ubuntu" in WSL.
+fn scoped(agent: &str) -> String {
+    if crate::env::is_wsl() && crate::adapters::ALL.contains(&agent) {
+        format!("{agent}@{}", crate::env::id())
+    } else {
+        agent.to_string()
+    }
+}
+
+fn agent_obj<'a>(root: &'a mut Value, agent: &str) -> &'a mut Map<String, Value> {
+    let agent = &scoped(agent);
     if !root.is_object() {
         *root = json!({});
     }
@@ -33,27 +42,39 @@ pub fn section<'a>(root: &'a mut Value, agent: &str, key: &str) -> &'a mut Map<S
     if !a.is_object() {
         *a = json!({});
     }
-    let s = a.as_object_mut().unwrap().entry(key.to_string()).or_insert_with(|| json!({}));
+    a.as_object_mut().unwrap()
+}
+
+/// Returns `store[agent][key]` as an object, creating it as needed.
+pub fn section<'a>(root: &'a mut Value, agent: &str, key: &str) -> &'a mut Map<String, Value> {
+    let s = agent_obj(root, agent).entry(key.to_string()).or_insert_with(|| json!({}));
     if !s.is_object() {
         *s = json!({});
     }
     s.as_object_mut().unwrap()
 }
 
+/// `store[agent][key]` for the current environment.
+pub fn agent_get<'a>(root: &'a Value, agent: &str, key: &str) -> Option<&'a Value> {
+    root.get(scoped(agent)).and_then(|a| a.get(key))
+}
+
 pub fn get_flag(root: &Value, agent: &str, key: &str) -> bool {
-    root.get(agent).and_then(|a| a.get(key)).and_then(|v| v.as_bool()).unwrap_or(false)
+    root.get(scoped(agent)).and_then(|a| a.get(key)).and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 pub fn set_flag(root: &mut Value, agent: &str, key: &str, v: bool) {
-    if !root.is_object() {
-        *root = json!({});
-    }
-    let a = root
-        .as_object_mut()
-        .unwrap()
-        .entry(agent.to_string())
-        .or_insert_with(|| json!({}));
-    if let Some(o) = a.as_object_mut() {
-        o.insert(key.to_string(), Value::Bool(v));
-    }
+    agent_obj(root, agent).insert(key.to_string(), Value::Bool(v));
+}
+
+pub fn get_str(root: &Value, agent: &str, key: &str) -> Option<String> {
+    root.get(scoped(agent)).and_then(|a| a.get(key)).and_then(|v| v.as_str()).map(String::from)
+}
+
+pub fn set_str(root: &mut Value, agent: &str, key: &str, v: &str) {
+    agent_obj(root, agent).insert(key.to_string(), Value::from(v));
+}
+
+pub fn set_value(root: &mut Value, agent: &str, key: &str, v: Value) {
+    agent_obj(root, agent).insert(key.to_string(), v);
 }

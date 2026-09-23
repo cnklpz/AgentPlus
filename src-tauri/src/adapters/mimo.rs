@@ -21,7 +21,7 @@ const PREFS: [(&str, &str, &str); 4] = [
 ];
 
 fn engine_path() -> PathBuf {
-    home().join(".config").join("mimocode").join("mimocode.jsonc")
+    super::dir_override(ID).unwrap_or_else(|| home().join(".config").join("mimocode")).join("mimocode.jsonc")
 }
 fn app_dir() -> PathBuf {
     dirs::config_dir().unwrap_or_else(home).join("Xiaomi MiMo")
@@ -35,11 +35,27 @@ fn catalog_path() -> PathBuf {
 
 fn api_of(npm: &str) -> &'static str {
     if npm.contains("anthropic") {
-        "Anthropic"
+        "anthropic"
     } else if npm.ends_with("/openai") {
-        "Responses"
+        "responses"
     } else {
-        "Chat"
+        "chat"
+    }
+}
+
+fn api_label(api: &str) -> &'static str {
+    match api {
+        "anthropic" => "Anthropic",
+        "responses" => "Responses",
+        _ => "Chat",
+    }
+}
+
+fn npm_for(api: &str) -> &'static str {
+    match api {
+        "anthropic" => "@ai-sdk/anthropic",
+        "responses" => "@ai-sdk/openai",
+        _ => "@ai-sdk/openai-compatible",
     }
 }
 
@@ -52,33 +68,44 @@ fn load_engine() -> Result<(Value, TextMeta, bool)> {
 }
 
 fn stash(root: &Value, key: &str) -> Map<String, Value> {
-    root.get(ID).and_then(|a| a.get(key)).and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    crate::store::agent_get(root, ID, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
 }
 
-fn ctx_of(def: &Value) -> Option<String> {
-    def.pointer("/limit/context").and_then(|x| x.as_u64()).map(fmt_ctx)
+fn model_from(id: &str, def: &Value, visible: bool) -> Model {
+    let context = def.pointer("/limit/context").and_then(|x| x.as_u64());
+    Model {
+        id: id.into(),
+        visible,
+        ctx: context.map(fmt_ctx),
+        context,
+        name: def.get("name").and_then(|x| x.as_str()).map(String::from),
+        deletable: true,
+        ..Default::default()
+    }
 }
 
 fn provider_from(id: &str, def: &Value, enabled: bool, hidden: &Map<String, Value>) -> Provider {
     let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).map(String::from);
     let npm = def.get("npm").and_then(|x| x.as_str()).unwrap_or("");
+    let api = api_of(npm);
     let mut models: Vec<Model> = def
         .get("models")
         .and_then(|m| m.as_object())
-        .map(|m| m.iter().map(|(mid, d)| Model { id: mid.clone(), visible: true, readonly: false, tags: vec![], ctx: ctx_of(d) }).collect())
+        .map(|m| m.iter().map(|(mid, d)| model_from(mid, d, true)).collect())
         .unwrap_or_default();
     let prefix = format!("{id}|");
     for (k, d) in hidden {
         if let Some(mid) = k.strip_prefix(&prefix) {
-            models.push(Model { id: mid.to_string(), visible: false, readonly: false, tags: vec![], ctx: ctx_of(d) });
+            models.push(model_from(mid, d, false));
         }
     }
+    let has_key = def.pointer("/options/apiKey").and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
     Provider {
         id: id.into(),
         name: def.get("name").and_then(|x| x.as_str()).unwrap_or(id).to_string(),
         host: base.as_deref().map(host_of).unwrap_or_default(),
         base_url: base,
-        apis: vec![api_of(npm).into()],
+        apis: vec![api_label(api).into()],
         builtin: false,
         enabled,
         compatible: true,
@@ -87,13 +114,12 @@ fn provider_from(id: &str, def: &Value, enabled: bool, hidden: &Map<String, Valu
         details: vec![
             Kv::mono("配置 ID", format!("provider.{id}")),
             Kv::mono("npm", if npm.is_empty() { "-".into() } else { npm.to_string() }),
-            Kv::text("密钥", if def.pointer("/options/apiKey").and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false) {
-                "API Key · 明文保存在 mimocode.jsonc"
-            } else {
-                "未填写"
-            }),
+            Kv::text("密钥", if has_key { "API Key · 明文保存在 mimocode.jsonc" } else { "未填写" }),
             Kv::text("状态", if enabled { "已启用" } else { "已停用 · 定义暂存在 AgentPlus" }),
         ],
+        editable: true,
+        api: api.into(),
+        has_key,
     }
 }
 
@@ -115,6 +141,8 @@ pub fn state(inst: &Install) -> AgentState {
         current: vec![],
         notes: vec![],
         readonly: false,
+        fixed_pending: false,
+        fixed_prompt: false,
     };
     let root = store::load();
     let hidden = stash(&root, "hiddenModels");
@@ -128,8 +156,15 @@ pub fn state(inst: &Install) -> AgentState {
             .map(|a| {
                 a.iter()
                     .filter(|m| m.get("modelType").and_then(|x| x.as_str()) == Some("TEXT"))
-                    .filter_map(|m| m.get("id").and_then(|x| x.as_str()))
-                    .map(|id| Model { id: id.into(), visible: true, readonly: true, tags: vec![], ctx: None })
+                    .filter_map(|m| {
+                        Some(Model {
+                            id: m.get("id")?.as_str()?.into(),
+                            name: m.get("name").and_then(|x| x.as_str()).map(String::from),
+                            visible: true,
+                            readonly: true,
+                            ..Default::default()
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -149,6 +184,9 @@ pub fn state(inst: &Install) -> AgentState {
                 Kv::mono("来源", "model-catalog.json"),
                 Kv::text("说明", "MiMo Desktop 内置，模型列表由 MiMo 管理"),
             ],
+            editable: false,
+            api: "chat".into(),
+            has_key: true,
         });
     }
 
@@ -187,7 +225,8 @@ pub fn state(inst: &Install) -> AgentState {
         "skillPathCompat：只读兼容，MiMo 不会写入这些目录",
         skills.clone(),
         &["~/.agents", "~/.claude", "~/.codex", "~/.opencode"],
-    )];
+    )
+    .with_hints(&["通用 Agent 技能目录", "Claude Code 的技能", "Codex 的技能", "OpenCode 的技能"])];
     st.settings.extend(PREFS.iter().map(|(k, l, d)| bool_setting(k, "应用", l, d, get_b(k))));
 
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
@@ -202,6 +241,33 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
+/// Base URL, key and API kind of a provider, for fetching its model list.
+pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+    let (cfg, _, _) = load_engine()?;
+    let parked = stash(&store::load(), "disabledProviders");
+    let def = cfg.pointer(&format!("/provider/{id}")).cloned().or_else(|| parked.get(id).cloned()).ok_or_else(|| anyhow!("找不到供应商 {id}"))?;
+    let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!("供应商 {id} 没有 baseURL"))?.to_string();
+    let key = def.pointer("/options/apiKey").and_then(|x| x.as_str()).filter(|k| !k.is_empty()).map(String::from);
+    Ok((base, key, api_of(def.get("npm").and_then(|x| x.as_str()).unwrap_or("")).into()))
+}
+
+fn providers_obj(cfg: &mut Value) -> Result<&mut Map<String, Value>> {
+    cfg.as_object_mut()
+        .ok_or_else(|| anyhow!("mimocode.jsonc 顶层不是对象"))?
+        .entry("provider")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("provider 不是对象"))
+}
+
+/// Edits a model definition wherever it lives (active config or the hidden stash).
+fn model_def_mut<'a>(cfg: &'a mut Value, root: &'a mut Value, pid: &str, mid: &str) -> Option<&'a mut Value> {
+    if cfg.pointer(&format!("/provider/{pid}/models/{mid}")).is_some() {
+        return cfg.pointer_mut(&format!("/provider/{pid}/models/{mid}"));
+    }
+    store::section(root, ID, "hiddenModels").get_mut(&format!("{pid}|{mid}"))
+}
+
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
     let (mut cfg, cfg_meta, had_comments) = load_engine()?;
     let (mut prefs, prefs_meta) = read_json(&prefs_path())?;
@@ -212,9 +278,84 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
 
     for op in ops {
         match op {
+            Op::UpsertProvider { provider: p } => {
+                if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
+                    return Err(anyhow!("名称和地址不能为空"));
+                }
+                match &p.id {
+                    None => {
+                        let parked = stash(&root, "disabledProviders");
+                        let providers = providers_obj(&mut cfg)?;
+                        let base = slug(&p.name);
+                        let id = if !providers.contains_key(&base) && !parked.contains_key(&base) {
+                            base.clone()
+                        } else {
+                            (2..).map(|n| format!("{base}-{n}")).find(|c| !providers.contains_key(c) && !parked.contains_key(c)).unwrap()
+                        };
+                        let models: Map<String, Value> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).map(|m| (m.to_string(), json!({}))).collect();
+                        let n = models.len();
+                        providers.insert(id.clone(), json!({
+                            "npm": npm_for(&p.api),
+                            "name": p.name.trim(),
+                            "options": { "baseURL": p.base_url.trim(), "apiKey": p.api_key.clone().unwrap_or_default().trim() },
+                            "models": models,
+                        }));
+                        diff.push(&ef, format!("+ provider.{id}（{} · {} · {n} 个模型）", p.base_url.trim(), api_label(&p.api)), true);
+                        if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+                            diff.push(&ef, format!("provider.{id}.options.apiKey = {}", mask_key(k.trim())), true);
+                        }
+                        cfg_dirty = true;
+                    }
+                    Some(id) => {
+                        // Edit wherever the definition currently lives.
+                        let in_cfg = cfg.pointer(&format!("/provider/{id}")).is_some();
+                        let def = if in_cfg {
+                            cfg.pointer_mut(&format!("/provider/{id}")).unwrap()
+                        } else {
+                            store::section(&mut root, ID, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!("找不到供应商 {id}"))?
+                        };
+                        let mut changed = vec![];
+                        if def.get("name").and_then(|x| x.as_str()) != Some(p.name.trim()) {
+                            def["name"] = json!(p.name.trim());
+                            changed.push(format!("name = \"{}\"", p.name.trim()));
+                        }
+                        if !def.get("options").map(|o| o.is_object()).unwrap_or(false) {
+                            def["options"] = json!({});
+                        }
+                        if def.pointer("/options/baseURL").and_then(|x| x.as_str()) != Some(p.base_url.trim()) {
+                            def["options"]["baseURL"] = json!(p.base_url.trim());
+                            changed.push(format!("options.baseURL = \"{}\"", p.base_url.trim()));
+                        }
+                        let npm = npm_for(&p.api);
+                        if api_of(def.get("npm").and_then(|x| x.as_str()).unwrap_or("")) != p.api {
+                            def["npm"] = json!(npm);
+                            changed.push(format!("npm = \"{npm}\""));
+                        }
+                        if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+                            def["options"]["apiKey"] = json!(k.trim());
+                            changed.push(format!("options.apiKey = {}", mask_key(k.trim())));
+                        }
+                        for c in changed {
+                            diff.push(&ef, format!("provider.{id}.{c}"), true);
+                            if in_cfg { cfg_dirty = true } else { store_dirty = true }
+                        }
+                    }
+                }
+            }
+            Op::DeleteProvider { provider } => {
+                let removed_cfg = providers_obj(&mut cfg)?.remove(provider).is_some();
+                let removed_stash = store::section(&mut root, ID, "disabledProviders").remove(provider).is_some();
+                let prefix = format!("{provider}|");
+                store::section(&mut root, ID, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
+                if !removed_cfg && !removed_stash {
+                    return Err(anyhow!("找不到供应商 {provider}"));
+                }
+                diff.push(&ef, format!("- provider.{provider}（含它的模型和密钥）"), false);
+                cfg_dirty |= removed_cfg;
+                store_dirty = true;
+            }
             Op::SetProviderEnabled { provider, enabled } => {
-                let providers = cfg.as_object_mut().unwrap().entry("provider").or_insert_with(|| json!({}));
-                let providers = providers.as_object_mut().ok_or_else(|| anyhow!("provider 不是对象"))?;
+                let providers = providers_obj(&mut cfg)?;
                 let parked = store::section(&mut root, ID, "disabledProviders");
                 if *enabled {
                     if let Some(def) = parked.remove(provider) {
@@ -254,6 +395,59 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     store_dirty = true;
                 }
             }
+            Op::UpsertModel { provider, model: m } => {
+                let mid = m.id.trim().to_string();
+                if mid.is_empty() {
+                    return Err(anyhow!("模型 ID 不能为空"));
+                }
+                let exists = model_def_mut(&mut cfg, &mut root, provider, &mid).is_some();
+                if !exists {
+                    let models = cfg
+                        .pointer_mut(&format!("/provider/{provider}"))
+                        .and_then(|p| p.as_object_mut())
+                        .ok_or_else(|| anyhow!("供应商 {provider} 未启用，先启用再添加模型"))?
+                        .entry("models")
+                        .or_insert_with(|| json!({}));
+                    models.as_object_mut().ok_or_else(|| anyhow!("models 不是对象"))?.insert(mid.clone(), json!({}));
+                    diff.push(&ef, format!("provider.{provider}.models + \"{mid}\""), true);
+                    cfg_dirty = true;
+                }
+                let in_cfg = cfg.pointer(&format!("/provider/{provider}/models/{mid}")).is_some();
+                let def = model_def_mut(&mut cfg, &mut root, provider, &mid).unwrap();
+                let mut changed = vec![];
+                if let Some(n) = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    if def.get("name").and_then(|x| x.as_str()) != Some(n) {
+                        def["name"] = json!(n);
+                        changed.push(format!("name = \"{n}\""));
+                    }
+                }
+                if let Some(c) = m.context {
+                    if def.pointer("/limit/context").and_then(|x| x.as_u64()) != Some(c) {
+                        if !def.get("limit").map(|l| l.is_object()).unwrap_or(false) {
+                            def["limit"] = json!({});
+                        }
+                        def["limit"]["context"] = json!(c);
+                        changed.push(format!("limit.context = {c}"));
+                    }
+                }
+                for c in changed {
+                    diff.push(&ef, format!("provider.{provider}.models.\"{mid}\".{c}"), true);
+                    if in_cfg { cfg_dirty = true } else { store_dirty = true }
+                }
+            }
+            Op::DeleteModel { provider, model } => {
+                let removed = cfg
+                    .pointer_mut(&format!("/provider/{provider}/models"))
+                    .and_then(|m| m.as_object_mut())
+                    .and_then(|m| m.remove(model))
+                    .is_some();
+                let stashed = store::section(&mut root, ID, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
+                if removed || stashed {
+                    diff.push(&ef, format!("provider.{provider}.models - \"{model}\"（删除）"), false);
+                    cfg_dirty |= removed;
+                    store_dirty |= stashed;
+                }
+            }
             Op::SetSetting { key, value } => {
                 if key == "skills" {
                     let want: Vec<String> = value.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
@@ -281,6 +475,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!("MiMo Desktop 按启用/停用管理供应商")),
+            Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
 
