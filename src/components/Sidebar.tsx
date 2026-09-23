@@ -2,11 +2,16 @@ import type { AgentId, AgentState } from "../api";
 import { type Draft, currentProvider, isEnabled, visibleCount } from "../draft";
 import { AgentIcon, Icon } from "./icons";
 
+export type Page = "providers" | "history" | "sync" | "settings";
+
 interface Props {
   agents: AgentState[];
   drafts: Record<string, Draft>;
-  selected: AgentId;
+  /** Selected agent when an agent page is open, else null. */
+  selected: AgentId | null;
+  page: Page | null;
   onSelect: (id: AgentId) => void;
+  onPage: (p: Page) => void;
 }
 
 function subline(a: AgentState, d: Draft): string {
@@ -17,8 +22,14 @@ function subline(a: AgentState, d: Draft): string {
   return `${on} 个供应商 · ${n} 个模型`;
 }
 
-export function Sidebar({ agents, drafts, selected, onSelect }: Props) {
+export function Sidebar({ agents, drafts, selected, page, onSelect, onPage }: Props) {
   const detected = agents.filter((a) => a.installed).length;
+  const pending = Object.values(drafts).reduce((n, d) => n + Object.keys(d).length, 0);
+  const links: [Page, string, JSX.Element][] = [
+    ["providers", "供应商", <Icon.layers key="l" />],
+    ["history", "历史与回滚", <Icon.history key="h" />],
+    ["sync", "多设备同步", <Icon.cloud key="c" />],
+  ];
   return (
     <nav className="sidebar" aria-label="导航">
       <div className="side-label">AGENT</div>
@@ -51,13 +62,13 @@ export function Sidebar({ agents, drafts, selected, onSelect }: Props) {
       </button>
 
       <div className="side-label spaced">资源</div>
-      <button className="side-link" disabled title="即将推出"><Icon.layers />服务商与模型</button>
-      <button className="side-link" disabled title="即将推出"><Icon.history />历史与回滚</button>
-      <button className="side-link" disabled title="即将推出"><Icon.cloud />多设备同步</button>
+      {links.map(([id, label, icon]) => (
+        <button key={id} className={`side-link${page === id ? " active" : ""}`} onClick={() => onPage(id)}>{icon}{label}</button>
+      ))}
 
       <div className="side-foot">
         <strong>已检测 {detected} 个 Agent</strong>
-        <span>备份保存在 ~/.agentplus/backups</span>
+        <span>{pending ? `${pending} 项改动未应用` : "备份保存在 ~/.agentplus/backups"}</span>
       </div>
     </nav>
   );

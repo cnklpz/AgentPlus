@@ -3,12 +3,11 @@ import zcodePng from "../assets/zcode.png";
 import mimoPng from "../assets/mimo.png";
 import type { AgentId } from "../api";
 
-// Codex's app icon is a dark glyph on a light tile (bordered so it reads on the
-// light sidebar); ZCode's icon has built-in padding (scaled up to fill); MiMo's
-// fills its tile already.
+// Codex's app icon is a dark glyph on a light tile (outlined so it reads on the
+// light sidebar); ZCode's and MiMo's images are cropped to their own tiles.
 const AGENT_ICONS: Record<AgentId, { src: string; bg: string; scale: number; ring?: string }> = {
   codex: { src: codexPng, bg: "#FFFFFF", scale: 66, ring: "inset 0 0 0 1px #D5DAE1" },
-  zcode: { src: zcodePng, bg: "#000000", scale: 122 },
+  zcode: { src: zcodePng, bg: "#000000", scale: 100 },
   mimo: { src: mimoPng, bg: "#000000", scale: 100 },
 };
 
@@ -39,6 +38,16 @@ export const Icon = {
   plus: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M12 5v14M5 12h14" />, 2.4),
   check: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M20 6 9 17l-5-5" />, 2.4),
   pulse: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M22 12h-4l-3 9L9 3l-3 9H2" />),
+  gear: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>, 1.8),
+  chevron: ({ size = 12, color = "currentColor" }: P) => svg(size, color, <path d="m6 9 6 6 6-6" />, 2.2),
+  close: ({ size = 12, color = "currentColor" }: P) => svg(size, color, <path d="M6 6l12 12M18 6 6 18" />, 2.2),
+  edit: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>),
+  trash: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></>),
+  copy: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>),
+  key: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><circle cx="7.5" cy="15.5" r="4.5" /><path d="m10.7 12.3 9.8-9.8M17 6l3 3M15 8l2 2" /></>),
+  back: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M19 12H5M11 18l-6-6 6-6" />),
+  arrow: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <path d="M5 12h14M13 6l6 6-6 6" />),
+  terminal: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>),
   grip: ({ size = 14 }: P) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="#B8BFC9" aria-hidden="true">
       {[6, 12, 18].map((y) => [9, 15].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.6" />))}
