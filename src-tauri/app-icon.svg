@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5B7BFF"/>
+      <stop offset="0.55" stop-color="#2F54EB"/>
+      <stop offset="1" stop-color="#3423C9"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="352" y1="464" x2="552" y2="680">
+      <stop offset="0" stop-color="#4D6DFF"/>
+      <stop offset="1" stop-color="#3628D2"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#10164A" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+
+  <!-- tile -->
+  <rect x="80" y="80" width="864" height="864" rx="208" fill="url(#bg)"/>
+  <rect x="80" y="80" width="864" height="864" rx="208" fill="url(#gloss)"/>
+
+  <!-- back card: the other agents' configs -->
+  <rect x="352" y="232" width="440" height="440" rx="104" fill="#FFFFFF" fill-opacity="0.34"/>
+
+  <!-- front card with the plus -->
+  <g filter="url(#shadow)">
+    <rect x="232" y="352" width="440" height="440" rx="104" fill="#FFFFFF"/>
+  </g>
+  <path d="M452 480V664M360 572H544" stroke="url(#ink)" stroke-width="80" stroke-linecap="round" fill="none"/>
+</svg>
