@@ -1,0 +1,7 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+*.log
+# local snapshot of this machine's agent configs (browser preview only)
+src/dev-fixture.json
