@@ -54,9 +54,19 @@ export const Icon = {
     </svg>
   ),
   logo: ({ size = 22 }: P) => (
-    <svg width={size} height={size} viewBox="0 0 22 22" aria-hidden="true">
-      <rect x="1" y="1" width="20" height="20" rx="6" fill="var(--accent)" />
-      <path d="M11 6.5v9M6.5 11h9" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
+    // Same drawing as the app icon (src-tauri/app-icon.svg), without the drop shadow.
+    <svg width={size} height={size} viewBox="80 80 864 864" aria-hidden="true">
+      <defs>
+        <linearGradient id="ap-logo-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#5B7BFF" />
+          <stop offset="0.55" stopColor="#2F54EB" />
+          <stop offset="1" stopColor="#3423C9" />
+        </linearGradient>
+      </defs>
+      <rect x="80" y="80" width="864" height="864" rx="208" fill="url(#ap-logo-bg)" />
+      <rect x="352" y="232" width="440" height="440" rx="104" fill="#FFFFFF" fillOpacity="0.34" />
+      <rect x="232" y="352" width="440" height="440" rx="104" fill="#FFFFFF" />
+      <path d="M452 480V664M360 572H544" stroke="#3448E6" strokeWidth="84" strokeLinecap="round" fill="none" />
     </svg>
   ),
 };
