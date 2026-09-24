@@ -22,12 +22,18 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
   const input = useRef<HTMLInputElement>(null);
 
   // Show everything until the user types; then filter by what they typed.
-  const q = value.trim().toLowerCase();
-  const list = typed && q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+  const listFor = (text: string, filtered: boolean) => {
+    const q = text.trim().toLowerCase();
+    return filtered && q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+  };
+  const list = listFor(value, typed);
   const nav = useListNav(list.length);
 
   useEffect(() => { if (open) nav.setHi(Math.max(0, list.indexOf(value))); }, [open]);
-  usePopover(open, () => setOpen(false), [root], { scroll: true, resize: true });
+  // Only open while there is something to list: an invisible "open" menu would still take Esc
+  // (and outside clicks) away from the page or dialog underneath.
+  const shown = open && list.length > 0;
+  usePopover(shown, () => setOpen(false), [root], { scroll: true, resize: true });
   // Sized for the whole list: typing only narrows it.
   const float = useFloatingMenu(root, nav.list, open, options.length * 34 + 12, { matchWidth: true });
 
@@ -39,7 +45,7 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
   };
 
   return (
-    <div className={`dd combo${open ? " open" : ""}${disabled ? " disabled" : ""}`} ref={root}>
+    <div className={`dd combo${shown ? " open" : ""}${disabled ? " disabled" : ""}`} ref={root}>
       <input
         ref={input}
         className="combo-input mono"
@@ -48,12 +54,12 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
         placeholder={placeholder}
         aria-label={label}
         role="combobox"
-        aria-expanded={open}
+        aria-expanded={shown}
         aria-autocomplete="list"
         onFocus={() => setTyped(false)}
-        onChange={(e) => { onChange(e.target.value); setTyped(true); setOpen(true); nav.setHi(0); }}
+        onChange={(e) => { onChange(e.target.value); setTyped(true); setOpen(listFor(e.target.value, true).length > 0); nav.setHi(0); }}
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown" && !open) { e.preventDefault(); setOpen(true); }
+          if (e.key === "ArrowDown" && !open) { e.preventDefault(); setOpen(list.length > 0); }
           else if (nav.onKey(e)) return;
           else if (e.key === "Enter") {
             e.preventDefault();
@@ -68,7 +74,7 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
           <Icon.chevron />
         </button>
       )}
-      {open && float && list.length > 0 && (
+      {shown && float && (
         <div ref={nav.list} className={`dd-menu combo-menu${float.up ? " up" : ""}`} role="listbox" style={float.style}>
           {list.map((o, i) => (
             <button key={o} type="button" role="option" aria-selected={o === value}
