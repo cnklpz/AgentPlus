@@ -43,28 +43,41 @@ Every change is previewed as a diff and backed up before it is written, so you c
 
 ## Features
 
-| | |
-|---|---|
-| 🗂️ **Provider library** | Keep all providers in one place and push them to the agents you pick. 19 templates for vendors and coding plans (Volcengine Ark, Zhipu, Kimi, DeepSeek, Alibaba Bailian, MiniMax, OpenRouter…) only need an API key |
-| 📋 **Model lists** | Choose per agent which models appear in its picker, fetch a provider's model list, set fields such as the context window |
-| 🔍 **Preview, then apply** | Changes go into a pending list where you review each diff before writing; afterwards, restart the agent in one click |
-| ⏪ **History and rollback** | Original files are backed up to `~/.agentplus/backups/` before every write and can be restored in one click |
-| 🔀 **Local gateway** | An HTTP server on `127.0.0.1` that converts between OpenAI Chat Completions, OpenAI Responses and Anthropic Messages on the fly (streaming and tool calls included), with an error breaker |
-| ⚡ **Latency and tests** | Measure latency, or send one small real request to check the URL, key and model |
-| 🐧 **WSL** | Switch the target environment between Windows and WSL distros; the provider library is shared |
-| 🙈 **Privacy mode** | `Ctrl+Shift+H` masks keys, hosts and user names and blurs conversation titles, for screenshots and screen sharing |
-| ⌨️ **Command palette** | `Ctrl+K` searches providers, models, settings and sessions |
-| 🔄 **In-app updates** | Checks GitHub Releases and verifies the installer's signature before installing |
-| 🌐 **Chinese and English** | The UI follows the system language by default |
+<table>
+  <tr>
+    <td width="50%" valign="top">🗂️ <b>Provider library</b><br>Keep all providers in one place and push them to the agents you pick. 19 templates for vendors and coding plans only need an API key</td>
+    <td width="50%" valign="top">📋 <b>Model lists</b><br>Choose per agent which models appear in its picker, fetch a provider's model list, set fields such as the context window</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🔍 <b>Preview, then apply</b><br>Changes go into a pending list where you review each diff before writing; then restart the agent in one click</td>
+    <td width="50%" valign="top">⏪ <b>History and rollback</b><br>Original files are backed up to <code>~/.agentplus/backups/</code> before every write and can be restored in one click</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🔀 <b>Local gateway</b><br>Converts between OpenAI Chat, OpenAI Responses and Anthropic Messages on the fly, streaming and tool calls included, with an error breaker</td>
+    <td width="50%" valign="top">⚡ <b>Latency and tests</b><br>Measure latency, or send one small real request to check the URL, key and model</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🐧 <b>WSL</b><br>Switch the target environment between Windows and WSL distros; the provider library is shared</td>
+    <td width="50%" valign="top">🙈 <b>Privacy mode</b><br><code>Ctrl+Shift+H</code> masks keys, hosts and user names and blurs conversation titles, for screenshots and screen sharing</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">⌨️ <b>Command palette</b><br><code>Ctrl+K</code> searches providers, models, settings and sessions</td>
+    <td width="50%" valign="top">📌 <b>Tray</b><br>Closing the window can minimize it to the tray while the local gateway keeps running</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🔄 <b>In-app updates</b><br>Checks GitHub Releases and verifies the installer's signature before installing</td>
+    <td width="50%" valign="top">🌐 <b>Chinese and English</b><br>The UI follows the system language by default</td>
+  </tr>
+</table>
 
 ## Supported systems
 
 | System | Status | Notes |
 |---|---|---|
-| Windows 11 (x64) | ✅ Supported | Main development and test platform |
-| Windows 10 (x64) | ✅ Supported | Needs WebView2; the installer adds it if missing |
-| WSL distros | ✅ As a target | AgentPlus runs on Windows and can manage Codex CLI, OpenCode and others inside WSL |
-| macOS | ⏳ Not yet | The code compiles, but agent detection, restarting agents and opening folders only have Windows implementations so far |
+| Windows 11 (x64) | ✅ Supported | Main platform |
+| Windows 10 (x64) | ✅ Supported | Needs WebView2; the installer adds it |
+| WSL distros | ✅ Supported | As a target: manage Codex CLI, OpenCode and others inside WSL |
+| macOS | ⏳ Not yet | Compiles, but detection and restarts are Windows-only for now |
 | Linux | ⏳ Not yet | Same as macOS |
 
 ## Download
