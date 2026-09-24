@@ -152,7 +152,8 @@ fn secret(k: &str) -> bool {
     k == TOKEN || k == API_KEY
 }
 
-fn provider_of(id: &str, p: &Value) -> Provider {
+/// `managed`: an AgentPlus profile (not the hand-set settings.json entry).
+fn provider_of(id: &str, p: &Value, managed: bool) -> Provider {
     let base = str_field(p, "baseUrl");
     let roles = roles_of(p);
     let key = str_field(p, "apiKey");
@@ -166,7 +167,9 @@ fn provider_of(id: &str, p: &Value) -> Provider {
             details.push(Kv::mono(&tr!("{label}模型", "{label} model"), m.clone()));
         }
     }
-    details.push(Kv::text(l("保存位置", "Stored in"), l("AgentPlus 配置档（切换时写入 settings.json 的 env）", "AgentPlus profile (written to the env block of settings.json on switch)")));
+    if managed {
+        details.push(Kv::text(l("保存位置", "Stored in"), l("AgentPlus 配置档（切换时写入 settings.json 的 env）", "AgentPlus profile (written to the env block of settings.json on switch)")));
+    }
     Provider {
         id: id.into(),
         name: str_field(p, "name"),
@@ -211,7 +214,7 @@ pub fn state(inst: &Install) -> AgentState {
         ],
     ));
     for (id, p) in &profs {
-        st.providers.push(provider_of(id, p));
+        st.providers.push(provider_of(id, p, true));
     }
     if cur == UNMANAGED {
         // A relay set up by hand (or by another tool): show it so it can be adopted.
@@ -228,7 +231,7 @@ pub fn state(inst: &Install) -> AgentState {
             "keyEnv": if env_str(&env, API_KEY).is_some() && env_str(&env, TOKEN).is_none() { API_KEY } else { TOKEN },
             "roles": roles,
         });
-        let mut prov = provider_of(UNMANAGED, &p);
+        let mut prov = provider_of(UNMANAGED, &p, false);
         prov.details.push(Kv::text(lbl::note(), l("不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
         st.providers.push(prov);
         st.notes.push(l("settings.json 里有手动设置的 ANTHROPIC_BASE_URL，已显示为「settings.json 里的配置」；编辑保存一次即可由 AgentPlus 管理。", "settings.json has a hand-set ANTHROPIC_BASE_URL, shown as \"Config in settings.json\". Edit and save it once to let AgentPlus manage it.").into());
@@ -541,6 +544,17 @@ mod tests {
         assert!(apply(vec![Op::UpsertModel { provider: OFFICIAL.into(), model: model("m") }]).is_err());
         apply(vec![Op::SetProviderModels { provider: "r".into(), models: vec!["a".into(), "b".into(), "a".into()] }]).unwrap();
         assert_eq!(models("r"), vec![("a".into(), true), ("b".into(), true)]);
+    }
+
+    #[test]
+    fn hand_set_relay_is_not_labelled_a_profile() {
+        let _h = setup(Some("{\n  \"env\": {\"ANTHROPIC_BASE_URL\": \"https://hand\", \"ANTHROPIC_AUTH_TOKEN\": \"sk-hand-1234\"}\n}\n"));
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r", None, &[]) }]).unwrap();
+        let st = state(&Install::default());
+        assert_eq!(st.current_provider.as_deref(), Some(UNMANAGED));
+        let stored_in = |id: &str| st.providers.iter().find(|p| p.id == id).unwrap().details.iter().any(|d| d.k == "保存位置");
+        assert!(!stored_in(UNMANAGED), "the settings.json entry is not an AgentPlus profile");
+        assert!(stored_in("r"));
     }
 
     #[test]

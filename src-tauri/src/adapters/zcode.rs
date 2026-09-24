@@ -165,7 +165,7 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
     }
     for r in rules(pc) {
         let Some(api) = r.pointer("/config/api") else { continue };
-        let pid = r.get("providerId").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        let pid = str_field(&r, "providerId");
         let base = api.get("baseUrl").and_then(|x| x.as_str()).map(String::from);
         let atype = api.get("type").and_then(|x| x.as_str()).unwrap_or("");
         let visible = str_list(r.pointer("/config/personalModelIds")).unwrap_or_default();

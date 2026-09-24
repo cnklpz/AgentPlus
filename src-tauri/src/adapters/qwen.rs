@@ -854,7 +854,7 @@ impl Ctx {
                 self.diff.push(&self.file, trn!(n, "- modelProviders.{}：「{name}」的 {n} 个条目", "- modelProviders.{}: {n} entry of \"{name}\"", "- modelProviders.{}: {n} entries of \"{name}\"", g.key), false);
             }
             if h > 0 || n == 0 {
-                self.diff.push(store_label(), tr!("- 「{name}」暂存的 {h} 个隐藏模型", "- {h} stashed hidden models of \"{name}\""), false);
+                self.diff.push(store_label(), trn!(h, "- 「{name}」暂存的 {n} 个隐藏模型", "- {n} stashed hidden model of \"{name}\"", "- {n} stashed hidden models of \"{name}\""), false);
             }
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
@@ -1332,7 +1332,9 @@ mod tests {
     #[test]
     fn delete_provider_removes_entries_and_key() {
         let _home = setup("delete", Some(SAMPLE));
-        apply(vec![Op::DeleteProvider { provider: "dashscope".into() }]);
+        apply(vec![Op::SetModelVisible { provider: "dashscope".into(), model: "qwen3-max".into(), visible: false }]);
+        let (d, _) = apply(vec![Op::DeleteProvider { provider: "dashscope".into() }]);
+        assert!(lines(&d).iter().any(|l| l.ends_with("」暂存的 1 个隐藏模型")), "{:?}", lines(&d));
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["openai"].as_array().unwrap().len(), 1);
         assert!(cfg["env"].get("DASHSCOPE_API_KEY").is_none());

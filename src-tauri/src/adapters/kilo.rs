@@ -75,13 +75,15 @@ fn vscode_extension() -> Option<String> {
         .max_by_key(|v| v.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>())
 }
 
-/// The `kilo` CLI (npm `@kilocode/cli` or a `kilo` binary on PATH) or the VS Code extension.
+/// The `kilo` CLI (npm `@kilocode/cli`, also under another npm prefix on PATH, or a `kilo`
+/// binary on PATH) or the VS Code extension.
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some(v) = crate::process::npm_global_version("@kilocode/cli") {
+    let on_path = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]);
+    if let Some(v) = crate::process::npm_version_near("@kilocode/cli", on_path.as_deref()) {
         inst.installed = true;
         inst.version = Some(v);
-    } else if let Some(exe) = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]) {
+    } else if let Some(exe) = on_path {
         inst.installed = true;
         if crate::process::is_exe(&exe) {
             inst.version = crate::process::cli_version(&exe);
