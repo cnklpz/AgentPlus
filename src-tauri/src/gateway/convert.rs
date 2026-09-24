@@ -1877,10 +1877,15 @@ impl UpstreamStream {
                         }
                     }
                     // Text that arrived only in the final item (no deltas streamed).
-                    "message" if !self.text_streamed(sget(item, "id"), oi) => {
-                        let t = parts_text(&chat_parts(&item["content"]));
-                        self.mark_text(sget(item, "id"), oi);
-                        self.content(&t, out);
+                    "message" => {
+                        let streamed = self.text_streamed(sget(item, "id"), oi);
+                        // Anonymous deltas belonged to this, the first message to finish.
+                        self.anon_text = false;
+                        if !streamed {
+                            let t = parts_text(&chat_parts(&item["content"]));
+                            self.mark_text(sget(item, "id"), oi);
+                            self.content(&t, out);
+                        }
                     }
                     _ => {}
                 }
@@ -3503,7 +3508,11 @@ mod tests {
         let by_index = ev("response.output_text.delta", json!({"output_index": 0, "delta": "Hi"}));
         assert_eq!(text_of(by_index.clone() + &done(0) + &end), "Hi");
         let anonymous = ev("response.output_text.delta", json!({"delta": "Hi"}));
-        assert_eq!(text_of(anonymous + &done(0) + &end), "Hi");
+        assert_eq!(text_of(anonymous.clone() + &done(0) + &end), "Hi");
+        // A later message that arrives only finished still shows its text.
+        let done2 = ev("response.output_item.done", json!({"output_index": 1, "item": {"type": "message", "id": "msg_2",
+            "content": [{"type": "output_text", "text": "Yo"}]}}));
+        assert_eq!(text_of(anonymous + &done(0) + &done2 + &end), "HiYo");
         // Another item's text still comes through.
         assert_eq!(text_of(by_index + &done(1) + &end), "HiHi");
     }
