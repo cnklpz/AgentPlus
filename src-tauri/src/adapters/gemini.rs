@@ -178,7 +178,8 @@ fn matching_profile(env: &str, profs: &Map<String, Value>) -> Option<String> {
 fn current(cfg: &Value, env: &str, profs: &Map<String, Value>) -> String {
     match effective_auth(cfg, env).as_deref() {
         None | Some(OAUTH) => GOOGLE.into(),
-        Some(API_KEY_AUTH | GATEWAY_AUTH) => matching_profile(env, profs).unwrap_or_else(|| UNMANAGED.into()),
+        // Without .env vars the key comes from the system environment: nothing to adopt.
+        Some(t @ (API_KEY_AUTH | GATEWAY_AUTH)) => matching_profile(env, profs).unwrap_or_else(|| if has_env_vars(env) { UNMANAGED.into() } else { format!("{AUTH}{t}") }),
         Some(other) => format!("{AUTH}{other}"),
     }
 }
@@ -188,6 +189,7 @@ fn auth_label(t: &str) -> &str {
         "vertex-ai" => "Vertex AI",
         "cloud-shell" => "Cloud Shell",
         "compute-default-credentials" => l("Google Cloud 默认凭据", "Google Cloud default credentials"),
+        API_KEY_AUTH => l("Gemini API 密钥（来自环境变量）", "Gemini API key (from environment variables)"),
         GATEWAY_AUTH => l("网关（gateway）", "Gateway (gateway)"),
         other => other,
     }
@@ -774,6 +776,24 @@ mod tests {
         assert_eq!(envtext(&t), "GEMINI_API_KEY=AIza-secret-9999\n");
         assert_eq!(settings(&t).pointer("/security/auth/selectedType").and_then(|x| x.as_str()), Some(API_KEY_AUTH));
         assert_eq!(state(&Install::default()).current_provider.as_deref(), Some("official-key"));
+    }
+
+    #[test]
+    fn api_key_from_system_env_is_listed_as_current() {
+        // Gemini CLI's documented setup: `export GEMINI_API_KEY`, then "Use Gemini API key" in /auth.
+        let t = setup(Some(r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#), None);
+        crate::env::set_test_vars(&[(KEY, "AIza-sys-secret-1111")]);
+        let st = state(&Install::default());
+        let cur = format!("{AUTH}{API_KEY_AUTH}");
+        assert_eq!(st.current_provider.as_deref(), Some(cur.as_str()));
+        let p = st.providers.iter().find(|p| p.id == cur).expect("current provider is listed");
+        assert_eq!(p.name, "Gemini API 密钥（来自环境变量）");
+        assert!(!st.providers.iter().any(|p| p.id == UNMANAGED), "nothing in .env to adopt");
+        assert!(st.notes.iter().any(|n| n.contains(KEY)));
+        // Switching to the Google login still works.
+        apply(vec![Op::SetCurrentProvider { provider: GOOGLE.into() }]).unwrap();
+        assert_eq!(settings(&t).pointer("/security/auth/selectedType").and_then(|x| x.as_str()), Some(OAUTH));
+        assert_eq!(state(&Install::default()).current_provider.as_deref(), Some(GOOGLE));
     }
 
     #[test]
