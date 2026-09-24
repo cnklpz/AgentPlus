@@ -71,7 +71,7 @@ fn entry(path: &str, last: Option<String>) -> ProjectEntry {
         exists: dir.is_dir(),
         config: cfg.exists().then(|| display_path(&cfg)),
         providers,
-        git: dir.ancestors().any(|d| d.join(".git").exists()),
+        git: ocproject::git_root(&dir).is_some(),
     }
 }
 
