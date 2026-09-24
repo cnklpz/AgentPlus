@@ -109,6 +109,8 @@ export const Icon = {
   monitor: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>),
   folder: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />),
   refresh: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></>),
+  download: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M12 4v11" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>),
+  external: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>),
   play: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M7 4.5v15l12.5-7.5Z" />),
   layers: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>),
   history: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>),

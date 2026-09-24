@@ -138,6 +138,8 @@ export default {
   navHistory: "历史与回滚",
   navSettings: "AgentPlus 设置",
   privacyOnToast: "已开启隐私模式",
+  updateToast: "AgentPlus {version} 已发布，可在「设置 › 关于」里更新",
+  updateDot: "有新版本",
   privacyOffToast: "已关闭隐私模式",
   openDataDir: "打开 AgentPlus 数据目录",
   gatewayKeysTitle: "更新 {n} 个供应商的网关密钥",

@@ -483,6 +483,19 @@ export type RestartProgress =
   | { kind: "plan"; steps: RestartStep[] }
   | { kind: "step"; step: RestartStep; status: RestartStatus; detail: string | null };
 
+/** A newer AgentPlus release on GitHub. `notes` is the release's Markdown text. */
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+  date: string | null;
+}
+
+/** Sent by the backend while an update downloads and installs. */
+export type UpdateProgress =
+  | { kind: "download"; done: number; total: number | null }
+  | { kind: "install" };
+
 const real = {
   listAgents: () => invoke<AgentState[]>("list_agents"),
   getAgent: (agent: AgentId) => invoke<AgentState>("get_agent", { agent }),
@@ -545,6 +558,14 @@ const real = {
   projectOpen: (path: string) => invoke<ProjectEntry>("project_open", { path }),
   projectForget: (path: string) => invoke<void>("project_forget", { path }),
   pickFolder: (start: string | null) => invoke<string | null>("pick_folder", { start }),
+  /** A newer release, or null when this is the latest. */
+  updateCheck: () => invoke<UpdateInfo | null>("update_check"),
+  /** Downloads, verifies and installs the update found by the last check; the app then restarts. */
+  updateInstall: (onProgress: (p: UpdateProgress) => void) => {
+    const ch = new Channel<UpdateProgress>();
+    ch.onmessage = onProgress;
+    return invoke<void>("update_install", { onProgress: ch });
+  },
 };
 
 // Plain-browser preview (`npm run dev`): serve a static snapshot so the UI can be
@@ -795,6 +816,20 @@ const demo: typeof real = {
   },
   projectForget: async (path) => { demoProjects = demoProjects.filter((x) => x.path !== path); },
   pickFolder: async () => "D:\\xm\\newapp",
+  updateCheck: async () => {
+    await new Promise((r) => setTimeout(r, 800));
+    return { version: "0.2.0", current: "0.1.0", notes: "（演示）\n- 新功能：应用内更新\n- 修复若干问题", date: new Date().toISOString() };
+  },
+  updateInstall: async (onProgress) => {
+    const total = 9_400_000;
+    for (let done = 0; done < total; done += 700_000) {
+      onProgress({ kind: "download", done, total });
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    onProgress({ kind: "install" });
+    await new Promise((r) => setTimeout(r, 1000));
+    throw new Error("（演示）浏览器预览里不能安装");
+  },
   officialStatus: async () => ({ ...demoOfficial, cacheReady: demoOfficial.active && Date.now() - demoOfficialAt > 4000, cacheModels: 9 }),
   officialStart: async () => { demoOfficial.active = true; demoOfficialAt = Date.now(); return { ...demoOfficial }; },
   officialFinish: async () => { demoOfficial.active = false; return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "codex-auto-review"].map((slug, i) => ({ slug, name: slug.toUpperCase(), visible: i !== 5 })); },

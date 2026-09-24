@@ -3,7 +3,7 @@ name = "agentplus"
 version = "0.1.0"
 description = "Manage providers and model lists for coding agents"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-only"
 
 [lib]
 name = "agentplus_lib"
@@ -32,6 +32,7 @@ json5 = "0.4"
 deunicode = "1.6.2"
 getrandom = "0.2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
