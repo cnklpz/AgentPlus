@@ -1,12 +1,17 @@
-//! Fast visibility injection for Codex.
+//! UI injection for Codex.
 //!
-//! Codex's UI hides the Fast option unless the auth method is "chatgpt":
-//!   isServiceTierAllowed = authMethod==="chatgpt" && !loading && requirements?.featureRequirements?.fast_mode!==false
-//! We start Codex with a local DevTools port and rewrite that one expression in the
-//! UI bundle, keeping the admin switch (`fast_mode === false`) intact.
+//! We start Codex with a local DevTools port and rewrite small expressions in the
+//! UI bundle. Each patch is optional:
+//! - Fast: Codex's UI hides the Fast option unless the auth method is "chatgpt":
+//!     isServiceTierAllowed = authMethod==="chatgpt" && !loading && requirements?.featureRequirements?.fast_mode!==false
+//!   We drop the auth check, keeping the admin switch (`fast_mode === false`) intact.
+//! - Full model names: the model-name formatter takes `stripGptPrefix` and turns
+//!   "GPT-6 Sol" into "6 Sol" unless a Statsig gate (only granted to ChatGPT accounts)
+//!   is on. We make it always return the full name.
 //! Strategy 1: intercept the bundle response on reload (Fetch domain).
 //! Strategy 2: live-edit the already-loaded script (Debugger.setScriptSource).
 
+use crate::process::Progress;
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use regex::Regex;
@@ -17,20 +22,76 @@ use std::time::{Duration, Instant};
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 
 pub const PORT: u16 = 39229;
-const MARK: &str = "/*agentplus-fast*/";
+const FAST_MARK: &str = "/*agentplus-fast*/";
+const NAMES_MARK: &str = "/*agentplus-names*/";
 const BUNDLE_HINT: &str = "app-initial-";
 
-/// Rewrites the Fast gate. Minified names change per release, so match on shape.
-pub fn patch_source(src: &str) -> Option<String> {
-    if src.contains(MARK) {
-        return None;
+/// Which UI patches to apply.
+#[derive(Clone, Copy, Default)]
+pub struct Patches {
+    pub fast: bool,
+    pub full_names: bool,
+}
+
+impl Patches {
+    pub fn any(self) -> bool {
+        self.fast || self.full_names
     }
+
+    /// Display names, in the order `patch_source` applies them.
+    fn names() -> [&'static str; 2] {
+        ["Fast", crate::i18n::l("完整模型名", "Full model names")]
+    }
+
+    fn wanted(self) -> Vec<&'static str> {
+        [self.fast, self.full_names].into_iter().zip(Self::names()).filter(|(on, _)| *on).map(|(_, n)| n).collect()
+    }
+}
+
+/// Rewrites the Fast gate. Minified names change per release, so match on shape.
+fn patch_fast(src: &str) -> Option<String> {
     let re = Regex::new(
         r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1",
     )
     .unwrap();
-    let out = re.replacen(src, 1, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{MARK}"));
+    let out = re.replacen(src, 1, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{FAST_MARK}"));
     if out == src { None } else { Some(out.into_owned()) }
+}
+
+/// Makes the model-name formatter ignore `stripGptPrefix`:
+///   return t?r.replace(/^GPT-/iu,``):r  →  return r
+fn patch_names(src: &str) -> Option<String> {
+    let re = Regex::new(r"return [\w$]+\?[\w$]+\.replace\(/\^GPT-/iu,``\):([\w$]+)").unwrap();
+    let out = re.replacen(src, 1, format!("return ${{1}}{NAMES_MARK}"));
+    if out == src { None } else { Some(out.into_owned()) }
+}
+
+/// Applies the wanted patches that aren't in `src` yet. Returns the patched source
+/// (`None` when nothing changed) and the patches whose code couldn't be found.
+pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static str>) {
+    type Patch = (bool, &'static str, fn(&str) -> Option<String>);
+    let patches: [Patch; 2] = [(want.fast, FAST_MARK, patch_fast), (want.full_names, NAMES_MARK, patch_names)];
+    let mut out: Option<String> = None;
+    let mut missing = vec![];
+    for (i, (on, mark, f)) in patches.into_iter().enumerate() {
+        let cur = out.as_deref().unwrap_or(src);
+        if !on || cur.contains(mark) {
+            continue;
+        }
+        match f(cur) {
+            Some(s) => out = Some(s),
+            None => missing.push(Patches::names()[i]),
+        }
+    }
+    (out, missing)
+}
+
+fn not_found(missing: &[&str]) -> anyhow::Error {
+    anyhow!(tr!(
+        "在 Codex 界面代码里没找到「{}」的注入位置，可能是版本变了",
+        "Couldn't find where to patch {} in the Codex UI code; the version may have changed",
+        missing.join(crate::i18n::l("、", ", "))
+    ))
 }
 
 struct Session {
@@ -67,7 +128,7 @@ impl Session {
             if let Some(msg) = self.read()? {
                 if msg.get("id").and_then(|x| x.as_u64()) == Some(id) {
                     if let Some(err) = msg.get("error") {
-                        return Err(anyhow!("{method} 失败：{err}"));
+                        return Err(anyhow!(tr!("{method} 失败：{err}", "{method} failed: {err}")));
                     }
                     return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                 }
@@ -76,7 +137,7 @@ impl Session {
                 }
             }
         }
-        Err(anyhow!("{method} 超时"))
+        Err(anyhow!(tr!("{method} 超时", "{method} timed out")))
     }
 
     fn next_event(&mut self, method: &str, deadline: Instant) -> Result<Option<Value>> {
@@ -120,12 +181,13 @@ impl JsonValue for reqwest::blocking::Response {
     }
 }
 
-fn via_fetch(s: &mut Session) -> Result<bool> {
+/// `Ok(None)` when the bundle request wasn't seen; otherwise the patches not found.
+fn via_fetch(s: &mut Session, want: Patches) -> Result<Option<Vec<&'static str>>> {
     s.call("Fetch.enable", json!({ "patterns": [{ "urlPattern": format!("*{BUNDLE_HINT}*"), "requestStage": "Response" }] }))?;
     s.call("Page.reload", json!({ "ignoreCache": true }))?;
     let deadline = Instant::now() + Duration::from_secs(10);
     let result = match s.next_event("Fetch.requestPaused", deadline)? {
-        None => Ok(false),
+        None => Ok(None),
         Some(ev) => {
             let p = &ev["params"];
             let rid = p["requestId"].as_str().unwrap_or_default().to_string();
@@ -136,8 +198,8 @@ fn via_fetch(s: &mut Session) -> Result<bool> {
             } else {
                 raw.to_string()
             };
-            match patch_source(&text) {
-                Some(patched) => {
+            match patch_source(&text, want) {
+                (Some(patched), missing) => {
                     let headers: Vec<Value> = p["responseHeaders"]
                         .as_array()
                         .cloned()
@@ -151,11 +213,11 @@ fn via_fetch(s: &mut Session) -> Result<bool> {
                         "responseHeaders": headers,
                         "body": B64.encode(patched.as_bytes()),
                     }))?;
-                    Ok(true)
+                    Ok(Some(missing))
                 }
-                None => {
+                (None, missing) => {
                     s.call("Fetch.continueRequest", json!({ "requestId": rid }))?;
-                    Err(anyhow!("在 Codex 界面代码里没找到 Fast 判断，可能是版本变了"))
+                    if missing.is_empty() { Ok(Some(missing)) } else { Err(not_found(&missing)) }
                 }
             }
         }
@@ -164,7 +226,8 @@ fn via_fetch(s: &mut Session) -> Result<bool> {
     result
 }
 
-fn via_live_edit(s: &mut Session) -> Result<()> {
+/// Returns the patches not found.
+fn via_live_edit(s: &mut Session, want: Patches) -> Result<Vec<&'static str>> {
     s.call("Debugger.enable", json!({}))?;
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut script_id = None;
@@ -178,29 +241,32 @@ fn via_live_edit(s: &mut Session) -> Result<()> {
             None => break,
         }
     }
-    let id = script_id.ok_or_else(|| anyhow!("没有找到 Codex 界面脚本"))?;
+    let id = script_id.ok_or_else(|| anyhow!(crate::i18n::l("没有找到 Codex 界面脚本", "Codex UI script not found")))?;
     let src = s.call("Debugger.getScriptSource", json!({ "scriptId": id }))?;
     let text = src["scriptSource"].as_str().unwrap_or_default();
-    if text.contains(MARK) {
-        let _ = s.call("Debugger.disable", json!({}));
-        return Ok(());
-    }
-    let patched = patch_source(text).ok_or_else(|| anyhow!("在 Codex 界面代码里没找到 Fast 判断，可能是版本变了"))?;
+    let (patched, missing) = match patch_source(text, want) {
+        (Some(p), missing) => (p, missing),
+        (None, missing) => {
+            let _ = s.call("Debugger.disable", json!({}));
+            return if missing.is_empty() { Ok(missing) } else { Err(not_found(&missing)) };
+        }
+    };
     let r = s.call("Debugger.setScriptSource", json!({ "scriptId": id, "scriptSource": patched }))?;
     let _ = s.call("Debugger.disable", json!({}));
     if let Some(ex) = r.get("exceptionDetails") {
-        return Err(anyhow!("热替换失败：{ex}"));
+        return Err(anyhow!(tr!("热替换失败：{ex}", "Live patch failed: {ex}")));
     }
     if let Some(st) = r.get("status").and_then(|x| x.as_str()) {
         if st != "Ok" {
-            return Err(anyhow!("热替换失败：{st}"));
+            return Err(anyhow!(tr!("热替换失败：{st}", "Live patch failed: {st}")));
         }
     }
-    Ok(())
+    Ok(missing)
 }
 
 /// Waits for Codex windows on the debug port and patches each one.
-pub fn inject(port: u16) -> Result<String> {
+pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String> {
+    on(Progress::step("port", "active", Some(port.to_string())));
     let t0 = Instant::now();
     let pages = loop {
         if let Ok(p) = page_targets(port) {
@@ -209,38 +275,84 @@ pub fn inject(port: u16) -> Result<String> {
             }
         }
         if t0.elapsed() > Duration::from_secs(60) {
-            return Err(anyhow!("60 秒内没有连上 Codex 的调试端口 {port}"));
+            return Err(anyhow!(tr!("60 秒内没有连上 Codex 的调试端口 {port}", "Couldn't connect to Codex's debug port {port} within 60 seconds")));
         }
         std::thread::sleep(Duration::from_millis(500));
     };
+    on(Progress::step("port", "done", Some(tr!("{} 个窗口", "{} window(s)", pages.len()))));
     // Let the first render settle before reloading.
+    on(Progress::step("patch", "active", Some(crate::i18n::l("等待界面加载", "Waiting for the UI to load").into())));
     std::thread::sleep(Duration::from_secs(2));
+    let total = pages.len();
+    let sep = crate::i18n::l("、", ", ");
     let mut done = vec![];
-    for page in pages {
-        let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!("调试目标缺少 WebSocket 地址"))?;
+    let mut missing: Vec<&str> = vec![];
+    for (i, page) in pages.into_iter().enumerate() {
+        on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}", "Window {}/{}", i + 1, total))));
+        let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("调试目标缺少 WebSocket 地址", "Debug target has no WebSocket URL")))?;
         let mut s = Session::open(ws)?;
-        let how = match via_fetch(&mut s) {
-            Ok(true) => "响应拦截",
-            Ok(false) => {
-                via_live_edit(&mut s)?;
-                "热替换"
-            }
-            Err(e) => return Err(e),
+        let (how, miss) = match via_fetch(&mut s, want)? {
+            Some(m) => (crate::i18n::l("响应拦截", "response interception"), m),
+            None => (crate::i18n::l("热替换", "live patch"), via_live_edit(&mut s, want)?),
         };
         done.push(how);
+        for m in miss {
+            if !missing.contains(&m) {
+                missing.push(m);
+            }
+        }
     }
-    Ok(format!("Fast 已注入（{}，{} 个窗口）", done.join("、"), done.len()))
+    let what: Vec<&str> = want.wanted().into_iter().filter(|w| !missing.contains(w)).collect();
+    on(if missing.is_empty() {
+        Progress::step("patch", "done", Some(what.join(sep)))
+    } else {
+        Progress::step("patch", "warn", Some(tr!("没找到：{}", "Not found: {}", missing.join(sep))))
+    });
+    let mut msg = tr!("界面已注入：{}（{}，{} 个窗口）", "UI patched: {} ({}; {} window(s))", what.join(sep), done.join(sep), done.len());
+    if !missing.is_empty() {
+        msg.push_str(&tr!("；没找到「{}」的注入位置，可能是 Codex 版本变了", "; couldn't find where to patch {}, the Codex version may have changed", missing.join(sep)));
+    }
+    Ok(msg)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const FAST: Patches = Patches { fast: true, full_names: false };
+    const NAMES: Patches = Patches { fast: false, full_names: true };
+    const BOTH: Patches = Patches { fast: true, full_names: true };
+    const GATE: &str = "let x=1;d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;";
+    const STRIP: &str = "join(``);return t?r.replace(/^GPT-/iu,``):r}function Cpa(){";
+
     #[test]
     fn patches_gate_once() {
-        let src = "let x=1;d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;";
-        let out = patch_source(src).unwrap();
+        let (out, missing) = patch_source(GATE, FAST);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
         assert!(out.contains("d=!u&&c?.requirements?.featureRequirements?.fast_mode!==!1/*agentplus-fast*/"));
-        assert!(patch_source(&out).is_none());
+        assert_eq!(patch_source(&out, FAST), (None, vec![]));
+    }
+
+    #[test]
+    fn keeps_gpt_prefix() {
+        let (out, _) = patch_source(STRIP, NAMES);
+        let out = out.unwrap();
+        assert_eq!(out, "join(``);return r/*agentplus-names*/}function Cpa(){");
+        assert_eq!(patch_source(&out, NAMES), (None, vec![]));
+        // Not requested → untouched.
+        assert_eq!(patch_source(STRIP, FAST), (None, vec!["Fast"]));
+    }
+
+    #[test]
+    fn applies_what_it_finds() {
+        let src = format!("{GATE}{STRIP}");
+        let (out, missing) = patch_source(&src, BOTH);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
+        assert!(out.contains("/*agentplus-fast*/") && out.contains("/*agentplus-names*/"));
+        let (out, missing) = patch_source(STRIP, BOTH);
+        assert!(out.unwrap().contains("/*agentplus-names*/"));
+        assert_eq!(missing, vec!["Fast"]);
     }
 }

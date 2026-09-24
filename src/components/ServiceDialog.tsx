@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useEscape } from "../hooks";
 import { type AgentId, type AgentState, type ApiKind, api } from "../api";
-import { type Service, type Use, writableAgents } from "../services";
+import { AGENT_NAME, API_LABEL, type Group, ONLY_API, type Use, gatewayCapable, writableAgents } from "../services";
 import { AgentIcon, Icon } from "./icons";
+import { TemplatePicker } from "./TemplatePicker";
+import type { Template } from "../templates";
+import { type TKey, t } from "../i18n";
 
 export interface ServiceSave {
   name: string;
@@ -13,26 +17,33 @@ export interface ServiceSave {
   sync: Use[];
   /** Agents to add this provider to. */
   addTo: AgentId[];
+  /** Add them through a local gateway forward (protocol converted) instead of the address itself. */
+  gateway: boolean;
+  /** Template: the same key at another protocol's address, for agents that need that protocol. */
+  alt: { api: ApiKind; baseUrl: string; addTo: AgentId[] }[];
 }
 
 interface Props {
   agents: AgentState[];
   /** null = add a new provider. */
-  service: Service | null;
+  group: Group | null;
+  /** New group inside an existing station: suggested name and address. */
+  prefill?: { name: string; baseUrl: string; station: string } | null;
   onSave: (v: ServiceSave) => Promise<void>;
   onClose: () => void;
 }
 
-const API_OPTIONS: { v: ApiKind; label: string; hint: string }[] = [
-  { v: "responses", label: "Responses", hint: "OpenAI Responses 接口（/v1/responses），Codex 只支持这种" },
-  { v: "chat", label: "Chat", hint: "OpenAI 兼容 Chat Completions（/v1/chat/completions）" },
-  { v: "anthropic", label: "Anthropic", hint: "Anthropic Messages 接口（/v1/messages）" },
+const API_OPTIONS: { v: ApiKind; label: string; hint: TKey }[] = [
+  { v: "responses", label: "Responses", hint: "serviceDialog.hintResponses" },
+  { v: "chat", label: "Chat", hint: "serviceDialog.hintChat" },
+  { v: "anthropic", label: "Anthropic", hint: "serviceDialog.hintAnthropic" },
 ];
 
-export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
+export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props) {
+  const service = group;
   const isNew = !service;
-  const [name, setName] = useState(service?.name ?? "");
-  const [baseUrl, setBaseUrl] = useState(service?.baseUrl ?? "");
+  const [name, setName] = useState(service?.name ?? prefill?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(service?.baseUrl ?? prefill?.baseUrl ?? "");
   const [kind, setKind] = useState<ApiKind>(service?.api ?? "responses");
   const [key, setKey] = useState("");
   const [models, setModels] = useState<string[]>(service?.lib?.models ?? []);
@@ -48,19 +59,46 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
   const [sync, setSync] = useState<Set<string>>(new Set(editable.map(uid)));
   const free = writableAgents(agents).filter((a) => !(service?.uses ?? []).some((u) => u.agent.id === a.id && u.state !== "removing"));
   const [addTo, setAddTo] = useState<Set<AgentId>>(new Set());
+  const [viaGw, setViaGw] = useState(false);
+  const [tpl, setTpl] = useState<Template | null>(null);
+  const pickTpl = (t: Template | null) => {
+    setTpl(t);
+    setFetched(null);
+    if (!t) return;
+    setName(t.name);
+    setKind(t.api);
+    setBaseUrl(t.endpoints[t.api]!);
+    setModels(t.models);
+  };
+  const setProto = (k: ApiKind) => {
+    setKind(k);
+    // A template's other protocols live at their own address.
+    if (tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind]) setBaseUrl(tpl.endpoints[k]!);
+  };
+  /** Template, direct: an agent that needs another protocol uses the template's address for it. */
+  const altFor = (a: AgentId): ApiKind | null => {
+    const only = ONLY_API[a];
+    return !viaGw && tpl && only && only !== kind && tpl.endpoints[only] ? only : null;
+  };
+  /** Why an agent can't take this provider (null = it can). */
+  const blockedBy = (a: AgentId): string | null => {
+    const only = ONLY_API[a];
+    if (altFor(a)) return null;
+    if (viaGw) return gatewayCapable(a) ? null : t("serviceDialog.blockedGateway", { agent: AGENT_NAME[a] });
+    return only && kind !== only ? t("serviceDialog.blockedProto", { agent: AGENT_NAME[a], api: API_LABEL[only] }) : null;
+  };
 
-  useEffect(() => {
-    first.current?.focus();
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Focus the first field once, when the dialog opens (not on every parent re-render).
+  useEffect(() => { first.current?.focus(); }, []);
+  useEscape(onClose);
 
   const url = baseUrl.trim().replace(/\/+$/, "");
   const urlOk = /^https?:\/\/\S+$/.test(url);
   const changedAddr = !!service && url !== (service.baseUrl ?? "").replace(/\/+$/, "");
   const changedKey = key.trim() !== "";
-  const canSave = name.trim() !== "" && urlOk && !saving;
+  const changedApi = !!service && kind !== service.api;
+  const changed = changedAddr || changedKey || changedApi;
+  const canSave = name.trim() !== "" && urlOk && !saving && (!tpl || key.trim() !== "");
 
   const fetchList = async () => {
     setErr(null);
@@ -73,7 +111,7 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
       setFetched(list);
       if (models.length === 0) setModels(list.slice(0, 20));
     } catch (e) {
-      setErr(`拉取失败：${e}`);
+      setErr(t("serviceDialog.fetchFailed", { err: String(e) }));
     } finally {
       setFetching(false);
     }
@@ -93,8 +131,12 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
     try {
       await onSave({
         name: name.trim(), baseUrl: url, api: kind, apiKey: key.trim() || null, models,
-        sync: changedAddr || changedKey ? editable.filter((u) => sync.has(uid(u))) : [],
-        addTo: [...addTo],
+        sync: changed ? editable.filter((u) => sync.has(uid(u))) : [],
+        addTo: [...addTo].filter((a) => !blockedBy(a) && !altFor(a)),
+        gateway: viaGw,
+        alt: (["responses", "chat", "anthropic", "gemini"] as ApiKind[]).map((k) => ({
+          api: k, baseUrl: tpl?.endpoints[k] ?? "", addTo: [...addTo].filter((a) => altFor(a) === k),
+        })).filter((x) => x.addTo.length),
       });
     } catch (e) {
       setErr(String(e));
@@ -106,51 +148,63 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
 
   return (
     <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label={isNew ? "添加供应商" : "编辑供应商"}>
+      <div className="modal wide" role="dialog" aria-modal="true" aria-label={isNew ? t("serviceDialog.addProvider") : t("serviceDialog.editProvider")}>
         <div className="modal-head">
-          <h2>{isNew ? "添加供应商" : `编辑「${service!.name}」`}</h2>
-          <button className="icon-btn" aria-label="关闭" onClick={onClose}><Icon.close /></button>
+          <h2>{isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("serviceDialog.addProvider")) : t("serviceDialog.editGroup", { name: service!.name })}</h2>
+          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
         </div>
 
         <div className="modal-body">
+          {isNew && !prefill && <TemplatePicker value={tpl} onPick={pickTpl} />}
           <div className="form2">
             <label className="field">
-              <span>名称</span>
-              <input ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：中转 A" />
+              <span>{t("common.name")}</span>
+              <input ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("serviceDialog.namePlaceholder")} />
             </label>
             <label className="field">
-              <span>地址（Base URL）</span>
+              <span>{t("serviceDialog.baseUrlLabel")}</span>
               <input className="input mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-              {baseUrl && !urlOk && <em className="field-err">需要以 http:// 或 https:// 开头</em>}
+              {baseUrl && !urlOk && <em className="field-err">{t("serviceDialog.urlInvalid")}</em>}
             </label>
           </div>
           <div className="form2">
             <div className="field">
-              <span>默认接口类型</span>
+              <span>{t("serviceDialog.protocol")}</span>
               <div className="seg">
-                {API_OPTIONS.map((o) => (
-                  <button key={o.v} type="button" className={kind === o.v ? "on" : ""} title={o.hint} onClick={() => setKind(o.v)}>{o.label}</button>
-                ))}
+                {API_OPTIONS.map((o) => {
+                  const missing = !!tpl && !tpl.endpoints[o.v];
+                  return (
+                    <button key={o.v} type="button" className={kind === o.v ? "on" : ""} disabled={missing}
+                      title={missing ? t("serviceDialog.protoMissing", { vendor: tpl!.vendor, api: o.label }) : t(o.hint)} onClick={() => setProto(o.v)}>{o.label}</button>
+                  );
+                })}
               </div>
-              <em className="muted tiny">添加到 Codex 时总是用 Responses。</em>
+              <em className="muted tiny">
+                {tpl
+                  ? t("serviceDialog.tplProtocols", { list: (Object.keys(tpl.endpoints) as ApiKind[]).map((k) => API_LABEL[k]).join(" / ") })
+                  : t("serviceDialog.groupHint")}
+              </em>
             </div>
             <label className="field">
-              <span>API Key</span>
+              <span>{t("serviceDialog.apiKeyLabel")}</span>
               <input className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
-                placeholder={service?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? "已设置，留空表示不修改" : "sk-..."} />
-              <em className="muted tiny">保存在本机 ~/.agentplus，写入各 Agent 时按它们自己的格式保存。</em>
+                placeholder={service?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("serviceDialog.keyKeepPlaceholder") : "sk-..."} />
+              <em className="muted tiny">
+                {t("serviceDialog.keyStorage")}
+                {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("serviceDialog.getKey", { vendor: tpl.vendor })}</button></>}
+              </em>
             </label>
           </div>
 
           <div className="field">
             <div className="row between">
-              <span>常用模型 <em className="muted tiny">（添加到 ZCode / MiMo 时作为初始模型列表）</em></span>
+              <span>{t("serviceDialog.commonModels")} <em className="muted tiny">{t("serviceDialog.commonModelsHint")}</em></span>
               <button type="button" className="btn small" disabled={!urlOk || fetching} onClick={fetchList}>
-                <Icon.refresh size={12} />{fetching ? "拉取中…" : "从地址拉取"}
+                <Icon.refresh size={12} />{fetching ? t("serviceDialog.fetching") : t("serviceDialog.fetchFromUrl")}
               </button>
             </div>
             <div className="pick-list wide">
-              {all.length === 0 && <div className="muted small">还没有模型，可以拉取或手动添加，之后也能在各 Agent 的「模型列表」里改。</div>}
+              {all.length === 0 && <div className="muted small">{t("serviceDialog.noModels")}</div>}
               {all.map((m) => (
                 <label key={m} className="pick">
                   <input type="checkbox" checked={models.includes(m)} onChange={() => toggle(m)} />
@@ -160,18 +214,18 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
             </div>
             <div className="row gap6">
               <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder="手动添加模型 ID，多个用空格分隔" />
-              <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>添加</button>
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("serviceDialog.manualPlaceholder")} />
+              <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
             </div>
           </div>
 
           {editable.length > 0 && (
             <div className="field">
-              <span>同步到已接入的 Agent {!(changedAddr || changedKey) && <em className="muted tiny">（地址或密钥有改动时才需要）</em>}</span>
+              <span>{t("serviceDialog.syncTo")} {!changed && <em className="muted tiny">{t("serviceDialog.syncHint")}</em>}</span>
               <div className="agent-picks">
                 {editable.map((u) => (
-                  <label key={uid(u)} className={`apick${sync.has(uid(u)) && (changedAddr || changedKey) ? " on" : ""}${!(changedAddr || changedKey) ? " dim" : ""}`}>
-                    <input type="checkbox" disabled={!(changedAddr || changedKey)} checked={sync.has(uid(u))}
+                  <label key={uid(u)} className={`apick${sync.has(uid(u)) && changed ? " on" : ""}${!changed ? " dim" : ""}`}>
+                    <input type="checkbox" disabled={!changed} checked={sync.has(uid(u))}
                       onChange={() => setSync((p) => { const n = new Set(p); n.has(uid(u)) ? n.delete(uid(u)) : n.add(uid(u)); return n; })} />
                     <AgentIcon id={u.agent.id} size={18} />
                     <span className="small ellipsis">{u.agent.name} · {u.p!.name}</span>
@@ -183,19 +237,36 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
 
           {free.length > 0 && (
             <div className="field">
-              <span>添加到</span>
-              <div className="agent-picks">
-                {free.map((a) => (
-                  <label key={a.id} className={`apick${addTo.has(a.id) ? " on" : ""}`}>
-                    <input type="checkbox" checked={addTo.has(a.id)}
-                      onChange={() => setAddTo((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} />
-                    <AgentIcon id={a.id} size={18} />
-                    <span className="small">{a.name}</span>
-                    {a.id === "codex" && kind !== "responses" && <span className="tiny muted">· Responses</span>}
-                  </label>
-                ))}
+              <span>{t("serviceDialog.addTo")}</span>
+              <div className={`gw-toggle${viaGw ? " on" : ""}`}>
+                <Icon.gateway size={16} />
+                <div className="grow minw0">
+                  <div className="small strong">{t("serviceDialog.useGateway")}</div>
+                  <div className="tiny muted">
+                    {viaGw ? t("serviceDialog.gatewayOn") : t("serviceDialog.gatewayOff")}
+                  </div>
+                </div>
+                <button type="button" className={`switch${viaGw ? " on" : ""}`} role="switch" aria-checked={viaGw} aria-label={t("serviceDialog.useGateway")}
+                  onClick={() => setViaGw((v) => !v)}><span /></button>
               </div>
-              {isNew && <em className="muted tiny">都不勾也可以，只保存到供应商库，之后随时添加。</em>}
+              <div className="agent-picks">
+                {free.map((a) => {
+                  const why = blockedBy(a.id);
+                  const only = ONLY_API[a.id];
+                  return (
+                    <label key={a.id} className={`apick${addTo.has(a.id) && !why ? " on" : ""}${why ? " dim" : ""}`} title={why ?? undefined}>
+                      <input type="checkbox" disabled={!!why} checked={addTo.has(a.id) && !why}
+                        onChange={() => setAddTo((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} />
+                      <AgentIcon id={a.id} size={18} />
+                      <span className="small">{a.name}</span>
+                      {why && <span className="tiny muted">{t("serviceDialog.needsApi", { api: API_LABEL[only!] })}</span>}
+                      {!why && viaGw && only && only !== kind && <span className="tiny muted">{t("serviceDialog.convertsTo", { api: API_LABEL[only] })}</span>}
+                      {altFor(a.id) && <span className="tiny muted">{t("serviceDialog.usesAltUrl", { api: API_LABEL[only!] })}</span>}
+                    </label>
+                  );
+                })}
+              </div>
+              {isNew && <em className="muted tiny">{t("serviceDialog.noneRequired")}</em>}
             </div>
           )}
 
@@ -203,9 +274,9 @@ export function ServiceDialog({ agents, service, onSave, onClose }: Props) {
         </div>
 
         <div className="modal-foot">
-          <span className="muted tiny grow">供应商库立即保存；写入 Agent 的部分会先进入「待写入的改动」。</span>
-          <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? "保存中…" : isNew ? "添加" : "保存"}</button>
+          <span className="muted tiny grow">{t("serviceDialog.footNote")}</span>
+          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("serviceDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
         </div>
       </div>
     </div>

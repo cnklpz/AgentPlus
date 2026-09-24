@@ -1,0 +1,25 @@
+import type zh from "../zh/modelDialog";
+
+const en: typeof zh = {
+  editTitle: "Edit model",
+  editHead: "Edit model {id}",
+  addHead: "Add a model to {agent}",
+  addTitle: "Add model",
+  modelId: "Model ID",
+  modelIdPlaceholder: "e.g. deepseek-v4-pro",
+  idLocked: "The ID is the model name sent to the provider and can't be changed. To use a different ID, delete this model and add it again.",
+  displayName: "Display name",
+  displayNamePlaceholder: "Optional; the ID is shown if empty",
+  context: "Context window",
+  contextPlaceholder: "e.g. 128k / 1m / 200000",
+  contextBad: "Enter a number; k / m suffixes are allowed",
+  contextTokens: "{n} tokens ({short})",
+  defaultNote: "Settings marked \"Default\" aren't written to the config; {agent} decides them itself.",
+  pendingNote: "Saved changes go to \"Pending changes\" and are written to the config file when you click \"Apply\".",
+  modified: "Modified",
+  default: "Default",
+  numberBad: "Enter a number; a k suffix is allowed",
+  resetDefault: "Reset to default",
+};
+
+export default en;

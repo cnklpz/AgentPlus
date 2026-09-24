@@ -1,0 +1,27 @@
+import type zh from "../zh/syncPage";
+
+const en: typeof zh = {
+  folderSaved: "Sync folder saved",
+  upToDate: "The sync file matches this device; nothing to import",
+  title: "Multi-device sync",
+  intro: "Choose a folder that gets synced (cloud drive, NAS or USB stick all work). Exports contain providers and model lists but no API keys; after importing on another device, you only need to fill in the keys.",
+  folder: "Sync folder",
+  folderPlaceholder: "e.g. D:\\OneDrive\\AgentPlus",
+  fileFromMachine: "The folder has a sync file from {machine}, exported {time}",
+  fileExported: "The folder has a sync file, exported {time}",
+  unknownTime: "at an unknown time",
+  noFile: "The folder has no sync file yet.",
+  noFolder: "No sync folder set yet.",
+  sync: "Sync",
+  exportLabel: "Export this device's config",
+  exportDesc: "Write the providers and model lists of all three agents to the sync folder (replacing the old sync file).",
+  export: "Export",
+  importLabel: "Import from sync file",
+  importDesc: "Compare with this device and list the missing providers and models. Selected items are added to that agent's \"Pending changes\" for you to confirm and apply.",
+  compare: "Compare",
+  importable: "Available to import",
+  noKeyHint: "New providers have no API key; after importing, click \"Edit\" in the provider's details to add one.",
+  adopt: "Add to pending ({n})",
+};
+
+export default en;

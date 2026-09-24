@@ -11,6 +11,11 @@ pub fn home() -> PathBuf {
 
 /// AgentPlus data always stays on the Windows side.
 pub fn agentplus_dir() -> PathBuf {
+    // Tests that run real flows point this at a temp dir so they don't leave backups behind.
+    #[cfg(test)]
+    if let Some(d) = std::env::var_os("AGENTPLUS_HOME") {
+        return PathBuf::from(d);
+    }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".agentplus")
 }
 
@@ -42,10 +47,10 @@ pub struct TextMeta {
 }
 
 pub fn read_text(path: &Path) -> Result<(String, TextMeta)> {
-    let bytes = fs::read(path).with_context(|| format!("读取 {} 失败", path.display()))?;
+    let bytes = fs::read(path).with_context(|| tr!("读取 {} 失败", "Failed to read {}", path.display()))?;
     let bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     let body = if bom { &bytes[3..] } else { &bytes[..] };
-    let text = String::from_utf8(body.to_vec()).with_context(|| format!("{} 不是 UTF-8", path.display()))?;
+    let text = String::from_utf8(body.to_vec()).with_context(|| tr!("{} 不是 UTF-8", "{} is not UTF-8", path.display()))?;
     let first_indent = text
         .lines()
         .map(|l| &l[..l.len() - l.trim_start_matches([' ', '\t']).len()])
@@ -74,15 +79,15 @@ pub fn write_text_atomic(path: &Path, text: &str, meta: TextMeta) -> Result<()> 
         "{}.agentplus-tmp",
         path.extension().and_then(|e| e.to_str()).unwrap_or("")
     ));
-    fs::write(&tmp, out.as_bytes()).with_context(|| format!("写入 {} 失败", tmp.display()))?;
-    fs::rename(&tmp, path).with_context(|| format!("替换 {} 失败", path.display()))?;
+    fs::write(&tmp, out.as_bytes()).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| tr!("替换 {} 失败", "Failed to replace {}", path.display()))?;
     Ok(())
 }
 
 /// Copies each file into `~/.agentplus/backups/<time>/<agent>/` before a write,
 /// with a `manifest.json` recording where each file came from (for rollback).
 pub fn backup(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
-    backup_tagged(agent, files, "应用配置")
+    backup_tagged(agent, files, crate::i18n::l("应用配置", "Apply config"))
 }
 
 pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
@@ -99,7 +104,7 @@ pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<Pat
     for f in files {
         if f.exists() {
             let name = f.file_name().map(|n| n.to_owned()).unwrap_or_default();
-            fs::copy(f, dir.join(&name)).with_context(|| format!("备份 {} 失败", f.display()))?;
+            fs::copy(f, dir.join(&name)).with_context(|| tr!("备份 {} 失败", "Failed to back up {}", f.display()))?;
             entries.push(serde_json::json!({ "name": name.to_string_lossy(), "path": f.to_string_lossy() }));
         }
     }
@@ -228,7 +233,7 @@ mod tests {
 
 pub fn read_json(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
     let (text, meta) = read_text(path)?;
-    let v = serde_json::from_str(&text).with_context(|| format!("解析 {} 失败", path.display()))?;
+    let v = serde_json::from_str(&text).with_context(|| tr!("解析 {} 失败", "Failed to parse {}", path.display()))?;
     Ok((v, meta))
 }
 

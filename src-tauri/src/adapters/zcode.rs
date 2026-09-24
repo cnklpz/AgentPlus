@@ -3,9 +3,11 @@
 //! when its id is in `personalModelIds`; `modelOrder` keeps the full known list.
 //! Per-model context windows live in `config.modelConfigRules.providerModelRules`.
 
+use crate::mfields;
 use crate::model::*;
 use crate::process::Install;
 use crate::util::*;
+use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -30,13 +32,17 @@ fn legacy_path() -> PathBuf {
     dir().join("config.json")
 }
 
-const SETTINGS: [(&str, &str, &str, &str); 6] = [
-    ("messageStreamShowReasoning", "对话", "显示推理过程", "messageStreamShowReasoning"),
-    ("messageStreamShowTodos", "对话", "显示待办清单", "messageStreamShowTodos"),
-    ("memoryEnabled", "对话", "记忆", "memoryEnabled"),
-    ("closeToTrayOnWindows", "窗口与数据", "关闭窗口时最小化到托盘", "closeToTrayOnWindows"),
-    ("modelIoFullRetentionEnabled", "窗口与数据", "保留完整的模型输入输出", "modelIoFullRetentionEnabled"),
-    ("taskAutoArchiveEnabled", "窗口与数据", "自动归档旧任务", "taskAutoArchiveEnabled"),
+/// (key, group, label, desc); group and label are (zh, en), picked with `l()`.
+type Text2 = (&'static str, &'static str);
+const G_CHAT: Text2 = ("对话", "Chat");
+const G_WINDOW: Text2 = ("窗口与数据", "Window & data");
+const SETTINGS: [(&str, Text2, Text2, &str); 6] = [
+    ("messageStreamShowReasoning", G_CHAT, ("显示推理过程", "Show reasoning"), "messageStreamShowReasoning"),
+    ("messageStreamShowTodos", G_CHAT, ("显示待办清单", "Show to-do list"), "messageStreamShowTodos"),
+    ("memoryEnabled", G_CHAT, ("记忆", "Memory"), "memoryEnabled"),
+    ("closeToTrayOnWindows", G_WINDOW, ("关闭窗口时最小化到托盘", "Minimize to tray when closing the window"), "closeToTrayOnWindows"),
+    ("modelIoFullRetentionEnabled", G_WINDOW, ("保留完整的模型输入输出", "Keep full model input and output"), "modelIoFullRetentionEnabled"),
+    ("taskAutoArchiveEnabled", G_WINDOW, ("自动归档旧任务", "Auto-archive old tasks"), "taskAutoArchiveEnabled"),
 ];
 
 fn api_type(api: &str) -> &'static str {
@@ -76,13 +82,52 @@ fn str_vec(v: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn is_rule(r: &Value, pid: &str, mid: &str) -> bool {
+    r.get("providerId").and_then(|x| x.as_str()) == Some(pid) && r.get("modelId").and_then(|x| x.as_str()) == Some(mid)
+}
+
+/// The per-model rule's `config` (context window, input formats, max output…).
+fn rule_config<'a>(v: &'a Value, pid: &str, mid: &str) -> Option<&'a Value> {
+    v.pointer("/config/modelConfigRules/providerModelRules")?.as_array()?.iter().find(|r| is_rule(r, pid, mid))?.get("config")
+}
+
 fn ctx_for(v: &Value, pid: &str, mid: &str) -> Option<u64> {
-    v.pointer("/config/modelConfigRules/providerModelRules")?
-        .as_array()?
+    rule_config(v, pid, mid)?.pointer("/properties/contextWindow")?.as_u64()
+}
+
+fn model_of(pc: &Value, pid: &str, mid: &str, visible: bool) -> Model {
+    let context = ctx_for(pc, pid, mid);
+    let extra = rule_config(pc, pid, mid).map(|c| mfields::read(c, mfields::ZCODE)).unwrap_or_default();
+    let tags = [("supportsImage", "图片", "Images"), ("supportsPdf", "PDF", "PDF"), ("supportsVideo", "视频", "Video")]
         .iter()
-        .find(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(pid) && r.get("modelId").and_then(|x| x.as_str()) == Some(mid))?
-        .pointer("/config/properties/contextWindow")?
-        .as_u64()
+        .filter(|(k, ..)| extra.get(&format!("/properties/inputFormat/{k}")) == Some(&json!(true)))
+        .map(|(_, zh, en)| l(*zh, *en).to_string())
+        .collect();
+    Model { id: mid.into(), visible, tags, ctx: context.map(fmt_ctx), context, deletable: true, extra, ..Default::default() }
+}
+
+/// Writes model fields into the model's rule, creating the rule if needed and dropping it
+/// when nothing is left in it.
+fn set_fields(pc: &mut Value, pid: &str, mid: &str, extra: &mfields::Extra) -> Result<Vec<String>> {
+    if pc.pointer("/config/modelConfigRules/providerModelRules").is_none() {
+        pc["config"]["modelConfigRules"]["providerModelRules"] = json!([]);
+    }
+    let list = pc.pointer_mut("/config/modelConfigRules/providerModelRules").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!(l("providerModelRules 不是数组", "providerModelRules is not an array")))?;
+    let i = match list.iter().position(|r| is_rule(r, pid, mid)) {
+        Some(i) => i,
+        None => {
+            list.push(json!({ "modelId": mid, "config": {}, "providerId": pid }));
+            list.len() - 1
+        }
+    };
+    if !list[i].get("config").map(|c| c.is_object()).unwrap_or(false) {
+        list[i]["config"] = json!({});
+    }
+    let lines = mfields::write(&mut list[i]["config"], mfields::ZCODE, extra)?;
+    if list[i]["config"].as_object().map(|c| c.is_empty()).unwrap_or(false) {
+        list.remove(i);
+    }
+    Ok(lines)
 }
 
 fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) -> Vec<Provider> {
@@ -97,21 +142,24 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
                 id: key.into(),
                 name: b.get("name").and_then(|x| x.as_str()).unwrap_or("Z.ai").to_string(),
                 base_url: None,
-                host: if oauth { "Z.ai 账号登录".into() } else { "Z.ai API Key".into() },
-                apis: vec!["套餐".into()],
+                host: if oauth { l("Z.ai 账号登录", "Z.ai account login").into() } else { "Z.ai API Key".into() },
+                apis: vec![l("套餐", "Plan").into()],
                 builtin: true,
                 enabled: true,
                 compatible: true,
                 reason: None,
                 models: models.into_iter().map(|id| Model { id, visible: true, readonly: true, ..Default::default() }).collect(),
                 details: vec![
-                    Kv::text("认证方式", if oauth { "Z.ai 账号（OAuth）" } else { "Z.ai API Key" }),
-                    Kv::mono("配置 ID", key),
-                    Kv::text("说明", "ZCode 内置，模型列表由 ZCode 管理"),
+                    Kv::text(l("认证方式", "Auth type"), if oauth { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)") } else { "Z.ai API Key" }),
+                    Kv::mono(l("配置 ID", "Config ID"), key),
+                    Kv::text(l("说明", "About"), l("ZCode 内置，模型列表由 ZCode 管理", "Built into ZCode; its model list is managed by ZCode")),
                 ],
                 editable: false,
                 api: "chat".into(),
                 has_key: true,
+                key_fp: None,
+                key_hint: None,
+                official_auth: false,
             });
         }
     }
@@ -130,14 +178,14 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
         let access = r.pointer("/config/access/type").and_then(|x| x.as_str()).unwrap_or("-");
         let has_key = r.pointer("/config/access/apiKey").and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
         let details = vec![
-            Kv::mono("配置 ID", pid.clone()),
+            Kv::mono(l("配置 ID", "Config ID"), pid.clone()),
             Kv::mono("api.type", if atype.is_empty() { "-".into() } else { atype.to_string() }),
-            Kv::text("密钥", match (access, has_key) {
-                ("api-key", true) => "API Key · 明文保存在 provider_config.json".to_string(),
-                ("api-key", false) => "API Key · 未填写".to_string(),
+            Kv::text(l("密钥", "API key"), match (access, has_key) {
+                ("api-key", true) => l("API Key · 明文保存在 provider_config.json", "API Key · stored in plain text in provider_config.json").to_string(),
+                ("api-key", false) => l("API Key · 未填写", "API Key · not set").to_string(),
                 (other, _) => other.to_string(),
             }),
-            Kv::mono("分组", r.pointer("/config/group").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
+            Kv::mono(l("分组", "Group"), r.pointer("/config/group").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
         ];
         out.push(Provider {
             details,
@@ -151,14 +199,14 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
             reason: None,
             models: order
                 .iter()
-                .map(|m| {
-                    let context = ctx_for(pc, &pid, m);
-                    Model { id: m.clone(), visible: visible.contains(m), ctx: context.map(fmt_ctx), context, deletable: true, ..Default::default() }
-                })
+                .map(|m| model_of(pc, &pid, m, visible.contains(m)))
                 .collect(),
             editable: true,
             api: api_short(atype).into(),
             has_key,
+            key_fp: None,
+            key_hint: None,
+            official_auth: false,
             id: pid,
         });
     }
@@ -185,6 +233,8 @@ pub fn state(inst: &Install) -> AgentState {
         readonly: false,
         fixed_pending: false,
         fixed_prompt: false,
+        restartable: false,
+        model_fields: vec![],
     };
     let pc = match read_json(&provider_path()) {
         Ok((v, _)) => v,
@@ -198,19 +248,19 @@ pub fn state(inst: &Install) -> AgentState {
     let legacy = read_json(&legacy_path()).ok().map(|x| x.0);
     st.providers = provider_list(&pc, legacy.as_ref(), setting.as_ref());
     let get_b = |k: &str| setting.as_ref().and_then(|s| s.get(k)).and_then(|x| x.as_bool()).unwrap_or(false);
-    st.settings = SETTINGS.iter().map(|(k, g, l, d)| bool_setting(k, g, l, d, get_b(k))).collect();
+    st.settings = SETTINGS.iter().map(|(k, g, lb, d)| bool_setting(k, l(g.0, g.1), l(lb.0, lb.1), d, get_b(k))).collect();
 
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
     let off: Vec<&str> = st.providers.iter().filter(|p| !p.enabled).map(|p| p.name.as_str()).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     let mode = setting.as_ref().and_then(|s| s.pointer("/modelProviderFamilyModes/zai")).and_then(|x| x.as_str()).unwrap_or("-");
     st.current = vec![
-        Kv::text("登录方式", if mode == "oauth" { "Z.ai 账号（OAuth）".to_string() } else { mode.to_string() }),
-        Kv::text("启用供应商", format!("{} 个", on.len())),
-        Kv::text("停用供应商", if off.is_empty() { "无".into() } else { off.join("、") }),
-        Kv::text("可见模型", format!("{vis} 个")),
-        Kv::text("记忆", if get_b("memoryEnabled") { "开" } else { "关" }),
-        Kv::text("最小化到托盘", if get_b("closeToTrayOnWindows") { "开" } else { "关" }),
+        Kv::text(l("登录方式", "Login method"), if mode == "oauth" { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)").to_string() } else { mode.to_string() }),
+        Kv::text(l("启用供应商", "Enabled providers"), tr!("{} 个", "{}", on.len())),
+        Kv::text(l("停用供应商", "Disabled providers"), if off.is_empty() { l("无", "None").into() } else { off.join(l("、", ", ")) }),
+        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
+        Kv::text(l("记忆", "Memory"), if get_b("memoryEnabled") { l("开", "On") } else { l("关", "Off") }),
+        Kv::text(l("最小化到托盘", "Minimize to tray"), if get_b("closeToTrayOnWindows") { l("开", "On") } else { l("关", "Off") }),
     ];
     st
 }
@@ -221,8 +271,8 @@ pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
     let r = rules(&pc)
         .into_iter()
         .find(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(id))
-        .ok_or_else(|| anyhow!("找不到供应商 {id}"))?;
-    let base = r.pointer("/config/api/baseUrl").and_then(|x| x.as_str()).ok_or_else(|| anyhow!("供应商 {id} 没有地址"))?.to_string();
+        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let base = r.pointer("/config/api/baseUrl").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有地址", "Provider {id} has no base URL")))?.to_string();
     let key = r.pointer("/config/access/apiKey").and_then(|x| x.as_str()).filter(|k| !k.is_empty()).map(String::from);
     let api = api_short(r.pointer("/config/api/type").and_then(|x| x.as_str()).unwrap_or("")).to_string();
     Ok((base, key, api))
@@ -231,14 +281,14 @@ pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
 fn rules_mut(pc: &mut Value) -> Result<&mut Vec<Value>> {
     pc.pointer_mut("/config/providerConfigRules/providerRules")
         .and_then(|r| r.as_array_mut())
-        .ok_or_else(|| anyhow!("provider_config.json 格式不对"))
+        .ok_or_else(|| anyhow!(l("provider_config.json 格式不对", "provider_config.json has an unexpected format")))
 }
 
 fn rule_mut<'a>(pc: &'a mut Value, pid: &str) -> Result<&'a mut Value> {
     rules_mut(pc)?
         .iter_mut()
         .find(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(pid))
-        .ok_or_else(|| anyhow!("找不到供应商 {pid}"))
+        .ok_or_else(|| anyhow!(tr!("找不到供应商 {pid}", "Provider not found: {pid}")))
 }
 
 fn rule_name(r: &Value, pid: &str) -> String {
@@ -294,7 +344,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!("名称和地址不能为空"));
+                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
                 }
                 match &p.id {
                     None => {
@@ -316,9 +366,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         if let Some(order) = pc.pointer_mut("/config/providerOrder").and_then(|x| x.as_array_mut()) {
                             order.push(json!(pid));
                         }
-                        diff.push(&pf, format!("+ 供应商「{}」{} · {}（{} 个模型）", p.name.trim(), p.base_url.trim(), api_label(api_type(&p.api)), models.len()), true);
+                        diff.push(&pf, tr!("+ 供应商「{}」{} · {}（{} 个模型）", "+ Provider \"{}\" {} · {} ({} models)", p.name.trim(), p.base_url.trim(), api_label(api_type(&p.api)), models.len()), true);
                         if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
-                            diff.push(&pf, format!("「{}」.apiKey = {}", p.name.trim(), mask_key(k.trim())), true);
+                            diff.push(&pf, tr!("「{}」.apiKey = {}", "\"{}\".apiKey = {}", p.name.trim(), mask_key(k.trim())), true);
                         }
                     }
                     Some(pid) => {
@@ -326,21 +376,21 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         let name = rule_name(r, pid);
                         if r.get("providerName").and_then(|x| x.as_str()) != Some(p.name.trim()) {
                             r["providerName"] = json!(p.name.trim());
-                            diff.push(&pf, format!("「{name}」.providerName = \"{}\"", p.name.trim()), true);
+                            diff.push(&pf, tr!("「{name}」.providerName = \"{}\"", "\"{name}\".providerName = \"{}\"", p.name.trim()), true);
                         }
                         if r.pointer("/config/api/baseUrl").and_then(|x| x.as_str()) != Some(p.base_url.trim()) {
                             r["config"]["api"]["baseUrl"] = json!(p.base_url.trim());
-                            diff.push(&pf, format!("「{name}」.baseUrl = \"{}\"", p.base_url.trim()), true);
+                            diff.push(&pf, tr!("「{name}」.baseUrl = \"{}\"", "\"{name}\".baseUrl = \"{}\"", p.base_url.trim()), true);
                         }
                         let t = api_type(&p.api);
                         if r.pointer("/config/api/type").and_then(|x| x.as_str()) != Some(t) {
                             r["config"]["api"]["type"] = json!(t);
-                            diff.push(&pf, format!("「{name}」.api.type = \"{t}\""), true);
+                            diff.push(&pf, tr!("「{name}」.api.type = \"{t}\"", "\"{name}\".api.type = \"{t}\""), true);
                         }
                         if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
                             r["config"]["access"]["type"] = json!("api-key");
                             r["config"]["access"]["apiKey"] = json!(k.trim());
-                            diff.push(&pf, format!("「{name}」.apiKey = {}", mask_key(k.trim())), true);
+                            diff.push(&pf, tr!("「{name}」.apiKey = {}", "\"{name}\".apiKey = {}", mask_key(k.trim())), true);
                         }
                     }
                 }
@@ -349,7 +399,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
             Op::DeleteProvider { provider } => {
                 let list = rules_mut(&mut pc)?;
                 let Some(i) = list.iter().position(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(provider)) else {
-                    return Err(anyhow!("找不到供应商 {provider}"));
+                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
                 };
                 let name = rule_name(&list[i], provider);
                 list.remove(i);
@@ -359,7 +409,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 if let Some(m) = pc.pointer_mut("/config/modelConfigRules/providerModelRules").and_then(|x| x.as_array_mut()) {
                     m.retain(|r| r.get("providerId").and_then(|x| x.as_str()) != Some(provider));
                 }
-                diff.push(&pf, format!("- 供应商「{name}」（含它的模型和密钥）"), false);
+                diff.push(&pf, tr!("- 供应商「{name}」（含它的模型和密钥）", "- Provider \"{name}\" (with its models and API key)"), false);
                 pc_dirty = true;
             }
             Op::SetProviderEnabled { provider, enabled } => {
@@ -367,14 +417,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 let name = rule_name(r, provider);
                 if r.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false) != *enabled {
                     r["enabled"] = json!(enabled);
-                    diff.push(&pf, format!("「{name}」.enabled = {enabled}"), *enabled);
+                    diff.push(&pf, tr!("「{name}」.enabled = {enabled}", "\"{name}\".enabled = {enabled}"), *enabled);
                     pc_dirty = true;
                 }
             }
             Op::SetModelVisible { provider, model, visible } => {
                 let r = rule_mut(&mut pc, provider)?;
                 let name = rule_name(r, provider);
-                let cfg = r.get_mut("config").ok_or_else(|| anyhow!("供应商 {provider} 缺少 config"))?;
+                let cfg = r.get_mut("config").ok_or_else(|| anyhow!(tr!("供应商 {provider} 缺少 config", "Provider {provider} has no config")))?;
                 let mut ids = str_vec(cfg.get("personalModelIds"));
                 let mut order = str_vec(cfg.get("modelOrder"));
                 if ids.contains(model) != *visible {
@@ -386,18 +436,21 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     ids.sort_by_key(|m| order.iter().position(|o| o == m).unwrap_or(usize::MAX));
                     cfg["personalModelIds"] = json!(ids);
                     cfg["modelOrder"] = json!(order);
-                    diff.push(&pf, format!("「{name}」.personalModelIds {} \"{model}\"", if *visible { "+" } else { "-" }), *visible);
+                    diff.push(&pf, tr!("「{name}」.personalModelIds {} \"{model}\"", "\"{name}\".personalModelIds {} \"{model}\"", if *visible { "+" } else { "-" }), *visible);
                     pc_dirty = true;
                 }
             }
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!("模型 ID 不能为空"));
+                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                }
+                for (k, v) in &m.extra {
+                    mfields::check(mfields::ZCODE, k, v)?;
                 }
                 let r = rule_mut(&mut pc, provider)?;
                 let name = rule_name(r, provider);
-                let cfg = r.get_mut("config").ok_or_else(|| anyhow!("供应商 {provider} 缺少 config"))?;
+                let cfg = r.get_mut("config").ok_or_else(|| anyhow!(tr!("供应商 {provider} 缺少 config", "Provider {provider} has no config")))?;
                 let mut order = str_vec(cfg.get("modelOrder"));
                 let mut ids = str_vec(cfg.get("personalModelIds"));
                 if !order.contains(&mid) && !ids.contains(&mid) {
@@ -405,21 +458,25 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     ids.push(mid.clone());
                     cfg["modelOrder"] = json!(order);
                     cfg["personalModelIds"] = json!(ids);
-                    diff.push(&pf, format!("「{name}」+ 模型 \"{mid}\""), true);
+                    diff.push(&pf, tr!("「{name}」+ 模型 \"{mid}\"", "\"{name}\" + model \"{mid}\""), true);
                     pc_dirty = true;
                 }
                 if let Some(c) = m.context {
                     if ctx_for(&pc, provider, &mid) != Some(c) {
                         set_context(&mut pc, provider, &mid, Some(c));
-                        diff.push(&pf, format!("「{name}」{mid} contextWindow = {c}"), true);
+                        diff.push(&pf, tr!("「{name}」{mid} contextWindow = {c}", "\"{name}\" {mid} contextWindow = {c}"), true);
                         pc_dirty = true;
                     }
+                }
+                for l in set_fields(&mut pc, provider, &mid, &m.extra)? {
+                    diff.push(&pf, tr!("「{name}」{mid} {l}", "\"{name}\" {mid} {l}"), true);
+                    pc_dirty = true;
                 }
             }
             Op::DeleteModel { provider, model } => {
                 let r = rule_mut(&mut pc, provider)?;
                 let name = rule_name(r, provider);
-                let cfg = r.get_mut("config").ok_or_else(|| anyhow!("供应商 {provider} 缺少 config"))?;
+                let cfg = r.get_mut("config").ok_or_else(|| anyhow!(tr!("供应商 {provider} 缺少 config", "Provider {provider} has no config")))?;
                 let mut ids = str_vec(cfg.get("personalModelIds"));
                 let mut order = str_vec(cfg.get("modelOrder"));
                 ids.retain(|m| m != model);
@@ -427,12 +484,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 cfg["personalModelIds"] = json!(ids);
                 cfg["modelOrder"] = json!(order);
                 set_context(&mut pc, provider, model, None);
-                diff.push(&pf, format!("「{name}」- 模型 \"{model}\""), false);
+                diff.push(&pf, tr!("「{name}」- 模型 \"{model}\"", "\"{name}\" - model \"{model}\""), false);
                 pc_dirty = true;
             }
             Op::SetSetting { key, value } => {
                 if !SETTINGS.iter().any(|(k, ..)| k == key) {
-                    return Err(anyhow!("未知设置 {key}"));
+                    return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}")));
                 }
                 let on = value.as_bool().unwrap_or(false);
                 if st.get(key).and_then(|x| x.as_bool()).unwrap_or(false) != on {
@@ -441,8 +498,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     st_dirty = true;
                 }
             }
-            Op::SetCurrentProvider { .. } => return Err(anyhow!("ZCode 按启用/停用管理供应商")),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("ZCode 按启用/停用管理供应商", "ZCode manages providers by enabling/disabling them"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models. Edit the models directly."))),
+            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
         }
     }
 
@@ -463,4 +522,28 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
         }
     }
     Ok((diff, written, backup_dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_fields_live_in_the_rule() {
+        let mut pc = json!({ "config": { "modelConfigRules": { "providerModelRules": [
+            { "modelId": "m", "config": { "properties": { "contextWindow": 1000 } }, "providerId": "p" }
+        ] } } });
+        let on: mfields::Extra = [("/properties/inputFormat/supportsImage".to_string(), json!(true))].into_iter().collect();
+        assert_eq!(set_fields(&mut pc, "p", "m", &on).unwrap().len(), 1);
+        assert_eq!(rule_config(&pc, "p", "m").unwrap()["properties"]["inputFormat"], json!({ "supportsImage": true }));
+        assert_eq!(model_of(&pc, "p", "m", true).tags, vec!["图片".to_string()]);
+        // A model without a rule gets one; clearing its only field drops it again.
+        set_fields(&mut pc, "p", "n", &on).unwrap();
+        let off: mfields::Extra = [("/properties/inputFormat/supportsImage".to_string(), Value::Null)].into_iter().collect();
+        set_fields(&mut pc, "p", "n", &off).unwrap();
+        assert!(rule_config(&pc, "p", "n").is_none());
+        // Clearing on "m" keeps its context window.
+        set_fields(&mut pc, "p", "m", &off).unwrap();
+        assert_eq!(rule_config(&pc, "p", "m").unwrap(), &json!({ "properties": { "contextWindow": 1000 } }));
+    }
 }

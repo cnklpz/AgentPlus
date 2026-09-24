@@ -1,0 +1,150 @@
+/* ------------------------------------------------------------ 动效 ·「过度」
+   Everything here is scoped to :root[data-motion="rich"]. The base vocabulary in
+   styles-hub.css keeps working; this level only retunes its variables (longer,
+   springier, farther, blurred) and layers extra feedback on top. The pieces that
+   need pointer or DOM state (ripples, rubber-band, tilt, gliders, exits) live in
+   motion.ts and add the classes styled at the bottom. */
+:root[data-motion="rich"] {
+  --ease-out: linear(0, 0.098, 0.303, 0.524, 0.715, 0.858, 0.952, 1.006, 1.032, 1.038, 1.035, 1.027, 1.019, 1.011, 1.006, 1.002, 1, 0.999, 0.999, 0.999, 0.999, 0.999, 1);
+  --ease-spring: linear(0, 0.103, 0.331, 0.589, 0.815, 0.98, 1.079, 1.122, 1.123, 1.101, 1.069, 1.038, 1.012, 0.996, 0.987, 0.984, 0.986, 0.989, 0.993, 0.997, 1, 1.001, 1.002, 1.002, 1.002, 1.001, 1.001, 1, 1);
+  --ease-smooth: cubic-bezier(.16, 1, .3, 1);
+  --t-fast: .2s;
+  --t: .4s;
+  --t-slow: .62s;
+  --rise: 16px;
+  --slide: 28px;
+  --pop: .92;
+  --fx: blur(6px);
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion="rich"] { --rise: 0px; --slide: 0px; --pop: 1; --fx: none; }
+}
+
+@keyframes ap-drop { from { opacity: 0; transform: translateY(calc(var(--rise) * -.6)); } }
+@keyframes ap-spin-in { from { opacity: 0; transform: rotate(-120deg) scale(.5); } }
+@keyframes ap-backdrop { from { background-color: rgba(18, 23, 34, 0); backdrop-filter: blur(0); } }
+@keyframes ap-pop-in { 0% { transform: scale(.86); } }
+@keyframes ap-check { 0% { transform: scale(.4); } 60% { transform: scale(1.18); } }
+@keyframes ap-glow { 0% { box-shadow: 0 0 0 0 rgba(47, 84, 235, .45); } 100% { box-shadow: 0 0 0 8px rgba(47, 84, 235, 0); } }
+@keyframes ap-hop { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-5px) scale(1.06); } }
+@keyframes ap-wiggle { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-12deg); } 60% { transform: rotate(9deg); } 85% { transform: rotate(-3deg); } }
+@keyframes ap-focus { from { outline-offset: 7px; outline-color: transparent; } }
+@keyframes ap-reveal { from { opacity: 0; transform: translateY(18px) scale(.985); } }
+@keyframes ap-ripple { 0% { transform: scale(0); opacity: .22; } 55% { opacity: .16; } 100% { transform: scale(1); opacity: 0; } }
+/* 退场（motion.ts 克隆被移除的浮层来播放） */
+@keyframes ap-out-fade { to { opacity: 0; } }
+@keyframes ap-out-backdrop { to { background-color: rgba(18, 23, 34, 0); backdrop-filter: blur(0); } }
+@keyframes ap-out-pop { to { opacity: 0; transform: translateY(10px) scale(.95); filter: blur(4px); } }
+@keyframes ap-out-menu { to { opacity: 0; transform: translateY(-6px) scale(.96); } }
+@keyframes ap-out-toast { to { opacity: 0; transform: translate(-50%, 14px) scale(.94); } }
+
+/* 页面与弹层 */
+:root[data-motion="rich"] .page-top { animation: ap-drop var(--t) var(--ease-out) backwards; }
+:root[data-motion="rich"] .page-body.slide-fwd { animation: ap-slide-fwd var(--t-slow) var(--ease-out) backwards; }
+:root[data-motion="rich"] .page-body.slide-back { animation: ap-slide-back var(--t-slow) var(--ease-out) backwards; }
+:root[data-motion="rich"] .page-icon { animation: ap-spin-in .7s var(--ease-spring) backwards; }
+:root[data-motion="rich"] .modal-bg { backdrop-filter: blur(3px); animation: ap-backdrop var(--t) var(--ease-smooth) backwards; }
+:root[data-motion="rich"] .modal, :root[data-motion="rich"] .palette { animation: ap-pop var(--t-slow) var(--ease-spring) backwards; }
+:root[data-motion="rich"] .dd-menu, :root[data-motion="rich"] .ctx-menu { animation: ap-menu var(--t) var(--ease-spring) backwards; }
+:root[data-motion="rich"] .toast { animation: ap-toast var(--t-slow) var(--ease-spring) backwards; }
+:root[data-motion="rich"] .tab-bar { transition: transform .5s var(--ease-spring), width .5s var(--ease-spring); }
+:root[data-motion="rich"] .agent-row.active::before { animation: ap-bar var(--t-slow) var(--ease-spring) backwards; }
+
+/* 逐个入场：更多列表、更长的错峰 */
+:root[data-motion="rich"] :is(.sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > * {
+  animation: ap-rise var(--t) var(--ease-out) backwards;
+}
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > * {
+  animation-delay: calc(var(--i, 0) * 38ms);
+}
+:root[data-motion="rich"] :is(.dd-menu, .ctx-menu, .palette-list) > * { animation-delay: calc(var(--i, 0) * 22ms); }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(2) { --i: 1; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(3) { --i: 2; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(4) { --i: 3; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(5) { --i: 4; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(6) { --i: 5; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(7) { --i: 6; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(8) { --i: 7; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(9) { --i: 8; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(10) { --i: 9; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(11) { --i: 10; }
+:root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(n+12) { --i: 11; }
+
+/* 长列表：滚动进入视口时浮现 */
+@supports (animation-timeline: view()) {
+  :root[data-motion="rich"] :is(.sess, .mrow:not(.mhead), .hrow, .proj-row, .kv-row, .gw-route) {
+    animation: ap-reveal linear both; animation-timeline: view(); animation-range: entry 0% entry 70%;
+  }
+}
+
+/* 悬停与按压 */
+:root[data-motion="rich"] .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 14px -8px rgba(18, 23, 34, .35); }
+:root[data-motion="rich"] .btn.primary { position: relative; overflow: hidden; isolation: isolate; }
+:root[data-motion="rich"] .btn.primary:hover:not(:disabled) { box-shadow: 0 8px 20px -8px rgba(47, 84, 235, .65); }
+:root[data-motion="rich"] .btn.primary::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .38) 50%, transparent 70%); transform: translateX(-110%); }
+:root[data-motion="rich"] .btn.primary:hover:not(:disabled)::after { transform: translateX(110%); transition: transform .8s var(--ease-smooth); }
+:root[data-motion="rich"] :is(.btn, .pbtn, .apick, .chip, .seg button, .env-card, .opt, .acct):active:not(:disabled) { transform: scale(.94); transition-duration: .08s; }
+:root[data-motion="rich"] .icon-btn:active:not(:disabled) { transform: scale(.86); transition-duration: .08s; }
+:root[data-motion="rich"] .icon-btn:not(.ghost):hover:not(:disabled) svg { animation: ap-wiggle .55s var(--ease-smooth); }
+:root[data-motion="rich"] .agent-row:not(.active):not(:disabled):hover,
+:root[data-motion="rich"] .side-link:not(.active):not(:disabled):hover,
+:root[data-motion="rich"] .rail-item:not(.on):hover { transform: translateX(3px); }
+:root[data-motion="rich"] .agent-row:active:not(:disabled), :root[data-motion="rich"] .side-link:active:not(:disabled) { transform: scale(.97); transition-duration: .08s; }
+:root[data-motion="rich"] .agent-tile:hover .agent-tile-icon { animation: ap-hop .55s var(--ease-spring); }
+:root[data-motion="rich"] :is(.env-card, .acct, .opt, .apick):hover:not(:disabled):not(.on):not(.selected) { transform: translateY(-2px); box-shadow: 0 8px 18px -12px rgba(18, 23, 34, .4); }
+:root[data-motion="rich"] .sgroup { transition: box-shadow var(--t) var(--ease-smooth), border-color var(--t-fast) var(--ease-smooth); }
+:root[data-motion="rich"] .sgroup:hover { box-shadow: 0 10px 28px -18px rgba(18, 23, 34, .35); border-color: var(--line-hover); }
+:root[data-motion="rich"] .srow { transition: background-color var(--t-fast) var(--ease-smooth); }
+:root[data-motion="rich"] .srow:hover { background-color: var(--surface-2); }
+
+/* 卡片：跟随指针倾斜 + 高光（--mx/--my 由 motion.ts 写入） */
+:root[data-motion="rich"] :is(.hcard, .pcard) { position: relative; }
+:root[data-motion="rich"] :is(.hcard, .pcard):not(.selected):hover {
+  transform: perspective(900px) rotateX(calc((.5 - var(--my, .5)) * 6deg)) rotateY(calc((var(--mx, .5) - .5) * 7deg)) translateY(-4px);
+  box-shadow: 0 18px 34px -18px rgba(18, 23, 34, .38);
+}
+:root[data-motion="rich"] :is(.hcard, .pcard):active { transform: scale(.985); transition-duration: .1s; }
+:root[data-motion="rich"] :is(.hcard, .pcard)::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0;
+  background: radial-gradient(320px circle at calc(var(--mx, .5) * 100%) calc(var(--my, .5) * 100%), rgba(47, 84, 235, .09), transparent 62%);
+  transition: opacity var(--t) var(--ease-smooth); }
+:root[data-motion="rich"] :is(.hcard, .pcard):hover::after { opacity: 1; }
+
+/* 选中与开关的状态反馈 */
+:root[data-motion="rich"] .seg button.on, :root[data-motion="rich"] .chip.on { animation: ap-pop-in var(--t) var(--ease-spring); }
+:root[data-motion="rich"] .switch.on { animation: ap-glow .7s var(--ease-smooth); }
+:root[data-motion="rich"] .switch span { transition: left var(--t) var(--ease-spring), width var(--t) var(--ease-spring); }
+:root[data-motion="rich"] :is(.opt.on .opt-check, .apick input:checked) { animation: ap-check var(--t) var(--ease-spring); }
+:root[data-motion="rich"] .agent-row.active .agent-icon { animation: ap-hop .5s var(--ease-spring); }
+:root[data-motion="rich"] :is(.btn, .icon-btn, .seg button, .tab, .chip, .agent-row, .side-link, .pcard, .hcard):focus-visible { animation: ap-focus var(--t) var(--ease-spring); }
+:root[data-motion="rich"] :is(.input, .search-input) { outline: 2px solid transparent; outline-offset: 7px;
+  transition: background-color var(--t-fast) var(--ease-out), border-color var(--t-fast) var(--ease-out), color var(--t-fast) var(--ease-out),
+    box-shadow var(--t) var(--ease-out), outline-offset var(--t) var(--ease-spring), outline-color var(--t-fast) var(--ease-smooth); }
+:root[data-motion="rich"] :is(.input, .search-input):focus { outline-color: var(--accent-soft); outline-offset: 0; }
+
+/* ---- motion.ts 使用的类 ---- */
+/* 点击涟漪 */
+.ap-ripple-host { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; z-index: 0; animation: none !important; }
+.ap-ripple { position: absolute; border-radius: 50%; background: currentColor; pointer-events: none; transform: scale(0); animation: ap-ripple .65s var(--ease-smooth) forwards !important; }
+
+/* 滚到边界时的橡皮筋回弹：宿主写 --ob，子元素跟着位移 */
+.ap-ob > :not(.ap-glider) { translate: 0 var(--ob, 0px); transition: translate .6s var(--ease-spring) !important; }
+.ap-ob.ap-pulling > :not(.ap-glider) { transition: translate .09s linear !important; }
+
+/* 选中高亮在兄弟之间滑动 */
+:root[data-motion="rich"] .seg { position: relative; }
+:root[data-motion="rich"] .seg > button { position: relative; z-index: 1; }
+:root[data-motion="rich"] .sidebar { position: relative; }
+:root[data-motion="rich"] .sidebar > :not(.ap-glider) { position: relative; z-index: 1; }
+.ap-glider { position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; animation: none !important; }
+.seg > .ap-glider { border-radius: 7px; background: var(--seg-on); box-shadow: 0 1px 2px rgba(18, 23, 34, .1), 0 0 0 1px rgba(18, 23, 34, .04); }
+.sidebar > .ap-glider { border-radius: 10px; background: var(--surface); border: 1px solid var(--line-active); box-shadow: 0 1px 2px rgba(18, 23, 34, .06); }
+.ap-glide-to { background: transparent !important; border-color: transparent !important; box-shadow: none !important; transition: none !important; }
+
+/* 被移除的浮层的退场克隆 */
+.ap-ghost { pointer-events: none !important; }
+.ap-ghost *, .ap-ghost *::before, .ap-ghost *::after { animation: none !important; transition: none !important; }
+.ap-ghost.modal-bg { animation: ap-out-backdrop .26s var(--ease-smooth) forwards !important; }
+.ap-ghost :is(.modal, .palette) { animation: ap-out-pop .26s var(--ease-smooth) forwards !important; }
+.ap-ghost:is(.dd-menu, .ctx-menu) { animation: ap-out-menu .2s var(--ease-smooth) forwards !important; }
+.ap-ghost.toast { animation: ap-out-toast .3s var(--ease-smooth) forwards !important; }

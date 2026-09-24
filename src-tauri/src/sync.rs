@@ -21,15 +21,16 @@ pub fn folder() -> Option<String> {
 pub fn set_folder(path: &str) -> Result<()> {
     let p = PathBuf::from(path.trim());
     if !p.is_dir() {
-        return Err(anyhow!("文件夹不存在：{}", p.display()));
+        return Err(anyhow!(tr!("文件夹不存在：{}", "Folder does not exist: {}", p.display())));
     }
-    let mut s = store::load();
-    store::set_str(&mut s, "sync", "folder", &p.to_string_lossy());
-    store::save(&s)
+    store::update(|s| {
+        store::set_str(s, "sync", "folder", &p.to_string_lossy());
+        Ok(())
+    })
 }
 
 fn sync_path() -> Result<PathBuf> {
-    Ok(PathBuf::from(folder().ok_or_else(|| anyhow!("先设置同步文件夹"))?).join(FILE))
+    Ok(PathBuf::from(folder().ok_or_else(|| anyhow!(crate::i18n::l("先设置同步文件夹", "Set a sync folder first")))?).join(FILE))
 }
 
 fn export_agent(st: &AgentState) -> Value {
@@ -89,7 +90,7 @@ pub fn export() -> Result<String> {
         "agents": agents,
     });
     fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
-    Ok(format!("已导出 {n} 个供应商到 {}（不含密钥）", display_path(&path)))
+    Ok(tr!("已导出 {n} 个供应商到 {}（不含密钥）", "Exported {n} provider(s) to {} (API keys not included)", display_path(&path)))
 }
 
 #[derive(Serialize)]
@@ -109,7 +110,7 @@ fn norm(u: &str) -> String {
 /// Compares the sync file with this machine and proposes additions.
 pub fn preview_import() -> Result<Vec<Suggestion>> {
     let path = sync_path()?;
-    let doc: Value = serde_json::from_str(&fs::read_to_string(&path).map_err(|_| anyhow!("同步文件夹里还没有 {FILE}，先在另一台设备导出"))?)?;
+    let doc: Value = serde_json::from_str(&fs::read_to_string(&path).map_err(|_| anyhow!(tr!("同步文件夹里还没有 {FILE}，先在另一台设备导出", "No {FILE} in the sync folder yet. Export from another device first")))?)?;
     let mut out = vec![];
     for a in adapters::ALL {
         let Some(remote) = doc["agents"].get(a) else { continue };
@@ -126,8 +127,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                     let key = format!("pu:sync-{a}-{}", slug(name));
                     out.push(Suggestion {
                         agent: a.into(),
-                        title: format!("添加供应商「{name}」"),
-                        detail: format!("{base} · {} 个模型 · 密钥需要在本机填写", ids.len()),
+                        title: tr!("添加供应商「{name}」", "Add provider \"{name}\""),
+                        detail: tr!("{base} · {} 个模型 · 密钥需要在本机填写", "{base} · {} model(s) · API key must be entered on this device", ids.len()),
                         ops: vec![(key, json!({ "op": "upsert_provider", "provider": { "id": null, "name": name, "baseUrl": base, "api": api, "apiKey": null, "models": ids } }))],
                     });
                 }
@@ -146,8 +147,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                             .collect();
                         out.push(Suggestion {
                             agent: a.into(),
-                            title: format!("「{}」补充 {} 个模型", lp.name, missing.len()),
-                            detail: missing.iter().filter_map(|m| m["id"].as_str()).take(6).collect::<Vec<_>>().join("、"),
+                            title: tr!("「{}」补充 {} 个模型", "Add {1} model(s) to \"{0}\"", lp.name, missing.len()),
+                            detail: missing.iter().filter_map(|m| m["id"].as_str()).take(6).collect::<Vec<_>>().join(crate::i18n::l("、", ", ")),
                             ops,
                         });
                     }
@@ -166,8 +167,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                     .collect();
                 out.push(Suggestion {
                     agent: a.into(),
-                    title: format!("Codex 模型目录补充 {} 个自定义模型", missing.len()),
-                    detail: missing.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect::<Vec<_>>().join("、"),
+                    title: tr!("Codex 模型目录补充 {} 个自定义模型", "Add {} custom model(s) to the Codex model catalog", missing.len()),
+                    detail: missing.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect::<Vec<_>>().join(crate::i18n::l("、", ", ")),
                     ops,
                 });
             }

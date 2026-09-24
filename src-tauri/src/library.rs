@@ -21,6 +21,8 @@ pub struct LibEntry {
     pub has_key: bool,
     /// "••••abcd"
     pub key_hint: Option<String>,
+    /// Same fingerprint as Provider.key_fp.
+    pub key_fp: Option<String>,
     pub models: Vec<String>,
 }
 
@@ -55,6 +57,7 @@ fn to_entry(v: &Value) -> LibEntry {
         api: str_of(v, "api"),
         has_key: !key.is_empty(),
         key_hint: (!key.is_empty()).then(|| mask_key(&key)),
+        key_fp: (!key.is_empty()).then(|| crate::model::key_fingerprint(&key)),
         models: v
             .get("models")
             .and_then(|m| m.as_array())
@@ -64,74 +67,85 @@ fn to_entry(v: &Value) -> LibEntry {
 }
 
 pub fn list() -> Vec<LibEntry> {
-    entries(&store::load()).iter().map(to_entry).collect()
+    list_in(&store::load())
+}
+
+/// Library entries from an already loaded store.
+pub fn list_in(root: &Value) -> Vec<LibEntry> {
+    entries(root).iter().map(to_entry).collect()
 }
 
 pub fn save(input: LibInput) -> Result<LibEntry> {
     let name = input.name.trim();
     let url = input.base_url.trim().trim_end_matches('/');
     if name.is_empty() {
-        return Err(anyhow!("名称不能为空"));
+        return Err(anyhow!(crate::i18n::l("名称不能为空", "Name can't be empty")));
     }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(anyhow!("地址需要以 http:// 或 https:// 开头"));
+        return Err(anyhow!(crate::i18n::l("地址需要以 http:// 或 https:// 开头", "Base URL must start with http:// or https://")));
     }
     if !["responses", "chat", "anthropic"].contains(&input.api.as_str()) {
-        return Err(anyhow!("未知接口类型 {}", input.api));
+        return Err(anyhow!(tr!("未知接口类型 {}", "Unknown API type {}", input.api)));
     }
-    let mut root = store::load();
-    let mut list = entries(&root);
-    let pos = input.id.as_ref().and_then(|id| list.iter().position(|e| str_of(e, "id") == *id));
-    if input.id.is_some() && pos.is_none() {
-        return Err(anyhow!("供应商库里没有这一项"));
-    }
-    let mut e = pos.map(|i| list[i].clone()).unwrap_or_else(|| {
-        let base = slug(name);
-        let mut id = base.clone();
-        let mut n = 2;
-        while list.iter().any(|e| str_of(e, "id") == id) {
-            id = format!("{base}-{n}");
-            n += 1;
+    // Read before taking the store lock: agent adapters may touch the store themselves.
+    let adopted = input.adopt_from.as_ref().and_then(|(agent, provider)| crate::adapters::provider_endpoint(agent, provider).ok()).and_then(|(_, k, _)| k);
+    let e = store::update(|root| {
+        let mut list = entries(root);
+        let pos = input.id.as_ref().and_then(|id| list.iter().position(|e| str_of(e, "id") == *id));
+        if input.id.is_some() && pos.is_none() {
+            return Err(anyhow!(crate::i18n::l("供应商库里没有这一项", "This entry is not in the provider library")));
         }
-        json!({ "id": id })
-    });
-    e["name"] = json!(name);
-    e["baseUrl"] = json!(url);
-    e["api"] = json!(input.api);
-    if let Some(m) = input.models {
-        e["models"] = json!(m);
-    }
-    match input.api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
-        Some(k) => e["apiKey"] = json!(k),
-        None if str_of(&e, "apiKey").is_empty() => {
-            if let Some((agent, provider)) = &input.adopt_from {
-                if let Ok((_, Some(k), _)) = crate::adapters::provider_endpoint(agent, provider) {
+        let mut e = pos.map(|i| list[i].clone()).unwrap_or_else(|| {
+            let base = slug(name);
+            let mut id = base.clone();
+            let mut n = 2;
+            while list.iter().any(|e| str_of(e, "id") == id) {
+                id = format!("{base}-{n}");
+                n += 1;
+            }
+            json!({ "id": id })
+        });
+        e["name"] = json!(name);
+        e["baseUrl"] = json!(url);
+        e["api"] = json!(input.api);
+        if let Some(m) = input.models {
+            e["models"] = json!(m);
+        }
+        match input.api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
+            Some(k) => e["apiKey"] = json!(k),
+            None if str_of(&e, "apiKey").is_empty() => {
+                if let Some(k) = adopted {
                     e["apiKey"] = json!(k);
                 }
             }
+            None => {}
         }
-        None => {}
-    }
-    match pos {
-        Some(i) => list[i] = e.clone(),
-        None => list.push(e.clone()),
-    }
-    root["library"] = Value::Array(list);
-    store::save(&root)?;
+        match pos {
+            Some(i) => list[i] = e.clone(),
+            None => list.push(e.clone()),
+        }
+        root["library"] = Value::Array(list);
+        Ok(e)
+    })?;
     Ok(to_entry(&e))
 }
 
 pub fn delete(id: &str) -> Result<()> {
-    let mut root = store::load();
-    let list: Vec<Value> = entries(&root).into_iter().filter(|e| str_of(e, "id") != id).collect();
-    root["library"] = Value::Array(list);
-    store::save(&root)
+    store::update(|root| {
+        let list: Vec<Value> = entries(root).into_iter().filter(|e| str_of(e, "id") != id).collect();
+        root["library"] = Value::Array(list);
+        Ok(())
+    })
 }
 
 /// (name, base_url, key, api, models) of a library entry, for copying into an agent.
 pub fn endpoint(id: &str) -> Result<(String, String, Option<String>, String, Vec<String>)> {
-    let root = store::load();
-    let e = entries(&root).into_iter().find(|e| str_of(e, "id") == id).ok_or_else(|| anyhow!("供应商库里没有 {id}"))?;
+    endpoint_in(&store::load(), id)
+}
+
+/// `endpoint` from an already loaded store.
+pub fn endpoint_in(root: &Value, id: &str) -> Result<(String, String, Option<String>, String, Vec<String>)> {
+    let e = entries(root).into_iter().find(|e| str_of(e, "id") == id).ok_or_else(|| anyhow!(tr!("供应商库里没有 {id}", "Not in the provider library: {id}")))?;
     let key = str_of(&e, "apiKey");
     let le = to_entry(&e);
     Ok((le.name, le.base_url, (!key.is_empty()).then_some(key), le.api, le.models))
