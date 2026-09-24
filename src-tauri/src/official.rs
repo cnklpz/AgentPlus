@@ -12,9 +12,9 @@
 //!
 //! The in-progress state lives in store.json, so a restart of AgentPlus can resume or undo.
 
-use crate::adapters::codex::{codex_home, ID};
+use crate::adapters::codex::{catalog_path, chatgpt_signed_in, codex_home, config_path, load_doc, ID};
 use crate::store;
-use crate::util::{backup_tagged, display_path, expand_tilde, read_json, read_text, str_list, write_json, write_text_atomic, TextMeta};
+use crate::util::{backup_tagged, display_path, read_json, str_list, write_bytes_atomic, write_json, write_text_atomic, TextMeta};
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -45,12 +45,8 @@ pub struct FetchStatus {
     pub cache_models: usize,
     pub cache_path: String,
     pub catalog_path: String,
-    /// Account logged in with ChatGPT (auth.json has tokens).
+    /// Account signed in with ChatGPT (auth.json, by Codex's own rules).
     pub chatgpt_login: bool,
-}
-
-fn config_path() -> PathBuf {
-    codex_home().join("config.toml")
 }
 
 fn cache_path() -> PathBuf {
@@ -61,16 +57,14 @@ fn state(root: &Value) -> Option<Value> {
     store::agent_get(root, ID, "officialFetch").cloned().filter(|v| v.is_object())
 }
 
-/// Catalog file named in a config text (or the default one).
+/// Catalog file named in config.toml (or the default one).
 fn catalog_of(doc: &DocumentMut) -> PathBuf {
-    let p = doc.get("model_catalog_json").and_then(|v| v.as_str()).unwrap_or(DEFAULT_CATALOG);
-    expand_tilde(p)
+    catalog_path(doc).unwrap_or_else(|| crate::env::resolve_path(DEFAULT_CATALOG))
 }
 
-fn chatgpt_login() -> bool {
-    let Ok(text) = fs::read_to_string(codex_home().join("auth.json")) else { return false };
-    let v: Value = serde_json::from_str(&text).unwrap_or_default();
-    v.get("tokens").map(|t| !t.is_null()).unwrap_or(false)
+/// When the fetch started (ms since the epoch), from its store entry.
+fn started_ms(st: &Value) -> i64 {
+    st.get("startedMs").and_then(|x| x.as_i64()).unwrap_or(0)
 }
 
 fn cache_models(since_ms: i64) -> Option<Vec<Value>> {
@@ -91,14 +85,14 @@ pub fn active() -> bool {
 
 pub fn status() -> FetchStatus {
     let root = store::load();
-    let doc = read_text(&config_path()).ok().and_then(|(t, _)| t.parse::<DocumentMut>().ok());
+    let doc = load_doc().ok().map(|(d, _)| d);
     let mut s = FetchStatus {
         cache_path: display_path(&cache_path()),
-        chatgpt_login: chatgpt_login(),
+        chatgpt_login: chatgpt_signed_in(),
         ..Default::default()
     };
     if let Some(st) = state(&root) {
-        let started = st.get("startedMs").and_then(|x| x.as_i64()).unwrap_or(0);
+        let started = started_ms(&st);
         s.active = true;
         s.started_at = st.get("startedAt").and_then(|x| x.as_str()).map(String::from);
         s.backup_dir = st.get("backupDir").and_then(|x| x.as_str()).map(String::from);
@@ -118,14 +112,14 @@ pub fn start() -> Result<FetchStatus> {
     if state(&root).is_some() {
         return Err(anyhow!(crate::i18n::l("已经在获取中，先完成或取消上一次", "A fetch is already in progress. Finish or cancel it first")));
     }
-    let (text, meta) = read_text(&config_path())?;
-    let mut doc: DocumentMut = text.parse().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Failed to parse config.toml: {e}")))?;
+    let (mut doc, meta) = load_doc()?;
     let catalog = catalog_of(&doc);
     let mut files = vec![config_path()];
     if catalog.exists() {
         files.push(catalog.clone());
     }
-    let dir = backup_tagged(ID, &files, crate::i18n::l("获取官方模型列表前", "Before fetching official model list"))?;
+    let (zh, en) = crate::history::REASON_OFFICIAL;
+    let dir = backup_tagged(ID, &files, crate::i18n::l(zh, en))?;
 
     // Official provider, no custom catalog: Codex will fetch and cache the list.
     doc["model_provider"] = value("openai");
@@ -148,10 +142,8 @@ pub fn start() -> Result<FetchStatus> {
 fn restore_config(st: &Value) -> Result<()> {
     let src = PathBuf::from(st.get("config").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("找不到备份的 config.toml", "Backed-up config.toml not found")))?);
     let bytes = fs::read(&src).with_context(|| tr!("读取备份 {} 失败", "Failed to read backup {}", src.display()))?;
-    let tmp = config_path().with_extension("toml.agentplus-tmp");
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, config_path())?;
-    Ok(())
+    // Byte for byte, and through a symlinked config.toml like `start`'s write.
+    write_bytes_atomic(&config_path(), &bytes)
 }
 
 fn clear(root: &mut Value) -> Result<()> {
@@ -163,8 +155,9 @@ fn clear(root: &mut Value) -> Result<()> {
 pub fn finish() -> Result<Vec<FetchModel>> {
     let mut root = store::load();
     let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("没有进行中的获取", "No fetch in progress")))?;
-    let started = st.get("startedMs").and_then(|x| x.as_i64()).unwrap_or(0);
-    let models = cache_models(started).ok_or_else(|| anyhow!(tr!("还没有新的 {CACHE}：请确认 Codex 已重启并用 ChatGPT 账号登录，打开一次模型选择", "No new {CACHE} yet: make sure Codex has restarted, is signed in with a ChatGPT account, and open the model picker once")))?;
+    if cache_models(started_ms(&st)).is_none() {
+        anyhow::bail!("{}", tr!("还没有新的 {CACHE}：请确认 Codex 已重启并用 ChatGPT 账号登录，打开一次模型选择", "No new {CACHE} yet: make sure Codex has restarted, is signed in with a ChatGPT account, and open the model picker once"));
+    }
     let catalog = PathBuf::from(st.get("catalogFile").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("备份信息不完整", "Backup info is incomplete")))?);
 
     // New catalog = the cache file as-is, plus AgentPlus's custom models from the old one.
@@ -189,15 +182,13 @@ pub fn finish() -> Result<Vec<FetchModel>> {
 
     // Put the user's config back, making sure it reads the catalog we just wrote.
     restore_config(&st)?;
-    let (text, cmeta) = read_text(&config_path())?;
-    let mut doc: DocumentMut = text.parse().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Failed to parse config.toml: {e}")))?;
+    let (mut doc, cmeta) = load_doc()?;
     if doc.get("model_catalog_json").is_none() {
         doc["model_catalog_json"] = value(display_path(&catalog));
         write_text_atomic(&config_path(), &doc.to_string(), cmeta)?;
     }
     clear(&mut root)?;
 
-    let _ = models;
     Ok(cache
         .get("models")
         .and_then(|m| m.as_array())
@@ -224,6 +215,55 @@ pub fn cancel() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// start → finish and start → cancel in a temp home: config.toml comes back byte for byte,
+    /// and a symlinked config.toml (dotfile managers) stays a link.
+    #[test]
+    fn start_finish_cancel_restore_config() {
+        let h = crate::util::TestHome::new("official");
+        let codex = h.0.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let original = "model_provider = \"relay\"\r\nmodel_catalog_json = \"~/.codex/models.json\"\r\n\r\n[model_providers.relay]\r\nbase_url = \"https://r.example.com\"\r\n";
+        let cfg = codex.join("config.toml");
+        #[cfg(unix)]
+        let real = {
+            let real = h.0.join("dotfiles-config.toml");
+            fs::write(&real, original).unwrap();
+            std::os::unix::fs::symlink(&real, &cfg).unwrap();
+            real
+        };
+        #[cfg(not(unix))]
+        let real = {
+            fs::write(&cfg, original).unwrap();
+            cfg.clone()
+        };
+        fs::write(codex.join("models.json"), r#"{"models":[{"slug":"mine","display_name":"Mine"}]}"#).unwrap();
+        assert!(!status().chatgpt_login);
+        fs::write(codex.join("auth.json"), r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-x","tokens":{"refresh_token":"r"}}"#).unwrap();
+        assert!(!status().chatgpt_login, "an API-key sign-in with leftover tokens is not a ChatGPT login");
+        fs::write(codex.join("auth.json"), r#"{"tokens":{"refresh_token":"r"}}"#).unwrap();
+        assert!(status().chatgpt_login);
+
+        let st = start().unwrap();
+        assert!(st.active && !st.cache_ready);
+        assert_eq!(st.catalog_path, "~/.codex/models.json");
+        let during = fs::read_to_string(&real).unwrap();
+        assert!(during.contains("model_provider = \"openai\"") && !during.contains("model_catalog_json"));
+        assert!(finish().unwrap_err().to_string().starts_with("还没有新的 models_cache.json"));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(codex.join(CACHE), r#"{"models":[{"slug":"gpt-new","display_name":"GPT New","visibility":"list"}]}"#).unwrap();
+        let models = finish().unwrap();
+        assert_eq!(models.iter().map(|m| m.slug.as_str()).collect::<Vec<_>>(), ["gpt-new"]);
+        assert_eq!(fs::read_to_string(&real).unwrap(), original);
+        assert!(fs::symlink_metadata(&cfg).unwrap().file_type().is_symlink() == cfg!(unix));
+        assert!(!status().active);
+
+        start().unwrap();
+        cancel().unwrap();
+        assert_eq!(fs::read_to_string(&real).unwrap(), original);
+        assert!(fs::symlink_metadata(&cfg).unwrap().file_type().is_symlink() == cfg!(unix));
+        assert!(fs::read_dir(&codex).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
+    }
 
     /// Full start → cache → finish flow, then start → cancel, on a temp copy of ~/.codex.
     /// store.json and the tagged backups go to the temp dir too, so nothing is left in ~/.agentplus.

@@ -33,7 +33,7 @@ pub fn codex_home() -> PathBuf {
         .unwrap_or_else(|| home().join(".codex"))
 }
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     codex_home().join("config.toml")
 }
 
@@ -41,14 +41,15 @@ fn env_path() -> PathBuf {
     codex_home().join(".env")
 }
 
-fn load_doc() -> Result<(DocumentMut, TextMeta)> {
+pub(crate) fn load_doc() -> Result<(DocumentMut, TextMeta)> {
     let (text, meta) = read_text(&config_path())?;
     let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Couldn't parse config.toml: {e}")))?;
     Ok((doc, meta))
 }
 
-fn catalog_path(doc: &DocumentMut) -> Option<PathBuf> {
-    doc.get("model_catalog_json").and_then(|i| i.as_str()).map(expand_tilde)
+/// The catalog file named by `model_catalog_json` (a Linux path in WSL mode, `~/…`).
+pub(crate) fn catalog_path(doc: &DocumentMut) -> Option<PathBuf> {
+    doc.get("model_catalog_json").and_then(|i| i.as_str()).map(crate::env::resolve_path)
 }
 
 fn str_list(item: Option<&Item>) -> Option<Vec<String>> {
@@ -277,6 +278,11 @@ fn sign_in(doc: &DocumentMut) -> SignIn {
         return if store == "file" { SignIn::None } else { SignIn::Unknown };
     };
     sign_in_from(&v)
+}
+
+/// Signed in with a ChatGPT account (what Codex needs to download the official model list).
+pub(crate) fn chatgpt_signed_in() -> bool {
+    read_json(&codex_home().join("auth.json")).is_ok_and(|(v, _)| sign_in_from(&v) == SignIn::ChatGpt)
 }
 
 fn sign_in_from(v: &Value) -> SignIn {
