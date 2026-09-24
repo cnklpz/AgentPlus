@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { useFloatingMenu, useListNav, usePopover } from "../hooks";
 import { t } from "../i18n";
+import { Icon } from "./icons";
 
 interface Props {
   value: string;
@@ -16,34 +18,18 @@ interface Props {
 export function ComboBox({ value, options, onChange, onEnter, placeholder, disabled, label }: Props) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState(false);
-  const [hi, setHi] = useState(0);
-  // The menu floats above everything (fixed), so scrolling panels never clip it.
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
 
   // Show everything until the user types; then filter by what they typed.
   const q = value.trim().toLowerCase();
   const list = typed && q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+  const nav = useListNav(list.length);
 
-  useEffect(() => {
-    if (!open) return;
-    setHi(Math.max(0, list.indexOf(value)));
-    const r = root.current!.getBoundingClientRect();
-    setPos({ top: r.bottom + 6, left: r.left, width: r.width });
-    const onDown = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
-    const onScroll = (e: Event) => { if (!(e.target as Element)?.closest?.(".combo-menu")) setOpen(false); };
-    const onResize = () => setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", onResize);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", onResize);
-      setPos(null);
-    };
-  }, [open]);
+  useEffect(() => { if (open) nav.setHi(Math.max(0, list.indexOf(value))); }, [open]);
+  usePopover(open, () => setOpen(false), [root], { scroll: true, resize: true });
+  // Sized for the whole list: typing only narrows it.
+  const float = useFloatingMenu(root, nav.list, open, options.length * 34 + 12, { matchWidth: true });
 
   const pick = (v: string) => {
     onChange(v);
@@ -65,14 +51,13 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
         aria-expanded={open}
         aria-autocomplete="list"
         onFocus={() => setTyped(false)}
-        onChange={(e) => { onChange(e.target.value); setTyped(true); setOpen(true); setHi(0); }}
+        onChange={(e) => { onChange(e.target.value); setTyped(true); setOpen(true); nav.setHi(0); }}
         onKeyDown={(e) => {
-          if (e.key === "ArrowDown") { e.preventDefault(); if (!open) setOpen(true); else setHi((h) => Math.min(h + 1, list.length - 1)); }
-          else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-          else if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+          if (e.key === "ArrowDown" && !open) { e.preventDefault(); setOpen(true); }
+          else if (nav.onKey(e)) return;
           else if (e.key === "Enter") {
             e.preventDefault();
-            if (open && list[hi]) pick(list[hi]);
+            if (open && list[nav.hi]) pick(list[nav.hi]);
             else onEnter?.();
           }
         }}
@@ -80,19 +65,17 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
       {options.length > 0 && (
         <button type="button" className="combo-toggle" tabIndex={-1} disabled={disabled} aria-label={t("comboBox.expand")}
           onClick={() => { setTyped(false); setOpen((o) => !o); input.current?.focus(); }}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+          <Icon.chevron />
         </button>
       )}
-      {open && pos && list.length > 0 && (
-        <div className="dd-menu combo-menu" role="listbox" style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width }}>
+      {open && float && list.length > 0 && (
+        <div ref={nav.list} className={`dd-menu combo-menu${float.up ? " up" : ""}`} role="listbox" style={float.style}>
           {list.map((o, i) => (
             <button key={o} type="button" role="option" aria-selected={o === value}
-              className={`dd-item${i === hi ? " hi" : ""}${o === value ? " sel" : ""}`}
-              onMouseEnter={() => setHi(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(o)}>
+              className={`dd-item${i === nav.hi ? " hi" : ""}${o === value ? " sel" : ""}`}
+              onMouseEnter={() => nav.setHi(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(o)}>
               <span className="grow minw0 ellipsis">{o}</span>
-              {o === value && (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
-              )}
+              {o === value && <Icon.check size={13} sw={2.6} />}
             </button>
           ))}
         </div>

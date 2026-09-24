@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type AgentId, type AgentState, type SessionRow, api } from "../api";
 import type { Tab } from "./AgentPage";
+import type { SettingsTab } from "./SettingsPage";
+import type { Page } from "./Sidebar";
 import { AgentIcon, Icon } from "./icons";
 import { type TKey, t, useLang } from "../i18n";
-import { useEscape } from "../hooks";
+import { useEscape, useListNav } from "../hooks";
 import { scrubHost, usePrivacy } from "../privacy";
 import { SYNC_ENABLED } from "../features";
 
 export type Target =
   | { kind: "agent"; agent: AgentId; tab?: Tab; provider?: string; setting?: string; query?: string }
-  | { kind: "page"; page: "providers" | "gateway" | "history" | "sync" | "settings"; settingsTab?: "general" | "agents" };
+  | { kind: "page"; page: Page; settingsTab?: SettingsTab };
 
 /** Stable group ids (display labels come from GROUP_LABEL); array order = display order. */
 const GROUPS = ["agent", "page", "provider", "setting", "model", "session"] as const;
@@ -45,7 +47,6 @@ interface Props {
 /** Ctrl+K: search agents, providers, models, settings, pages and Codex sessions. */
 export function CommandPalette({ agents, onGo, onClose }: Props) {
   const [q, setQ] = useState("");
-  const [sel, setSel] = useState(0);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const lang = useLang();
@@ -109,7 +110,8 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
       .slice(0, 60);
   }, [items, q]);
 
-  useEffect(() => setSel(0), [q]);
+  const nav = useListNav(results.length, { selector: ".palette-item.on" });
+  useEffect(() => nav.setHi(0), [q]);
 
   const go = (i: Item | undefined) => { if (i && !i.disabled) { onGo(i.target); onClose(); } };
   // Esc closes only the palette, not a dialog it was opened over.
@@ -125,16 +127,14 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
           placeholder={t("commandPalette.placeholder")}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
-            else if (e.key === "Enter") go(results[sel]);
+            if (!nav.onKey(e) && e.key === "Enter") go(results[nav.hi]);
           }}
         />
-        <div className="palette-list">
+        <div className="palette-list" ref={nav.list}>
           {results.length === 0 && <div className="muted small palette-empty">{t("commandPalette.noResults", { q })}</div>}
           {results.map((r, i) => (
-            <button key={`${r.group}-${r.label}-${r.hint}-${i}`} className={`palette-item${i === sel ? " on" : ""}${r.disabled ? " off" : ""}`} aria-disabled={r.disabled}
-              onMouseEnter={() => setSel(i)} onClick={() => go(r)}>
+            <button key={`${r.group}-${r.label}-${r.hint}-${i}`} className={`palette-item${i === nav.hi ? " on" : ""}${r.disabled ? " off" : ""}`} aria-disabled={r.disabled}
+              onMouseEnter={() => nav.setHi(i)} onClick={() => go(r)}>
               {r.agent ? <AgentIcon id={r.agent} size={18} /> : <span className="palette-dot">{r.icon}</span>}
               <span className="grow minw0">
                 <span className={`ellipsis block small strong${r.group === "session" ? " sensitive" : ""}`}>{r.label}</span>

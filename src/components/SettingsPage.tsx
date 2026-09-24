@@ -4,7 +4,7 @@ import { type AgentDetect, type AgentId, type EnvInfo, api } from "../api";
 import { inTauri } from "../tauri";
 import type { CloseAction, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
 import { LANGS, type TKey, locale, t, useLang } from "../i18n";
-import { useEscape } from "../hooks";
+import { useEscape, usePageEscape } from "../hooks";
 import { AGENT_NAME } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { TabBar, useSlideDir } from "./TabBar";
@@ -60,14 +60,8 @@ export function SettingsPage(props: Props) {
   const { tab, setTab } = props;
   const env = props.envs.find((e) => e.current);
   const slide = useSlideDir(tab, ["general", "agents"] as const);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target instanceof Element ? e.target : null;
-      if (e.key === "Escape" && !el?.closest("input, .modal-bg") && !document.querySelector(".modal-bg:not(.ap-ghost)")) props.onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [props.onClose]);
+  // Esc goes back, unless a dialog or menu is open or a field is being edited.
+  usePageEscape(props.onClose, true, { skipInputs: true });
   return (
     <main className="page settings-page">
       <div className="page-top">

@@ -32,7 +32,7 @@ import { ContextMenu, type MenuItem, editableOf, insertText, selectedIn } from "
 import { ProjectHead, ProjectList } from "./components/ProjectsPage";
 import { type CopyPick, CopyProviderDialog } from "./components/CopyProviderDialog";
 import { type RestartRun, RestartDialog, applyProgress, finishRun, newRun } from "./components/RestartDialog";
-import { escapeLayerOpen } from "./hooks";
+import { useDismiss } from "./hooks";
 import { inTauri } from "./tauri";
 import { scrub, setPrivacy, usePrivacy } from "./privacy";
 import { copyText, errText } from "./util";
@@ -380,20 +380,7 @@ export default function App() {
   const closeDetail = () => setPicked((m) => ({ ...m, [sid]: null }));
 
   // Clicking outside the cards / detail panel, or pressing Esc, closes the details.
-  useEffect(() => {
-    if (!pickedProvider || dialog || palette || copyOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Element | null;
-      if (!t?.closest(".pcard, .pdetail, .toast, .modal-bg")) closeDetail();
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !escapeLayerOpen()) closeDetail(); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [pickedProvider?.id, sid, dialog, palette, copyOpen]);
+  useDismiss(!!pickedProvider && !dialog && !palette && !copyOpen, ".pcard, .pdetail, .toast, .modal-bg", closeDetail);
 
   const deleteProvider = async (p: ViewProvider) => {
     if (!st) return;
@@ -945,20 +932,7 @@ ${p}`))];
   };
 
   // Hub details close on outside click / Esc, like the agent page.
-  useEffect(() => {
-    if (page !== "providers" || !hubSel || hubDialog !== undefined || palette) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Element | null;
-      if (!t?.closest(".hcard, .acct, .sdetail, .toast, .modal-bg, .aside-diff, .aside-foot")) setHubSel(null);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !escapeLayerOpen()) setHubSel(null); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [page, hubSel, hubDialog, palette]);
+  useDismiss(page === "providers" && !!hubSel && hubDialog === undefined && !palette, ".hcard, .acct, .sdetail, .toast, .modal-bg, .aside-diff, .aside-foot", () => setHubSel(null));
 
   const openAgent = (id: AgentId) => {
     setPage(null);
