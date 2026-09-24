@@ -99,40 +99,17 @@ pub fn state(inst: &Install) -> AgentState {
     st.providers = f.providers(&cfg, &root, auth.as_ref());
 
     // Built-in providers logged in through `pi` (/login or an API key) but not configured here.
-    if let Some(obj) = auth.as_ref().and_then(|a| a.as_object()) {
-        for (id, e) in obj {
-            if st.providers.iter().any(|p| &p.id == id) {
-                continue;
-            }
-            let oauth = e.get("type").and_then(|t| t.as_str()) == Some("oauth");
-            st.providers.push(Provider::builtin(
-                id.clone(),
-                id.clone(),
-                if oauth { l("账号登录（/login）", "Account sign-in (/login)") } else { l("内置供应商 · API Key", "Built-in provider · API key") },
-                "chat",
-                l("内置", "Built-in"),
-                vec![
-                    Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
-                    Kv::text(lbl::note(), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
-                ],
-            ));
-        }
-    }
+    let about = l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.");
+    let cards = super::ocfmt::auth_cards(auth.as_ref(), &st.providers, "/login", about, &[]);
+    st.providers.extend(cards);
 
-    let (dp, dm) = defaults();
-    let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled && !p.builtin).collect();
-    let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
-    st.current = vec![
-        Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
-        Kv::mono(lbl::default_model(), match (&dp, &dm) {
-            (Some(p), Some(m)) => format!("{p}/{m}"),
-            (None, Some(m)) => m.clone(),
-            (Some(p), None) => tr!("{p}/（未指定）", "{p}/(not set)"),
-            _ => "-".into(),
-        }),
-        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
-        Kv::mono(lbl::config_file(), f.file()),
-    ];
+    let default = match defaults() {
+        (Some(p), Some(m)) => format!("{p}/{m}"),
+        (None, Some(m)) => m,
+        (Some(p), None) => tr!("{p}/（未指定）", "{p}/(not set)"),
+        _ => "-".into(),
+    };
+    st.current = f.summary(&st.providers, default, None);
     st
 }
 
@@ -144,6 +121,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, had_comments) = load_models()?;
+    let cfg0 = cfg.clone();
     let mut auth = f.load_auth();
     let mut root = store::load();
     let mut diff = Diff::default();
@@ -156,7 +134,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("pi 可以同时用多个供应商：按启用/停用管理，在 pi 里用 /model 选择模型", "pi can use several providers at once: manage them by enabling/disabling, and pick models with /model in pi."))),
             Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("pi 没有设置项 {key}", "pi has no setting {key}"))),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),
         }
@@ -167,9 +145,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if dirty.cfg {
         let (dp, dm) = defaults();
         if let Some(dp) = dp {
-            let (before, _, _) = load_models()?;
-            let was = f.has_model(&before, &dp, dm.as_deref());
-            if was && !f.has_model(&cfg, &dp, dm.as_deref()) {
+            if f.has_model(&cfg0, &dp, dm.as_deref()) && !f.has_model(&cfg, &dp, dm.as_deref()) {
                 let (mut s, m) = read_json(&settings_path())?;
                 if let Some(o) = s.as_object_mut() {
                     o.remove("defaultProvider");
@@ -197,10 +173,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             write_json(&models_path(), &cfg, meta)?;
             written.push(models_path());
         }
-        if dirty.auth {
-            // In place (not tmp + rename) so the file keeps its owner-only permissions.
-            let (a, _) = auth.as_ref().unwrap();
-            std::fs::write(auth_path(), serde_json::to_string_pretty(a)? + "\n")?;
+        if let (true, Some((a, _))) = (dirty.auth, &auth) {
+            super::ocfmt::write_auth(&auth_path(), a)?;
             written.push(auth_path());
         }
         if let Some((s, m)) = &settings {
@@ -265,6 +239,7 @@ mod tests {
 "#;
     const AUTH: &str = r#"{
   "envy": { "type": "api_key", "key": "sk-auth-secret-9876" },
+  "openai": { "type": "api_key", "key": "sk-auth-openai-1111" },
   "anthropic": { "type": "oauth", "refresh": "r", "access": "a", "expires": 1 }
 }
 "#;
@@ -340,6 +315,22 @@ mod tests {
         v["providers"]["myproxy"]["apiKey"] = json!("$ENVY_KEY");
         std::fs::write(models_path(), serde_json::to_string(&v).unwrap()).unwrap();
         assert_eq!(provider_endpoint("myproxy").unwrap().1.as_deref(), Some("sk-env-value-5555"));
+        let key_desc = || {
+            let st = state(&Install::default());
+            let p = st.providers.into_iter().find(|p| p.id == "myproxy").unwrap();
+            p.details.into_iter().find(|k| k.k == lbl::api_key()).unwrap().v
+        };
+        assert_eq!(key_desc(), "环境变量 ENVY_KEY");
+        // A bare name of a set variable is read from the environment too, and shown that way.
+        v["providers"]["myproxy"]["apiKey"] = json!("ENVY_KEY");
+        std::fs::write(models_path(), serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(provider_endpoint("myproxy").unwrap().1.as_deref(), Some("sk-env-value-5555"));
+        assert_eq!(key_desc(), "环境变量 ENVY_KEY");
+        // One that isn't set is the key itself.
+        v["providers"]["myproxy"]["apiKey"] = json!("NOPE_KEY");
+        std::fs::write(models_path(), serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(provider_endpoint("myproxy").unwrap().1.as_deref(), Some("NOPE_KEY"));
+        assert_eq!(key_desc(), "明文保存在 models.json");
     }
 
     #[test]
@@ -380,6 +371,22 @@ mod tests {
         assert_eq!(w, vec![auth_path()]);
         assert_eq!(read("auth.json")["envy"]["key"], "sk-rotated-7777");
         assert_eq!(read("models.json")["providers"]["envy"]["apiKey"], "${ENVY_KEY}");
+
+        // Deleting a custom provider drops its auth.json key too, so it doesn't come back as
+        // an undeletable built-in provider.
+        let (d, w, _) = plan(&[Op::DeleteProvider { provider: "envy".into() }], false).unwrap();
+        assert!(lines(&d).contains("含它的模型和密钥"), "{}", lines(&d));
+        assert!(w.contains(&auth_path()));
+        let a = read("auth.json");
+        assert!(a.get("envy").is_none());
+        assert_eq!(a["anthropic"]["type"], "oauth");
+        assert!(!state(&Install::default()).providers.iter().any(|p| p.id == "envy"));
+        // A provider pi ships keeps its auth.json key: pi goes on using it.
+        let (d, w, _) = plan(&[Op::DeleteProvider { provider: "openai".into() }], false).unwrap();
+        assert!(lines(&d).contains("auth.json 里的密钥保留"), "{}", lines(&d));
+        assert!(!w.contains(&auth_path()));
+        assert_eq!(read("auth.json")["openai"]["key"], "sk-auth-openai-1111");
+        assert!(state(&Install::default()).providers.iter().any(|p| p.id == "openai" && p.builtin));
 
         // Delete the default provider: settings.json default cleared, other keys kept.
         let (d, w, _) = plan(&[Op::DeleteProvider { provider: "myproxy".into() }], false).unwrap();

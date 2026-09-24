@@ -68,13 +68,10 @@ fn dotenv_path() -> PathBuf {
 /// (`%LOCALAPPDATA%\qwen-code\bin\qwen.cmd`). A CLI: `exe` stays None.
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    let pkg = |root: &Path| root.join("node_modules").join("@qwen-code").join("qwen-code").join("package.json");
+    const PKG: &str = "@qwen-code/qwen-code";
+    let pkg = |root: &Path| crate::process::npm_package_in(root, PKG);
     let on_path = crate::process::on_path(&["qwen.cmd", "qwen.exe", "qwen"]);
-    let mut roots: Vec<PathBuf> = dirs::data_dir().map(|d| d.join("npm")).into_iter().collect();
-    if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
-        roots.push(d.to_path_buf());
-    }
-    if let Some(v) = roots.iter().find_map(|r| crate::process::package_version(&pkg(r))) {
+    if let Some(v) = crate::process::npm_version_near(PKG, on_path.as_deref()) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(sd) = dirs::data_local_dir().map(|d| d.join("qwen-code")).filter(|d| d.join("bin").join("qwen.cmd").exists()) {

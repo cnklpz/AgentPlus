@@ -78,17 +78,12 @@ pub fn detect() -> Install {
     let mut inst = Install::default();
     let home = dirs::home_dir().unwrap_or_default();
     let native = home.join(".kimi-code").join("bin").join("kimi.exe");
-    let pkg = |root: &Path| root.join("node_modules").join("@moonshot-ai").join("kimi-code").join("package.json");
     let on_path = crate::process::on_path(&["kimi.exe", "kimi.cmd", "kimi"]);
-    let mut roots: Vec<PathBuf> = dirs::data_dir().map(|d| d.join("npm")).into_iter().collect();
-    if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
-        roots.push(d.to_path_buf());
-    }
     if native.exists() {
         inst.installed = true;
         inst.version = crate::process::cli_version(&native);
         inst.dir = native.parent().map(Path::to_path_buf);
-    } else if let Some(v) = roots.iter().find_map(|r| crate::process::package_version(&pkg(r))) {
+    } else if let Some(v) = crate::process::npm_version_near("@moonshot-ai/kimi-code", on_path.as_deref()) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(p) = Some(home.join(".local").join("bin").join("kimi.exe")).filter(|p| p.exists()).or(on_path) {
