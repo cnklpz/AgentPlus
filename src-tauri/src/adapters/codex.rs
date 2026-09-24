@@ -4,6 +4,7 @@
 //! Provider keys live in `~/.codex/.env` under the provider's `env_key`.
 
 use super::{Plan, Endpoint};
+use crate::dotenv;
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -224,26 +225,21 @@ fn read_env() -> (Vec<String>, TextMeta) {
     read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
-fn env_line_key(l: &str) -> Option<&str> {
-    let l = l.trim_start();
-    let l = l.strip_prefix("export ").unwrap_or(l);
-    l.split_once('=').map(|(k, _)| k.trim())
-}
-
-/// Value of an env_key: ~/.codex/.env first, then the process environment.
+/// Value of an env_key: ~/.codex/.env first (an assignment there wins even when empty),
+/// then the process environment. The first assignment of a key counts, and `set_env`
+/// rewrites that same line.
 pub fn env_value(name: &str) -> Option<String> {
     let (lines, _) = read_env();
-    lines
-        .iter()
-        .find(|l| env_line_key(l) == Some(name))
-        .and_then(|l| l.split_once('=').map(|(_, v)| v.trim().trim_matches('"').trim_matches('\'').to_string()))
-        .or_else(|| std::env::var(name).ok())
-        .filter(|v| !v.is_empty())
+    match dotenv::get_first(&lines.join("\n"), name) {
+        Some(v) => Some(v),
+        None => std::env::var(name).ok(),
+    }
+    .filter(|v| !v.is_empty())
 }
 
 fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
     let line = format!("{name}={val}");
-    match lines.iter_mut().find(|l| env_line_key(l) == Some(name)) {
+    match lines.iter_mut().find(|l| dotenv::line_key(l) == Some(name)) {
         Some(l) => *l = line,
         None => lines.push(line),
     }
@@ -251,7 +247,7 @@ fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
 
 fn key_status(name: &str) -> &'static str {
     let (lines, _) = read_env();
-    if lines.iter().any(|l| env_line_key(l) == Some(name)) {
+    if lines.iter().any(|l| dotenv::line_key(l) == Some(name)) {
         l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
     } else if std::env::var_os(name).is_some() {
         l("已在系统环境变量配置", "set in system environment variables")

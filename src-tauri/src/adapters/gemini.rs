@@ -9,6 +9,7 @@
 //! role "default" for it (the first model of the list is the default when none is chosen).
 
 use super::{Plan, Endpoint};
+use crate::dotenv;
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -131,58 +132,6 @@ fn load() -> Result<(Value, TextMeta, bool)> {
     Ok((v, meta, had))
 }
 
-fn load_env() -> (String, TextMeta) {
-    read_text_or_new(&env_path()).unwrap_or_else(|_| (String::new(), TextMeta::NEW))
-}
-
-fn env_unquote(v: &str) -> String {
-    let v = v.trim();
-    if v.len() >= 2 && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\''))) {
-        return v[1..v.len() - 1].to_string();
-    }
-    v.split(" #").next().unwrap_or(v).trim().to_string()
-}
-
-fn env_line_key(l: &str) -> Option<&str> {
-    let t = l.trim_start();
-    if t.starts_with('#') {
-        return None;
-    }
-    let t = t.strip_prefix("export ").unwrap_or(t);
-    let (k, _) = t.split_once('=')?;
-    Some(k.trim())
-}
-
-fn env_get(text: &str, key: &str) -> Option<String> {
-    text.lines().rfind(|l| env_line_key(l) == Some(key)).and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
-}
-
-/// Sets (or removes, value None) `key` in .env text, keeping every other line.
-fn env_set(text: &str, key: &str, value: Option<&str>) -> String {
-    let needs_q = |v: &str| v.chars().any(|c| c.is_whitespace() || c == '#' || c == '"' || c == '\'');
-    let line = value.map(|v| if needs_q(v) { format!("{key}=\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")) } else { format!("{key}={v}") });
-    let mut out: Vec<String> = vec![];
-    let mut done = false;
-    for l in text.split('\n') {
-        if env_line_key(l) == Some(key) {
-            if let (Some(n), false) = (&line, done) {
-                out.push(n.clone());
-            }
-            done = true;
-            continue;
-        }
-        out.push(l.to_string());
-    }
-    if let (Some(n), false) = (line, done) {
-        while out.last().map(|l| l.is_empty()).unwrap_or(false) {
-            out.pop();
-        }
-        out.push(n);
-        out.push(String::new());
-    }
-    out.join("\n")
-}
-
 // ---------------------------------------------------------------- profiles
 
 fn profiles(root: &Value) -> Map<String, Value> {
@@ -227,9 +176,9 @@ fn model_name(cfg: &Value) -> Option<String> {
 /// The auth type Gemini CLI ends up with: settings first, else what the env implies.
 fn effective_auth(cfg: &Value, env: &str) -> Option<String> {
     auth_type(cfg).or_else(|| {
-        if env_get(env, BASE).is_some() {
+        if dotenv::get(env, BASE).is_some() {
             Some("gateway".into())
-        } else if env_get(env, KEY).is_some() {
+        } else if dotenv::get(env, KEY).is_some() {
             Some(API_KEY_AUTH.into())
         } else {
             None
@@ -239,8 +188,8 @@ fn effective_auth(cfg: &Value, env: &str) -> Option<String> {
 
 /// A profile matching the .env values (address first, key to tell same-address profiles apart).
 fn matching_profile(env: &str, profs: &Map<String, Value>) -> Option<String> {
-    let base = env_get(env, BASE).map(|b| norm_url(&b)).unwrap_or_default();
-    let key = env_get(env, KEY);
+    let base = dotenv::get(env, BASE).map(|b| norm_url(&b)).unwrap_or_default();
+    let key = dotenv::get(env, KEY);
     if base.is_empty() && key.is_none() {
         return None;
     }
@@ -337,8 +286,8 @@ fn builtin(id: &str, name: &str, host: &str, details: Vec<Kv>) -> Provider {
 fn unmanaged_profile(env: &str) -> Value {
     json!({
         "name": l(".env 里的配置", "Config in .env"),
-        "baseUrl": env_get(env, BASE).map(|b| clean_base(&b)).unwrap_or_default(),
-        "apiKey": env_get(env, KEY).unwrap_or_default(),
+        "baseUrl": dotenv::get(env, BASE).map(|b| clean_base(&b)).unwrap_or_default(),
+        "apiKey": dotenv::get(env, KEY).unwrap_or_default(),
         "models": [],
     })
 }
@@ -379,7 +328,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments that would be lost on write, so it's read-only.").into());
     }
     let root = store_load();
-    let (env, _) = load_env();
+    let (env, _) = dotenv::load(&env_path());
     let profs = profiles(&root);
     let cur = current(&cfg, &env, &profs);
     st.current_provider = Some(cur.clone());
@@ -400,7 +349,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.providers.push(provider_of(id, p));
     }
     // A relay / key in .env that no profile covers: show it so it can be adopted.
-    let has_env = env_get(&env, BASE).is_some() || env_get(&env, KEY).is_some();
+    let has_env = dotenv::get(&env, BASE).is_some() || dotenv::get(&env, KEY).is_some();
     if has_env && matching_profile(&env, &profs).is_none() {
         let mut prov = provider_of(UNMANAGED, &unmanaged_profile(&env));
         let stored = stored_in_label();
@@ -426,7 +375,7 @@ pub fn state(inst: &Install) -> AgentState {
     st.current = vec![
         Kv::text(l("供应商", "Provider"), cur_name),
         Kv::mono("selectedType", auth_type(&cfg).unwrap_or_else(|| l("-（未设置）", "- (not set)").into())),
-        Kv::mono(BASE, env_get(&env, BASE).unwrap_or_else(|| "-".into())),
+        Kv::mono(BASE, dotenv::get(&env, BASE).unwrap_or_else(|| "-".into())),
         Kv::mono("model.name", model_name(&cfg).unwrap_or_else(|| l("-（默认）", "- (default)").into())),
     ];
     st
@@ -434,7 +383,7 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let p = if id == UNMANAGED {
-        unmanaged_profile(&load_env().0)
+        unmanaged_profile(&dotenv::load(&env_path()).0)
     } else if id == GOOGLE || id.starts_with(AUTH) {
         return Err(anyhow!(l("Google 账号登录没有可用的地址", "Google account sign-in has no usable base URL")));
     } else {
@@ -513,7 +462,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     None | Some(UNMANAGED) => {
                         let id = unique_id(&slug(&p.name), |c| profs.contains_key(c) || c == GOOGLE || c == UNMANAGED);
                         let adopting = p.id.as_deref() == Some(UNMANAGED);
-                        let key = if adopting { key.or_else(|| env_get(&env0, KEY)) } else { key };
+                        let key = if adopting { key.or_else(|| dotenv::get(&env0, KEY)) } else { key };
                         let models: Vec<Value> = clean_ids(&p.models).into_iter().map(|m| json!({ "id": m, "visible": true })).collect();
                         let mut prof = json!({ "name": p.name.trim(), "baseUrl": base, "apiKey": key.clone().unwrap_or_default(), "models": models });
                         if adopting {
@@ -573,7 +522,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 if provider.starts_with(AUTH) && provider != &before {
                     return Err(anyhow!(l("这种认证方式请在 Gemini CLI 里用 /auth 选择", "Choose this auth method with /auth in Gemini CLI")));
                 }
-                if provider == UNMANAGED && env_get(&env0, BASE).is_none() && env_get(&env0, KEY).is_none() {
+                if provider == UNMANAGED && dotenv::get(&env0, BASE).is_none() && dotenv::get(&env0, KEY).is_none() {
                     return Err(anyhow!(l(".env 里没有 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY", ".env has no GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY")));
                 }
                 if provider != GOOGLE && provider != UNMANAGED && !provider.starts_with(AUTH) && !profs.contains_key(provider) {
@@ -692,7 +641,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     #[allow(clippy::type_complexity)]
     let target: Option<(Option<String>, Option<String>, &str, Option<String>)> = match cur.as_str() {
         GOOGLE if switching => Some((None, None, OAUTH, None)),
-        UNMANAGED if switching => Some((env_get(&env0, BASE), env_get(&env0, KEY), API_KEY_AUTH, None)),
+        UNMANAGED if switching => Some((dotenv::get(&env0, BASE), dotenv::get(&env0, KEY), API_KEY_AUTH, None)),
         GOOGLE | UNMANAGED => None,
         id if id.starts_with(AUTH) => None,
         id if switching || profs0.get(id) != profs.get(id) => profs.get(id).map(|p| {
@@ -704,8 +653,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     };
     if let Some((base, key, auth, model)) = target {
         for (var, v) in [(BASE, &base), (KEY, &key)] {
-            if env_get(&env, var) != *v {
-                env = env_set(&env, var, v.as_deref());
+            if dotenv::get(&env, var) != *v {
+                env = dotenv::set(&env, var, v.as_deref());
                 match v {
                     Some(val) => diff.push(&envfile, format!("{var} = {}", if var == KEY { mask_key(val) } else { val.clone() }), true),
                     None => diff.push(&envfile, tr!("{var}（删除）", "{var} (removed)"), false),
