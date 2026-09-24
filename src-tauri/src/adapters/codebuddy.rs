@@ -135,12 +135,6 @@ fn uninstall_entry(_: &str) -> Option<(Option<String>, Option<String>, Option<St
     None
 }
 
-fn npm_version(pkg: &str) -> Option<String> {
-    let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version").and_then(|x| x.as_str()).map(String::from)
-}
-
 /// The desktop IDE (registry uninstall entry "CodeBuddy …"), else the npm CLI.
 #[allow(dead_code)]
 pub fn detect() -> Install {
@@ -159,7 +153,7 @@ pub fn detect() -> Install {
         }
     }
     if !inst.installed {
-        if let Some(v) = npm_version("@tencent-ai/codebuddy-code") {
+        if let Some(v) = crate::process::npm_global_version("@tencent-ai/codebuddy-code") {
             inst.installed = true;
             inst.version = Some(v);
         }

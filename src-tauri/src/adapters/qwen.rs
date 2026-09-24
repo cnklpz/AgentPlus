@@ -111,11 +111,6 @@ fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------------------------------------------------------------- detection
 
-fn pkg_version(p: &Path) -> Option<String> {
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version")?.as_str().map(String::from)
-}
-
 /// npm global `@qwen-code/qwen-code`, or the standalone installer
 /// (`%LOCALAPPDATA%\qwen-code\bin\qwen.cmd`). A CLI: `exe` stays None.
 pub fn detect() -> Install {
@@ -126,14 +121,14 @@ pub fn detect() -> Install {
     if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
         roots.push(d.to_path_buf());
     }
-    if let Some(v) = roots.iter().find_map(|r| pkg_version(&pkg(r))) {
+    if let Some(v) = roots.iter().find_map(|r| crate::process::package_version(&pkg(r))) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(sd) = dirs::data_local_dir().map(|d| d.join("qwen-code")).filter(|d| d.join("bin").join("qwen.cmd").exists()) {
         inst.installed = true;
         inst.version = [sd.join("package.json"), pkg(&sd), pkg(&sd.join("lib"))]
             .iter()
-            .find_map(|p| pkg_version(p))
+            .find_map(|p| crate::process::package_version(p))
             .or_else(|| crate::process::cli_version(&sd.join("bin").join("qwen.cmd")));
         inst.dir = Some(sd);
     } else if let Some(p) = on_path {

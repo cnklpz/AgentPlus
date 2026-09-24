@@ -119,12 +119,6 @@ fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------- detection ----------
 
-fn npm_version(pkg: &str) -> Option<String> {
-    let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version").and_then(|x| x.as_str()).map(String::from)
-}
-
 /// Newest `kilocode.kilo-code-<version>` folder in the VS Code extensions dir.
 fn vscode_extension() -> Option<String> {
     let dir = dirs::home_dir()?.join(".vscode").join("extensions");
@@ -142,7 +136,7 @@ fn vscode_extension() -> Option<String> {
 #[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some(v) = npm_version("@kilocode/cli") {
+    if let Some(v) = crate::process::npm_global_version("@kilocode/cli") {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(exe) = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]) {
