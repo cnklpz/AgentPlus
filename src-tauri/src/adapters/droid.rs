@@ -411,7 +411,15 @@ impl Work {
                             }
                         };
                         self.names.insert(fp(&key), json!(p.name.trim()));
-                        let added: Vec<&String> = models.iter().filter(|m| !self.entries.iter().any(|e| key_of(e) == key && str_field(e, "model") == **m)).collect();
+                        // Adding to an existing provider under another name renames it.
+                        if p.name.trim() != g.name {
+                            self.diff.push(STORE_LABEL, tr!("供应商名称「{}」→「{}」", "Provider name \"{}\" → \"{}\"", g.name, p.name.trim()), true);
+                            if let Some(x) = self.groups.iter_mut().find(|x| x.id == g.id) {
+                                x.name = p.name.trim().to_string();
+                            }
+                        }
+                        // A hidden (parked) model is already there: it stays hidden.
+                        let added: Vec<&String> = models.iter().filter(|m| !self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == key && str_field(e, "model") == **m)).collect();
                         if !added.is_empty() {
                             self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), msg::key_suffix(new_key.as_deref())), true);
                         }
@@ -843,6 +851,23 @@ mod tests {
         assert_eq!(models_of(&c), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5", "kimi-k2"]);
         assert_eq!(c["model"], "custom:GLM-Coding-0");
         assert_eq!(c["customModels"][3]["apiKey"], "sk-moon-1111");
+    }
+
+    #[test]
+    fn re_adding_an_existing_provider_renames_it_and_keeps_hidden_models() {
+        let h = setup("readd", Some(SAMPLE));
+        let old = state(&Install::default()).providers.iter().find(|p| p.id == "api-moonshot-cn").unwrap().name.clone();
+        plan(&[Op::SetModelVisible { provider: "api-moonshot-cn".into(), model: "kimi-k2".into(), visible: false }], false).unwrap();
+        let (d, _, _) = plan(&[upsert(None, "Moonshot", "https://api.moonshot.cn/v1", "chat", Some("sk-moon-1111"), &["kimi-k2"])], false).unwrap();
+        let t = diff_text(&d);
+        assert_eq!(t, format!("供应商名称「{old}」→「Moonshot」"), "the rename shows, and the hidden model is not added again");
+        let st = state(&Install::default());
+        // The id follows the name.
+        let kimi = st.providers.iter().find(|p| p.id == "moonshot").unwrap();
+        assert_eq!(kimi.name, "Moonshot");
+        assert!(kimi.models.len() == 1 && !kimi.models[0].visible);
+        plan(&[Op::SetModelVisible { provider: "moonshot".into(), model: "kimi-k2".into(), visible: true }], false).unwrap();
+        assert_eq!(models_of(&cfg_of(&h)), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5", "kimi-k2"], "no duplicate entry");
     }
 
     #[test]
