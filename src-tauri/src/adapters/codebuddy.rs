@@ -22,22 +22,16 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)]
 pub const ID: &str = "codebuddy";
-#[allow(dead_code)]
 pub const NAME: &str = "CodeBuddy";
-#[allow(dead_code)]
 pub const MARKER: &str = "settings.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "codebuddy --version 2>/dev/null | head -n 1; pgrep -x codebuddy >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".codebuddy";
 
 const SUFFIX: &str = "/chat/completions";
 const STORE_LABEL: &str = "AgentPlus · CodeBuddy";
 
 /// `CODEBUDDY_CONFIG_DIR` (Windows side only), else `~/.codebuddy`.
-#[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
     if let Some(d) = crate::env::agent_var("CODEBUDDY_CONFIG_DIR") {
         return PathBuf::from(d);
@@ -84,7 +78,6 @@ fn uninstall_entry(_: &str) -> Option<(Option<String>, Option<String>, Option<St
 }
 
 /// The desktop IDE (registry uninstall entry "CodeBuddy …"), else the npm CLI.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some((ver, icon, loc)) = uninstall_entry("CodeBuddy") {
@@ -275,7 +268,6 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
     }
 }
 
-#[allow(dead_code)]
 pub fn state(inst: &Install) -> AgentState {
     let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&models_path())]);
     let cfg = match load_models() {
@@ -313,7 +305,6 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-#[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
     let g = groups_of(&entries_of(&cfg), &parked_of(&store::load())).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
@@ -641,7 +632,6 @@ impl Work {
     }
 }
 
-#[allow(dead_code)]
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load_models()?;
     let entries0 = entries_of(&cfg);

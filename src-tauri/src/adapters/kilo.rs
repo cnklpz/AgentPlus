@@ -16,20 +16,14 @@ use anyhow::{anyhow, Result};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)]
 pub const ID: &str = "kilo";
-#[allow(dead_code)]
 pub const NAME: &str = "Kilo Code";
 /// `kilo.jsonc` / `opencode.json` in the same dir also count (see `config_path`).
-#[allow(dead_code)]
 pub const MARKER: &str = "kilo.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "(kilo --version || kilocode --version) 2>/dev/null | head -n 1; pgrep -x kilo >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".config/kilo";
 
 /// Kilo's default config dir, `~/.config/kilo`.
-#[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
     home().join(".config").join("kilo")
 }
@@ -79,7 +73,6 @@ fn vscode_extension() -> Option<String> {
 }
 
 /// The `kilo` CLI (npm `@kilocode/cli` or a `kilo` binary on PATH) or the VS Code extension.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some(v) = crate::process::npm_global_version("@kilocode/cli") {
@@ -101,7 +94,6 @@ pub fn detect() -> Install {
 
 // ---------- state / plan ----------
 
-#[allow(dead_code)]
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
     let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![f.file(), display_path(&auth_path())]);
@@ -189,12 +181,10 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-#[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     fmt().endpoint(id)
 }
 
-#[allow(dead_code)]
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let existed = config_path().exists();

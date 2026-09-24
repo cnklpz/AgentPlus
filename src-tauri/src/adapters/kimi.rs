@@ -9,8 +9,6 @@
 //! Edited with toml_edit so comments and layout survive. Hidden models and disabled
 //! providers are moved, as TOML text, into the AgentPlus store and restored from it.
 
-// Unused until the integrator wires the adapter into adapters::mod.
-
 use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;

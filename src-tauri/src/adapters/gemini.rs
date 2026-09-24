@@ -21,13 +21,10 @@ use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
 pub const ID: &str = "gemini";
-#[allow(dead_code)]
 pub const NAME: &str = "Gemini CLI";
 /// Relative to the config dir.
 pub const MARKER: &str = "settings.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "gemini --version 2>/dev/null | head -n 1; pgrep -f '[b]in/gemini' >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".gemini/settings.json";
 
 const GOOGLE: &str = "google";
@@ -61,7 +58,6 @@ fn env_path() -> PathBuf {
 // ---------------------------------------------------------------- detection
 
 /// npm global install (`%APPDATA%\npm\node_modules\@google\gemini-cli`). A CLI: `exe` stays None.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some(pkg) = crate::process::npm_global_package("@google/gemini-cli").filter(|p| p.is_file()) {
