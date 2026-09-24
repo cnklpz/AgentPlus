@@ -24,9 +24,11 @@ use crate::process::Install;
 use crate::store;
 use crate::util::*;
 use anyhow::{anyhow, Result};
+use regex::Regex;
 use serde_json::{json, Map as JMap, Value as J};
 use serde_yaml::{Mapping, Value as Y};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub const ID: &str = "hermes";
 pub const NAME: &str = "Hermes";
@@ -77,7 +79,8 @@ fn native_home() -> Option<PathBuf> {
 /// `%LOCALAPPDATA%\x` → the value of the variable (REG_EXPAND_SZ values come back raw).
 #[cfg(windows)]
 fn expand_percent(s: &str) -> String {
-    let re = regex::Regex::new(r"%([^%]+)%").unwrap();
+    static PERCENT: OnceLock<Regex> = OnceLock::new();
+    let re = PERCENT.get_or_init(|| Regex::new(r"%([^%]+)%").unwrap());
     re.replace_all(s, |c: &regex::Captures| std::env::var(&c[1]).unwrap_or_else(|_| c[0].to_string())).to_string()
 }
 
@@ -224,23 +227,54 @@ fn blocks(lines: &[&str]) -> Vec<Block> {
 
 /// Comments, anchors / aliases or tags inside a block (re-emitting it would lose them).
 fn has_extras(lines: &[&str]) -> bool {
-    let anchor = regex::Regex::new(r"(^\s*|:\s+|-\s+)[&*!][^\s]").unwrap();
-    lines.iter().any(|l| {
-        if l.trim_start().starts_with('#') || anchor.is_match(l) {
-            return true;
-        }
-        let (mut sq, mut dq, mut prev_ws) = (false, false, true);
-        for c in l.chars() {
-            match c {
-                '\'' if !dq => sq = !sq,
-                '"' if !sq => dq = !dq,
-                '#' if !sq && !dq && prev_ws => return true,
-                _ => {}
+    static ANCHOR: OnceLock<Regex> = OnceLock::new();
+    let anchor = ANCHOR.get_or_init(|| Regex::new(r"(^\s*|:\s+|-\s+)[&*!][^\s]").unwrap());
+    lines.iter().any(|l| l.trim_start().starts_with('#') || anchor.is_match(l) || has_comment(l))
+}
+
+/// A `#` after whitespace, outside quoted scalars. A quote only opens a scalar where one can
+/// begin (the start of the line, after `: `, `- `, `? `, or `[` `{` `,` in a flow collection);
+/// anywhere else it is a literal character, as in `name: Bob's relay  # main`.
+fn has_comment(l: &str) -> bool {
+    let is_ws = |c: Option<&char>| c.is_none_or(|c| *c == ' ' || *c == '\t');
+    let mut chars = l.chars().peekable();
+    let (mut quote, mut at_start, mut prev_ws, mut flow) = (None::<char>, true, true, 0usize);
+    while let Some(c) = chars.next() {
+        match quote {
+            Some('\'') => {
+                // `''` is an escaped quote inside a single-quoted scalar.
+                if c == '\'' && chars.next_if_eq(&'\'').is_none() {
+                    quote = None;
+                }
             }
-            prev_ws = c == ' ' || c == '\t';
+            Some(_) => {
+                if c == '\\' {
+                    chars.next();
+                } else if c == '"' {
+                    quote = None;
+                }
+            }
+            None => match c {
+                ' ' | '\t' => {}
+                '#' if prev_ws => return true,
+                '\'' | '"' if at_start => {
+                    quote = Some(c);
+                    at_start = false;
+                }
+                '-' | '?' if at_start && is_ws(chars.peek()) => {}
+                ':' if flow > 0 || is_ws(chars.peek()) => at_start = true,
+                '[' | '{' if at_start => flow += 1,
+                ',' if flow > 0 => at_start = true,
+                ']' | '}' if flow > 0 => {
+                    flow -= 1;
+                    at_start = false;
+                }
+                _ => at_start = false,
+            },
         }
-        false
-    })
+        prev_ws = quote.is_none() && (c == ' ' || c == '\t');
+    }
+    false
 }
 
 /// Replaces (Some) or removes (None) top-level blocks, leaving every other line as it was.
@@ -304,8 +338,12 @@ fn needs_quotes(s: &str) -> bool {
     if WORDS.contains(&s.to_lowercase().as_str()) {
         return true;
     }
-    let num = regex::Regex::new(r"^[-+]?(\.?[0-9][0-9_]*(\.[0-9_]*)?([eE][-+]?[0-9]+)?|0[xXoObB][0-9a-fA-F_]+|[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?|\.(inf|Inf|INF|nan|NaN|NAN))$").unwrap();
-    let date = regex::Regex::new(r"^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}").unwrap();
+    static NUM: OnceLock<Regex> = OnceLock::new();
+    static DATE: OnceLock<Regex> = OnceLock::new();
+    let num = NUM.get_or_init(|| {
+        Regex::new(r"^[-+]?(\.?[0-9][0-9_]*(\.[0-9_]*)?([eE][-+]?[0-9]+)?|0[xXoObB][0-9a-fA-F_]+|[0-9][0-9_]*(:[0-5]?[0-9])+(\.[0-9_]*)?|\.(inf|Inf|INF|nan|NaN|NAN))$").unwrap()
+    });
+    let date = DATE.get_or_init(|| Regex::new(r"^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}").unwrap());
     if num.is_match(s) || date.is_match(s) {
         return true;
     }
@@ -1911,6 +1949,35 @@ hooks:
         assert!(!lines[cp.end - 1].is_empty() && !lines[cp.end - 1].starts_with('#'));
         assert!(!has_extras(&lines[cp.start..cp.end]));
         assert!(has_extras(&["  a: 1 # c"]) && has_extras(&["  a: &x 1"]) && !has_extras(&["  a: 'x # y'", "  u: http://h/#f"]));
+    }
+
+    #[test]
+    fn comment_after_quote_inside_plain_scalar() {
+        // A quote in the middle of a plain scalar is a literal character, not an opening quote.
+        assert!(has_extras(&["  name: Bob's relay # c"]));
+        assert!(has_extras(&["    name: Bob's relay  # main one"]));
+        assert!(has_extras(&["  name: say \"hi # c"]));
+        assert!(has_extras(&["  a: x, 'y # z"]), "a comma outside a flow collection is plain text");
+        assert!(has_extras(&["  a: 'x' # c"]));
+        assert!(has_extras(&["  b: ['x', y] # c"]));
+        assert!(has_extras(&["  - Bob's # c"]));
+        assert!(!has_extras(&["  name: Bob's relay", "  m: it's-fine", "  q: say \"hi\" there"]));
+        // Quoted scalars that do start a value keep their `#`.
+        assert!(!has_extras(&["  a: 'it''s # x'", "  b: \"q\\\" # x\"", "  - 'x # y'", "  - - \"x # y\"", "  c: ['x # y', \"z # w\"]", "  d: {k: 'v # w'}", "  'k # k': v", "  ? 'k # k'"]));
+    }
+
+    #[test]
+    fn apostrophe_comment_makes_block_readonly() {
+        for name in ["Bob's relay", "say \"hi"] {
+            let yaml = SAMPLE.replace("  - name: relay-103\n", &format!("  - name: {name}  # main one\n"));
+            let t = setup(&yaml);
+            let st = state(&Install::default());
+            assert!(st.providers.iter().any(|p| p.id == name), "{name} parses as a plain scalar");
+            assert!(st.readonly, "{name}: {:?}", st.notes);
+            // Rewriting custom_providers would drop the comment.
+            assert!(apply(vec![Op::DeleteProvider { provider: "opencode".into() }]).is_err(), "{name}");
+            assert_eq!(fs::read_to_string(t.0.join("config.yaml")).unwrap(), yaml);
+        }
     }
 
     /// Read-only look at the real Hermes config on this machine (keys masked).
