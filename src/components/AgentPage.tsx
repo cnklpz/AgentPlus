@@ -397,7 +397,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
 
       <div className="mrow mhead"><span /><span>{t("common.model")}</span><span>{t("agentPage.colContext")}</span><span className="right">{t("agentPage.colShown")}</span></div>
       {(editing === "__new" || editingModel) && (
-        <ModelDialog agentName={st.name} hasNames={hasNames} hasContext={hasContext} fields={fields} initial={editingModel}
+        <ModelDialog agentName={st.name} hasNames={hasNames} nameIsUpstream={st.id === "kimi"} hasContext={hasContext} fields={fields} initial={editingModel}
           onClose={() => setEditing(null)}
           onSave={(input) => { if (saveModel(input, editingModel)) setEditing(null); }} />
       )}

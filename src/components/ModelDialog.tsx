@@ -12,6 +12,8 @@ interface Props {
   agentName: string;
   /** The agent stores a display name per model. */
   hasNames: boolean;
+  /** The "name" is really the upstream model id sent in requests (Kimi's `model = …`). */
+  nameIsUpstream?: boolean;
   /** The agent stores a context window per model. */
   hasContext: boolean;
   fields: ModelField[];
@@ -30,7 +32,7 @@ const same = (a: ModelFieldValue | undefined, b: ModelFieldValue | undefined) =>
  * the agent declares (input kinds, reasoning, max output…). Unset settings stay out of
  * the config, so the agent's own default applies.
  */
-export function ModelDialog({ agentName, hasNames, hasContext, fields, initial, onSave, onClose }: Props) {
+export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasContext, fields, initial, onSave, onClose }: Props) {
   const [id, setId] = useState(initial?.id ?? "");
   const [name, setName] = useState(initial?.name ?? "");
   const [ctx, setCtx] = useState(initial?.context ? String(initial.context) : "");
@@ -88,8 +90,9 @@ export function ModelDialog({ agentName, hasNames, hasContext, fields, initial, 
         <div className={hasNames && hasContext ? "form2" : ""}>
           {hasNames && (
             <div className="field">
-              <label htmlFor="md-name">{t("modelDialog.displayName")}</label>
-              <input id="md-name" ref={initial ? first : undefined} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("modelDialog.displayNamePlaceholder")} />
+              <label htmlFor="md-name">{t(nameIsUpstream ? "modelDialog.upstreamModel" : "modelDialog.displayName")}</label>
+              <input id="md-name" ref={initial ? first : undefined} className={`input${nameIsUpstream ? " mono" : ""}`} value={name} onChange={(e) => setName(e.target.value)}
+                placeholder={t(nameIsUpstream ? "modelDialog.upstreamModelPlaceholder" : "modelDialog.displayNamePlaceholder")} />
             </div>
           )}
           {hasContext && (
