@@ -372,8 +372,7 @@ impl Work {
                         // Models the provider already has are left as they are.
                         let added: Vec<&String> = models.iter().filter(|m| self.owner_of(m).is_none()).collect();
                         if !added.is_empty() {
-                            let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                            self.diff.push(&file, trn!(added.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), key_part), true);
+                            self.diff.push(&file, trn!(added.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), msg::key_suffix(new_key.as_deref())), true);
                         }
                         for m in added {
                             self.entries.push(Self::new_entry(&key, m, None, None));
