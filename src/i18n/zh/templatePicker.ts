@@ -6,4 +6,5 @@ export default {
   custom: "自定义",
   customHint: "自己填地址和协议",
   billing: "计费方式",
+  getKey: "去 {vendor} 获取 Key ↗",
 };
