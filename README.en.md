@@ -206,13 +206,6 @@ src-tauri/src/          backend
 
 </details>
 
-## Contributing
-
-Bug reports and suggestions are welcome in [Issues](https://github.com/cnklpz/AgentPlus/issues).
-
-Code contributions (pull requests) are not accepted for now. When they are, contributors will need to sign a Contributor License Agreement (CLA)
-allowing the author to use contributed code under terms other than the AGPLv3, including commercial licenses.
-
 ## License
 
 Copyright (C) 2026 cnklpz
