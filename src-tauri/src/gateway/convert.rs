@@ -1,10 +1,11 @@
 //! Wire-protocol conversion between OpenAI Chat Completions (the pivot format),
 //! OpenAI Responses and Anthropic Messages: requests, responses, errors, model
 //! lists and SSE streams. Pure functions / state machines, no I/O.
-#![allow(dead_code)]
 
+use super::clip;
 use crate::i18n::l;
 use anyhow::{bail, Result};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,20 +45,23 @@ pub struct ReqCtx {
     pub stream: bool,
 }
 
+impl ReqCtx {
+    /// Whether `name` is one of the client's custom (freeform) tools.
+    fn is_custom(&self, name: &str) -> bool {
+        self.custom_tools.iter().any(|n| n == name)
+    }
+}
+
 pub fn req_ctx(from: Proto, body: &Value) -> ReqCtx {
-    let mut custom_tools = Vec::new();
-    if from == Proto::Responses {
-        for t in arr(body.get("tools")) {
-            if sget(t, "type") == "custom" && !sget(t, "name").is_empty() {
-                custom_tools.push(sget(t, "name").to_string());
-            }
-        }
-    }
-    ReqCtx {
-        model: sget(body, "model").to_string(),
-        custom_tools,
-        stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
-    }
+    let custom_tools = match from {
+        Proto::Responses => arr(body.get("tools"))
+            .iter()
+            .filter(|t| sget(t, "type") == "custom" && !sget(t, "name").is_empty())
+            .map(|t| sget(t, "name").to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
+    ReqCtx { model: sget(body, "model").to_string(), custom_tools, stream: bget(body, "stream") }
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +89,15 @@ fn sget<'a>(v: &'a Value, k: &str) -> &'a str {
 
 fn uget(v: &Value, k: &str) -> u64 {
     v.get(k).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn bget(v: &Value, k: &str) -> bool {
+    v.get(k).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// The first non-empty string, or "".
+fn first_str<'a>(candidates: impl IntoIterator<Item = &'a str>) -> &'a str {
+    candidates.into_iter().find(|s| !s.is_empty()).unwrap_or("")
 }
 
 fn nonnull(v: Option<&Value>) -> Option<&Value> {
@@ -124,6 +137,16 @@ fn output_text(v: Option<&Value>) -> String {
     }
 }
 
+/// Tool-call arguments as the string chat carries: a string as-is, `none` when missing
+/// or null, anything else JSON-encoded.
+fn args_str(v: Option<&Value>, none: &str) -> String {
+    match v {
+        Some(Value::String(s)) => s.clone(),
+        None | Some(Value::Null) => none.to_string(),
+        Some(o) => o.to_string(),
+    }
+}
+
 /// Parse tool-call arguments into a JSON object for Anthropic `input`.
 fn parse_args(s: &str) -> Value {
     if s.trim().is_empty() {
@@ -133,6 +156,11 @@ fn parse_args(s: &str) -> Value {
         Ok(v @ Value::Object(_)) => v,
         _ => json!({ "raw": s }),
     }
+}
+
+/// Chat arguments carrying a custom tool's freeform input: `{"input": ...}`.
+fn custom_args(input: &str) -> String {
+    json!({ "input": input }).to_string()
 }
 
 /// Extract the freeform input of a custom tool from `{"input": ...}` arguments.
@@ -157,13 +185,6 @@ fn sanitize_id(s: &str) -> String {
         "toolu_empty".into()
     } else {
         t
-    }
-}
-
-fn truncate_chars(s: &str, n: usize) -> String {
-    match s.char_indices().nth(n) {
-        Some((i, _)) => format!("{}...", &s[..i]),
-        None => s.to_string(),
     }
 }
 
@@ -259,6 +280,7 @@ fn anthropic_image_url(block: &Value) -> Option<String> {
     }
 }
 
+/// A chat request's stream flags (with usage in the stream).
 fn set_stream_opts(out: &mut Map<String, Value>, stream: bool) {
     if stream {
         out.insert("stream".into(), json!(true));
@@ -266,12 +288,159 @@ fn set_stream_opts(out: &mut Map<String, Value>, stream: bool) {
     }
 }
 
+/// `"stream": true` when streaming (Responses and Anthropic requests).
+fn set_stream(out: &mut Map<String, Value>, stream: bool) {
+    if stream {
+        out.insert("stream".into(), json!(true));
+    }
+}
+
 fn copy_keys(src: &Value, dst: &mut Map<String, Value>, keys: &[&str]) {
     for k in keys {
-        if let Some(v) = nonnull(src.get(*k)) {
-            dst.insert((*k).to_string(), v.clone());
+        copy_as(src, k, dst, k);
+    }
+}
+
+/// `src[from]`, when set, as `dst[to]`.
+fn copy_as(src: &Value, from: &str, dst: &mut Map<String, Value>, to: &str) {
+    if let Some(v) = nonnull(src.get(from)) {
+        dst.insert(to.to_string(), v.clone());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// tools
+
+/// A tool's JSON schema, or an empty object schema when it has none.
+fn schema_or_empty(v: Option<&Value>) -> Value {
+    nonnull(v).cloned().unwrap_or_else(|| json!({"type": "object", "properties": {}}))
+}
+
+/// Chat function tool definition.
+fn fn_tool(name: &str, parameters: Value, description: Option<&str>) -> Value {
+    let mut f = json!({"name": name, "parameters": parameters});
+    if let Some(d) = description {
+        f["description"] = json!(d);
+    }
+    json!({"type": "function", "function": f})
+}
+
+/// (name, description, schema) of each function tool in a chat request.
+fn chat_fn_tools(c: &Value) -> Vec<(&str, Option<&str>, Value)> {
+    arr(c.get("tools"))
+        .iter()
+        .filter_map(|t| {
+            let f = t.get("function")?;
+            Some((sget(f, "name"), f.get("description").and_then(Value::as_str), schema_or_empty(f.get("parameters"))))
+        })
+        .collect()
+}
+
+/// A chat request's `tool_choice`: a mode ("auto", "none", "required"…) or one named tool.
+enum ToolChoice<'a> {
+    Mode(&'a str),
+    Tool(&'a str),
+}
+
+fn chat_tool_choice(v: Option<&Value>) -> Option<ToolChoice<'_>> {
+    match v? {
+        Value::String(s) => Some(ToolChoice::Mode(s)),
+        o @ Value::Object(_) => Some(ToolChoice::Tool(sget(&o["function"], "name"))),
+        _ => None,
+    }
+}
+
+/// One tool call of an assistant turn.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct ToolCall {
+    id: String,
+    name: String,
+    /// Chat arguments (a JSON string).
+    args: String,
+}
+
+/// A chat tool call's id, name and arguments (`no_args` when it has none).
+fn chat_call(tc: &Value, no_args: &str) -> ToolCall {
+    let f = &tc["function"];
+    ToolCall { id: sget(tc, "id").to_string(), name: sget(f, "name").to_string(), args: args_str(f.get("arguments"), no_args) }
+}
+
+fn chat_tool_call(c: &ToolCall) -> Value {
+    json!({"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.args}})
+}
+
+/// An assistant turn: text, reasoning and tool calls.
+#[derive(Debug, Default)]
+struct Turn {
+    text: String,
+    reasoning: String,
+    tools: Vec<ToolCall>,
+}
+
+/// An assistant turn in Anthropic content (a string or blocks).
+fn anthropic_turn(content: &Value) -> Turn {
+    let mut t = Turn::default();
+    match content {
+        Value::String(s) => t.text.push_str(s),
+        Value::Array(blocks) => {
+            for bl in blocks {
+                match sget(bl, "type") {
+                    "text" => t.text.push_str(sget(bl, "text")),
+                    "thinking" => t.reasoning.push_str(sget(bl, "thinking")),
+                    "tool_use" => t.tools.push(ToolCall {
+                        id: sget(bl, "id").to_string(),
+                        name: sget(bl, "name").to_string(),
+                        args: nonnull(bl.get("input")).cloned().unwrap_or_else(|| json!({})).to_string(),
+                    }),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    t
+}
+
+/// An assistant turn in a Responses `output` list.
+fn responses_output_turn(output: &[Value]) -> Turn {
+    let mut t = Turn::default();
+    for it in output {
+        match sget(it, "type") {
+            "message" => t.text.push_str(&parts_text(&chat_parts(&it["content"]))),
+            "reasoning" => {
+                let mut r = text_of(&it["summary"]);
+                if r.is_empty() {
+                    r = text_of(&it["content"]);
+                }
+                t.reasoning.push_str(&r);
+            }
+            "function_call" => t.tools.push(ToolCall {
+                id: sget(it, "call_id").to_string(),
+                name: sget(it, "name").to_string(),
+                args: output_text(it.get("arguments")),
+            }),
+            "custom_tool_call" => t.tools.push(ToolCall {
+                id: sget(it, "call_id").to_string(),
+                name: sget(it, "name").to_string(),
+                args: custom_args(&output_text(it.get("input"))),
+            }),
+            _ => {}
         }
     }
+    t
+}
+
+/// A chat assistant message for a turn.
+fn chat_assistant_msg(t: &Turn) -> Value {
+    let mut msg = json!({"role": "assistant",
+        "content": if t.text.is_empty() && !t.tools.is_empty() { Value::Null } else { json!(t.text) }});
+    if !t.reasoning.is_empty() {
+        msg["reasoning_content"] = json!(t.reasoning);
+    }
+    if !t.tools.is_empty() {
+        msg["tool_calls"] = t.tools.iter().map(chat_tool_call).collect();
+    }
+    msg
 }
 
 // ---------------------------------------------------------------------------
@@ -367,10 +536,24 @@ fn usage_to_anthropic(u: Usage) -> Value {
 // ---------------------------------------------------------------------------
 // requests
 
-pub fn request_to_chat(from: Proto, body: &Value) -> Result<Value> {
-    if !body.is_object() {
-        bail!("{}", l("请求体必须是 JSON 对象", "The request body must be a JSON object"));
+/// Why a request (or response) body was refused: it is not a JSON object.
+pub fn not_object(request: bool) -> &'static str {
+    if request {
+        l("请求体必须是 JSON 对象", "The request body must be a JSON object")
+    } else {
+        l("响应体不是 JSON 对象", "The response body is not a JSON object")
     }
+}
+
+fn require_object(v: &Value, request: bool) -> Result<()> {
+    if !v.is_object() {
+        bail!("{}", not_object(request));
+    }
+    Ok(())
+}
+
+pub fn request_to_chat(from: Proto, body: &Value) -> Result<Value> {
+    require_object(body, true)?;
     match from {
         Proto::Chat => Ok(body.clone()),
         Proto::Responses => Ok(responses_req_to_chat(body)),
@@ -379,9 +562,7 @@ pub fn request_to_chat(from: Proto, body: &Value) -> Result<Value> {
 }
 
 pub fn request_from_chat(to: Proto, chat: &Value) -> Result<Value> {
-    if !chat.is_object() {
-        bail!("{}", l("请求体必须是 JSON 对象", "The request body must be a JSON object"));
-    }
+    require_object(chat, true)?;
     match to {
         Proto::Chat => Ok(chat.clone()),
         Proto::Responses => Ok(chat_req_to_responses(chat)),
@@ -393,11 +574,9 @@ pub fn request_from_chat(to: Proto, chat: &Value) -> Result<Value> {
 
 fn responses_req_to_chat(b: &Value) -> Value {
     let mut msgs: Vec<Value> = Vec::new();
-    if let Some(ins) = b.get("instructions") {
-        let t = text_of(ins);
-        if !t.is_empty() {
-            msgs.push(json!({"role": "system", "content": t}));
-        }
+    let t = text_of(&b["instructions"]);
+    if !t.is_empty() {
+        msgs.push(json!({"role": "system", "content": t}));
     }
     match b.get("input") {
         Some(Value::String(s)) => msgs.push(json!({"role": "user", "content": s})),
@@ -416,23 +595,13 @@ fn responses_req_to_chat(b: &Value) -> Value {
     let mut tools = Vec::new();
     for t in arr(b.get("tools")) {
         match sget(t, "type") {
-            "function" => {
-                let mut f = json!({
-                    "name": sget(t, "name"),
-                    "parameters": nonnull(t.get("parameters")).cloned()
-                        .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
-                });
-                if let Some(d) = t.get("description").and_then(Value::as_str) {
-                    f["description"] = json!(d);
-                }
-                tools.push(json!({"type": "function", "function": f}));
-            }
+            "function" => tools.push(fn_tool(sget(t, "name"), schema_or_empty(t.get("parameters")), t.get("description").and_then(Value::as_str))),
             "custom" => {
-                let fmt = t.get("format").cloned().unwrap_or(Value::Null);
-                let desc = [sget(&fmt, "definition"), sget(&fmt, "description")]
-                    .into_iter()
-                    .find(|s| !s.is_empty())
-                    .unwrap_or("Raw freeform input for this tool.");
+                let fmt = &t["format"];
+                let desc = match first_str([sget(fmt, "definition"), sget(fmt, "description")]) {
+                    "" => "Raw freeform input for this tool.",
+                    d => d,
+                };
                 tools.push(json!({"type": "function", "function": {
                     "name": sget(t, "name"),
                     "description": sget(t, "description"),
@@ -446,8 +615,7 @@ fn responses_req_to_chat(b: &Value) -> Value {
             _ => {} // built-in tools (web_search, local_shell, ...) are dropped
         }
     }
-    let has_tools = !tools.is_empty();
-    if has_tools {
+    if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
         match b.get("tool_choice") {
             Some(Value::String(s)) if matches!(s.as_str(), "auto" | "none" | "required") => {
@@ -463,14 +631,12 @@ fn responses_req_to_chat(b: &Value) -> Value {
         }
         copy_keys(b, &mut out, &["parallel_tool_calls"]);
     }
-    if let Some(m) = nonnull(b.get("max_output_tokens")) {
-        out.insert("max_tokens".into(), m.clone());
-    }
-    if let Some(e) = b.get("reasoning").and_then(|r| r.get("effort")).and_then(Value::as_str) {
+    copy_as(b, "max_output_tokens", &mut out, "max_tokens");
+    if let Some(e) = b["reasoning"]["effort"].as_str() {
         out.insert("reasoning_effort".into(), json!(e));
     }
     copy_keys(b, &mut out, &["temperature", "top_p"]);
-    set_stream_opts(&mut out, b.get("stream").and_then(Value::as_bool).unwrap_or(false));
+    set_stream_opts(&mut out, bget(b, "stream"));
     Value::Object(out)
 }
 
@@ -487,7 +653,7 @@ fn responses_item_to_chat(it: &Value, msgs: &mut Vec<Value>) {
                 "system" | "developer" => "system",
                 _ => "user",
             };
-            let parts = chat_parts(it.get("content").unwrap_or(&Value::Null));
+            let parts = chat_parts(&it["content"]);
             if role == "assistant" {
                 msgs.push(json!({"role": "assistant", "content": parts_text(&parts)}));
             } else {
@@ -495,40 +661,23 @@ fn responses_item_to_chat(it: &Value, msgs: &mut Vec<Value>) {
             }
         }
         "function_call" | "custom_tool_call" => {
-            let call_id = [sget(it, "call_id"), sget(it, "id")]
-                .into_iter()
-                .find(|s| !s.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| gen_id("call_"));
-            let args = if ty == "custom_tool_call" {
-                let input = match it.get("input") {
-                    Some(Value::String(s)) => s.clone(),
-                    other => output_text(other),
-                };
-                json!({ "input": input }).to_string()
-            } else {
-                match it.get("arguments") {
-                    Some(Value::String(s)) => s.clone(),
-                    None | Some(Value::Null) => "{}".to_string(),
-                    Some(o) => o.to_string(),
-                }
+            let id = match first_str([sget(it, "call_id"), sget(it, "id")]) {
+                "" => gen_id("call_"),
+                s => s.to_string(),
             };
-            let tc = json!({"id": call_id, "type": "function",
-                "function": {"name": sget(it, "name"), "arguments": args}});
-            let last_is_assistant = msgs
-                .last()
-                .map(|m| sget(m, "role") == "assistant")
-                .unwrap_or(false);
-            if last_is_assistant {
-                let obj = msgs.last_mut().unwrap().as_object_mut().unwrap();
-                match obj.get_mut("tool_calls") {
-                    Some(Value::Array(a)) => a.push(tc),
-                    _ => {
-                        obj.insert("tool_calls".into(), json!([tc]));
-                    }
-                }
+            let args = if ty == "custom_tool_call" {
+                custom_args(&output_text(it.get("input")))
             } else {
-                msgs.push(json!({"role": "assistant", "content": null, "tool_calls": [tc]}));
+                args_str(it.get("arguments"), "{}")
+            };
+            let tc = chat_tool_call(&ToolCall { id, name: sget(it, "name").to_string(), args });
+            match msgs.last_mut() {
+                // Calls right after an assistant message belong to it.
+                Some(m) if sget(m, "role") == "assistant" => match m.get_mut("tool_calls") {
+                    Some(Value::Array(a)) => a.push(tc),
+                    _ => m["tool_calls"] = json!([tc]),
+                },
+                _ => msgs.push(json!({"role": "assistant", "content": null, "tool_calls": [tc]})),
             }
         }
         "function_call_output" | "custom_tool_call_output" => {
@@ -546,105 +695,73 @@ fn responses_item_to_chat(it: &Value, msgs: &mut Vec<Value>) {
 
 fn anthropic_req_to_chat(b: &Value) -> Value {
     let mut msgs: Vec<Value> = Vec::new();
-    if let Some(sys) = b.get("system") {
-        let t = text_of(sys);
-        if !t.is_empty() {
-            msgs.push(json!({"role": "system", "content": t}));
-        }
+    let t = text_of(&b["system"]);
+    if !t.is_empty() {
+        msgs.push(json!({"role": "system", "content": t}));
     }
     for m in arr(b.get("messages")) {
-        let content = m.get("content").unwrap_or(&Value::Null);
+        let content = &m["content"];
         if sget(m, "role") == "assistant" {
-            let mut text = String::new();
-            let mut reasoning = String::new();
-            let mut calls = Vec::new();
-            match content {
-                Value::String(s) => text.push_str(s),
-                Value::Array(blocks) => {
-                    for bl in blocks {
-                        match sget(bl, "type") {
-                            "text" => text.push_str(sget(bl, "text")),
-                            "thinking" => reasoning.push_str(sget(bl, "thinking")),
-                            "tool_use" => {
-                                let input = nonnull(bl.get("input")).cloned().unwrap_or_else(|| json!({}));
-                                calls.push(json!({"id": sget(bl, "id"), "type": "function",
-                                    "function": {"name": sget(bl, "name"), "arguments": input.to_string()}}));
+            msgs.push(chat_assistant_msg(&anthropic_turn(content)));
+            continue;
+        }
+        match content {
+            Value::Array(blocks) => {
+                let mut tool_msgs = Vec::new();
+                let mut parts = Vec::new();
+                for bl in blocks {
+                    match sget(bl, "type") {
+                        "text" => parts.push(Part::Text(sget(bl, "text").into())),
+                        "image" => {
+                            if let Some(u) = anthropic_image_url(bl) {
+                                parts.push(Part::Image(u));
                             }
-                            _ => {}
                         }
-                    }
-                }
-                _ => {}
-            }
-            let mut msg = json!({"role": "assistant",
-                "content": if text.is_empty() && !calls.is_empty() { Value::Null } else { json!(text) }});
-            if !calls.is_empty() {
-                msg["tool_calls"] = Value::Array(calls);
-            }
-            if !reasoning.is_empty() {
-                msg["reasoning_content"] = json!(reasoning);
-            }
-            msgs.push(msg);
-        } else {
-            match content {
-                Value::Array(blocks) => {
-                    let mut tool_msgs = Vec::new();
-                    let mut parts = Vec::new();
-                    for bl in blocks {
-                        match sget(bl, "type") {
-                            "text" => parts.push(Part::Text(sget(bl, "text").into())),
-                            "image" => {
-                                if let Some(u) = anthropic_image_url(bl) {
-                                    parts.push(Part::Image(u));
-                                }
-                            }
-                            "tool_result" => {
-                                let mut text = String::new();
-                                match bl.get("content") {
-                                    Some(Value::Array(inner)) => {
-                                        let mut texts = Vec::new();
-                                        for ib in inner {
-                                            match sget(ib, "type") {
-                                                "image" => {
-                                                    if let Some(u) = anthropic_image_url(ib) {
-                                                        parts.push(Part::Image(u));
-                                                    }
+                        "tool_result" => {
+                            let mut text = String::new();
+                            match bl.get("content") {
+                                Some(Value::Array(inner)) => {
+                                    let mut texts = Vec::new();
+                                    for ib in inner {
+                                        match sget(ib, "type") {
+                                            "image" => {
+                                                if let Some(u) = anthropic_image_url(ib) {
+                                                    parts.push(Part::Image(u));
                                                 }
-                                                _ => {
-                                                    let t = text_of(ib);
-                                                    if !t.is_empty() {
-                                                        texts.push(t);
-                                                    }
+                                            }
+                                            _ => {
+                                                let t = text_of(ib);
+                                                if !t.is_empty() {
+                                                    texts.push(t);
                                                 }
                                             }
                                         }
-                                        text = texts.join("\n");
                                     }
-                                    other => text.push_str(&output_text(other)),
+                                    text = texts.join("\n");
                                 }
-                                if bl.get("is_error").and_then(Value::as_bool).unwrap_or(false) {
-                                    text = format!("[tool error] {text}");
-                                }
-                                tool_msgs.push(json!({"role": "tool",
-                                    "tool_call_id": sget(bl, "tool_use_id"), "content": text}));
+                                other => text.push_str(&output_text(other)),
                             }
-                            "document" => {
-                                if let Some(src) = bl.get("source") {
-                                    if sget(src, "type") == "text" {
-                                        parts.push(Part::Text(sget(src, "data").into()));
-                                    }
-                                }
+                            if bget(bl, "is_error") {
+                                text = format!("[tool error] {text}");
                             }
-                            _ => {}
+                            tool_msgs.push(json!({"role": "tool",
+                                "tool_call_id": sget(bl, "tool_use_id"), "content": text}));
                         }
-                    }
-                    msgs.extend(tool_msgs);
-                    if !parts.is_empty() {
-                        msgs.push(json!({"role": "user", "content": parts_to_chat_content(parts)}));
+                        "document" => {
+                            let src = &bl["source"];
+                            if sget(src, "type") == "text" {
+                                parts.push(Part::Text(sget(src, "data").into()));
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                other => msgs.push(json!({"role": "user", "content": text_of(other)})),
+                msgs.extend(tool_msgs);
+                if !parts.is_empty() {
+                    msgs.push(json!({"role": "user", "content": parts_to_chat_content(parts)}));
+                }
             }
+            other => msgs.push(json!({"role": "user", "content": text_of(other)})),
         }
     }
 
@@ -655,15 +772,7 @@ fn anthropic_req_to_chat(b: &Value) -> Value {
     let tools: Vec<Value> = arr(b.get("tools"))
         .iter()
         .filter(|t| matches!(t.get("type").and_then(Value::as_str), None | Some("custom")))
-        .map(|t| {
-            let mut f = json!({"name": sget(t, "name"),
-                "parameters": nonnull(t.get("input_schema")).cloned()
-                    .unwrap_or_else(|| json!({"type": "object", "properties": {}}))});
-            if let Some(d) = t.get("description").and_then(Value::as_str) {
-                f["description"] = json!(d);
-            }
-            json!({"type": "function", "function": f})
-        })
+        .map(|t| fn_tool(sget(t, "name"), schema_or_empty(t.get("input_schema")), t.get("description").and_then(Value::as_str)))
         .collect();
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
@@ -678,32 +787,27 @@ fn anthropic_req_to_chat(b: &Value) -> Value {
             if let Some(m) = mapped {
                 out.insert("tool_choice".into(), m);
             }
-            if tc.get("disable_parallel_tool_use").and_then(Value::as_bool) == Some(true) {
+            if bget(tc, "disable_parallel_tool_use") {
                 out.insert("parallel_tool_calls".into(), json!(false));
             }
         }
     }
-    if let Some(m) = nonnull(b.get("max_tokens")) {
-        out.insert("max_tokens".into(), m.clone());
-    }
-    if let Some(s) = nonnull(b.get("stop_sequences")) {
-        out.insert("stop".into(), s.clone());
-    }
-    if let Some(th) = b.get("thinking") {
-        if sget(th, "type") == "enabled" {
-            let budget = uget(th, "budget_tokens");
-            let effort = if budget < 4096 {
-                "low"
-            } else if budget < 16384 {
-                "medium"
-            } else {
-                "high"
-            };
-            out.insert("reasoning_effort".into(), json!(effort));
-        }
+    copy_keys(b, &mut out, &["max_tokens"]);
+    copy_as(b, "stop_sequences", &mut out, "stop");
+    let th = &b["thinking"];
+    if sget(th, "type") == "enabled" {
+        let budget = uget(th, "budget_tokens");
+        let effort = if budget < 4096 {
+            "low"
+        } else if budget < 16384 {
+            "medium"
+        } else {
+            "high"
+        };
+        out.insert("reasoning_effort".into(), json!(effort));
     }
     copy_keys(b, &mut out, &["temperature", "top_p"]);
-    set_stream_opts(&mut out, b.get("stream").and_then(Value::as_bool).unwrap_or(false));
+    set_stream_opts(&mut out, bget(b, "stream"));
     Value::Object(out)
 }
 
@@ -713,7 +817,7 @@ fn chat_req_to_responses(c: &Value) -> Value {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
     for m in arr(c.get("messages")) {
-        let content = m.get("content").unwrap_or(&Value::Null);
+        let content = &m["content"];
         match sget(m, "role") {
             "system" | "developer" => {
                 let t = text_of(content);
@@ -728,13 +832,8 @@ fn chat_req_to_responses(c: &Value) -> Value {
                         "content": [{"type": "output_text", "text": t}]}));
                 }
                 for tc in arr(m.get("tool_calls")) {
-                    let f = tc.get("function").unwrap_or(&Value::Null);
-                    input.push(json!({"type": "function_call", "call_id": sget(tc, "id"),
-                        "name": sget(f, "name"), "arguments": match f.get("arguments") {
-                            Some(Value::String(s)) => s.clone(),
-                            None | Some(Value::Null) => "{}".into(),
-                            Some(o) => o.to_string(),
-                        }}));
+                    let c = chat_call(tc, "{}");
+                    input.push(json!({"type": "function_call", "call_id": c.id, "name": c.name, "arguments": c.args}));
                 }
             }
             "tool" | "function" => {
@@ -759,30 +858,26 @@ fn chat_req_to_responses(c: &Value) -> Value {
         out.insert("instructions".into(), json!(instructions.join("\n\n")));
     }
     out.insert("input".into(), Value::Array(input));
-    let tools: Vec<Value> = arr(c.get("tools"))
-        .iter()
-        .filter_map(|t| {
-            let f = t.get("function")?;
-            let mut o = json!({"type": "function", "name": sget(f, "name"),
-                "parameters": nonnull(f.get("parameters")).cloned()
-                    .unwrap_or_else(|| json!({"type": "object", "properties": {}}))});
-            if let Some(d) = f.get("description").and_then(Value::as_str) {
+    let tools: Vec<Value> = chat_fn_tools(c)
+        .into_iter()
+        .map(|(name, desc, params)| {
+            let mut o = json!({"type": "function", "name": name, "parameters": params});
+            if let Some(d) = desc {
                 o["description"] = json!(d);
             }
-            Some(o)
+            o
         })
         .collect();
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
-        match c.get("tool_choice") {
-            Some(Value::String(s)) => {
+        match chat_tool_choice(c.get("tool_choice")) {
+            Some(ToolChoice::Mode(s)) => {
                 out.insert("tool_choice".into(), json!(s));
             }
-            Some(o @ Value::Object(_)) => {
-                let name = o.get("function").map(|f| sget(f, "name")).unwrap_or("");
+            Some(ToolChoice::Tool(name)) => {
                 out.insert("tool_choice".into(), json!({"type": "function", "name": name}));
             }
-            _ => {}
+            None => {}
         }
         copy_keys(c, &mut out, &["parallel_tool_calls"]);
     }
@@ -794,9 +889,7 @@ fn chat_req_to_responses(c: &Value) -> Value {
     }
     copy_keys(c, &mut out, &["temperature", "top_p"]);
     out.insert("store".into(), json!(false));
-    if c.get("stream").and_then(Value::as_bool).unwrap_or(false) {
-        out.insert("stream".into(), json!(true));
-    }
+    set_stream(&mut out, bget(c, "stream"));
     Value::Object(out)
 }
 
@@ -825,7 +918,7 @@ fn chat_req_to_anthropic(c: &Value) -> Value {
     let mut system = Vec::new();
     let mut msgs: Vec<(String, Vec<Value>)> = Vec::new();
     for m in arr(c.get("messages")) {
-        let content = m.get("content").unwrap_or(&Value::Null);
+        let content = &m["content"];
         match sget(m, "role") {
             "system" | "developer" => {
                 let t = text_of(content);
@@ -840,7 +933,7 @@ fn chat_req_to_anthropic(c: &Value) -> Value {
                     blocks.push(json!({"type": "text", "text": t}));
                 }
                 for tc in arr(m.get("tool_calls")) {
-                    let f = tc.get("function").unwrap_or(&Value::Null);
+                    let f = &tc["function"];
                     let input = match f.get("arguments") {
                         Some(Value::String(s)) => parse_args(s),
                         Some(o @ Value::Object(_)) => o.clone(),
@@ -903,17 +996,14 @@ fn chat_req_to_anthropic(c: &Value) -> Value {
         .and_then(Value::as_u64)
         .unwrap_or(8192);
 
-    let tools: Vec<Value> = arr(c.get("tools"))
-        .iter()
-        .filter_map(|t| {
-            let f = t.get("function")?;
-            let mut o = json!({"name": sget(f, "name"),
-                "input_schema": nonnull(f.get("parameters")).cloned()
-                    .unwrap_or_else(|| json!({"type": "object", "properties": {}}))});
-            if let Some(d) = f.get("description").and_then(Value::as_str) {
+    let tools: Vec<Value> = chat_fn_tools(c)
+        .into_iter()
+        .map(|(name, desc, params)| {
+            let mut o = json!({"name": name, "input_schema": params});
+            if let Some(d) = desc {
                 o["description"] = json!(d);
             }
-            Some(o)
+            o
         })
         .collect();
     let thinking = c
@@ -922,18 +1012,12 @@ fn chat_req_to_anthropic(c: &Value) -> Value {
         .and_then(effort_budget);
     if !tools.is_empty() {
         out.insert("tools".into(), Value::Array(tools));
-        let mut tc = match c.get("tool_choice") {
-            Some(Value::String(s)) => match s.as_str() {
-                "required" => Some(json!({"type": "any"})),
-                "none" => Some(json!({"type": "none"})),
-                "auto" => Some(json!({"type": "auto"})),
-                _ => None,
-            },
-            Some(o @ Value::Object(_)) => {
-                let name = o.get("function").map(|f| sget(f, "name")).unwrap_or("");
-                Some(json!({"type": "tool", "name": name}))
-            }
-            _ => None,
+        let mut tc = match chat_tool_choice(c.get("tool_choice")) {
+            Some(ToolChoice::Mode("required")) => Some(json!({"type": "any"})),
+            Some(ToolChoice::Mode("none")) => Some(json!({"type": "none"})),
+            Some(ToolChoice::Mode("auto")) => Some(json!({"type": "auto"})),
+            Some(ToolChoice::Mode(_)) | None => None,
+            Some(ToolChoice::Tool(name)) => Some(json!({"type": "tool", "name": name})),
         };
         // Anthropic rejects forced tool use together with extended thinking.
         if thinking.is_some() && matches!(tc.as_ref().map(|t| sget(t, "type")), Some("any" | "tool")) {
@@ -967,9 +1051,7 @@ fn chat_req_to_anthropic(c: &Value) -> Value {
         copy_keys(c, &mut out, &["temperature", "top_p"]);
     }
     out.insert("max_tokens".into(), json!(max_tokens));
-    if c.get("stream").and_then(Value::as_bool).unwrap_or(false) {
-        out.insert("stream".into(), json!(true));
-    }
+    set_stream(&mut out, bget(c, "stream"));
     Value::Object(out)
 }
 
@@ -978,160 +1060,72 @@ fn chat_req_to_anthropic(c: &Value) -> Value {
 
 /// Assistant turn extracted from a chat.completion.
 struct ChatTurn {
-    id: String,
+    /// The client's model name, or the upstream's when the client named none.
     model: String,
-    text: String,
-    reasoning: String,
-    tools: Vec<(String, String, String)>, // (call id, name, arguments)
+    turn: Turn,
     finish: String,
     usage: Usage,
 }
 
 /// (text, reasoning) of a chat.completion message, whatever shape its content has.
 pub fn message_text(msg: &Value) -> (String, String) {
-    let reasoning = [sget(msg, "reasoning_content"), sget(msg, "reasoning")]
-        .into_iter()
-        .find(|s| !s.is_empty())
-        .unwrap_or("")
-        .to_string();
-    (parts_text(&chat_parts(msg.get("content").unwrap_or(&Value::Null))), reasoning)
+    let reasoning = first_str([sget(msg, "reasoning_content"), sget(msg, "reasoning")]).to_string();
+    (parts_text(&chat_parts(&msg["content"])), reasoning)
 }
 
-fn parse_chat_response(chat: &Value) -> ChatTurn {
-    let ch = chat.get("choices").and_then(|c| c.get(0)).unwrap_or(&Value::Null);
-    let msg = ch.get("message").unwrap_or(&Value::Null);
+fn parse_chat_response(chat: &Value, ctx: &ReqCtx) -> ChatTurn {
+    let ch = &chat["choices"][0];
+    let msg = &ch["message"];
     let (text, reasoning) = message_text(msg);
     let tools = arr(msg.get("tool_calls"))
         .iter()
         .map(|tc| {
-            let f = tc.get("function").unwrap_or(&Value::Null);
-            let args = match f.get("arguments") {
-                Some(Value::String(s)) => s.clone(),
-                None | Some(Value::Null) => String::new(),
-                Some(o) => o.to_string(),
-            };
-            let id = match sget(tc, "id") {
-                "" => gen_id("call_"),
-                s => s.to_string(),
-            };
-            (id, sget(f, "name").to_string(), args)
+            let mut c = chat_call(tc, "");
+            if c.id.is_empty() {
+                c.id = gen_id("call_");
+            }
+            c
         })
         .collect();
     ChatTurn {
-        id: sget(chat, "id").to_string(),
-        model: sget(chat, "model").to_string(),
-        text,
-        reasoning,
-        tools,
+        model: if ctx.model.is_empty() { sget(chat, "model") } else { ctx.model.as_str() }.to_string(),
+        turn: Turn { text, reasoning, tools },
         finish: sget(ch, "finish_reason").to_string(),
         usage: chat.get("usage").map(usage_from_chat).unwrap_or_default(),
     }
 }
 
-fn chat_completion(
-    id: &str,
-    model: &str,
-    text: &str,
-    reasoning: &str,
-    tools: &[(String, String, String)],
-    finish: &str,
-    usage: Usage,
-) -> Value {
-    let mut msg = json!({"role": "assistant",
-        "content": if text.is_empty() && !tools.is_empty() { Value::Null } else { json!(text) }});
-    if !reasoning.is_empty() {
-        msg["reasoning_content"] = json!(reasoning);
-    }
-    if !tools.is_empty() {
-        msg["tool_calls"] = Value::Array(
-            tools
-                .iter()
-                .map(|(id, name, args)| {
-                    json!({"id": id, "type": "function", "function": {"name": name, "arguments": args}})
-                })
-                .collect(),
-        );
-    }
+fn chat_completion(id: &str, model: &str, turn: &Turn, finish: &str, usage: Usage) -> Value {
     json!({
         "id": if id.is_empty() { gen_id("chatcmpl-") } else { id.to_string() },
         "object": "chat.completion",
         "created": now_secs(),
         "model": model,
-        "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
+        "choices": [{"index": 0, "message": chat_assistant_msg(turn), "finish_reason": finish}],
         "usage": usage_to_chat(usage),
     })
 }
 
 pub fn response_to_chat(from: Proto, body: &Value) -> Result<Value> {
-    if !body.is_object() {
-        bail!("{}", l("响应体不是 JSON 对象", "The response body is not a JSON object"));
-    }
-    match from {
-        Proto::Chat => Ok(body.clone()),
+    require_object(body, false)?;
+    let (turn, finish, usage) = match from {
+        Proto::Chat => return Ok(body.clone()),
         Proto::Responses => {
-            let mut text = String::new();
-            let mut reasoning = String::new();
-            let mut tools = Vec::new();
-            for it in arr(body.get("output")) {
-                match sget(it, "type") {
-                    "message" => text.push_str(&parts_text(&chat_parts(it.get("content").unwrap_or(&Value::Null)))),
-                    "reasoning" => {
-                        let mut r = text_of(it.get("summary").unwrap_or(&Value::Null));
-                        if r.is_empty() {
-                            r = text_of(it.get("content").unwrap_or(&Value::Null));
-                        }
-                        reasoning.push_str(&r);
-                    }
-                    "function_call" => tools.push((
-                        sget(it, "call_id").to_string(),
-                        sget(it, "name").to_string(),
-                        output_text(it.get("arguments")),
-                    )),
-                    "custom_tool_call" => tools.push((
-                        sget(it, "call_id").to_string(),
-                        sget(it, "name").to_string(),
-                        json!({"input": output_text(it.get("input"))}).to_string(),
-                    )),
-                    _ => {}
-                }
-            }
+            let turn = responses_output_turn(arr(body.get("output")));
             let finish = if sget(body, "status") == "incomplete" {
-                match body.get("incomplete_details").map(|d| sget(d, "reason")) {
-                    Some("content_filter") => "content_filter",
-                    _ => "length",
-                }
-            } else if !tools.is_empty() {
-                "tool_calls"
+                incomplete_to_finish(sget(&body["incomplete_details"], "reason"))
             } else {
-                "stop"
+                finish_with_tools("stop", !turn.tools.is_empty())
             };
-            let usage = body.get("usage").map(usage_from_responses).unwrap_or_default();
-            Ok(chat_completion(sget(body, "id"), sget(body, "model"), &text, &reasoning, &tools, finish, usage))
+            (turn, finish, body.get("usage").map(usage_from_responses))
         }
         Proto::Anthropic => {
-            let mut text = String::new();
-            let mut reasoning = String::new();
-            let mut tools = Vec::new();
-            for bl in arr(body.get("content")) {
-                match sget(bl, "type") {
-                    "text" => text.push_str(sget(bl, "text")),
-                    "thinking" => reasoning.push_str(sget(bl, "thinking")),
-                    "tool_use" => tools.push((
-                        sget(bl, "id").to_string(),
-                        sget(bl, "name").to_string(),
-                        nonnull(bl.get("input")).cloned().unwrap_or_else(|| json!({})).to_string(),
-                    )),
-                    _ => {}
-                }
-            }
-            let mut finish = anthropic_stop_to_finish(sget(body, "stop_reason"));
-            if finish == "stop" && !tools.is_empty() {
-                finish = "tool_calls";
-            }
-            let usage = body.get("usage").map(usage_from_anthropic).unwrap_or_default();
-            Ok(chat_completion(sget(body, "id"), sget(body, "model"), &text, &reasoning, &tools, finish, usage))
+            let turn = anthropic_turn(&body["content"]);
+            let finish = finish_with_tools(anthropic_stop_to_finish(sget(body, "stop_reason")), !turn.tools.is_empty());
+            (turn, finish, body.get("usage").map(usage_from_anthropic))
         }
-    }
+    };
+    Ok(chat_completion(sget(body, "id"), sget(body, "model"), &turn, finish, usage.unwrap_or_default()))
 }
 
 fn anthropic_stop_to_finish(s: &str) -> &'static str {
@@ -1147,24 +1141,53 @@ fn finish_to_anthropic(f: &str, saw_tool: bool) -> &'static str {
     match f {
         "length" => "max_tokens",
         "tool_calls" | "function_call" => "tool_use",
+        "content_filter" => "refusal",
         _ if saw_tool => "tool_use",
         _ => "end_turn",
     }
 }
 
-/// Responses output item for one tool call (custom_tool_call when the name is a custom tool).
-fn responses_tool_item(ctx: &ReqCtx, item_id: &str, call_id: &str, name: &str, args: &str, status: &str) -> Value {
-    if ctx.custom_tools.iter().any(|n| n == name) {
+/// A plain "stop" from a turn that called tools is a tool-call finish.
+fn finish_with_tools(finish: &str, has_tools: bool) -> &str {
+    if finish == "stop" && has_tools {
+        "tool_calls"
+    } else {
+        finish
+    }
+}
+
+/// Responses `incomplete_details.reason` for a chat finish reason that cut the answer short.
+fn finish_to_incomplete(finish: &str) -> Option<&'static str> {
+    match finish {
+        "length" => Some("max_output_tokens"),
+        "content_filter" => Some("content_filter"),
+        _ => None,
+    }
+}
+
+/// Chat finish reason for an incomplete Responses answer.
+fn incomplete_to_finish(reason: &str) -> &'static str {
+    if reason == "content_filter" {
+        "content_filter"
+    } else {
+        "length"
+    }
+}
+
+/// Item id for a Responses tool call.
+fn tool_item_id(custom: bool) -> String {
+    gen_id(if custom { "ctc_" } else { "fc_" })
+}
+
+/// Responses output item for one tool call (custom_tool_call for a custom tool).
+fn responses_tool_item(custom: bool, item_id: &str, call_id: &str, name: &str, args: &str, status: &str) -> Value {
+    if custom {
         json!({"type": "custom_tool_call", "id": item_id, "call_id": call_id, "name": name,
             "input": custom_input(args), "status": status})
     } else {
         json!({"type": "function_call", "id": item_id, "call_id": call_id, "name": name,
             "arguments": args, "status": status})
     }
-}
-
-fn is_custom(ctx: &ReqCtx, name: &str) -> bool {
-    ctx.custom_tools.iter().any(|n| n == name)
 }
 
 fn reasoning_item(id: &str, text: &str) -> Value {
@@ -1215,24 +1238,16 @@ fn responses_envelope(
     })
 }
 
-fn anthropic_message(
-    id: &str,
-    model: &str,
-    reasoning: &str,
-    text: &str,
-    tools: &[(String, String, String)],
-    stop_reason: &str,
-    usage: Usage,
-) -> Value {
+fn anthropic_message(id: &str, model: &str, turn: &Turn, stop_reason: &str, usage: Usage) -> Value {
     let mut content = Vec::new();
-    if !reasoning.is_empty() {
-        content.push(json!({"type": "thinking", "thinking": reasoning, "signature": ""}));
+    if !turn.reasoning.is_empty() {
+        content.push(json!({"type": "thinking", "thinking": turn.reasoning, "signature": ""}));
     }
-    if !text.is_empty() || (tools.is_empty() && reasoning.is_empty()) {
-        content.push(json!({"type": "text", "text": text}));
+    if !turn.text.is_empty() || (turn.tools.is_empty() && turn.reasoning.is_empty()) {
+        content.push(json!({"type": "text", "text": turn.text}));
     }
-    for (cid, name, args) in tools {
-        content.push(json!({"type": "tool_use", "id": cid, "name": name, "input": parse_args(args)}));
+    for c in &turn.tools {
+        content.push(json!({"type": "tool_use", "id": c.id, "name": c.name, "input": parse_args(&c.args)}));
     }
     json!({
         "id": id,
@@ -1247,34 +1262,27 @@ fn anthropic_message(
 }
 
 pub fn response_from_chat(to: Proto, chat: &Value, ctx: &ReqCtx) -> Result<Value> {
-    if !chat.is_object() {
-        bail!("{}", l("响应体不是 JSON 对象", "The response body is not a JSON object"));
-    }
-    let t = parse_chat_response(chat);
-    let model = if ctx.model.is_empty() { t.model.clone() } else { ctx.model.clone() };
+    require_object(chat, false)?;
     match to {
         Proto::Chat => Ok(chat.clone()),
         Proto::Responses => {
+            let t = parse_chat_response(chat, ctx);
             let mut output = Vec::new();
-            if !t.reasoning.is_empty() {
-                output.push(reasoning_item(&gen_id("rs_"), &t.reasoning));
+            if !t.turn.reasoning.is_empty() {
+                output.push(reasoning_item(&gen_id("rs_"), &t.turn.reasoning));
             }
-            if !t.text.is_empty() {
-                output.push(message_item(&gen_id("msg_"), &t.text, "completed"));
+            if !t.turn.text.is_empty() {
+                output.push(message_item(&gen_id("msg_"), &t.turn.text, "completed"));
             }
-            for (cid, name, args) in &t.tools {
-                let prefix = if is_custom(ctx, name) { "ctc_" } else { "fc_" };
-                output.push(responses_tool_item(ctx, &gen_id(prefix), cid, name, args, "completed"));
+            for c in &t.turn.tools {
+                let custom = ctx.is_custom(&c.name);
+                output.push(responses_tool_item(custom, &tool_item_id(custom), &c.id, &c.name, &c.args, "completed"));
             }
-            let incomplete = match t.finish.as_str() {
-                "length" => Some("max_output_tokens"),
-                "content_filter" => Some("content_filter"),
-                _ => None,
-            };
+            let incomplete = finish_to_incomplete(&t.finish);
             Ok(responses_envelope(
                 &gen_id("resp_"),
                 now_secs(),
-                &model,
+                &t.model,
                 if incomplete.is_some() { "incomplete" } else { "completed" },
                 output,
                 Some(t.usage),
@@ -1282,45 +1290,36 @@ pub fn response_from_chat(to: Proto, chat: &Value, ctx: &ReqCtx) -> Result<Value
                 None,
             ))
         }
-        Proto::Anthropic => Ok(anthropic_message(
-            &gen_id("msg_"),
-            &model,
-            &t.reasoning,
-            &t.text,
-            &t.tools,
-            finish_to_anthropic(&t.finish, !t.tools.is_empty()),
-            t.usage,
-        )),
+        Proto::Anthropic => {
+            let t = parse_chat_response(chat, ctx);
+            let stop = finish_to_anthropic(&t.finish, !t.turn.tools.is_empty());
+            Ok(anthropic_message(&gen_id("msg_"), &t.model, &t.turn, stop, t.usage))
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // errors & models
 
-fn extract_error_message(text: &str) -> String {
-    if let Ok(v) = serde_json::from_str::<Value>(text) {
-        let candidates = [
-            v.get("error").and_then(|e| e.get("message")),
-            v.get("message"),
-            v.get("error"),
-            v.get("detail"),
-        ];
-        for c in candidates.into_iter().flatten() {
-            match c {
-                Value::String(s) if !s.is_empty() => return s.clone(),
-                Value::Null | Value::String(_) => {}
-                Value::Object(o) if o.contains_key("message") => {}
-                other if !other.is_object() => return other.to_string(),
-                _ => {}
-            }
+/// The message of an error body or event: `error.message`, `message`, `error` or `detail`
+/// (the first that is set; a non-string one JSON-encoded, objects skipped).
+pub fn error_message(v: &Value) -> Option<String> {
+    for c in [v.pointer("/error/message"), v.get("message"), v.get("error"), v.get("detail")].into_iter().flatten() {
+        match c {
+            Value::String(s) if !s.is_empty() => return Some(s.clone()),
+            Value::Null | Value::String(_) | Value::Object(_) => {}
+            other => return Some(other.to_string()),
         }
     }
-    let t = text.trim();
-    if t.is_empty() {
-        String::new()
-    } else {
-        truncate_chars(t, 500)
-    }
+    None
+}
+
+/// The message of an upstream error body: from its JSON, else the (shortened) text itself.
+fn extract_error_message(text: &str) -> String {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|v| error_message(&v))
+        .unwrap_or_else(|| clip(text.trim(), 500))
 }
 
 fn error_type(status: u16) -> &'static str {
@@ -1345,30 +1344,26 @@ pub fn error_body(to: Proto, status: u16, upstream_text: &str) -> Value {
     }
 }
 
-pub fn models_body(to: Proto, upstream: &Value) -> Value {
-    let list = if upstream.is_array() {
-        upstream.as_array().map(Vec::as_slice).unwrap_or(&[])
-    } else if upstream.get("data").map(Value::is_array).unwrap_or(false) {
-        arr(upstream.get("data"))
-    } else {
-        arr(upstream.get("models"))
+/// (id, display name, owner) of each model in an upstream's list, in any of the shapes
+/// OpenAI, Anthropic and Gemini use, without duplicates. Gemini's "models/" prefix is dropped.
+pub fn model_entries(upstream: &Value) -> Vec<(String, String, String)> {
+    let list = match upstream {
+        Value::Array(a) => a.as_slice(),
+        _ if upstream["data"].is_array() => arr(upstream.get("data")),
+        _ => arr(upstream.get("models")),
     };
     let mut seen = HashSet::new();
-    let mut models: Vec<(String, String, String)> = Vec::new(); // (id, display, owner)
+    let mut models = Vec::new();
     for m in list {
         let (id, display, owner) = match m {
             Value::String(s) => (s.clone(), s.clone(), String::new()),
             Value::Object(_) => {
-                let id = [sget(m, "id"), sget(m, "name"), sget(m, "model"), sget(m, "slug")]
-                    .into_iter()
-                    .find(|s| !s.is_empty())
-                    .unwrap_or("");
+                let id = first_str([sget(m, "id"), sget(m, "name"), sget(m, "model"), sget(m, "slug")]);
                 let id = id.strip_prefix("models/").unwrap_or(id).to_string();
-                let display = [sget(m, "display_name"), sget(m, "displayName")]
-                    .into_iter()
-                    .find(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| id.clone());
+                let display = match first_str([sget(m, "display_name"), sget(m, "displayName")]) {
+                    "" => id.clone(),
+                    d => d.to_string(),
+                };
                 (id, display, sget(m, "owned_by").to_string())
             }
             _ => continue,
@@ -1377,6 +1372,11 @@ pub fn models_body(to: Proto, upstream: &Value) -> Value {
             models.push((id, display, owner));
         }
     }
+    models
+}
+
+pub fn models_body(to: Proto, upstream: &Value) -> Value {
+    let models = model_entries(upstream);
     match to {
         Proto::Anthropic => {
             let data: Vec<Value> = models
@@ -1400,6 +1400,37 @@ pub fn models_body(to: Proto, upstream: &Value) -> Value {
 }
 
 // ---------------------------------------------------------------------------
+// wire envelopes
+
+/// A chat.completion.chunk.
+fn chunk_json(id: impl Serialize, created: impl Serialize, model: impl Serialize, choices: Value) -> Value {
+    json!({"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": choices})
+}
+
+/// An SSE frame "event: <ty>" whose data starts with "type" (and "sequence_number" when given).
+fn sse_event(ty: &str, fields: Value, seq: Option<u64>) -> String {
+    let mut m = Map::new();
+    m.insert("type".into(), json!(ty));
+    if let Some(n) = seq {
+        m.insert("sequence_number".into(), json!(n));
+    }
+    if let Value::Object(f) = fields {
+        m.extend(f);
+    }
+    format!("event: {ty}\ndata: {}\n\n", Value::Object(m))
+}
+
+/// An SSE frame with only data (Chat Completions streams).
+fn sse_data(v: &Value) -> String {
+    format!("data: {v}\n\n")
+}
+
+/// What a stream that stopped without its closing event reports.
+pub fn stream_cut_off() -> &'static str {
+    l("上游的流没有正常结束就断开了", "The upstream stream ended before it finished")
+}
+
+// ---------------------------------------------------------------------------
 // streaming: upstream SSE -> chat chunks
 
 struct RespTool {
@@ -1417,7 +1448,6 @@ pub struct UpstreamStream {
     id: String,
     model: String,
     created: i64,
-    started: bool,
     role_sent: bool,
     done: bool,
     /// Ended without its closing event (message_stop / response.completed / an error).
@@ -1427,10 +1457,14 @@ pub struct UpstreamStream {
     usage: Option<Usage>,
     // anthropic: content block index -> tool index
     block_tool: HashMap<u64, usize>,
-    // responses: item id -> tool state; output_index -> item id; items that streamed text
+    // responses: item id -> tool state; output_index -> item id
     resp_tools: HashMap<String, RespTool>,
     oi_item: HashMap<u64, String>,
+    /// Responses message items whose text streamed as deltas, by item id and by output index;
+    /// `anon_text` when deltas named neither.
     text_items: HashSet<String>,
+    text_ois: HashSet<u64>,
+    anon_text: bool,
 }
 
 impl UpstreamStream {
@@ -1441,7 +1475,6 @@ impl UpstreamStream {
             id: gen_id("chatcmpl-"),
             model: String::new(),
             created: now_secs(),
-            started: false,
             role_sent: false,
             done: false,
             early: false,
@@ -1452,6 +1485,8 @@ impl UpstreamStream {
             resp_tools: HashMap::new(),
             oi_item: HashMap::new(),
             text_items: HashSet::new(),
+            text_ois: HashSet::new(),
+            anon_text: false,
         }
     }
 
@@ -1460,12 +1495,16 @@ impl UpstreamStream {
         if self.buf.contains('\r') {
             self.buf = self.buf.replace("\r\n", "\n");
         }
+        // Walk the complete events with a cursor and keep only the tail: a whole body fed in
+        // one piece is parsed in one pass.
+        let buf = std::mem::take(&mut self.buf);
         let mut out = Vec::new();
-        while let Some(pos) = self.buf.find("\n\n") {
-            let block: String = self.buf[..pos].to_string();
-            self.buf.drain(..pos + 2);
-            self.handle_block(&block, &mut out);
+        let mut start = 0;
+        while let Some(pos) = buf[start..].find("\n\n") {
+            self.handle_block(&buf[start..start + pos], &mut out);
+            start += pos + 2;
         }
+        self.buf = buf[start..].to_string();
         out
     }
 
@@ -1480,7 +1519,7 @@ impl UpstreamStream {
         // it the stream was cut off, which must not look like a complete answer.
         if self.from != Proto::Chat && !self.done {
             self.early = true;
-            let c = self.error_chunk(l("上游的流没有正常结束就断开了", "The upstream stream ended before it finished"));
+            let c = self.error_chunk(stream_cut_off());
             out.push(c);
         }
         out
@@ -1518,15 +1557,11 @@ impl UpstreamStream {
             Some(t) => t.to_string(),
             None => event,
         };
-        self.started = true;
         match self.from {
             Proto::Chat => {
-                if let Some(e) = nonnull(v.get("error")) {
-                    let msg = match e {
-                        Value::String(s) => s.clone(),
-                        o => sget(o, "message").to_string(),
-                    };
-                    out.push(self.error_chunk(&msg));
+                if nonnull(v.get("error")).is_some() {
+                    let c = self.error_chunk(&error_message(&v).unwrap_or_default());
+                    out.push(c);
                 } else if v.get("choices").is_some() {
                     out.push(v);
                 }
@@ -1537,25 +1572,24 @@ impl UpstreamStream {
     }
 
     fn chunk(&self, delta: Value, finish: Option<&str>) -> Value {
-        json!({
-            "id": self.id,
-            "object": "chat.completion.chunk",
-            "created": self.created,
-            "model": self.model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-        })
+        chunk_json(&self.id, self.created, &self.model, json!([{"index": 0, "delta": delta, "finish_reason": finish}]))
     }
 
     fn error_chunk(&mut self, msg: &str) -> Value {
         self.done = true;
-        json!({
-            "id": self.id,
-            "object": "chat.completion.chunk",
-            "created": self.created,
-            "model": self.model,
-            "choices": [],
-            "error": {"message": if msg.is_empty() { l("上游流出错", "Upstream stream error") } else { msg }, "type": "upstream_error"},
-        })
+        let mut c = chunk_json(&self.id, self.created, &self.model, json!([]));
+        c["error"] = json!({"message": if msg.is_empty() { l("上游流出错", "Upstream stream error") } else { msg }, "type": "upstream_error"});
+        c
+    }
+
+    /// Takes the upstream's id and model from its opening event.
+    fn adopt_meta(&mut self, m: &Value) {
+        if !sget(m, "id").is_empty() {
+            self.id = sget(m, "id").to_string();
+        }
+        if !sget(m, "model").is_empty() {
+            self.model = sget(m, "model").to_string();
+        }
     }
 
     fn role(&mut self, out: &mut Vec<Value>) {
@@ -1606,19 +1640,12 @@ impl UpstreamStream {
         }
         self.done = true;
         self.role(out);
-        let finish = self.finish.clone().unwrap_or_else(|| {
-            if self.tool_count > 0 { "tool_calls" } else { "stop" }.to_string()
-        });
+        let finish = finish_with_tools(self.finish.as_deref().unwrap_or("stop"), self.tool_count > 0).to_string();
         out.push(self.chunk(json!({}), Some(&finish)));
         if let Some(u) = self.usage {
-            out.push(json!({
-                "id": self.id,
-                "object": "chat.completion.chunk",
-                "created": self.created,
-                "model": self.model,
-                "choices": [],
-                "usage": usage_to_chat(u),
-            }));
+            let mut c = chunk_json(&self.id, self.created, &self.model, json!([]));
+            c["usage"] = usage_to_chat(u);
+            out.push(c);
         }
     }
 
@@ -1628,20 +1655,15 @@ impl UpstreamStream {
         }
         match ty {
             "message_start" => {
-                let m = v.get("message").unwrap_or(&Value::Null);
-                if !sget(m, "id").is_empty() {
-                    self.id = sget(m, "id").to_string();
-                }
-                if !sget(m, "model").is_empty() {
-                    self.model = sget(m, "model").to_string();
-                }
+                let m = &v["message"];
+                self.adopt_meta(m);
                 if let Some(u) = m.get("usage") {
                     self.usage = Some(usage_from_anthropic(u));
                 }
                 self.role(out);
             }
             "content_block_start" => {
-                let b = v.get("content_block").unwrap_or(&Value::Null);
+                let b = &v["content_block"];
                 match sget(b, "type") {
                     "tool_use" => {
                         let ti = self.tool_start(sget(b, "id"), sget(b, "name"), out);
@@ -1653,7 +1675,7 @@ impl UpstreamStream {
                 }
             }
             "content_block_delta" => {
-                let d = v.get("delta").unwrap_or(&Value::Null);
+                let d = &v["delta"];
                 match sget(d, "type") {
                     "text_delta" => self.content(sget(d, "text"), out),
                     "thinking_delta" => self.reasoning(sget(d, "thinking"), out),
@@ -1666,7 +1688,7 @@ impl UpstreamStream {
                 }
             }
             "message_delta" => {
-                if let Some(sr) = v.get("delta").and_then(|d| d.get("stop_reason")).and_then(Value::as_str) {
+                if let Some(sr) = v["delta"]["stop_reason"].as_str() {
                     self.finish = Some(anthropic_stop_to_finish(sr).to_string());
                 }
                 if let Some(u) = v.get("usage") {
@@ -1684,9 +1706,7 @@ impl UpstreamStream {
             }
             "message_stop" => self.emit_final(out),
             "error" => {
-                let e = v.get("error").unwrap_or(v);
-                let msg = sget(e, "message").to_string();
-                let c = self.error_chunk(&msg);
+                let c = self.error_chunk(&error_message(v).unwrap_or_default());
                 out.push(c);
             }
             _ => {} // ping, unknown
@@ -1703,53 +1723,68 @@ impl UpstreamStream {
             .and_then(|oi| self.oi_item.get(&oi).cloned())
     }
 
-    /// Register a Responses tool item (idempotent); returns its item key.
+    /// Register a Responses tool item (idempotent); returns its item key. An item already
+    /// seen under its id or at its output index is the same call, even when the upstream's
+    /// added and done events disagree on the id.
     fn resp_tool_open(&mut self, item: &Value, oi: Option<u64>, out: &mut Vec<Value>) -> String {
-        let key = match sget(item, "id") {
-            "" => format!("oi_{}", oi.unwrap_or(self.tool_count as u64 + 1000)),
-            s => s.to_string(),
+        let id = sget(item, "id");
+        let known = Some(id)
+            .filter(|id| !id.is_empty() && self.resp_tools.contains_key(*id))
+            .map(str::to_string)
+            .or_else(|| oi.and_then(|oi| self.oi_item.get(&oi).cloned()));
+        let key = match known {
+            Some(key) => key,
+            None => {
+                let key = match id {
+                    "" => format!("oi_{}", oi.unwrap_or(self.tool_count as u64 + 1000)),
+                    s => s.to_string(),
+                };
+                let call_id = match sget(item, "call_id") {
+                    "" => key.clone(),
+                    s => s.to_string(),
+                };
+                let ti = self.tool_start(&call_id, sget(item, "name"), out);
+                let custom = sget(item, "type") == "custom_tool_call";
+                self.resp_tools.insert(key.clone(), RespTool { ti, custom, args_emitted: false, buf: String::new(), done: false });
+                key
+            }
         };
-        if !self.resp_tools.contains_key(&key) {
-            let call_id = match sget(item, "call_id") {
-                "" => key.clone(),
-                s => s.to_string(),
-            };
-            let ti = self.tool_start(&call_id, sget(item, "name"), out);
-            self.resp_tools.insert(
-                key.clone(),
-                RespTool {
-                    ti,
-                    custom: sget(item, "type") == "custom_tool_call",
-                    args_emitted: false,
-                    buf: String::new(),
-                    done: false,
-                },
-            );
-        }
         if let Some(oi) = oi {
             self.oi_item.insert(oi, key.clone());
         }
         key
     }
 
+    /// Whether a finished message item's text already streamed as deltas.
+    fn text_streamed(&self, id: &str, oi: Option<u64>) -> bool {
+        self.anon_text || (!id.is_empty() && self.text_items.contains(id)) || oi.is_some_and(|oi| self.text_ois.contains(&oi))
+    }
+
+    fn mark_text(&mut self, id: &str, oi: Option<u64>) {
+        if !id.is_empty() {
+            self.text_items.insert(id.to_string());
+        }
+        if let Some(oi) = oi {
+            self.text_ois.insert(oi);
+        }
+    }
+
     fn responses_event(&mut self, ty: &str, v: &Value, out: &mut Vec<Value>) {
         if self.done && ty != "error" && ty != "response.failed" {
             return;
         }
+        let oi = v.get("output_index").and_then(Value::as_u64);
         match ty {
             "response.created" | "response.in_progress" => {
-                if let Some(r) = v.get("response") {
-                    if !sget(r, "id").is_empty() {
-                        self.id = sget(r, "id").to_string();
-                    }
-                    if !sget(r, "model").is_empty() {
-                        self.model = sget(r, "model").to_string();
-                    }
-                }
+                self.adopt_meta(&v["response"]);
                 self.role(out);
             }
             "response.output_text.delta" | "response.refusal.delta" => {
-                self.text_items.insert(sget(v, "item_id").to_string());
+                let id = sget(v, "item_id");
+                if id.is_empty() && oi.is_none() {
+                    self.anon_text = true;
+                }
+                self.mark_text(id, oi);
                 self.content(sget(v, "delta"), out);
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
@@ -1761,9 +1796,9 @@ impl UpstreamStream {
                 }
             }
             "response.output_item.added" => {
-                let item = v.get("item").unwrap_or(&Value::Null);
+                let item = &v["item"];
                 if matches!(sget(item, "type"), "function_call" | "custom_tool_call") {
-                    self.resp_tool_open(item, v.get("output_index").and_then(Value::as_u64), out);
+                    self.resp_tool_open(item, oi, out);
                 }
             }
             "response.function_call_arguments.delta" => {
@@ -1803,11 +1838,11 @@ impl UpstreamStream {
                 }
             }
             "response.output_item.done" => {
-                let item = v.get("item").unwrap_or(&Value::Null);
+                let item = &v["item"];
                 let ity = sget(item, "type");
                 match ity {
                     "function_call" | "custom_tool_call" => {
-                        let key = self.resp_tool_open(item, v.get("output_index").and_then(Value::as_u64), out);
+                        let key = self.resp_tool_open(item, oi, out);
                         let t = self.resp_tools.get_mut(&key).unwrap();
                         if t.done {
                             return;
@@ -1820,7 +1855,7 @@ impl UpstreamStream {
                             } else {
                                 t.buf.clone()
                             };
-                            self.tool_args(ti, &json!({"input": input}).to_string(), out);
+                            self.tool_args(ti, &custom_args(&input), out);
                         } else if !t.args_emitted {
                             t.args_emitted = true;
                             let args = output_text(item.get("arguments"));
@@ -1828,38 +1863,31 @@ impl UpstreamStream {
                         }
                     }
                     // Text that arrived only in the final item (no deltas streamed).
-                    "message" if !self.text_items.contains(sget(item, "id")) => {
-                        let t = parts_text(&chat_parts(item.get("content").unwrap_or(&Value::Null)));
-                        self.text_items.insert(sget(item, "id").to_string());
+                    "message" if !self.text_streamed(sget(item, "id"), oi) => {
+                        let t = parts_text(&chat_parts(&item["content"]));
+                        self.mark_text(sget(item, "id"), oi);
                         self.content(&t, out);
                     }
                     _ => {}
                 }
             }
             "response.completed" | "response.incomplete" | "response.done" => {
-                let r = v.get("response").unwrap_or(&Value::Null);
+                let r = &v["response"];
                 if let Some(u) = nonnull(r.get("usage")) {
                     self.usage = Some(usage_from_responses(u));
                 }
                 if sget(r, "status") == "incomplete" || ty == "response.incomplete" {
-                    let reason = r.get("incomplete_details").map(|d| sget(d, "reason")).unwrap_or("");
-                    self.finish = Some(if reason == "content_filter" { "content_filter" } else { "length" }.into());
+                    self.finish = Some(incomplete_to_finish(sget(&r["incomplete_details"], "reason")).into());
                 }
                 self.emit_final(out);
             }
             "response.failed" => {
-                let r = v.get("response").unwrap_or(&Value::Null);
-                let msg = r.get("error").map(|e| sget(e, "message")).unwrap_or("").to_string();
-                let msg = if msg.is_empty() { l("上游响应失败", "The upstream response failed").to_string() } else { msg };
+                let msg = error_message(&v["response"]).unwrap_or_else(|| l("上游响应失败", "The upstream response failed").to_string());
                 let c = self.error_chunk(&msg);
                 out.push(c);
             }
             "error" => {
-                let msg = match sget(v, "message") {
-                    "" => v.get("error").map(|e| sget(e, "message")).unwrap_or("").to_string(),
-                    s => s.to_string(),
-                };
-                let c = self.error_chunk(&msg);
+                let c = self.error_chunk(&error_message(v).unwrap_or_default());
                 out.push(c);
             }
             _ => {}
@@ -1883,6 +1911,7 @@ struct DTool {
     call_id: String,
     name: String,
     args: String,
+    /// A custom (freeform) tool: this one flag picks the item type of every event of the call.
     custom: bool,
     /// Not sent yet: it started while another call was streaming (see `on_tool`).
     held: bool,
@@ -1938,12 +1967,8 @@ impl DownstreamStream {
             return Vec::new();
         }
         if let Some(e) = nonnull(chunk.get("error")) {
-            let msg = match e {
-                Value::String(s) => s.clone(),
-                o => sget(o, "message").to_string(),
-            };
             let status = e.get("code").and_then(Value::as_u64).unwrap_or(502) as u16;
-            return self.error(status, &msg);
+            return self.error(status, &error_message(chunk).unwrap_or_default());
         }
         if self.model.is_empty() {
             self.model = sget(chunk, "model").to_string();
@@ -1959,12 +1984,10 @@ impl DownstreamStream {
         let Some(ch) = chunk.get("choices").and_then(|c| c.get(0)) else {
             return out;
         };
-        let d = ch.get("delta").unwrap_or(&Value::Null);
-        let reasoning = [sget(d, "reasoning_content"), sget(d, "reasoning")]
-            .into_iter()
-            .find(|s| !s.is_empty());
-        if let Some(r) = reasoning {
-            self.on_reasoning(r, &mut out);
+        let d = &ch["delta"];
+        let reasoning = first_str([sget(d, "reasoning_content"), sget(d, "reasoning")]);
+        if !reasoning.is_empty() {
+            self.on_reasoning(reasoning, &mut out);
         }
         if let Some(t) = d.get("content").and_then(Value::as_str) {
             if !t.is_empty() {
@@ -1973,13 +1996,8 @@ impl DownstreamStream {
         }
         for (pos, tc) in arr(d.get("tool_calls")).iter().enumerate() {
             let idx = tc.get("index").and_then(Value::as_u64).unwrap_or(pos as u64);
-            let f = tc.get("function").unwrap_or(&Value::Null);
-            let args = match f.get("arguments") {
-                Some(Value::String(s)) => s.clone(),
-                None | Some(Value::Null) => String::new(),
-                Some(o) => o.to_string(),
-            };
-            self.on_tool(idx, sget(tc, "id"), sget(f, "name"), &args, &mut out);
+            let c = chat_call(tc, "");
+            self.on_tool(idx, &c.id, &c.name, &c.args, &mut out);
         }
         if let Some(f) = ch.get("finish_reason").and_then(Value::as_str) {
             self.finish_reason = Some(f.to_string());
@@ -1995,9 +2013,9 @@ impl DownstreamStream {
         match self.to {
             Proto::Chat => {
                 if let (Some(u), false) = (self.usage, self.usage_sent) {
-                    let c = json!({"id": self.id, "object": "chat.completion.chunk", "created": self.created,
-                        "model": self.model, "choices": [], "usage": usage_to_chat(u)});
-                    out.push(format!("data: {c}\n\n"));
+                    let mut c = chunk_json(&self.id, self.created, &self.model, json!([]));
+                    c["usage"] = usage_to_chat(u);
+                    out.push(sse_data(&c));
                     self.usage_sent = true;
                 }
                 out.push("data: [DONE]\n\n".into());
@@ -2005,11 +2023,7 @@ impl DownstreamStream {
             Proto::Responses => {
                 self.start(&mut out);
                 self.close_current(&mut out);
-                let incomplete = match self.finish_reason.as_deref() {
-                    Some("length") => Some("max_output_tokens"),
-                    Some("content_filter") => Some("content_filter"),
-                    _ => None,
-                };
+                let incomplete = finish_to_incomplete(self.finish_reason.as_deref().unwrap_or(""));
                 let resp = responses_envelope(
                     &self.id,
                     self.created,
@@ -2020,18 +2034,17 @@ impl DownstreamStream {
                     incomplete,
                     None,
                 );
+                // "response.completed" also for an incomplete answer (its status says so):
+                // clients such as Codex take it as the end of the turn.
                 out.push(self.rev("response.completed", json!({"response": resp})));
             }
             Proto::Anthropic => {
                 self.start(&mut out);
                 self.close_current(&mut out);
                 let stop = finish_to_anthropic(self.finish_reason.as_deref().unwrap_or(""), !self.tools.is_empty());
-                let u = self.usage.unwrap_or_default();
-                let mut usage = usage_to_anthropic(u);
-                usage["output_tokens"] = json!(u.output);
                 out.push(self.aev("message_delta", json!({
                     "delta": {"stop_reason": stop, "stop_sequence": null},
-                    "usage": usage,
+                    "usage": usage_to_anthropic(self.usage.unwrap_or_default()),
                 })));
                 out.push(self.aev("message_stop", json!({})));
             }
@@ -2048,8 +2061,7 @@ impl DownstreamStream {
         let mut out = Vec::new();
         match self.to {
             Proto::Chat => {
-                let e = json!({"error": {"message": msg, "type": "upstream_error", "code": status}});
-                out.push(format!("data: {e}\n\n"));
+                out.push(sse_data(&json!({"error": {"message": msg, "type": "upstream_error", "code": status}})));
                 out.push("data: [DONE]\n\n".into());
             }
             Proto::Responses => {
@@ -2072,8 +2084,7 @@ impl DownstreamStream {
                 out.push(self.rev("response.failed", json!({"response": resp})));
             }
             Proto::Anthropic => {
-                let e = json!({"type": "error", "error": {"type": error_type(status), "message": msg}});
-                out.push(format!("event: error\ndata: {e}\n\n"));
+                out.push(self.aev("error", json!({"error": {"type": error_type(status), "message": msg}})));
             }
         }
         self.finished = true;
@@ -2095,29 +2106,19 @@ impl DownstreamStream {
             o.insert("created".into(), json!(self.created));
             o.insert("model".into(), json!(self.model));
         }
-        vec![format!("data: {c}\n\n")]
+        vec![sse_data(&c)]
     }
 
     /// Responses event frame with type + sequence_number first.
     fn rev(&mut self, ty: &str, fields: Value) -> String {
-        let mut m = Map::new();
-        m.insert("type".into(), json!(ty));
-        m.insert("sequence_number".into(), json!(self.seq));
+        let seq = self.seq;
         self.seq += 1;
-        if let Value::Object(f) = fields {
-            m.extend(f);
-        }
-        format!("event: {ty}\ndata: {}\n\n", Value::Object(m))
+        sse_event(ty, fields, Some(seq))
     }
 
     /// Anthropic event frame with type first.
     fn aev(&self, ty: &str, fields: Value) -> String {
-        let mut m = Map::new();
-        m.insert("type".into(), json!(ty));
-        if let Value::Object(f) = fields {
-            m.extend(f);
-        }
-        format!("event: {ty}\ndata: {}\n\n", Value::Object(m))
+        sse_event(ty, fields, None)
     }
 
     fn start(&mut self, out: &mut Vec<String>) {
@@ -2209,10 +2210,7 @@ impl DownstreamStream {
             Proto::Anthropic => out.push(self.aev("content_block_start", json!({"index": oi,
                 "content_block": {"type": "tool_use", "id": call_id, "name": name, "input": {}}}))),
             _ => {
-                let mut item = responses_tool_item(&self.ctx, &item_id, &call_id, &name, "", "in_progress");
-                if custom {
-                    item["input"] = json!("");
-                }
+                let item = responses_tool_item(custom, &item_id, &call_id, &name, "", "in_progress");
                 out.push(self.rev("response.output_item.added", json!({"output_index": oi, "item": item})));
             }
         }
@@ -2253,7 +2251,7 @@ impl DownstreamStream {
             out.push(self.rev("response.function_call_arguments.done",
                 json!({"item_id": item_id, "output_index": oi, "arguments": args})));
         }
-        let item = responses_tool_item(&self.ctx, &item_id, &call_id, &name, &args, "completed");
+        let item = responses_tool_item(custom, &item_id, &call_id, &name, &args, "completed");
         out.push(self.rev("response.output_item.done", json!({"output_index": oi, "item": item.clone()})));
         self.output.push(item);
     }
@@ -2332,6 +2330,11 @@ impl DownstreamStream {
                 t.args.push_str(args);
                 if t.name.is_empty() && !name.is_empty() {
                     t.name = name.to_string();
+                    if t.held {
+                        // Nothing sent yet: the late name still decides the call's kind.
+                        t.custom = self.ctx.is_custom(name);
+                        t.item_id = tool_item_id(t.custom);
+                    }
                 }
                 if t.held {
                     return;
@@ -2347,9 +2350,9 @@ impl DownstreamStream {
                 }
                 return;
             }
-            let custom = is_custom(&self.ctx, name);
+            let custom = self.ctx.is_custom(name);
             let call_id = if id.is_empty() { gen_id("call_") } else { id.to_string() };
-            let item_id = gen_id(if custom { "ctc_" } else { "fc_" });
+            let item_id = tool_item_id(custom);
             // Upstreams may interleave the argument pieces of parallel calls. A block can't
             // take more deltas once closed, so while one call streams, later ones are held
             // back and sent whole when it closes.
@@ -3292,7 +3295,8 @@ mod tests {
             json!({"type": "api_error", "message": "<html>down</html>"}));
         let long = "é".repeat(800);
         let m = error_body(Proto::Chat, 500, &long)["error"]["message"].as_str().unwrap().to_string();
-        assert_eq!(m.chars().count(), 503);
+        assert_eq!(m.chars().count(), 501);
+        assert!(m.ends_with('…'));
         assert_eq!(error_body(Proto::Chat, 502, "")["error"]["message"], "上游出错（HTTP 502）");
         // anthropic-shaped upstream error
         let e = error_body(Proto::Chat, 529, r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#);
@@ -3316,5 +3320,132 @@ mod tests {
         assert_eq!(g["data"][1]["id"], "plain");
         assert_eq!(models_body(Proto::Anthropic, &json!({"models": [{"name": "models/g", "displayName": "G"}]}))["data"][0]["display_name"], "G");
         assert_eq!(models_body(Proto::Chat, &json!("junk"))["data"], json!([]));
+    }
+
+    /// A whole body fed in one piece is parsed in one pass, not re-copied per event.
+    #[test]
+    fn feeds_a_huge_body_at_once() {
+        let mut body = String::new();
+        for i in 0..10_000 {
+            body += &format!("data: {}\r\n\r\n", json!({"choices": [{"index": 0, "delta": {"content": format!("{i} ")}}]}));
+        }
+        let mut up = UpstreamStream::new(Proto::Chat);
+        let chunks = up.feed(&body);
+        assert_eq!(chunks.len(), 10_000);
+        assert_eq!(chunks[9_999]["choices"][0]["delta"]["content"], "9999 ");
+        assert!(up.finish().is_empty());
+        // What is left after the last complete event waits for the rest.
+        let mut up = UpstreamStream::new(Proto::Chat);
+        assert_eq!(up.feed("data: {\"choices\":[]}\n\ndata: {\"choi").len(), 1);
+        assert_eq!(up.feed("ces\":[]}\n\n").len(), 1);
+    }
+
+    /// An Anthropic refusal stays a refusal through the chat pivot, streamed or not.
+    #[test]
+    fn refusal_round_trips() {
+        let native = json!({"id": "m", "model": "c", "content": [{"type": "text", "text": "no"}], "stop_reason": "refusal"});
+        let chat = response_to_chat(Proto::Anthropic, &native).unwrap();
+        assert_eq!(chat["choices"][0]["finish_reason"], "content_filter");
+        assert_eq!(response_from_chat(Proto::Anthropic, &chat, &ReqCtx::default()).unwrap()["stop_reason"], "refusal");
+
+        let t = anthropic_transcript().replace("\"stop_reason\":\"tool_use\"", "\"stop_reason\":\"refusal\"");
+        let chunks = feed_in_pieces(&mut UpstreamStream::new(Proto::Anthropic), &t, 50);
+        let mut down = DownstreamStream::new(Proto::Anthropic, ReqCtx::default());
+        let mut out: Vec<String> = chunks.iter().flat_map(|c| down.push(c)).collect();
+        out.extend(down.finish());
+        let md = frames(&out).into_iter().find(|(e, _)| e == "message_delta").unwrap();
+        assert_eq!(md.1["delta"]["stop_reason"], "refusal");
+    }
+
+    /// A streamed Anthropic turn that used tools finishes with tool_calls even when its
+    /// stop_reason says end_turn, like the same answer in one piece.
+    #[test]
+    fn streamed_tool_turn_finishes_with_tool_calls() {
+        let t = anthropic_transcript().replace("\"stop_reason\":\"tool_use\"", "\"stop_reason\":\"end_turn\"");
+        let chunks = feed_in_pieces(&mut UpstreamStream::new(Proto::Anthropic), &t, 50);
+        let fin = chunks.iter().find_map(|c| c["choices"][0]["finish_reason"].as_str()).unwrap();
+        assert_eq!(fin, "tool_calls");
+        let native = json!({"content": [{"type": "tool_use", "id": "t", "name": "n", "input": {}}], "stop_reason": "end_turn"});
+        assert_eq!(response_to_chat(Proto::Anthropic, &native).unwrap()["choices"][0]["finish_reason"], fin);
+        // A length stop stays a length stop.
+        let t = anthropic_transcript().replace("\"stop_reason\":\"tool_use\"", "\"stop_reason\":\"max_tokens\"");
+        let chunks = feed_in_pieces(&mut UpstreamStream::new(Proto::Anthropic), &t, 50);
+        assert_eq!(chunks.iter().find_map(|c| c["choices"][0]["finish_reason"].as_str()), Some("length"));
+    }
+
+    /// Text deltas without an item id are matched to their finished item by output index
+    /// (or not at all), so the text is not sent a second time.
+    #[test]
+    fn responses_text_is_not_repeated() {
+        let ev = |t: &str, mut v: Value| {
+            v["type"] = json!(t);
+            sse(t, v)
+        };
+        let done = |oi: u64| ev("response.output_item.done", json!({"output_index": oi, "item": {"type": "message", "id": "msg_1",
+            "content": [{"type": "output_text", "text": "Hi"}]}}));
+        let end = ev("response.completed", json!({"response": {"status": "completed"}}));
+        let text_of = |src: String| -> String {
+            feed_in_pieces(&mut UpstreamStream::new(Proto::Responses), &src, 9)
+                .iter()
+                .filter_map(|c| c["choices"][0]["delta"]["content"].as_str().map(String::from))
+                .collect()
+        };
+        let by_index = ev("response.output_text.delta", json!({"output_index": 0, "delta": "Hi"}));
+        assert_eq!(text_of(by_index.clone() + &done(0) + &end), "Hi");
+        let anonymous = ev("response.output_text.delta", json!({"delta": "Hi"}));
+        assert_eq!(text_of(anonymous + &done(0) + &end), "Hi");
+        // Another item's text still comes through.
+        assert_eq!(text_of(by_index + &done(1) + &end), "HiHi");
+    }
+
+    /// A tool call whose added and done events disagree on the item id is one call.
+    #[test]
+    fn responses_tool_call_is_not_doubled() {
+        let ev = |t: &str, mut v: Value| {
+            v["type"] = json!(t);
+            sse(t, v)
+        };
+        let src = ev("response.output_item.added", json!({"output_index": 0, "item": {"type": "function_call", "id": "fc_a", "call_id": "call_1", "name": "shell", "arguments": ""}}))
+            + &ev("response.function_call_arguments.delta", json!({"output_index": 0, "delta": "{\"x\":1}"}))
+            + &ev("response.output_item.done", json!({"output_index": 0, "item": {"type": "function_call", "id": "fc_b", "call_id": "call_1", "name": "shell", "arguments": "{\"x\":1}"}}))
+            + &ev("response.completed", json!({"response": {"status": "completed"}}));
+        let chunks = feed_in_pieces(&mut UpstreamStream::new(Proto::Responses), &src, 13);
+        let calls: Vec<&Value> = chunks.iter().flat_map(|c| arr(c["choices"][0]["delta"].get("tool_calls"))).collect();
+        assert!(calls.iter().all(|c| c["index"] == 0), "{calls:?}");
+        let args: String = calls.iter().filter_map(|c| c["function"]["arguments"].as_str()).collect();
+        assert_eq!(args, "{\"x\":1}");
+    }
+
+    /// A call held back while another streams takes its kind from its name even when the
+    /// name arrives after its first piece.
+    #[test]
+    fn held_custom_call_with_late_name() {
+        let mk = |tc: Value| json!({"choices": [{"index": 0, "delta": {"tool_calls": [tc]}}]});
+        let ctx = ReqCtx { model: "m".into(), custom_tools: vec!["apply_patch".into()], stream: true };
+        let mut down = DownstreamStream::new(Proto::Responses, ctx);
+        let mut out = Vec::new();
+        for c in [
+            mk(json!({"index": 0, "id": "call_a", "function": {"name": "shell", "arguments": "{}"}})),
+            mk(json!({"index": 1, "id": "call_b", "function": {"arguments": "{\"input\":"}})),
+            mk(json!({"index": 1, "function": {"name": "apply_patch", "arguments": "\"P\"}"}})),
+        ] {
+            out.extend(down.push(&c));
+        }
+        out.extend(down.finish());
+        let fr = frames(&out);
+        let items: Vec<&Value> = fr.iter().filter(|(e, _)| e.starts_with("response.output_item.")).map(|(_, d)| &d["item"]).collect();
+        let kinds: Vec<&str> = items.iter().filter(|i| i["call_id"] == "call_b").filter_map(|i| i["type"].as_str()).collect();
+        assert_eq!(kinds, ["custom_tool_call", "custom_tool_call"]);
+        assert!(fr.iter().any(|(e, d)| e == "response.custom_tool_call_input.done" && d["input"] == "P"));
+        assert!(!fr.iter().any(|(e, d)| e == "response.function_call_arguments.done" && d["arguments"].as_str().unwrap().contains("input")));
+    }
+
+    #[test]
+    fn error_messages() {
+        assert_eq!(error_message(&json!({"error": {"message": "a"}, "message": "b"})).as_deref(), Some("a"));
+        assert_eq!(error_message(&json!({"error": {"message": ""}, "message": "b"})).as_deref(), Some("b"));
+        assert_eq!(error_message(&json!({"error": "plain"})).as_deref(), Some("plain"));
+        assert_eq!(error_message(&json!({"error": {"code": 1}, "detail": [1]})).as_deref(), Some("[1]"));
+        assert_eq!(error_message(&json!({"error": {"code": 1}})), None);
     }
 }
