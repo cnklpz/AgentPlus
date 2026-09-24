@@ -78,7 +78,7 @@ export function SettingsPage(props: Props) {
         <TabBar items={[{ id: "general", label: t("settingsPage.tabGeneral") }, { id: "agents", label: t("settingsPage.tabAgents") }]} value={tab} onChange={setTab} />
       </div>
       <div className={`page-body slide-${slide}`} key={tab}>
-        {tab === "general" ? <General {...props} /> : <Detection envLabel={env?.label ?? t("settingsPage.localWindows")} onChanged={props.onAgentsChanged} flash={props.flash} prefs={props.prefs} setPrefs={props.setPrefs} />}
+        {tab === "general" ? <General {...props} /> : <Detection envLabel={env?.label ?? t("common.localWindows")} onChanged={props.onAgentsChanged} flash={props.flash} prefs={props.prefs} setPrefs={props.setPrefs} />}
       </div>
     </main>
   );

@@ -8,7 +8,6 @@ const en: typeof zh = {
   noSource: "No base URL and API key to copy; edit the group to fill them in first",
   useCurrent: "In use",
   useOn: "Connected",
-  useOff: "Disabled",
   useAdding: "To be added",
   useRemoving: "To be removed",
   useNew: "New · not applied",

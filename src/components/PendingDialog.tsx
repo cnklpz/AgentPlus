@@ -31,11 +31,11 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
     // Like the backdrop and the close button, Esc does nothing while the changes are being written.
     <Modal label={title} title={title} wide busy={busy} onClose={onCancel} foot={<>
       <span className="muted tiny grow">
-        {!applying.length ? t("pendingDialog.discardAll") : t(rest ? "pendingDialog.willWriteRestDiscarded" : "pendingDialog.willWrite", { names: joinList(applying.map((a) => a.name)) })}
+        {!applying.length ? t("common.discardAll") : t(rest ? "pendingDialog.willWriteRestDiscarded" : "pendingDialog.willWrite", { names: joinList(applying.map((a) => a.name)) })}
       </span>
       <button className="btn" disabled={busy} onClick={onCancel}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={busy} onClick={() => onConfirm(applying.map((a) => a.id))}>
-        {t(busy ? "pendingDialog.writing" : applying.length ? "pendingDialog.applyContinue" : "pendingDialog.discardContinue")}
+        {t(busy ? "common.writing" : applying.length ? "pendingDialog.applyContinue" : "pendingDialog.discardContinue")}
       </button>
     </>}>
       <span className="muted small">{t("pendingDialog.intro")}</span>
@@ -49,7 +49,7 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
               <strong className="grow">{a.name}<span className="tiny muted">{tn("pendingDialog.changeCount", Object.keys(drafts[a.id]).length)}</span></strong>
               <div className="seg">
                 <button className={on ? "on" : ""} onClick={() => setKeep((k) => ({ ...k, [a.id]: true }))}>{t("common.apply")}</button>
-                <button className={!on ? "on danger" : ""} onClick={() => setKeep((k) => ({ ...k, [a.id]: false }))}>{t("pendingDialog.discard")}</button>
+                <button className={!on ? "on danger" : ""} onClick={() => setKeep((k) => ({ ...k, [a.id]: false }))}>{t("common.discard")}</button>
               </div>
             </div>
             {typeof d === "string" && <ErrorBox text={d} />}
@@ -60,7 +60,7 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
                 )))}
               </div>
             )}
-            {!d && <span className="tiny muted">{t("pendingDialog.reading")}</span>}
+            {!d && <span className="tiny muted">{t("common.reading")}</span>}
           </section>
         );
       })}

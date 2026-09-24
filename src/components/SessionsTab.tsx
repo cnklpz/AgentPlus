@@ -142,7 +142,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
       {last && (
         <div className="row between note-line">
           <span className="small">{tn("sessionsTab.lastAction", last.count, { target: last.target })}</span>
-          <button className="link" disabled={!canWrite || busy} onClick={() => run(() => api.codexUndoRepair(last.stamp))}>{t("sessionsTab.undo")}</button>
+          <button className="link" disabled={!canWrite || busy} onClick={() => run(() => api.codexUndoRepair(last.stamp))}>{t("common.undo")}</button>
         </div>
       )}
       {data.note && <div className="notes"><span>{scrub(data.note)}</span></div>}

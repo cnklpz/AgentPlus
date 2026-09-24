@@ -51,14 +51,14 @@ export function ServiceDetail(props: Props) {
           <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
           <span className="pcard-host mono ellipsis">{s.builtin ? t("serviceDetail.accountLogin") : tn("serviceDetail.hostGroups", s.groups.length, { host: s.host })}</span>
         </span>
-        <button className="icon-btn" aria-label={t("serviceDetail.closeDetails")} onClick={props.onClose}><Icon.close /></button>
+        <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={props.onClose}><Icon.close /></button>
       </div>
 
       {lat && (
         <div className="pdetail-lat">
           <Bars level={lat.level} />
           <span className={`grow small ${lat.level >= 2 ? "mono good-ink" : ""}`}>{lat.text}</span>
-          <button className="link" onClick={() => props.onTest(s.baseUrl!)}>{t("serviceDetail.retest")}</button>
+          <button className="link" onClick={() => props.onTest(s.baseUrl!)}>{t("common.retest")}</button>
         </div>
       )}
 
@@ -108,12 +108,12 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 <span className="muted small">{t("common.baseUrl")}</span>
                 <span className="row gap6 minw0">
                   <span className="mono small ellipsis grow" title={scrub(g.baseUrl)}>{scrub(g.baseUrl)}</span>
-                  <button className="icon-btn sm" aria-label={t("serviceDetail.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
+                  <button className="icon-btn sm" aria-label={t("common.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
                 </span>
               </div>
               <div className="kv-row">
                 <span className="muted small">{t("common.apiKey")}</span>
-                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("serviceDetail.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
+                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("common.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
               </div>
             </div>
           )}
@@ -166,11 +166,11 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                   <span className="block small strong ellipsis">{u.agent.name} · {u.p?.name ?? g.name}</span>
                   <span className="block tiny muted ellipsis">
                     <span className={`ustate ${u.state}`}>{USE_LABEL[u.state]}</span>
-                    {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("serviceDetail.nModels", u.models)}`}
+                    {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("common.modelCount", u.models)}`}
                   </span>
                 </span>
                 {(u.state === "adding" || u.state === "removing" || u.state === "new")
-                  ? <button className="btn xs" onClick={() => props.onUndo(u)}>{t("serviceDetail.undo")}</button>
+                  ? <button className="btn xs" onClick={() => props.onUndo(u)}>{t("common.undo")}</button>
                   : <>
                       {u.p && <button className="btn xs" onClick={() => props.onModels(u)}>{t("common.models")}</button>}
                       {u.p && removable(u) === null && <button className="icon-btn sm" aria-label={t("serviceDetail.removeFrom", { agent: u.agent.name })} title={t("serviceDetail.removeFrom", { agent: u.agent.name })} onClick={() => props.onRemove(u)}><Icon.trash size={12} /></button>}

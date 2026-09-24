@@ -31,7 +31,6 @@ const en: typeof zh = {
   checkNow: "Check now",
   cancelRestore: "Cancel and restore",
   readyNote: "Got the official model list: {count} models. Next, it's copied to {catalog} and your original config.toml is restored.",
-  writing: "Writing…",
   writeRestore: "Write model catalog and restore config",
   pleaseRestart: "Restart Codex",
   doneNote: "Done: wrote {n} official models and restored config.toml. {restart}; its model picker will then always use this list.",

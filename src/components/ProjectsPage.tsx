@@ -53,7 +53,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
                 </span>
                 <span className="proj-meta small">
                   {!p.exists ? <span className="warn-text">{t("projectsPage.folderMissing")}</span>
-                    : p.config ? <span>opencode.json{p.providers ? ` · ${tn("projectsPage.providerCount", p.providers)}` : ""}</span>
+                    : p.config ? <span>opencode.json{p.providers ? ` · ${tn("common.providerCount", p.providers)}` : ""}</span>
                     : <span className="muted">{t("projectsPage.notConfigured")}</span>}
                   <span className="tiny muted">{fmtAgo(p.lastOpened)}</span>
                 </span>

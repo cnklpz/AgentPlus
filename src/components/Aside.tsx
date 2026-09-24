@@ -43,8 +43,8 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
 
       <section className="aside-diff">
         <div className="row between">
-          <h2>{t("aside.pendingTitle")}</h2>
-          <span className={`count${pending ? " warn" : ""}`}>{pending ? tn("aside.pendingCount", pending) : t("common.none")}</span>
+          <h2>{t("common.pendingChanges")}</h2>
+          <span className={`count${pending ? " warn" : ""}`}>{pending ? tn("common.changeCount", pending) : t("common.none")}</span>
         </div>
         {error && <ErrorBox text={error} />}
         <DiffGroups groups={diff} />
@@ -53,8 +53,8 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
 
       <div className="aside-foot">
         <div className="grid2">
-          <button className="btn full" disabled={!pending || busy} onClick={onDiscard}>{t("aside.discard")}</button>
-          <button className="btn primary full" disabled={!pending || busy || st.readonly} onClick={onApply}>{busy ? t("aside.writing") : t("common.apply")}</button>
+          <button className="btn full" disabled={!pending || busy} onClick={onDiscard}>{t("common.discard")}</button>
+          <button className="btn primary full" disabled={!pending || busy || st.readonly} onClick={onApply}>{busy ? t("common.writing") : t("common.apply")}</button>
         </div>
         <span className="muted tiny center">{st.restartable
           ? t(st.running ? "aside.footRestart" : "aside.footStart", { name: st.name })

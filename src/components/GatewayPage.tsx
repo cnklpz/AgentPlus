@@ -84,7 +84,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
     setBusy("power");
     try {
       setStatus(await api.gatewaySet(on, portOk ? portNum : null));
-      flash(t(on ? "gatewayPage.gatewayOn" : "gatewayPage.gatewayOff"));
+      flash(t(on ? "common.gatewayStarted" : "common.gatewayStopped"));
     } catch (e) {
       flash(errText(e), true);
       api.gatewayStatus().then(setStatus).catch(() => undefined);
@@ -128,7 +128,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                 {s?.running ? (
                   <div className="row gap6 minw0">
                     <span className="mono small ellipsis">{base}</span>
-                    <button className="icon-btn sm" aria-label={t("gatewayPage.copyUrl")} onClick={() => copy(base)}><Icon.copy size={12} /></button>
+                    <button className="icon-btn sm" aria-label={t("common.copyUrl")} onClick={() => copy(base)}><Icon.copy size={12} /></button>
                     <span className="tiny muted">· {tn("gatewayPage.heroRequests", s.requests)} · {tn("gatewayPage.heroFailures", s.failures)}{s.active ? ` · ${tn("gatewayPage.heroActive", s.active)}` : ""}</span>
                   </div>
                 ) : (
@@ -222,7 +222,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                       : !r.enabled ? <span className="chip-muted">{t("gatewayPage.chipPaused")}</span>
                       : trip ? <span className="chip-bad" title={breakerWhen(trip)}>{trip.state === "open" ? t("gatewayPage.chipTripped", { wait: secs(trip.remainingSecs) }) : t("gatewayPage.chipProbe")}</span>
                       : <span className="chip-ok">{t("gatewayPage.chipActive")}</span>}
-                    <button className="icon-btn sm" aria-label={t("gatewayPage.copyGatewayUrl")} title={t("gatewayPage.copyUrl")} onClick={(e) => { e.stopPropagation(); copy(r.localBase); }}><Icon.copy size={12} /></button>
+                    <button className="icon-btn sm" aria-label={t("gatewayPage.copyGatewayUrl")} title={t("common.copyUrl")} onClick={(e) => { e.stopPropagation(); copy(r.localBase); }}><Icon.copy size={12} /></button>
                     <button className="icon-btn sm" aria-label={t("gatewayPage.deleteRoute")} title={t("gatewayPage.deleteRoute")} onClick={(e) => { e.stopPropagation(); remove(r.id); }}><Icon.trash size={12} /></button>
                     <span className="gw-chev"><Icon.chevron /></span>
                   </div>
@@ -278,7 +278,7 @@ function Unified({ s, copy }: { s: GatewayStatus; copy: (t: string) => void }) {
   const unknown = live.filter((r) => r.models.length === 0);
   return (
     <section className="sgroup">
-      <h2 className="row between"><span>{t("gatewayPage.unified")}</span><span className="tiny muted">{tn("gatewayPage.modelCount", rows.length)} · {tn("gatewayPage.routeCount", live.length)}</span></h2>
+      <h2 className="row between"><span>{t("gatewayPage.unified")}</span><span className="tiny muted">{tn("common.modelCount", rows.length)} · {tn("gatewayPage.routeCount", live.length)}</span></h2>
       <div className="srow stacked">
         <div className="gw-base">
           <span className="mono small grow ellipsis">{s.unifiedBase}</span>
@@ -396,7 +396,7 @@ function AddForward({ groups, onForward, onClose }: {
           <div className="field">
             <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
             <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-            {url && !urlOk && <em className="field-err">{t("gatewayPage.urlInvalid")}</em>}
+            {url && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
           </div>
           <div className="field">
             <span className="field-label">{t("gatewayPage.upstreamProto")}</span>
@@ -552,7 +552,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
                 modelMap: map.split("\n").map((l) => l.split("=").map((x) => x.trim())).filter((p) => p.length === 2 && p[0] && p[1]) as [string, string][],
               }, t("gatewayPage.modelMapSaved"))}>{t("gatewayPage.saveMap")}</button>
               <span className="grow" />
-              <button className="btn small" onClick={() => save({ enabled: !r.enabled }, t(r.enabled ? "gatewayPage.routePaused" : "gatewayPage.routeResumed"))}>{t(r.enabled ? "gatewayPage.pauseRoute" : "gatewayPage.resumeRoute")}</button>
+              <button className="btn small" onClick={() => save({ enabled: !r.enabled }, t(r.enabled ? "gatewayPage.routePaused" : "gatewayPage.routeResumed"))}>{t(r.enabled ? "common.pauseRoute" : "common.resumeRoute")}</button>
               <button className="btn small danger" onClick={onDelete}>{t("gatewayPage.deleteRoute")}</button>
             </div>
             <span className="tiny muted">{t("gatewayPage.stopHint")}</span>

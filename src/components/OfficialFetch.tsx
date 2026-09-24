@@ -156,7 +156,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
           <div className="row gap6">
             <button className="btn small danger" disabled={busy} onClick={cancel}>{t("officialFetch.cancelRestore")}</button>
             <span className="grow" />
-            <button className="btn primary" disabled={busy} onClick={finish}>{busy ? t("officialFetch.writing") : t("officialFetch.writeRestore")}</button>
+            <button className="btn primary" disabled={busy} onClick={finish}>{busy ? t("common.writing") : t("officialFetch.writeRestore")}</button>
           </div>
         </div>
       )}

@@ -58,10 +58,10 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
             </span>
           </div>
           <button className="btn" onClick={onTestAll}><Icon.pulse />{t("providersHub.testLatency")}</button>
-          <button className="btn primary" onClick={onAdd}><Icon.plus />{t("providersHub.addProvider")}</button>
+          <button className="btn primary" onClick={onAdd}><Icon.plus />{t("common.addProvider")}</button>
         </div>
         <div className="toolbar">
-          <div className="seg" role="tablist" aria-label={t("providersHub.filter")}>
+          <div className="seg" role="tablist" aria-label={t("common.filter")}>
             {FILTERS.map(([id, label]) => (
               <button key={id} role="tab" aria-selected={filter === id} className={filter === id ? "on" : ""} onClick={() => setFilter(id)}>
                 {t(label)}<b>{counts[id]}</b>
@@ -100,7 +100,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
                     <span className="pcard-host mono ellipsis">{scrubHost(s.host)}</span>
                   </span>
                   {s.baseUrl && (
-                    <button className={`hlat lat-btn${lat.level ? ` ${latencyTone(lat.level)}` : ""}`} title={t("providersHub.retestTitle")}
+                    <button className={`hlat lat-btn${lat.level ? ` ${latencyTone(lat.level)}` : ""}`} title={t("common.retestHint")}
                       disabled={latency[s.baseUrl] === "pending"}
                       onClick={(e) => { e.stopPropagation(); onTestOne(s.baseUrl!); }}>
                       <Bars level={lat.level} />{lat.text}<span className="lat-re" aria-hidden="true">↻</span>
@@ -140,7 +140,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
           {filter !== "used" && !q && (
             <button className="hcard-add" onClick={onAdd}>
               <Icon.plus size={16} />
-              <strong>{t("providersHub.addProvider")}</strong>
+              <strong>{t("common.addProvider")}</strong>
               <span className="tiny muted">{t("providersHub.addCardHint", { agents: shown.map((a) => a.name).join(" / ") || t("providersHub.eachAgent") })}</span>
             </button>
           )}

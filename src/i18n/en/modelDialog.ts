@@ -15,7 +15,6 @@ const en: typeof zh = {
   contextBad: "Enter a number; k / m suffixes are allowed",
   contextTokens: "{n} tokens ({short})",
   defaultNote: "Settings marked \"Default\" aren't written to the config; {agent} decides them itself.",
-  pendingNote: "Saved changes go to \"Pending changes\" and are written to the config file when you click \"Apply\".",
   modified: "Modified",
   default: "Default",
   numberBad: "Enter a number; a k suffix is allowed",

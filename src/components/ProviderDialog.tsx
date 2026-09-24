@@ -152,7 +152,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       setFetched(list);
       if (checked.length === 0) setChecked(list.slice(0, 20));
     } catch (e) {
-      setErr(t("providerDialog.fetchFailed", { err: errText(e) }));
+      setErr(t("common.fetchFailed", { err: errText(e) }));
     } finally {
       setFetching(false);
     }
@@ -244,13 +244,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   const foot = (
     <>
-      <span className="muted tiny grow">{t("providerDialog.pendingNote")}</span>
+      <span className="muted tiny grow">{t("common.pendingNote")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-      <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("providerDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
+      <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
     </>
   );
   return (
-    <Modal label={isNew ? t("providerDialog.addTitle") : t("providerDialog.editTitle")} wide onClose={onClose}
+    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
       title={isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })} foot={foot}>
       {isNew && gatewayCapable(st.id) && !unifiedNew && <TemplatePicker value={tpl} onPick={pickTpl} />}
       {tplForward && (
@@ -259,11 +259,11 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       )}
       <div className="field">
         <label htmlFor="pd-name">{t("common.name")}</label>
-        <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("providerDialog.namePlaceholder")} />
+        <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />
       </div>
 
       {!isNew && editing?.baseUrl && !onUnified && gatewayCapable(st.id) && (
-        <ToggleRow on={gw} icon={<Icon.gateway size={16} />} title={t("providerDialog.useGateway")}
+        <ToggleRow on={gw} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
           hint={gw
             ? viaGateway && gatewayRoute
               ? t("providerDialog.gwOnRoute", { url: gatewayRoute.upstreamUrl ?? "", api: API_LABEL[gatewayRoute.upstreamApi] })
@@ -290,7 +290,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         </>
       )}
       {isNew && gatewayCapable(st.id) && (
-        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("providerDialog.useGateway")}
+        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
           hint={unifiedNew
             ? pool.length
               ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
@@ -317,9 +317,9 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       {!gw && !unifiedNew && !onUnified && (
         <>
           <div className="field">
-            <label htmlFor="pd-url">{t("providerDialog.baseUrl")}</label>
+            <label htmlFor="pd-url">{t("common.baseUrlLabel")}</label>
             <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-            {baseUrl && !urlOk && <em className="field-err">{t("providerDialog.urlBad")}</em>}
+            {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
           </div>
           <div className="form2">
             <div className="field">
@@ -334,12 +334,12 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                 })} />
             </div>
             <div className="field">
-              <label htmlFor="pd-key">{t("providerDialog.apiKey")}</label>
+              <label htmlFor="pd-key">{t("common.apiKeyLabel")}</label>
               <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
-                placeholder={!isNew && editing?.hasKey ? t("providerDialog.keySet") : "sk-..."} />
+                placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
               <em className="muted tiny">
                 {tplForward ? t("providerDialog.keyForward") : keyHint}
-                {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("providerDialog.getKey", { vendor: tpl.vendor })}</button></>}
+                {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("common.getKey", { vendor: tpl.vendor })}</button></>}
               </em>
             </div>
           </div>
@@ -355,7 +355,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <div className="row between">
           <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>
           <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
-            <Icon.refresh size={12} />{fetching ? t("providerDialog.fetching") : t("providerDialog.fetchFromUrl")}
+            <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
           </button>
         </div>
         <em className="muted tiny">
@@ -375,9 +375,9 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
           <>
             <div className="mpick-bar">
               <span className="tiny muted">{t("providerDialog.selectedN", { n: checked.length })}</span>
-              {candidates.length > 8 && <input className="input mono mpick-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("providerDialog.filter")} />}
+              {candidates.length > 8 && <input className="input mono mpick-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("common.filter")} />}
               <span className="grow" />
-              {candidates.length > 0 && <button type="button" className="link tiny" onClick={() => setChecked(checked.length === candidates.length ? [] : candidates)}>{checked.length === candidates.length ? t("providerDialog.selectNone") : t("providerDialog.selectAll")}</button>}
+              {candidates.length > 0 && <button type="button" className="link tiny" onClick={() => setChecked(checked.length === candidates.length ? [] : candidates)}>{checked.length === candidates.length ? t("common.selectNone") : t("common.selectAll")}</button>}
             </div>
             <div className="pick-list wide">
               {candidates.length === 0 && <div className="muted small">{codex && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}</div>}
@@ -385,13 +385,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                 <label key={m} className="pick">
                   <input type="checkbox" checked={checked.includes(m)} onChange={() => toggle(m)} />
                   <span className="mono small">{m}</span>
-                  {fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m) && !isNew && <span className="mtag new">{t("providerDialog.tagNew")}</span>}
+                  {fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m) && !isNew && <span className="mtag new">{t("common.tagNew")}</span>}
                 </label>
               ))}
             </div>
             <div className="row gap6">
               <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("providerDialog.manualPlaceholder")} />
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("common.manualModelsPlaceholder")} />
               <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
             </div>
           </>

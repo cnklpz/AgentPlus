@@ -32,7 +32,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
         onClick={() => { if (!open) onOpen(); setOpen((o) => !o); }}
       >
         <EnvIcon id={current?.id ?? ""} />
-        <span>{switching ? t("envSwitch.switching") : current?.label ?? t("envSwitch.localWindows")}</span>
+        <span>{switching ? t("envSwitch.switching") : current?.label ?? t("common.localWindows")}</span>
         <Icon.chevron />
       </button>
       {open && (

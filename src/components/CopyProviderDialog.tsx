@@ -123,7 +123,7 @@ export function CopyProviderDialog({ target, agents, lib, onCopy, onClose }: Pro
                   <span className="block mono tiny muted ellipsis">{scrubHost(s.host)}</span>
                 </span>
                 <span className="api-chip">{API_LABEL[s.api]}</span>
-                <span className="tiny muted copy-meta">{tn("copyProviderDialog.modelCount", s.models)}{s.hasKey ? "" : ` · ${t("copyProviderDialog.noKey")}`}</span>
+                <span className="tiny muted copy-meta">{tn("common.modelCount", s.models)}{s.hasKey ? "" : ` · ${t("copyProviderDialog.noKey")}`}</span>
               </label>
             ))}
           </div>

@@ -10,7 +10,6 @@ const en: typeof zh = {
   empty: "No projects opened yet. Pick a project folder to give it its own providers, default model and permissions.",
   unapplied: "{n} unapplied|{n} unapplied",
   folderMissing: "Folder not found",
-  providerCount: "{n} provider|{n} providers",
   notConfigured: "Not configured · uses global",
   revealTitle: "Show in Explorer",
   revealLabel: "Open the {name} folder",
