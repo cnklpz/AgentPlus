@@ -16,6 +16,10 @@ use std::path::PathBuf;
 
 pub const ID: &str = "mimo";
 pub const NAME: &str = "MiMo Desktop";
+pub const MARKER: &str = "mimocode.jsonc";
+/// A desktop app only: nothing to find in WSL.
+pub const WSL_SCRIPT: &str = "";
+pub const WSL_MARKER: &str = "";
 const SKILLS: [&str; 4] = ["agents", "claude", "codex", "opencode"];
 /// (key, label zh, label en, description)
 const PREFS: [(&str, &str, &str, &str); 4] = [
@@ -25,8 +29,18 @@ const PREFS: [(&str, &str, &str, &str); 4] = [
     ("uncommittedHintEnabled", "提示未提交的改动", "Hint about uncommitted changes", "uncommittedHintEnabled"),
 ];
 
+/// `~/.config/mimocode`.
+pub fn default_dir() -> PathBuf {
+    home().join(".config").join("mimocode")
+}
+
+/// The desktop app (registry uninstall entry).
+pub fn detect() -> Install {
+    crate::process::detect_mimo()
+}
+
 fn engine_path() -> PathBuf {
-    super::dir_override(ID).unwrap_or_else(|| home().join(".config").join("mimocode")).join("mimocode.jsonc")
+    super::dir_override(ID).unwrap_or_else(default_dir).join(MARKER)
 }
 fn app_dir() -> PathBuf {
     dirs::config_dir().unwrap_or_else(home).join("Xiaomi MiMo")

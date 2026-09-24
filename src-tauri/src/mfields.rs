@@ -123,19 +123,19 @@ pub const KIMI: &[Spec] = &[Spec {
     kind: Kind::Chips(&[("image_in", "读取图片", "Read images"), ("video_in", "读取视频", "Read video"), ("thinking", "思考", "Thinking"), ("always_thinking", "始终思考", "Always thinking")]),
 }];
 
-/// Field declarations shown for an agent's models.
+/// Field declarations shown for an agent's models (OpenCode's for its project configs).
 pub fn for_agent(agent: &str) -> &'static [Spec] {
-    match agent {
-        "opencode" | "kilo" | "mimo" => OPENCODE,
-        "pi" => PI,
-        "openclaw" => OPENCLAW,
-        "codebuddy" => CODEBUDDY,
-        "droid" => DROID,
-        "codex" => CODEX,
-        "zcode" => ZCODE,
-        "kimi" => KIMI,
-        "qwen" => QWEN,
-        a if a.starts_with("opencode@") => OPENCODE,
+    use crate::adapters::{base_agent, codebuddy, codex, droid, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
+    match base_agent(agent) {
+        opencode::ID | kilo::ID | mimo::ID => OPENCODE,
+        pi::ID => PI,
+        openclaw::ID => OPENCLAW,
+        codebuddy::ID => CODEBUDDY,
+        droid::ID => DROID,
+        codex::ID => CODEX,
+        zcode::ID => ZCODE,
+        kimi::ID => KIMI,
+        qwen::ID => QWEN,
         _ => &[],
     }
 }
