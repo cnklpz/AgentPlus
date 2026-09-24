@@ -1,160 +1,220 @@
+<div align="center">
+
+<img src="docs/images/logo.png" width="96" alt="AgentPlus">
+
 # AgentPlus
+
+**一处管理所有 AI 编程 Agent 的供应商与模型列表**
+
+Codex · Claude Code · OpenCode · ZCode · MiMo Desktop · Gemini CLI · Qwen Code · Kimi Code 等 15 个 Agent
+
+[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?label=%E4%B8%8B%E8%BD%BD&color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
 简体中文 | [English](README.en.md)
 
-一个桌面小工具，统一管理各家 AI 编程 Agent 的**供应商（API 地址 + 密钥）和模型列表**。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/codex-dark-zh.png">
+  <img src="docs/images/codex-zh.png" alt="AgentPlus 主界面" width="880">
+</picture>
 
-每个 Agent 的配置文件格式都不一样：Codex 是 TOML + `models.json`，OpenCode 是 JSONC，Claude Code 靠 `settings.json` 里的环境变量……
-AgentPlus 把这些都读出来，放在同一个界面里编辑：供应商在「供应商」页维护一次，就能推送到任意 Agent，
-再按 Agent 决定哪些模型出现在它的模型选择器里。
+</div>
+
+## 为什么需要 AgentPlus
+
+每个 Agent 的配置格式都不一样：Codex 是 TOML + `models.json`，OpenCode 是 JSONC，Claude Code 靠 `settings.json` 里的环境变量……换一个中转站，就要在好几个文件里改地址、填密钥、调模型列表。
+
+AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维护一次，推送到任意 Agent**；再按 Agent 决定哪些模型出现在它的选择器里。所有改动先预览 diff，写入前自动备份，随时可以回滚。
 
 > AgentPlus 只管「有哪些供应商、选择器里有哪些模型」，**不替你选当前用哪个模型**，这个仍然在各 Agent 里自己选。
+
+## 界面一览
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/providers-zh.png" alt="供应商库"><p align="center"><b>供应商库</b>：按中转站归组，一眼看出每个分组接入了哪些 Agent</p></td>
+    <td width="50%"><img src="docs/images/codex-models-zh.png" alt="模型列表"><p align="center"><b>模型列表</b>：按 Agent 决定选择器里显示哪些模型</p></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/gateway-zh.png" alt="本地网关"><p align="center"><b>本地网关</b>：三种协议互转，实时查看流量、耗时和失败率</p></td>
+  </tr>
+</table>
+
+## 主要功能
+
+| | |
+|---|---|
+| 🗂️ **供应商库** | 所有供应商集中维护，一键推送到选中的 Agent。内置 19 个厂商和编程套餐模板（火山方舟、智谱、Kimi、DeepSeek、百炼、MiniMax、OpenRouter……），只需填 API Key |
+| 📋 **模型列表** | 按 Agent 管理选择器里显示哪些模型，可以直接拉取供应商的模型列表，支持上下文窗口等字段 |
+| 🔍 **先预览、后应用** | 改动先进入待应用列表，逐条查看 diff 再写入；写完可以一键重启对应的 Agent |
+| ⏪ **历史与回滚** | 每次写入前把原文件备份到 `~/.agentplus/backups/`，一键回滚 |
+| 🔀 **本地网关** | `127.0.0.1` 上的 HTTP 服务，在 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 之间实时转换（含流式和工具调用），带出错熔断 |
+| ⚡ **测速与测试** | 测延迟，或发一个真实的小请求，验证地址、密钥和模型是否可用 |
+| 🐧 **WSL** | 目标环境可以在 Windows 和 WSL 发行版之间切换，供应商库共用 |
+| 🙈 **隐私模式** | `Ctrl+Shift+H` 遮挡密钥、地址、用户名，模糊对话标题，适合截图和共享屏幕 |
+| ⌨️ **命令面板** | `Ctrl+K` 搜索供应商、模型、设置和会话 |
+| 🔄 **应用内更新** | 从 GitHub Releases 检查新版本，下载后校验签名再安装 |
+| 🌐 **中英双语** | 界面支持简体中文和英文，默认跟随系统 |
+
+## 支持的系统
+
+| 系统 | 状态 | 说明 |
+|---|---|---|
+| Windows 11（x64） | ✅ 支持 | 主要开发和测试平台 |
+| Windows 10（x64） | ✅ 支持 | 需要 WebView2，安装程序会自动补装 |
+| WSL 发行版 | ✅ 作为目标环境 | AgentPlus 运行在 Windows 上，可以管理 WSL 里的 Codex CLI、OpenCode 等 |
+| macOS | ⏳ 暂不支持 | 代码能编译，但 Agent 识别、重启、打开文件夹等功能还只有 Windows 实现 |
+| Linux | ⏳ 暂不支持 | 同上 |
 
 ## 下载安装
 
 到 [Releases](https://github.com/cnklpz/AgentPlus/releases/latest) 下载 `AgentPlus_<版本>_x64-setup.exe`，双击安装。
 
-- 系统要求：Windows 10 / 11（x64）。WebView2 在 Windows 11 上自带，Windows 10 上安装程序会自动补装。
-- 安装包未做代码签名，首次运行时 SmartScreen 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」即可。
-- **macOS / Linux 暂不支持**：代码能编译，但 Agent 识别、重启、打开文件夹等功能目前只实现了 Windows 版本。
+安装包没有做代码签名，首次运行时 SmartScreen 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」即可。
 
-### 更新
-
-AgentPlus 启动后会到 GitHub Releases 检查新版本，有新版本时右上角的「设置」按钮会出现一个小圆点。
-到「设置 → 通用 → 关于」可以查看更新说明，点「下载并安装」后自动下载、校验签名、安装并重新打开。
-
-不想自动检查的，关掉同一处的「启动时检查更新」，之后需要时手动点「检查更新」。
+**更新**：AgentPlus 启动时会检查新版本，有新版本时右上角的「设置」按钮会出现小圆点。到「设置 → 通用 → 关于」查看更新说明，点「下载并安装」，AgentPlus 会校验签名、安装并自动重新打开。不想自动检查的，可以在同一处关闭。
 
 ## 支持的 Agent
 
-| Agent | 管理的配置 |
-|---|---|
-| Codex（桌面版 + CLI） | `~/.codex/config.toml`、模型目录 `models.json`，密钥在 `~/.codex/.env` |
-| Claude Code | 供应商作为配置档，切换时写入 `~/.claude/settings.json` 的 `env` |
-| OpenCode | `~/.config/opencode/opencode.json(c)`，密钥在 `auth.json`；支持项目级配置 |
-| MiMo Desktop | `~/.config/mimocode/mimocode.jsonc` |
-| ZCode | `~/.zcode/v2/provider_config.json` |
-| Gemini CLI | `~/.gemini/.env` + `settings.json` |
-| Qwen Code | `~/.qwen/settings.json` |
-| Kimi Code | `~/.kimi-code/config.toml` |
-| Kilo Code | `~/.config/kilo/kilo.json(c)` |
-| CodeBuddy | `~/.codebuddy/models.json` |
-| Droid (Factory) | `~/.factory/settings.json` |
-| Hermes | HERMES_HOME 下的 `config.yaml` |
-| pi | `~/.pi/agent/models.json` |
-| OpenClaw | `~/.openclaw/openclaw.json` |
-| Trae | 仅识别（自定义模型存在账号云端，无法代写），给出手动操作步骤 |
+未检测到安装的 Agent 会自动隐藏；装在非默认位置的，可以在「设置 → Agent 识别」里手动指定配置目录。
 
-未检测到安装的 Agent 会自动隐藏；装在非默认位置的，可以在「设置 → Agent 识别」里手动指定配置目录，
-也可以在那里把识别到但用不上的 Agent 从侧边栏隐藏。
+| Agent | 写入的配置 | 密钥写在哪里 |
+|---|---|---|
+| **Codex**（桌面版 + CLI） | `~/.codex/config.toml`、`models.json` | `~/.codex/.env`（config 里只引用变量名） |
+| **Claude Code** | `~/.claude/settings.json` 的 `env` | 同一处的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` |
+| **OpenCode** | `~/.config/opencode/opencode.json(c)`，以及项目里的 `opencode.json` | `~/.local/share/opencode/auth.json` |
+| **MiMo Desktop** | `~/.config/mimocode/mimocode.jsonc` | 同一文件 |
+| **ZCode** | `~/.zcode/v2/provider_config.json` | 同一文件 |
+| **Gemini CLI** | `~/.gemini/settings.json` | `~/.gemini/.env` |
+| **Qwen Code** | `~/.qwen/settings.json` | 同一文件的 `env` 块 |
+| **Kimi Code** | `~/.kimi-code/config.toml` | 同一文件（用 `api_key_env` 的保持不动） |
+| **Kilo Code** | `~/.config/kilo/kilo.json(c)` | `~/.local/share/kilo/auth.json` |
+| **CodeBuddy** | `~/.codebuddy/models.json` | 同一文件 |
+| **Droid**（Factory） | `~/.factory/settings.json` | 同一文件 |
+| **Hermes** | HERMES_HOME 下的 `config.yaml` | `.env` 或 `config.yaml` |
+| **pi** | `~/.pi/agent/models.json` | `auth.json`（已有时）或 `models.json` |
+| **OpenClaw** | `~/.openclaw/openclaw.json` | 同一文件 |
+| **Trae** | 仅识别 | 自定义模型存在账号云端，AgentPlus 给出手动添加的步骤 |
 
-## 主要功能
+### 各 Agent 的特色功能
 
-- **供应商库**：所有供应商集中在一处，增删改后推送到选中的 Agent。内置常见厂商和编程套餐的模板，只需填 API Key；
-  可以直接从供应商拉取模型列表，测延迟，或发一个真实的小请求测试连通性。
-- **模型列表**：按 Agent 管理选择器里显示哪些模型，支持上下文窗口等字段。
-- **先预览、后应用**：所有改动先进入待应用列表，可逐条查看 diff 再写入；写完可以一键重启对应的 Agent 让配置生效。
-- **历史与回滚**：每次写入前把原文件备份到 `~/.agentplus/backups/`，可一键回滚。
-- **本地网关**：`127.0.0.1` 上的小型 HTTP 服务，在 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 三种协议之间实时转换（含流式）。
-  让只支持 Responses 的 Codex、只支持 Anthropic 协议的 Claude Code 也能用其他协议的中转；带出错熔断，每个 Agent 使用独立的网关密钥。
-- **WSL**：目标环境可在 Windows 和 WSL 发行版之间切换，供应商库在各环境间共用。
-- **Codex 专项**：会话浏览、健康检查、安全清理和供应商修复；从官方拉取模型列表；Fast 模式与完整模型名的界面补丁。
-- **OpenCode 项目配置**：给单个项目文件夹单独配置供应商、默认模型和权限，和全局配置按 OpenCode 的规则合并。
-- **托盘与隐私模式**：关闭窗口可以最小化到托盘，网关继续运行；隐私模式（`Ctrl+Shift+H`）遮挡密钥、地址和用户名，方便截图和共享屏幕。
-- **命令面板**：`Ctrl+K` 搜索供应商、模型、设置和会话。
-- **应用内更新**：见上文「更新」。
-- **多设备同步**（暂未开放）：通过共享文件夹导出/导入供应商和模型列表，不导出 API Key。
+<details open>
+<summary><b>Codex</b>：会话管理、固定供应商 ID、官方模型目录</summary>
 
-界面支持简体中文和英文，在「设置 → 界面 → 语言」切换，默认跟随系统。
+- **固定供应商 ID**：切换供应商只改同一张表，历史会话不会因为换了中转站就从 Codex 的列表里消失
+- **每个供应商一份模型列表**，切换供应商时自动换上
+- **会话**：浏览所有会话，查看某个会话为什么在 Codex 里看不到，把会话迁移到另一个供应商（可撤销），复制 `codex resume` 命令
+- **维护**：健康检查（数据库、缺失文件、供应商不一致、日志体积等）和安全清理，清理前自动备份
+- **拉取官方模型目录**：用 ChatGPT 账号登录一次，把官方的模型列表导入自己的目录
+- **界面增强**：Fast 模式、完整模型名等界面补丁，通过 AgentPlus 重启 Codex 时生效
+- 可以从 AgentPlus 直接重启 Codex 桌面版
+
+</details>
+
+<details>
+<summary><b>Claude Code</b>：供应商配置档与模型角色</summary>
+
+- 每个供应商是一份配置档，切换时写入 `settings.json` 的 `env`；手动配置过的中转也能识别并收编
+- **模型角色**：分别指定默认、Opus、Sonnet、Haiku、子代理各用哪个模型
+- 只支持 Anthropic 协议；其他协议的中转可以经本地网关接入
+- 常用设置一键切换：关闭非必要流量、提交里的 Co-Authored-By 署名
+
+</details>
+
+<details>
+<summary><b>OpenCode / Kilo Code</b>：项目级配置</summary>
+
+- **项目**：给单个项目文件夹单独配置供应商、默认模型和权限，并标出哪些设置继承自全局配置
+- 常用设置可视化：默认模型、`small_model`、只加载哪些供应商、会话分享、自动更新、权限（编辑 / bash / webfetch）等
+- 用 `opencode auth` 登录的供应商只读显示，不会被改动
+
+</details>
+
+<details>
+<summary><b>ZCode / MiMo Desktop</b>：桌面应用设置</summary>
+
+- **ZCode**：模型显示顺序、每个模型的上下文规则，以及显示思考过程、记忆、最小化到托盘等设置
+- **MiMo Desktop**：显示账号内置的模型（只读），技能目录兼容、托盘、语音反馈等设置
+- 两者都可以从 AgentPlus 直接重启
+
+</details>
+
+<details>
+<summary><b>其他命令行 Agent</b>：Gemini CLI、Qwen Code、Kimi Code、CodeBuddy、Droid、Hermes、pi、OpenClaw</summary>
+
+- **Gemini CLI**：多配置档切换；系统环境变量或项目 `.env` 会覆盖设置时给出提醒
+- **Kimi Code / Hermes**：只改动变化的配置块，保留原文件里的注释和格式
+- **CodeBuddy**：IDE 和 CLI 共用配置，约 1 秒内热加载
+- **Droid**：写入前重新读取文件，避免覆盖 Droid 运行时自己写入的改动
+- **OpenClaw**：改地址或密钥时，同步更新 OpenClaw 生成的各 agent 模型文件
+- **pi**：只写入已知有效的结构，避免一个字段写错导致整个文件失效
+- 已有的环境变量引用（`$VAR`、`${VAR}`、`env_key` 等）会原样保留
+
+</details>
+
+## 密钥怎么存
+
+AgentPlus **不加密密钥**，也不使用系统的凭据管理器。它的原则是：不多存、不外传、界面上不显示。
+
+- **存在哪里**
+  - 供应商库、Claude Code / Gemini CLI 的配置档、网关密钥：`~/.agentplus/store.json`，**明文**
+  - 推送到各 Agent 后：写进该 Agent 自己的配置文件（位置见上表），和手动配置时一样是明文
+  - 写入前的备份：`~/.agentplus/backups/` 里是原文件的完整副本，**同样包含密钥**，不会自动清理
+- **界面拿不到完整密钥**：后端只把「是否有密钥」、末 4 位和一个指纹传给界面；在 Agent 之间复制供应商时，密钥只在后端流转；diff 预览里的密钥都打了码
+- **本地网关不暴露上游密钥**：只监听 `127.0.0.1`，拒绝来自网页和非本机 Host 的请求；每个 Agent 拿到的是自己独立的随机网关密钥（`agp-…`），真正的上游密钥只在网关转发时使用
+- **没有遥测**：AgentPlus 只访问你配置的供应商地址（拉取模型、测延迟、测试请求、网关转发）和 GitHub（检查更新）；访问供应商时不跟随跨主机的重定向，密钥不会被带到别处
+- **多设备同步**（暂未开放）导出的文件不含任何密钥
+
+> 建议：不要把 `~/.agentplus` 放进网盘同步目录；截图或共享屏幕前打开隐私模式（`Ctrl+Shift+H`）。
 
 ## 开发
 
 技术栈：[Tauri 2](https://tauri.app)（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）+ Vite。
 
-准备环境：Node.js 18+、Rust stable（1.88 及以上），以及 [Tauri 的系统依赖](https://tauri.app/start/prerequisites/)（Windows 上是 WebView2 和 MSVC 生成工具）。
+需要 Node.js 18+、Rust 1.88+，以及 [Tauri 的系统依赖](https://tauri.app/start/prerequisites/)（Windows 上是 WebView2 和 MSVC 生成工具）。
 
 ```bash
 npm install
 npm run tauri dev      # 开发模式运行
-npm run tauri build    # 打包安装程序（本地打包不需要签名密钥，见下文）
+npm run tauri build    # 打包安装程序
+npm run check          # 前端：类型检查 + 单元测试
 ```
 
-只改界面时可以用 `npm run dev` 在浏览器里预览，后端调用会换成本地的演示数据。
-
-检查与测试：
-
 ```bash
-npm run check                                   # 前端：类型检查 + 单元测试（vitest）
 cd src-tauri && cargo clippy --all-targets && cargo test   # 后端：lint + 单元测试
 ```
 
-`cargo test` 里标了 `#[ignore]` 的用例会读本机真实的 Agent 配置（只读），需要时用
-`cargo test <名字> -- --ignored --nocapture` 单独运行。
+只改界面时可以用 `npm run dev` 在浏览器里预览，后端调用会换成演示数据。多语言和代码约定见 [CLAUDE.md](CLAUDE.md)。
 
-### 目录结构
+<details>
+<summary>目录结构</summary>
 
 ```
 src/                    前端
   components/           页面与组件
   i18n/zh, i18n/en      界面文案（中文为源语言）
   api.ts                调用后端命令
-  updater.ts            应用内更新的状态
+  updater.ts            应用内更新
 src-tauri/src/          后端
   adapters/             每个 Agent 一个适配器，负责读写它的配置文件
   gateway/              本地网关：协议转换、HTTP 服务、熔断、密钥
   sessions.rs           Codex 会话管理
   history.rs            备份与回滚
-  update.rs             应用内更新（tauri-plugin-updater）
+  update.rs             应用内更新
   i18n.rs               后端文案双语
-scripts/                发版用的小脚本
-docs/design.html        设计方案
 ```
 
-AgentPlus 自己的数据保存在 `~/.agentplus/`（`store.json` 和 `backups/`）。
-
-多语言和代码约定见 [CLAUDE.md](CLAUDE.md)：界面上的文字不许写死，新增文案要同时写中英文。
-
-## 发布新版本
-
-发版由 GitHub Actions 完成（[`.github/workflows/release.yml`](.github/workflows/release.yml)）：推送 `v*` 标签后，
-在 Windows 上打包、用私钥给安装包签名，并创建一个**草稿** Release，附带安装包、签名和给自动更新用的 `latest.json`。
-
-**一次性准备**
-
-1. 仓库需要是公开的（私有仓库的 Release 未登录访问不到，自动更新会失败）。
-2. 签名密钥：公钥已写在 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`；
-   私钥**只保存在维护者本地**，把它的内容添加为仓库的 Actions secret `TAURI_SIGNING_PRIVATE_KEY`
-   （Settings → Secrets and variables → Actions）。私钥设了密码的，再加一个 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。
-
-   > 私钥丢了，已安装的旧版本就再也收不到更新（只能让用户手动下载新安装包），务必备份。
-
-**每次发版**
-
-1. 在 [CHANGELOG.md](CHANGELOG.md) 顶部加一节 `## 0.2.0`，写上中英文更新说明，提交。
-2. 升版本号并打标签（工作区要干净）：
-
-   ```bash
-   npm version 0.2.0      # 同步 package.json、tauri.conf.json、Cargo.toml、Cargo.lock，提交并打 v0.2.0 标签
-   git push --follow-tags
-   ```
-
-3. 等 Actions 里的 Release 工作流跑完（约 10 分钟），到 Releases 页面检查草稿，确认无误后点 **Publish release**。
-   发布之后，已安装的 AgentPlus 在下次启动或手动检查时就会看到这个版本。
-
-发错了版本：把该 Release 改回草稿或删除即可，客户端只认最新的正式 Release。
+</details>
 
 ## 参与贡献
 
 欢迎通过 [Issues](https://github.com/cnklpz/AgentPlus/issues) 反馈问题和建议。
 
-目前暂不接受代码贡献（Pull Request）。以后开放时，提交代码前需要签署贡献者许可协议（CLA），
-授权作者以 AGPLv3 以外的方式（包括商业授权）使用你贡献的代码。
+目前暂不接受代码贡献（Pull Request）。以后开放时，提交代码前需要签署贡献者许可协议（CLA），授权作者以 AGPLv3 以外的方式（包括商业授权）使用你贡献的代码。
 
 ## 许可证
 
 Copyright (C) 2026 cnklpz
 
-本项目以 [GNU Affero General Public License v3.0](LICENSE)（SPDX：`AGPL-3.0-only`）发布。
-修改并分发本项目，或通过网络向他人提供修改后的版本时，需要按 AGPLv3 向对方提供对应的完整源代码。
+本项目以 [GNU Affero General Public License v3.0](LICENSE)（SPDX：`AGPL-3.0-only`）发布。修改并分发本项目，或通过网络向他人提供修改后的版本时，需要按 AGPLv3 向对方提供对应的完整源代码。
 
 如需在不满足 AGPLv3 条款的情况下使用（例如闭源分发），请联系作者获取商业授权。

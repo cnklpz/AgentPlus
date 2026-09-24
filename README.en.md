@@ -1,147 +1,212 @@
+<div align="center">
+
+<img src="docs/images/logo.png" width="96" alt="AgentPlus">
+
 # AgentPlus
+
+**One place to manage providers and model lists for all your AI coding agents**
+
+Codex · Claude Code · OpenCode · ZCode · MiMo Desktop · Gemini CLI · Qwen Code · Kimi Code and 7 more
+
+[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?label=download&color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
 [简体中文](README.md) | English
 
-A small desktop app for managing the **providers (API base URL + key) and model lists** of AI coding agents in one place.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/codex-dark-en.png">
+  <img src="docs/images/codex-en.png" alt="AgentPlus main window" width="880">
+</picture>
+
+</div>
+
+## Why AgentPlus
 
 Every agent stores its configuration differently: Codex uses TOML plus `models.json`, OpenCode uses JSONC, Claude Code uses environment variables in `settings.json`…
-AgentPlus reads all of them and lets you edit them in one UI: maintain a provider once on the Providers page, push it to any agent,
-then decide per agent which models show up in its model picker.
+Switching to another relay means editing URLs, pasting keys and fixing model lists in several files.
+
+AgentPlus reads all of them and puts them in one window: **maintain a provider once and push it to any agent**, then decide per agent which models show up in its picker.
+Every change is previewed as a diff and backed up before it is written, so you can always roll back.
 
 > AgentPlus manages *which providers exist and which models are in the picker*. It **does not choose the model you are using**; you still do that in each agent.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/providers-en.png" alt="Provider library"><p align="center"><b>Provider library</b>: grouped by relay, showing which agents use each group</p></td>
+    <td width="50%"><img src="docs/images/codex-models-en.png" alt="Model list"><p align="center"><b>Model list</b>: choose per agent which models appear in the picker</p></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/gateway-en.png" alt="Local gateway"><p align="center"><b>Local gateway</b>: converts between three protocols, with live traffic, latency and failure charts</p></td>
+  </tr>
+</table>
+
+## Features
+
+| | |
+|---|---|
+| 🗂️ **Provider library** | Keep all providers in one place and push them to the agents you pick. 19 templates for vendors and coding plans (Volcengine Ark, Zhipu, Kimi, DeepSeek, Alibaba Bailian, MiniMax, OpenRouter…) only need an API key |
+| 📋 **Model lists** | Choose per agent which models appear in its picker, fetch a provider's model list, set fields such as the context window |
+| 🔍 **Preview, then apply** | Changes go into a pending list where you review each diff before writing; afterwards, restart the agent in one click |
+| ⏪ **History and rollback** | Original files are backed up to `~/.agentplus/backups/` before every write and can be restored in one click |
+| 🔀 **Local gateway** | An HTTP server on `127.0.0.1` that converts between OpenAI Chat Completions, OpenAI Responses and Anthropic Messages on the fly (streaming and tool calls included), with an error breaker |
+| ⚡ **Latency and tests** | Measure latency, or send one small real request to check the URL, key and model |
+| 🐧 **WSL** | Switch the target environment between Windows and WSL distros; the provider library is shared |
+| 🙈 **Privacy mode** | `Ctrl+Shift+H` masks keys, hosts and user names and blurs conversation titles, for screenshots and screen sharing |
+| ⌨️ **Command palette** | `Ctrl+K` searches providers, models, settings and sessions |
+| 🔄 **In-app updates** | Checks GitHub Releases and verifies the installer's signature before installing |
+| 🌐 **Chinese and English** | The UI follows the system language by default |
+
+## Supported systems
+
+| System | Status | Notes |
+|---|---|---|
+| Windows 11 (x64) | ✅ Supported | Main development and test platform |
+| Windows 10 (x64) | ✅ Supported | Needs WebView2; the installer adds it if missing |
+| WSL distros | ✅ As a target | AgentPlus runs on Windows and can manage Codex CLI, OpenCode and others inside WSL |
+| macOS | ⏳ Not yet | The code compiles, but agent detection, restarting agents and opening folders only have Windows implementations so far |
+| Linux | ⏳ Not yet | Same as macOS |
 
 ## Download
 
 Get `AgentPlus_<version>_x64-setup.exe` from [Releases](https://github.com/cnklpz/AgentPlus/releases/latest) and run it.
 
-- Requirements: Windows 10 / 11 (x64). WebView2 ships with Windows 11; on Windows 10 the installer adds it if needed.
-- The installer is not code-signed, so SmartScreen may say "Windows protected your PC" on first run. Click "More info → Run anyway".
-- **macOS and Linux are not supported yet.** The code compiles, but agent detection, restarting agents and opening folders are only implemented for Windows so far.
+The installer is not code-signed, so SmartScreen may say "Windows protected your PC" on first run. Click "More info → Run anyway".
 
-### Updates
-
-At startup AgentPlus checks GitHub Releases for a new version. When there is one, a small dot appears on the Settings button in the top-right corner.
-Open Settings → General → About to read the release notes, then click "Download and install": AgentPlus downloads the update, verifies its signature, installs it and reopens.
-
-To stop the startup check, turn off "Check for updates at startup" in the same place and use "Check for updates" when you want to.
+**Updates**: AgentPlus checks for a new version at startup; when there is one, a small dot appears on the Settings button in the top-right corner.
+Open Settings → General → About to read the release notes and click "Download and install". AgentPlus verifies the signature, installs the update and reopens. You can turn off the startup check in the same place.
 
 ## Supported agents
 
-| Agent | Configuration it manages |
-|---|---|
-| Codex (desktop + CLI) | `~/.codex/config.toml`, model catalog `models.json`, keys in `~/.codex/.env` |
-| Claude Code | Providers as profiles; switching writes the `env` block of `~/.claude/settings.json` |
-| OpenCode | `~/.config/opencode/opencode.json(c)`, keys in `auth.json`; per-project configs too |
-| MiMo Desktop | `~/.config/mimocode/mimocode.jsonc` |
-| ZCode | `~/.zcode/v2/provider_config.json` |
-| Gemini CLI | `~/.gemini/.env` + `settings.json` |
-| Qwen Code | `~/.qwen/settings.json` |
-| Kimi Code | `~/.kimi-code/config.toml` |
-| Kilo Code | `~/.config/kilo/kilo.json(c)` |
-| CodeBuddy | `~/.codebuddy/models.json` |
-| Droid (Factory) | `~/.factory/settings.json` |
-| Hermes | `config.yaml` under HERMES_HOME |
-| pi | `~/.pi/agent/models.json` |
-| OpenClaw | `~/.openclaw/openclaw.json` |
-| Trae | Detection only (custom models live in the account's cloud storage); shows manual steps |
+Agents that aren't installed are hidden. For agents installed in a non-default location, set the config folder in Settings → Agent detection.
 
-Agents that aren't installed are hidden. For agents installed in a non-default location, set the config folder in Settings → Agent detection;
-you can also hide detected agents you don't use from the sidebar there.
+| Agent | Configuration it writes | Where the API key goes |
+|---|---|---|
+| **Codex** (desktop + CLI) | `~/.codex/config.toml`, `models.json` | `~/.codex/.env` (the config only names the variable) |
+| **Claude Code** | `env` in `~/.claude/settings.json` | `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` in the same place |
+| **OpenCode** | `~/.config/opencode/opencode.json(c)`, plus `opencode.json` in projects | `~/.local/share/opencode/auth.json` |
+| **MiMo Desktop** | `~/.config/mimocode/mimocode.jsonc` | Same file |
+| **ZCode** | `~/.zcode/v2/provider_config.json` | Same file |
+| **Gemini CLI** | `~/.gemini/settings.json` | `~/.gemini/.env` |
+| **Qwen Code** | `~/.qwen/settings.json` | The `env` block of the same file |
+| **Kimi Code** | `~/.kimi-code/config.toml` | Same file (providers using `api_key_env` are left alone) |
+| **Kilo Code** | `~/.config/kilo/kilo.json(c)` | `~/.local/share/kilo/auth.json` |
+| **CodeBuddy** | `~/.codebuddy/models.json` | Same file |
+| **Droid** (Factory) | `~/.factory/settings.json` | Same file |
+| **Hermes** | `config.yaml` under HERMES_HOME | `.env` or `config.yaml` |
+| **pi** | `~/.pi/agent/models.json` | `auth.json` (if already used) or `models.json` |
+| **OpenClaw** | `~/.openclaw/openclaw.json` | Same file |
+| **Trae** | Detection only | Custom models live in the account's cloud storage; AgentPlus shows the manual steps |
 
-## Features
+### What's special for each agent
 
-- **Provider library**: all providers in one place; add, edit or remove them and push the change to the agents you pick. Templates for common vendors and coding plans only need an API key.
-  Fetch a provider's model list, measure latency, or send one small real request to test it.
-- **Model lists**: choose per agent which models appear in its picker, with fields such as the context window.
-- **Preview, then apply**: every change goes into a pending list where you can review each diff before it is written; afterwards, restart the agent in one click so it picks up the change.
-- **History and rollback**: the original files are backed up to `~/.agentplus/backups/` before every write, and can be restored in one click.
-- **Local gateway**: a small HTTP server on `127.0.0.1` that converts between OpenAI Chat Completions, OpenAI Responses and Anthropic Messages on the fly (streaming included).
-  It lets Codex (Responses only) and Claude Code (Anthropic only) use relays that speak another protocol. It has an error breaker, and each agent gets its own gateway key.
-- **WSL**: switch the target environment between Windows and WSL distros; the provider library is shared between them.
-- **Codex tools**: session browser, health check, safe cleanup and provider repair; fetch the official model list; UI patches for Fast mode and full model names.
-- **OpenCode project configs**: give a single project folder its own providers, default model and permissions, merged with the global config the way OpenCode does it.
-- **Tray and privacy mode**: closing the window can minimize it to the tray while the gateway keeps running; privacy mode (`Ctrl+Shift+H`) masks keys, hosts and user names for screenshots and screen sharing.
-- **Command palette**: `Ctrl+K` searches providers, models, settings and sessions.
-- **In-app updates**: see [Updates](#updates).
-- **Multi-device sync** (not available yet): export and import providers and model lists through a shared folder, without API keys.
+<details open>
+<summary><b>Codex</b>: sessions, fixed provider ID, official model catalog</summary>
 
-The UI is available in Simplified Chinese and English. Switch in Settings → Interface → Language; it follows the system by default.
+- **Fixed provider ID**: switching providers only rewrites one table, so past sessions don't vanish from Codex's lists when you change relays
+- **A model list per provider**, swapped in automatically when you switch
+- **Sessions**: browse every session, see why one is hidden in Codex, move sessions to another provider (with undo), copy the `codex resume` command
+- **Maintenance**: health check (database, missing files, provider mismatches, log size…) and safe cleanup, with a backup first
+- **Fetch the official model catalog**: sign in with ChatGPT once and import the official model list into your catalog
+- **UI enhancements**: patches such as Fast mode and full model names, applied when AgentPlus restarts Codex
+- Restart the Codex desktop app from AgentPlus
+
+</details>
+
+<details>
+<summary><b>Claude Code</b>: provider profiles and model roles</summary>
+
+- Each provider is a profile; switching writes it into the `env` block of `settings.json`. A relay you set up by hand is detected and can be adopted
+- **Model roles**: pick the model for default, Opus, Sonnet, Haiku and subagents separately
+- Anthropic protocol only; relays speaking other protocols can go through the local gateway
+- One-click settings: turn off nonessential traffic, the Co-Authored-By line in commits
+
+</details>
+
+<details>
+<summary><b>OpenCode / Kilo Code</b>: per-project configs</summary>
+
+- **Projects**: give a single project folder its own providers, default model and permissions, with what is inherited from the global config marked
+- Common settings in a form: default model, `small_model`, which providers to load, session sharing, auto-update, permissions (edit / bash / webfetch)…
+- Providers signed in with `opencode auth` are shown read-only and never changed
+
+</details>
+
+<details>
+<summary><b>ZCode / MiMo Desktop</b>: desktop app settings</summary>
+
+- **ZCode**: model order, context rules per model, and settings such as showing reasoning, memory and minimize to tray
+- **MiMo Desktop**: shows the account's built-in models (read-only), plus skill folder compatibility, tray and voice feedback settings
+- Both can be restarted from AgentPlus
+
+</details>
+
+<details>
+<summary><b>Other CLI agents</b>: Gemini CLI, Qwen Code, Kimi Code, CodeBuddy, Droid, Hermes, pi, OpenClaw</summary>
+
+- **Gemini CLI**: switch between profiles; warns when system environment variables or a project `.env` override the settings
+- **Kimi Code / Hermes**: only the changed blocks are rewritten, keeping comments and formatting in the original file
+- **CodeBuddy**: the IDE and CLI share the config, hot-reloaded within about a second
+- **Droid**: re-reads the file right before writing so changes Droid made while running aren't lost
+- **OpenClaw**: changing a URL or key also updates the per-agent model files OpenClaw generates
+- **pi**: only writes shapes known to be valid, so one bad field can't disable the whole file
+- Existing environment-variable references (`$VAR`, `${VAR}`, `env_key`…) are kept as they are
+
+</details>
+
+## How API keys are stored
+
+AgentPlus **does not encrypt keys** and does not use the system credential store. Instead it keeps as few copies as it can, never sends keys anywhere they don't belong, and never shows them in the UI.
+
+- **Where keys live**
+  - The provider library, Claude Code / Gemini CLI profiles and gateway keys: `~/.agentplus/store.json`, **in plain text**
+  - After pushing to an agent: that agent's own config files (see the table above), in plain text, just as if you had set them up by hand
+  - Backups taken before each write: `~/.agentplus/backups/` holds full copies of the original files, **keys included**, and they are not cleaned up automatically
+- **The UI never gets the full key**: the backend only sends whether a key exists, its last 4 characters and a fingerprint. Copying a provider between agents happens entirely in the backend, and keys in diff previews are masked
+- **The local gateway doesn't hand out upstream keys**: it listens on `127.0.0.1` only and refuses requests from web pages or with a non-local Host. Each agent gets its own random gateway key (`agp-…`); the real upstream key is only used when the gateway forwards a request
+- **No telemetry**: AgentPlus only talks to the provider URLs you configure (fetching models, latency, test requests, gateway forwarding) and to GitHub (update check). Redirects to another host are not followed, so a key is never sent elsewhere
+- **Multi-device sync** (not available yet) exports no keys at all
+
+> Tip: don't put `~/.agentplus` in a cloud-synced folder, and turn on privacy mode (`Ctrl+Shift+H`) before taking screenshots or sharing your screen.
 
 ## Development
 
 Stack: [Tauri 2](https://tauri.app) (Rust, `src-tauri/`) + React 18 + TypeScript (`src/`) + Vite.
 
-Prerequisites: Node.js 18+, stable Rust (1.88 or newer) and [Tauri's system dependencies](https://tauri.app/start/prerequisites/) (WebView2 and the MSVC build tools on Windows).
+You need Node.js 18+, Rust 1.88+ and [Tauri's system dependencies](https://tauri.app/start/prerequisites/) (WebView2 and the MSVC build tools on Windows).
 
 ```bash
 npm install
 npm run tauri dev      # run in development mode
-npm run tauri build    # build the installer (no signing key needed locally, see below)
+npm run tauri build    # build the installer
+npm run check          # frontend: type check + unit tests
 ```
 
-For UI-only work, `npm run dev` previews the app in a browser with backend calls replaced by local demo data.
-
-Checks and tests:
-
 ```bash
-npm run check                                   # frontend: type check + unit tests (vitest)
 cd src-tauri && cargo clippy --all-targets && cargo test   # backend: lint + unit tests
 ```
 
-Tests marked `#[ignore]` in `cargo test` read the real agent configs on this machine (read-only). Run one with
-`cargo test <name> -- --ignored --nocapture`.
+For UI-only work, `npm run dev` previews the app in a browser with demo data in place of the backend. Language and coding conventions are in [CLAUDE.md](CLAUDE.md).
 
-### Layout
+<details>
+<summary>Layout</summary>
 
 ```
 src/                    frontend
   components/           pages and components
   i18n/zh, i18n/en      UI text (Chinese is the source language)
   api.ts                calls into the backend
-  updater.ts            in-app update state
+  updater.ts            in-app updates
 src-tauri/src/          backend
   adapters/             one adapter per agent, reads and writes its config files
   gateway/              local gateway: protocol conversion, HTTP server, breaker, keys
   sessions.rs           Codex sessions
   history.rs            backups and rollback
-  update.rs             in-app updates (tauri-plugin-updater)
+  update.rs             in-app updates
   i18n.rs               backend text in both languages
-scripts/                small release scripts
-docs/design.html        design notes
 ```
 
-AgentPlus keeps its own data in `~/.agentplus/` (`store.json` and `backups/`).
-
-Language and coding conventions are in [CLAUDE.md](CLAUDE.md): no hard-coded UI text, and every new string needs both Chinese and English.
-
-## Releasing
-
-Releases are built by GitHub Actions ([`.github/workflows/release.yml`](.github/workflows/release.yml)). Pushing a `v*` tag builds on Windows,
-signs the installer with the private key and creates a **draft** release with the installer, its signature and the `latest.json` used by the updater.
-
-**One-time setup**
-
-1. The repository must be public (releases of a private repository can't be read without signing in, so updates would fail).
-2. Signing key: the public key is in `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
-   The private key **stays on the maintainer's machine**; add its contents as the Actions secret `TAURI_SIGNING_PRIVATE_KEY`
-   (Settings → Secrets and variables → Actions). If the key has a password, also add `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
-
-   > If the private key is lost, installed copies can never receive updates again (users would have to download a new installer by hand). Back it up.
-
-**Every release**
-
-1. Add a `## 0.2.0` section at the top of [CHANGELOG.md](CHANGELOG.md) with notes in Chinese and English, and commit it.
-2. Bump the version and tag it (the working tree must be clean):
-
-   ```bash
-   npm version 0.2.0      # syncs package.json, tauri.conf.json, Cargo.toml and Cargo.lock, commits and tags v0.2.0
-   git push --follow-tags
-   ```
-
-3. Wait for the Release workflow in Actions to finish (about 10 minutes), check the draft on the Releases page, then click **Publish release**.
-   Installed copies of AgentPlus see the new version at their next startup or manual check.
-
-Released the wrong thing? Turn the release back into a draft or delete it; clients only look at the latest published release.
+</details>
 
 ## Contributing
 

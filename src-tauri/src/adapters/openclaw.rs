@@ -500,7 +500,8 @@ mod tests {
         assert_eq!(provider_endpoint("vault").unwrap().1, None);
         assert_eq!(provider_endpoint("plain").unwrap(), ("https://plain.example.com/v1".into(), Some("sk-plain-secret-4321".into()), "responses".into()));
         assert!(st.notes.iter().any(|n| n.contains("热加载")));
-        assert!(st.files.iter().any(|f| f.ends_with("agents/main/agent/models.json")));
+        // The temp dir can be outside home (CI), where display_path keeps native separators.
+        assert!(st.files.iter().any(|f| f.replace('\\', "/").ends_with("agents/main/agent/models.json")));
         let dump = format!("{:?}", st);
         assert!(!dump.contains("sk-plain-secret") && !dump.contains("sk-env-proxy"));
         // ${VAR} from ~/.openclaw/.env.
