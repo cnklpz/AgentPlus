@@ -2,6 +2,7 @@
 //! `provider.<id>.models`), app preferences in `%APPDATA%\Xiaomi MiMo\preferences.json`.
 //! Provider and model editing is shared with OpenCode (see ocfmt).
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -115,13 +116,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(
-                    l(
-                        "mimocode.jsonc 含注释，写回会丢失注释，已切换为只读。",
-                        "mimocode.jsonc contains comments, which would be lost on write, so it's read-only.",
-                    )
-                    .into(),
-                );
+                st.notes.push(msg::comments_readonly("mimocode.jsonc"));
             }
             st.providers.extend(f.providers(&cfg, &root));
         }
@@ -210,20 +205,20 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         prefs_dirty = true;
                     }
                 } else {
-                    return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}")));
+                    return Err(msg::unknown_setting(key));
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("MiMo Desktop 按启用/停用管理供应商", "MiMo Desktop manages providers by enabling and disabling them"))),
             Op::UpsertProvider { .. } | Op::DeleteProvider { .. } | Op::SetProviderEnabled { .. } | Op::SetModelVisible { .. } | Op::UpsertModel { .. } | Op::DeleteModel { .. } => unreachable!("handled by ocfmt"),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models; edit the models directly"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
         }
     }
 
     let (cfg_dirty, store_dirty) = (dirty.cfg, dirty.store);
     if cfg_dirty && had_comments {
-        return Err(anyhow!(l("mimocode.jsonc 含注释，为避免丢失注释不写入", "mimocode.jsonc contains comments; not writing it so they aren't lost")));
+        return Err(msg::comments_not_written("mimocode.jsonc"));
     }
     let mut written = vec![];
     let mut backup_dir = None;

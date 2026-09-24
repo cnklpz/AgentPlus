@@ -3,6 +3,7 @@
 //! each entry's `visibility` ("list" | "hide") decides whether it shows up.
 //! Provider keys live in `~/.codex/.env` under the provider's `env_key`.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::dotenv;
 use crate::i18n::l;
@@ -167,7 +168,7 @@ fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut D
     if provider == "openai" {
         return Err(anyhow!(l("OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商", "The OpenAI official account can't use the fixed ID; switch to a custom provider first")));
     }
-    let mut table = provider_item(doc, provider).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+    let mut table = provider_item(doc, provider).cloned().ok_or_else(|| msg::no_provider(provider))?;
     if let Some(t) = table.as_table_like_mut() {
         t.insert("name", value(format!("AgentPlus（{provider}）")));
     }
@@ -672,7 +673,7 @@ fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> 
         .get_mut("model_providers")
         .and_then(|t| t.get_mut(id))
         .and_then(|t| t.as_table_like_mut())
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        .ok_or_else(|| msg::no_provider(id))?;
     let old = t.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
     if old == on {
         return Ok(false);
@@ -728,11 +729,11 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("Codex 只支持 Responses 接口", "Codex only supports the Responses API")));
                 }
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let id = match &p.id {
                     Some(id) => {
-                        provider_item(&doc, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        provider_item(&doc, id).ok_or_else(|| msg::no_provider(id))?;
                         id.clone()
                     }
                     None => unique_id(&slug(&p.name), |c| c == "openai" || c == FIXED_ID || provider_item(&doc, c).is_some()),
@@ -814,7 +815,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                 }
                 if provider != "openai" && provider_item(&doc, provider).is_none() {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 switched = Some(provider.clone());
                 let raw = configured_provider(&doc);
@@ -844,7 +845,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
                 let id = m.id.trim().to_string();
                 if id.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 if let Some(entry) = catalog_entry(v, &id) {
                     if let Some(n) = m.name.as_deref().filter(|n| !n.trim().is_empty()) {
@@ -985,7 +986,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         cfg_dirty = true;
                     }
                 }
-                other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                other => return Err(msg::unknown_setting(other)),
             },
             Op::SetProviderModels { provider, models } => {
                 let list = clean_ids(models);
@@ -1003,7 +1004,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex 同时只能使用一个供应商", "Codex can only use one provider at a time"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code uses model roles"))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }

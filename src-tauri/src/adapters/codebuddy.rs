@@ -10,6 +10,7 @@
 //! `availableModels` is the native visibility list: hiding removes the id from it and
 //! keeps the entry. Disabled providers are moved out and parked in the AgentPlus store.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::mfields;
@@ -306,7 +307,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had)) => {
             if had {
                 st.readonly = true;
-                st.notes.push(l("models.json 含注释，写回会丢失注释，已切换为只读。", "models.json contains comments that would be lost on write, so it's read-only.").into());
+                st.notes.push(msg::comments_readonly("models.json"));
             }
             cfg
         }
@@ -341,7 +342,7 @@ pub fn state(inst: &Install) -> AgentState {
 #[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
-    let g = groups_of(&entries_of(&cfg), &parked_of(&store::load())).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let g = groups_of(&entries_of(&cfg), &parked_of(&store::load())).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
     if g.key.0.is_empty() {
         return Err(anyhow!(tr!("供应商 {id} 没有 url", "Provider {id} has no url")));
     }
@@ -367,7 +368,7 @@ struct Work {
 
 impl Work {
     fn group(&self, id: &str) -> Result<Group> {
-        self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| msg::no_provider(id))
     }
 
     fn enabled(&self, g: &Group) -> bool {
@@ -440,7 +441,7 @@ impl Work {
             Op::UpsertProvider { provider: p } => {
                 chat_only(&p.api)?;
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let base = base_of(&p.base_url);
                 let new_key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
@@ -580,7 +581,7 @@ impl Work {
                 let g = self.group(provider)?;
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 self.check_free(&g, &mid)?;
                 for (k, v) in &m.extra {
@@ -658,8 +659,8 @@ impl Work {
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("CodeBuddy 的自定义模型可以同时启用，在 CodeBuddy 里切换模型", "CodeBuddy custom models can all be enabled at once; switch models inside CodeBuddy"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code uses model roles"))),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
         Ok(())
@@ -681,7 +682,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let cfg_dirty = w.entries != entries0 || w.avail != avail0;
     let store_dirty = w.parked != parked0;
     if cfg_dirty && had_comments {
-        return Err(anyhow!(l("models.json 含注释，为避免丢失注释不写入", "models.json contains comments; not writing it to avoid losing them")));
+        return Err(msg::comments_not_written("models.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;

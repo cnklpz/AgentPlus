@@ -6,6 +6,7 @@
 //! Provider / model editing is shared with OpenClaw (see pimodels).
 
 
+use super::msg;
 use super::{Plan, Endpoint};
 use super::pimodels::{Dirty, Flavor, Fmt};
 use crate::model::*;
@@ -107,7 +108,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(l("models.json 含注释，写回会丢失注释，已切换为只读。", "models.json contains comments, which would be lost on write. Switched to read-only.").into());
+                st.notes.push(msg::comments_readonly("models.json"));
             }
             cfg
         }
@@ -188,7 +189,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("pi 可以同时用多个供应商：按启用/停用管理，在 pi 里用 /model 选择模型", "pi can use several providers at once: manage them by enabling/disabling, and pick models with /model in pi."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::SetSetting { key, .. } => return Err(anyhow!(tr!("pi 没有设置项 {key}", "pi has no setting {key}"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),
@@ -215,7 +216,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     }
 
     if dirty.cfg && had_comments {
-        return Err(anyhow!(l("models.json 含注释，为避免丢失注释不写入", "models.json contains comments; not writing to avoid losing them")));
+        return Err(msg::comments_not_written("models.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;

@@ -11,6 +11,7 @@
 //! baseUrl / apiKey win over openclaw.json, so address / key changes are mirrored there.
 
 
+use super::msg;
 use super::{Plan, Endpoint};
 use super::pimodels::{Dirty, Flavor, Fmt};
 use crate::model::*;
@@ -227,7 +228,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenClaw 可以同时用多个供应商：按启用/停用管理，默认模型在 OpenClaw 里设置", "OpenClaw can use several providers at once: manage them by enabling/disabling, and set the default model in OpenClaw."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::SetSetting { key, .. } => return Err(anyhow!(tr!("OpenClaw 没有设置项 {key}", "OpenClaw has no setting {key}"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),

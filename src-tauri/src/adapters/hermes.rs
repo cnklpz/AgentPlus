@@ -15,6 +15,7 @@
 //! block that contains comments or anchors is refused.
 
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::dotenv;
 use crate::i18n::l;
@@ -957,7 +958,7 @@ pub fn state(inst: &Install) -> AgentState {
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
     let (env, _) = dotenv::load(&env_path());
-    let src = find(&cfg, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let src = find(&cfg, id).ok_or_else(|| msg::no_provider(id))?;
     match &src {
         Src::Builtin(_) => Err(anyhow!(l("Hermes 内置供应商没有可用的地址", "Hermes built-in providers have no usable base URL"))),
         Src::Inline => {
@@ -967,7 +968,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
             Ok((base, key, api.into()))
         }
         _ => {
-            let def = def_of(&cfg, &src).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+            let def = def_of(&cfg, &src).ok_or_else(|| msg::no_provider(id))?;
             let base = ystr(def, url_key(def)).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
             let api = api_of(mode_of(def).as_deref()).ok_or_else(|| anyhow!(l("这个供应商的 api_mode AgentPlus 不支持", "AgentPlus doesn't support this provider's api_mode")))?;
             Ok((base, key_of(def, &env), api.into()))
@@ -1046,7 +1047,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 match p.id.as_deref() {
                     None => {
                         if name.is_empty() {
-                            return Err(anyhow!(l("名称不能为空", "Name is required")));
+                            return Err(msg::name_required());
                         }
                         let taken: Vec<String> = entries(&cfg).iter().flat_map(|(id, s)| {
                             let mut a = entry_aliases(&cfg, s);
@@ -1084,7 +1085,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         );
                     }
                     Some(id) => {
-                        let src = find(&cfg, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        let src = find(&cfg, id).ok_or_else(|| msg::no_provider(id))?;
                         plan_err_readonly(&src)?;
                         if src == Src::Inline {
                             let active = current(&cfg).1 == Src::Inline;
@@ -1124,7 +1125,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             _ => unreachable!(),
                         };
                         let was_current = current(&cfg).0 == *id;
-                        let def = def_mut(&mut cfg, &src).and_then(|d| d.as_mapping_mut()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        let def = def_mut(&mut cfg, &src).and_then(|d| d.as_mapping_mut()).ok_or_else(|| msg::no_provider(id))?;
                         let dv = Y::Mapping(def.clone());
                         let (uk, mk) = (url_key(&dv), mode_key(&dv));
                         if !name.is_empty() && set_str(def, "name", Some(name)) {
@@ -1174,9 +1175,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::DeleteProvider { provider } => {
-                let src = find(&cfg, provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+                let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
                 if current(&cfg).0 == *provider {
-                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商", "\"{provider}\" is in use; switch to another provider first")));
+                    return Err(msg::in_use(provider));
                 }
                 match &src {
                     Src::Dict(k) => {
@@ -1209,7 +1210,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 store_dirty |= h.len() != n;
             }
             Op::SetCurrentProvider { provider } => {
-                let src = find(&cfg, provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+                let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
                 let (cur_id, cur_src) = current(&cfg);
                 if cur_id == *provider {
                     continue;
@@ -1350,7 +1351,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let src = entry_src(&cfg, provider)?;
                 let mid = mi.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 let key = format!("{provider}|{mid}");
                 // A hidden model is edited in the stash.
@@ -1444,7 +1445,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("Hermes 只有「默认模型」一个角色", "Hermes has only one role: \"Default model\"")));
                 }
                 let Some(m) = roles.get("default").map(|m| m.trim().to_string()).filter(|m| !m.is_empty()) else { continue };
-                let src = find(&cfg, provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+                let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
                 let is_current = current(&cfg).0 == *provider;
                 match &src {
                     Src::Dict(_) | Src::List(_) => {
@@ -1472,7 +1473,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Hermes 同时只用一个供应商，请用「设为当前」", "Hermes uses one provider at a time; use \"Set as current\""))),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
@@ -1545,7 +1546,7 @@ fn entry_src(cfg: &Y, provider: &str) -> Result<Src> {
             "The direct config (custom in model) has no model list; change model.default in config.yaml, or add a new provider"
         ))),
         Some(Src::Builtin(_)) => Err(anyhow!(l("Hermes 内置供应商的模型用 hermes model 选择", "Pick models for Hermes built-in providers with hermes model"))),
-        None => Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}"))),
+        None => Err(msg::no_provider(provider)),
     }
 }
 

@@ -8,6 +8,7 @@
 //! Keys live in `options.apiKey`, or in OpenCode's `auth.json` when that is where the
 //! user keeps them.
 
+use super::msg;
 use super::Endpoint;
 use crate::i18n::l;
 use crate::mfields;
@@ -225,7 +226,7 @@ impl Fmt {
         let (cfg, _, _) = self.load(true)?;
         // Only a config without a native disabled list parks providers in the store.
         let parked = || if self.native_disable { None } else { store::get_obj(&store::load(), self.agent, "disabledProviders").get(id).cloned() };
-        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(parked).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(parked).ok_or_else(|| msg::no_provider(id))?;
         let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseURL", "Provider {id} has no baseURL")))?.to_string();
         let auth = self.load_auth().map(|x| x.0);
         let key = def
@@ -283,7 +284,7 @@ impl Fmt {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match &p.id {
                     None => {
@@ -319,7 +320,7 @@ impl Fmt {
                         let def = if in_cfg {
                             cfg.pointer_mut(&jptr(&["provider", id])).unwrap()
                         } else {
-                            store::section(root, self.agent, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+                            store::section(root, self.agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?
                         };
                         let mut changed = vec![];
                         if def.get("name").and_then(|x| x.as_str()) != Some(p.name.trim()) {
@@ -360,7 +361,7 @@ impl Fmt {
                 let prefix = format!("{provider}|");
                 store::section(root, self.agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
                 if !removed_cfg && !removed_stash {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 if self.native_disable {
                     if let Some(list) = cfg.get_mut("disabled_providers").and_then(|x| x.as_array_mut()) {
@@ -431,7 +432,7 @@ impl Fmt {
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 for (k, v) in &m.extra {
                     mfields::check(mfields::OPENCODE, k, v)?;

@@ -11,6 +11,7 @@
 //! writing and replace only `customModels` and `model` (atomic tmp + rename).
 //! The legacy `~/.factory/config.json` (`custom_models`, snake_case) is shown read-only.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -343,7 +344,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had)) => {
             if had {
                 st.readonly = true;
-                st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments that would be lost on write, so it's read-only.").into());
+                st.notes.push(msg::comments_readonly("settings.json"));
             }
             cfg
         }
@@ -397,7 +398,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let groups = groups_of(&entries, &parked_of(&root), &names_of(&root));
     let key = match groups.into_iter().find(|g| g.id == id) {
         Some(g) => g.key,
-        None => legacy_groups(&entries).into_iter().find(|(g, _)| g.id == id).map(|(g, _)| g.key).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?,
+        None => legacy_groups(&entries).into_iter().find(|(g, _)| g.id == id).map(|(g, _)| g.key).ok_or_else(|| msg::no_provider(id))?,
     };
     if key.0.is_empty() {
         return Err(anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")));
@@ -421,7 +422,7 @@ impl Work {
         if self.legacy.iter().any(|l| l == id) {
             return Err(anyhow!(l("旧版 config.json 里的条目只读；请在 Droid 里迁移到 settings.json 后再编辑", "Entries in the legacy config.json are read-only; migrate them to settings.json in Droid before editing")));
         }
-        self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| msg::no_provider(id))
     }
 
     fn enabled(&self, g: &Group) -> bool {
@@ -463,7 +464,7 @@ impl Work {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let prov = provider_for(&p.api)?;
                 let base = norm_base(&p.base_url);
@@ -590,7 +591,7 @@ impl Work {
                 let g = self.group(provider)?;
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 for (k, v) in &m.extra {
                     crate::mfields::check(crate::mfields::DROID, k, v)?;
@@ -662,8 +663,8 @@ impl Work {
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Droid 的自定义模型可以同时存在，在 Droid 里用 /model 切换", "Droid custom models can all coexist; switch with /model inside Droid"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code uses model roles"))),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
         Ok(())
@@ -731,7 +732,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let cfg_dirty = w.entries != orig_entries || model1 != model0;
     let store_dirty = w.parked != parked0 || w.names != names0;
     if cfg_dirty && had_comments {
-        return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing it to avoid losing them")));
+        return Err(msg::comments_not_written("settings.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;
@@ -743,7 +744,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             // only our two keys.
             let (mut fresh, meta, had) = load_settings()?;
             if had {
-                return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing it to avoid losing them")));
+                return Err(msg::comments_not_written("settings.json"));
             }
             let o = fresh.as_object_mut().unwrap();
             o.insert("customModels".into(), Value::Array(w.entries.clone()));

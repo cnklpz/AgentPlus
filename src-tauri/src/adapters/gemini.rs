@@ -8,6 +8,7 @@
 //! Model roles: Gemini CLI has one model setting, `model.name`; `SetModelRoles` accepts the
 //! role "default" for it (the first model of the list is the default when none is chosen).
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::dotenv;
 use crate::i18n::l;
@@ -284,7 +285,7 @@ pub fn state(inst: &Install) -> AgentState {
     };
     if had_comments {
         st.readonly = true;
-        st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments that would be lost on write, so it's read-only.").into());
+        st.notes.push(msg::comments_readonly("settings.json"));
     }
     let root = store::load();
     let (env, _) = dotenv::load(&env_path());
@@ -346,7 +347,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     } else if id == GOOGLE || id.starts_with(AUTH) {
         return Err(anyhow!(l("Google 账号登录没有可用的地址", "Google account sign-in has no usable base URL")));
     } else {
-        profiles(&store::load()).get(id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+        profiles(&store::load()).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
     };
     let base = str_field(&p, "baseUrl");
     let base = if base.is_empty() { "https://generativelanguage.googleapis.com".to_string() } else { base };
@@ -403,7 +404,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if id == UNMANAGED {
             return Err(anyhow!(l("先编辑并保存一次「.env 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in .env\" once so AgentPlus takes it over, then change its models")));
         }
-        profs.get(id).map(|_| ()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        profs.get(id).map(|_| ()).ok_or_else(|| msg::no_provider(id))
     };
 
     for op in ops {
@@ -413,7 +414,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("Gemini CLI 只支持 Gemini 协议；其他协议的中转请经本地网关接入", "Gemini CLI only supports the Gemini protocol; connect relays using other protocols through the local gateway")));
                 }
                 if p.name.trim().is_empty() {
-                    return Err(anyhow!(l("名称不能为空", "Name is required")));
+                    return Err(msg::name_required());
                 }
                 let base = clean_base(&p.base_url);
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
@@ -446,7 +447,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     Some(id) if id == GOOGLE || id.starts_with(AUTH) => return Err(anyhow!(l("Google 账号登录不能编辑", "Google account sign-in can't be edited"))),
                     Some(id) => {
-                        let e = profs.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        let e = profs.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
                         for (k, v) in [("name", p.name.trim()), ("baseUrl", base.as_str())] {
                             if str_field(e, k) != v {
                                 e[k] = json!(v);
@@ -469,10 +470,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("这一项不能删除", "This entry can't be deleted")));
                 }
                 if provider == &cur {
-                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商", "\"{provider}\" is in use; switch to another provider first")));
+                    return Err(msg::in_use(provider));
                 }
                 if profs.remove(provider).is_none() {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 diff.push(store_label, tr!("- 「{provider}」", "- \"{provider}\""), false);
                 store_dirty = true;
@@ -485,7 +486,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l(".env 里没有 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY", ".env has no GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY")));
                 }
                 if provider != GOOGLE && provider != UNMANAGED && !provider.starts_with(AUTH) && !profs.contains_key(provider) {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 cur = provider.clone();
             }
@@ -511,7 +512,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let mut list = model_list(p);
                 let id = m.id.trim().to_string();
                 if id.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 if !list.iter().any(|(x, _)| x == &id) {
                     list.push((id.clone(), true));
@@ -582,7 +583,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let path: &[&str] = match key.as_str() {
                     "autoupdate" => &["general", "enableAutoUpdate"],
                     "usage_stats" => &["privacy", "usageStatisticsEnabled"],
-                    other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                    other => return Err(msg::unknown_setting(other)),
                 };
                 let now = cfg.pointer(&format!("/{}", path.join("/"))).and_then(|x| x.as_bool()).unwrap_or(true);
                 if now != on {
@@ -649,7 +650,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let cfg_dirty = cfg != cfg0;
     let env_dirty = env != env0;
     if cfg_dirty && had_comments {
-        return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing it to avoid losing them")));
+        return Err(msg::comments_not_written("settings.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;

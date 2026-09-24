@@ -23,6 +23,57 @@ use crate::{process, store};
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
+/// Messages the adapters share, worded once per language.
+pub(crate) mod msg {
+    use crate::i18n::l;
+    use anyhow::{anyhow, Error};
+
+    pub fn no_provider(id: &str) -> Error {
+        anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}"))
+    }
+
+    /// Deleting the provider the agent is on.
+    pub fn in_use(id: &str) -> Error {
+        anyhow!(tr!("「{id}」正在使用，先切换到其他供应商", "\"{id}\" is in use; switch to another provider first"))
+    }
+
+    pub fn name_required() -> Error {
+        anyhow!(l("名称不能为空", "Name is required"))
+    }
+
+    pub fn name_and_url_required() -> Error {
+        anyhow!(l("名称和地址不能为空", "Name and base URL are required"))
+    }
+
+    pub fn model_id_required() -> Error {
+        anyhow!(l("模型 ID 不能为空", "Model ID is required"))
+    }
+
+    pub fn unknown_setting(key: &str) -> Error {
+        anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))
+    }
+
+    /// SetModelRoles on an agent without model roles.
+    pub fn roles_claude_only() -> Error {
+        anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))
+    }
+
+    /// SetProviderModels on an agent whose providers each keep their own models.
+    pub fn models_per_provider() -> Error {
+        anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models; edit the models directly"))
+    }
+
+    /// Note for a config file with comments: shown, but not written back.
+    pub fn comments_readonly(file: &str) -> String {
+        tr!("{file} 含注释，写回会丢失注释，已切换为只读。", "{file} contains comments that would be lost on write, so it's read-only.")
+    }
+
+    /// A change to a config file with comments.
+    pub fn comments_not_written(file: &str) -> Error {
+        anyhow!(tr!("{file} 含注释，为避免丢失注释不写入", "{file} contains comments; not writing it to avoid losing them"))
+    }
+}
+
 /// What a plan produces: (diff, files written, backup folder).
 pub type Plan = (Diff, Vec<PathBuf>, Option<PathBuf>);
 /// (base_url, key, api) of a provider.
@@ -398,7 +449,7 @@ fn resolve_import(agent: &str, from: &str, provider: &str, api: Option<&str>, na
     } else {
         let (base_url, key, api) = provider_endpoint(from, provider)?;
         let src = state(from)?;
-        let p = src.providers.iter().find(|p| p.id == provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+        let p = src.providers.iter().find(|p| p.id == provider).ok_or_else(|| msg::no_provider(provider))?;
         (p.name.clone(), base_url, key, api, p.models.iter().filter(|m| m.visible).map(|m| m.id.clone()).collect())
     };
     let api = api.map(String::from).unwrap_or(src_api);

@@ -6,6 +6,7 @@
 //! the global one (objects key by key, arrays replaced, `instructions` concatenated), so a
 //! missing key means "use the global value". Project rows show that value in their labels.
 
+use super::msg;
 use crate::i18n::l;
 use crate::model::{Diff, Setting};
 use anyhow::{anyhow, Result};
@@ -278,7 +279,7 @@ fn write(cfg: &mut Value, key: &str, v: Option<Value>) -> Result<()> {
 
 /// Applies one setting to `cfg`. Returns whether the file changed.
 pub fn apply(cfg: &mut Value, key: &str, value: &Value, diff: &mut Diff, file: &str) -> Result<bool> {
-    let spec = SPECS.iter().find(|s| s.key == key).ok_or_else(|| anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}")))?;
+    let spec = SPECS.iter().find(|s| s.key == key).ok_or_else(|| msg::unknown_setting(key))?;
     if value.as_str() == Some("custom") {
         return Ok(false); // "keep the rule map as it is"
     }
