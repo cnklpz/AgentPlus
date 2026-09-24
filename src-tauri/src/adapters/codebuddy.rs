@@ -10,7 +10,7 @@
 //! `availableModels` is the native visibility list: hiding removes the id from it and
 //! keeps the entry. Disabled providers are moved out and parked in the AgentPlus store.
 
-use super::keyref::{self, host, resolve_key, Group, Key};
+use super::keyref::{self, host, resolve_key, set_or_remove, Group, Key};
 use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
@@ -322,17 +322,16 @@ impl Work {
         let mut e = json!({
             "id": mid,
             "name": name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(mid),
-            "vendor": key.2,
+            "vendor": "",
             "url": url_of(&key.0),
-            "apiKey": key.1,
+            "apiKey": "",
             "maxInputTokens": context.unwrap_or(128000),
             "maxOutputTokens": 8192,
             "supportsToolCall": true,
             "supportsImages": false,
         });
-        if key.1.is_empty() {
-            e.as_object_mut().unwrap().remove("apiKey");
-        }
+        set_or_remove(&mut e, "vendor", &key.2);
+        set_or_remove(&mut e, "apiKey", &key.1);
         e
     }
 
@@ -369,16 +368,22 @@ impl Work {
                 }
                 let base = base_of(&p.base_url);
                 let new_key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
-                let vendor = p.name.trim().to_string();
                 match &p.id {
                     None => {
+                        let vendor = p.name.trim().to_string();
                         let models = clean_ids(&p.models);
                         if models.is_empty() {
                             return Err(anyhow!(l("CodeBuddy 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型", "Each CodeBuddy model entry carries its own base URL and API key: add at least one model when creating a provider")));
                         }
                         let key: Key = (base.clone(), new_key.clone().unwrap_or_default(), vendor.clone());
                         let g = match self.groups.iter().find(|g| g.key == key) {
-                            Some(g) => g.clone(),
+                            // Same as an existing provider: add to it, unless it is disabled
+                            // (its entries are parked; adding would orphan them).
+                            Some(g) => {
+                                let g = g.clone();
+                                self.require_enabled(&g)?;
+                                g
+                            }
                             None => {
                                 let id = unique_id(&slug(&vendor), |c| self.groups.iter().any(|g| g.id == c));
                                 let g = Group { id, key: key.clone(), name: vendor.clone() };
@@ -389,18 +394,24 @@ impl Work {
                         for m in &models {
                             self.check_free(&g, m)?;
                         }
-                        let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        self.diff.push(&file, trn!(models.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), key_part), true);
-                        for m in &models {
-                            if self.owner_of(m).is_none() {
-                                self.entries.push(Self::new_entry(&key, m, None, None));
-                                self.show(m);
-                            }
+                        // Models the provider already has are left as they are.
+                        let added: Vec<&String> = models.iter().filter(|m| self.owner_of(m).is_none()).collect();
+                        if !added.is_empty() {
+                            let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
+                            self.diff.push(&file, trn!(added.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), key_part), true);
+                        }
+                        for m in added {
+                            self.entries.push(Self::new_entry(&key, m, None, None));
+                            self.show(m);
                         }
                     }
                     Some(id) => {
                         let g = self.group(id)?;
-                        let key: Key = (base.clone(), new_key.clone().unwrap_or_else(|| g.key.1.clone()), vendor.clone());
+                        // The name shown may not be the vendor (a host for an empty vendor,
+                        // " · host" for a shared one): unchanged, it keeps the vendor as is.
+                        let renamed = p.name.trim() != g.name;
+                        let vendor = if renamed { p.name.trim().to_string() } else { g.key.2.clone() };
+                        let key: Key = (base.clone(), new_key.clone().unwrap_or_else(|| g.key.1.clone()), vendor);
                         if key == g.key {
                             return Ok(());
                         }
@@ -416,18 +427,27 @@ impl Work {
                         if key.2 != g.key.2 {
                             self.diff.push(&file, tr!("「{}」所有模型 vendor = {}", "\"{}\" all models vendor = {}", g.name, key.2), true);
                         }
+                        // Only the changed fields: no `"apiKey": ""` / `"vendor": ""` appears.
                         let set = |e: &mut Value| {
                             if key_of(e) == g.key {
-                                e["url"] = json!(url_of(&key.0));
-                                e["apiKey"] = json!(key.1);
-                                e["vendor"] = json!(key.2);
+                                if key.0 != g.key.0 {
+                                    e["url"] = json!(url_of(&key.0));
+                                }
+                                if key.1 != g.key.1 {
+                                    set_or_remove(e, "apiKey", &key.1);
+                                }
+                                if key.2 != g.key.2 {
+                                    set_or_remove(e, "vendor", &key.2);
+                                }
                             }
                         };
                         self.entries.iter_mut().for_each(set);
                         self.parked.iter_mut().filter_map(|p| p.get_mut("entry")).for_each(set);
                         if let Some(x) = self.groups.iter_mut().find(|x| x.id == g.id) {
+                            if renamed {
+                                x.name = key.2.clone();
+                            }
                             x.key = key;
-                            x.name = vendor;
                         }
                     }
                 }
@@ -839,6 +859,68 @@ mod tests {
         let _h2 = setup("jsonc", Some("{\n  // c\n  \"models\": []\n}"));
         assert!(state(&Install::default()).readonly);
         assert!(plan(&[upsert(None, "x", "https://x/v1", "chat", None, &["m"])], true).is_err());
+    }
+
+    #[test]
+    fn edit_with_the_shown_name_keeps_vendor() {
+        // Same vendor at two URLs: shown as "DeepSeek · host"; editing the key with that name
+        // must not write the display name into `vendor`.
+        let h = setup("vendor", Some(r#"{"models":[{"id":"a","vendor":"DeepSeek","url":"https://api.deepseek.com/v1/chat/completions","apiKey":"sk-1"},{"id":"b","vendor":"DeepSeek","url":"https://relay.example.com/v1/chat/completions","apiKey":"sk-2"},{"id":"c","url":"https://local.example.com/v1/chat/completions"}]}"#));
+        let st = state(&Install::default());
+        let names: Vec<(&str, &str)> = st.providers.iter().map(|p| (p.id.as_str(), p.name.as_str())).collect();
+        assert_eq!(names, [("deepseek", "DeepSeek · api.deepseek.com"), ("deepseek-2", "DeepSeek · relay.example.com"), ("local-example-com", "local.example.com")]);
+        let ops = [
+            upsert(Some("deepseek"), "DeepSeek · api.deepseek.com", "https://api.deepseek.com/v1", "chat", Some("sk-new-1"), &[]),
+            // No vendor, shown as its host: a new key keeps the entry vendor-less.
+            upsert(Some("local-example-com"), "local.example.com", "https://local.example.com/v1", "chat", Some("sk-new-3"), &[]),
+        ];
+        let (d, _, _) = plan(&ops, false).unwrap();
+        assert!(!diff_text(&d).contains("vendor"), "{}", diff_text(&d));
+        let c = cfg_of(&h);
+        assert_eq!(c["models"][0]["vendor"], "DeepSeek");
+        assert_eq!(c["models"][0]["apiKey"], "sk-new-1");
+        assert!(c["models"][2].get("vendor").is_none());
+        assert_eq!(c["models"][2]["apiKey"], "sk-new-3");
+        let st = state(&Install::default());
+        assert_eq!(st.providers.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["DeepSeek · api.deepseek.com", "DeepSeek · relay.example.com", "local.example.com"]);
+        // A real rename still sets the vendor.
+        plan(&[upsert(Some("deepseek-2"), "Relay", "https://relay.example.com/v1", "chat", None, &[])], false).unwrap();
+        assert_eq!(cfg_of(&h)["models"][1]["vendor"], "Relay");
+    }
+
+    #[test]
+    fn keyless_edit_writes_no_api_key() {
+        let h = setup("keyless", Some(r#"{"models":[{"id":"qwen3","vendor":"Ollama","url":"http://localhost:11434/v1/chat/completions"}]}"#));
+        let ops = [
+            upsert(Some("ollama"), "Ollama", "http://localhost:11435/v1", "chat", None, &[]),
+            Op::UpsertModel { provider: "ollama".into(), model: ModelInput { id: "llama4".into(), ..Default::default() } },
+        ];
+        plan(&ops, false).unwrap();
+        let c = cfg_of(&h);
+        assert_eq!(ids(&c), ["qwen3", "llama4"]);
+        for e in c["models"].as_array().unwrap() {
+            assert_eq!(e["url"], "http://localhost:11435/v1/chat/completions");
+            assert_eq!(e["vendor"], "Ollama");
+            assert!(e.get("apiKey").is_none(), "{e}");
+        }
+    }
+
+    #[test]
+    fn recreating_a_disabled_provider_is_refused() {
+        let h = setup("recreate", Some(SAMPLE));
+        plan(&[Op::SetProviderEnabled { provider: "deepseek".into(), enabled: false }], false).unwrap();
+        let store0 = std::fs::read(agentplus_dir().join("store.json")).unwrap();
+        let again = upsert(None, "DeepSeek", "https://api.deepseek.com/v1", "chat", Some("sk-ds-1111"), &["deepseek-v4"]);
+        let err = plan(std::slice::from_ref(&again), false).err().unwrap();
+        assert!(err.to_string().contains("已停用"), "{err}");
+        assert_eq!(store0, std::fs::read(agentplus_dir().join("store.json")).unwrap());
+        assert_eq!(ids(&cfg_of(&h)), ["glm-4.6"]);
+
+        // An enabled one takes the new models; the diff counts only those.
+        plan(&[Op::SetProviderEnabled { provider: "deepseek".into(), enabled: true }], false).unwrap();
+        let (d, _, _) = plan(&[upsert(None, "DeepSeek", "https://api.deepseek.com/v1", "chat", Some("sk-ds-1111"), &["deepseek-chat", "deepseek-v4"])], false).unwrap();
+        assert!(diff_text(&d).contains("「DeepSeek」1 个模型"), "{}", diff_text(&d));
+        assert_eq!(ids(&cfg_of(&h)), ["glm-4.6", "deepseek-chat", "deepseek-reasoner", "deepseek-v4"]);
     }
 
     /// Read-only look at the real machine: state and a dry-run plan (nothing is written).

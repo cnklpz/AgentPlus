@@ -6,6 +6,7 @@
 use crate::i18n::l;
 use crate::util::host_of;
 use anyhow::{anyhow, Result};
+use serde_json::{json, Value};
 
 /// What groups entries into one provider; each adapter documents its field order.
 pub(super) type Key = (String, String, String);
@@ -57,6 +58,18 @@ pub(super) fn require_enabled(g: &Group, enabled: bool) -> Result<()> {
     if enabled { Ok(()) } else { Err(anyhow!(tr!("供应商「{}」已停用，先启用再调整模型", "Provider \"{}\" is disabled; enable it before changing its models", g.name))) }
 }
 
+/// Sets a string field of an entry, or removes it when `v` is empty (an entry without a key
+/// or vendor has no such field, rather than an empty one). Other fields keep their order.
+pub(super) fn set_or_remove(e: &mut Value, k: &str, v: &str) {
+    if let Some(o) = e.as_object_mut() {
+        if v.is_empty() {
+            o.shift_remove(k);
+        } else {
+            o.insert(k.into(), json!(v));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +100,16 @@ mod tests {
         assert_eq!(key_note("$MISSING_KEY", "x.json"), "环境变量 ${MISSING_KEY}（未设置）");
         assert_eq!(key_note("", "x.json"), "未填写");
         assert_eq!(key_note("sk-lit", "models.json"), "明文保存在 models.json");
+    }
+
+    #[test]
+    fn sets_or_removes_fields() {
+        let mut e = json!({ "a": 1, "apiKey": "old", "b": 2 });
+        set_or_remove(&mut e, "apiKey", "new");
+        assert_eq!(e, json!({ "a": 1, "apiKey": "new", "b": 2 }));
+        set_or_remove(&mut e, "apiKey", "");
+        assert_eq!(e.as_object().unwrap().keys().collect::<Vec<_>>(), ["a", "b"]);
+        set_or_remove(&mut e, "vendor", "");
+        assert!(e.get("vendor").is_none());
     }
 }
