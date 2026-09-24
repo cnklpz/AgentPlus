@@ -4,6 +4,7 @@ pub mod codex;
 pub mod droid;
 pub mod gemini;
 pub mod hermes;
+mod keyref;
 pub mod kilo;
 pub mod kimi;
 pub mod mimo;
