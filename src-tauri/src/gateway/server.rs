@@ -2100,6 +2100,33 @@ mod tests {
         lock(&TEST_ROUTES).clear();
     }
 
+    /// A Gemini model picked as "models/x" (the provider picker keeps the prefix) is listed
+    /// once by the unified entry, as the upstream's bare "x"; both spellings route.
+    #[test]
+    fn picked_gemini_model_is_listed_once() {
+        let _guard = lock(&TEST_LOCK);
+        let hits = Arc::new(AtomicU64::new(0));
+        let ok = r#"{"id":"c","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}"#;
+        let up = mock_upstream(hits.clone(), move |req| {
+            let body = if req.method == "GET" { r#"{"models":[{"name":"models/gem-y"}]}"# } else { ok };
+            http_resp("200 OK", "application/json", body)
+        });
+        *lock(&TEST_ROUTES) = vec![(test_route("gemy", "chat", &[("models/gem-y", "models/gem-y")]), up, None)];
+        lock(&MODEL_CACHE).clear();
+        breaker::reset(Some("gemy"));
+        let port = gateway_n(3);
+        let client = reqwest::blocking::Client::new();
+        let v: Value = serde_json::from_str(&client.get(format!("http://127.0.0.1:{port}/v1/models")).bearer_auth(test_key()).send().unwrap().text().unwrap()).unwrap();
+        let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
+        assert_eq!(ids, vec!["gem-y"], "{v}");
+        for model in ["gem-y", "models/gem-y"] {
+            let r = client.post(format!("http://127.0.0.1:{port}/v1/chat/completions")).bearer_auth(test_key()).body(json!({ "model": model, "messages": [] }).to_string()).send().unwrap();
+            assert_eq!(r.status().as_u16(), 200, "{model}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        lock(&TEST_ROUTES).clear();
+    }
+
     /// A forward pointed at another upstream (library address or key edited) stops using
     /// the model list cached from the old one.
     #[test]
