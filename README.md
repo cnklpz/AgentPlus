@@ -4,7 +4,7 @@
 
 # AgentPlus
 
-**一处管理所有 AI 编程 Agent 的供应商与模型列表**
+**一站式管理所有 AI 编程 Agent 的供应商与模型列表**
 
 Codex · Claude Code · OpenCode · ZCode · MiMo Desktop · Gemini CLI · Qwen Code · Kimi Code 等 15 个 Agent
 
