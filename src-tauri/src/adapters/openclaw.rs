@@ -15,6 +15,7 @@ use super::{Plan, Endpoint};
 use super::pimodels::{self, Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
+use crate::store;
 use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
@@ -32,9 +33,6 @@ pub const WSL_MARKER: &str = ".openclaw/openclaw.json";
 
 /// `~/.openclaw` (or `$OPENCLAW_STATE_DIR`, or the folder picked in AgentPlus).
 pub fn default_dir() -> PathBuf {
-    if let Some(r) = pimodels::test_root() {
-        return r.join("openclaw");
-    }
     if let Some(d) = super::dir_override(ID) {
         return d;
     }
@@ -45,7 +43,7 @@ pub fn default_dir() -> PathBuf {
 }
 
 fn config_path() -> PathBuf {
-    if pimodels::test_root().is_none() && super::dir_override(ID).is_none() {
+    if super::dir_override(ID).is_none() {
         if let Some(p) = pimodels::env_var("OPENCLAW_CONFIG_PATH") {
             return crate::env::resolve_path(&p);
         }
@@ -170,7 +168,7 @@ pub fn state(inst: &Install) -> AgentState {
             st.notes.push(l("发现旧版 Clawdbot / Moltbot 的配置目录；运行一次 openclaw 会迁移到 ~/.openclaw。", "Found an old Clawdbot / Moltbot config folder. Run openclaw once to migrate it to ~/.openclaw.").into());
         }
     }
-    let root = pimodels::load_store();
+    let root = store::load();
     let cfg = match load() {
         Ok((cfg, _, ro)) => {
             if let Some(why) = ro {
@@ -210,14 +208,14 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    fmt().endpoint(id, &cfg, &pimodels::load_store())
+    fmt().endpoint(id, &cfg, &store::load())
 }
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, readonly) = load()?;
     let cfg0 = cfg.clone();
-    let mut root = pimodels::load_store();
+    let mut root = store::load();
     let mut none = None;
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
@@ -311,7 +309,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !dry_run && dirty.cfg {
         let mut targets = vec![config_path()];
         targets.extend(gen_out.iter().map(|g| g.0.clone()));
-        backup_dir = Some(pimodels::backup_files(ID, &targets)?);
+        backup_dir = Some(backup(ID, &targets)?);
         if let Some(d) = config_path().parent() {
             std::fs::create_dir_all(d)?;
         }
@@ -323,7 +321,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     if !dry_run && dirty.store {
-        pimodels::save_store(&root)?;
+        store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
 }
@@ -436,27 +434,17 @@ mod tests {
 }
 "#;
 
-    struct Guard(PathBuf);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn setup(name: &str, cfg: Option<&str>) -> Guard {
-        let root = std::env::temp_dir().join(format!("agentplus-openclaw-test-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let d = root.join("openclaw");
+    fn setup(name: &str, cfg: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("openclaw-{name}"));
+        crate::env::set_test_vars(&[("MYPROXY_API_KEY", "sk-env-proxy-3333")]);
+        let d = default_dir();
         std::fs::create_dir_all(d.join("agents").join("main").join("agent")).unwrap();
         if let Some(c) = cfg {
             std::fs::write(d.join("openclaw.json"), c).unwrap();
         }
         std::fs::write(d.join("agents/main/agent/models.json"), GENERATED).unwrap();
         std::fs::write(d.join(".env"), "PLAIN_ONLY=1\nFROM_DOTENV=sk-dotenv-2222\n").unwrap();
-        pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = Some(root.clone()));
-        pimodels::TEST_ENV.with(|e| *e.borrow_mut() = vec![("MYPROXY_API_KEY".into(), "sk-env-proxy-3333".into())]);
-        Guard(root)
+        home
     }
 
     fn cfg() -> Value {

@@ -37,33 +37,13 @@ const SEL: &str = "__agentplus_sel";
 const IDFMT: &str = "__agentplus_idfmt";
 const STORE_LABEL: &str = "AgentPlus · Droid";
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Tests point the adapter at a temp home (settings, store and backups all inside it).
-fn test_home() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        TEST_HOME.with(|t| t.borrow().clone())
-    }
-    #[cfg(not(test))]
-    {
-        None
-    }
-}
-
 /// Droid's default config dir, `~/.factory`.
 #[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
-    test_home().unwrap_or_else(home).join(".factory")
+    home().join(".factory")
 }
 
 fn dir() -> PathBuf {
-    if test_home().is_some() {
-        return default_dir();
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -73,34 +53,6 @@ fn settings_path() -> PathBuf {
 
 fn legacy_path() -> PathBuf {
     dir().join("config.json")
-}
-
-fn load_root() -> Value {
-    match test_home() {
-        Some(h) => std::fs::read_to_string(h.join("agentplus-store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_root(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(h) => Ok(std::fs::write(h.join("agentplus-store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(h) => {
-            let d = h.join("agentplus-backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
 }
 
 // ---------- detection ----------
@@ -128,7 +80,6 @@ pub fn detect() -> Install {
 }
 
 // ---------- format helpers ----------
-
 
 fn norm_base(u: &str) -> String {
     u.trim().trim_end_matches('/').to_string()
@@ -238,7 +189,6 @@ fn names_of(root: &Value) -> Map<String, Value> {
 fn parked_why(p: &Value) -> &str {
     p.get("why").and_then(|x| x.as_str()).unwrap_or("hidden")
 }
-
 
 /// (settings, meta, had_comments); a missing file reads as `{}`.
 fn load_settings() -> Result<(Value, TextMeta, bool)> {
@@ -405,7 +355,7 @@ pub fn state(inst: &Install) -> AgentState {
             return st;
         }
     };
-    let root = load_root();
+    let root = store::load();
     let entries = custom_models(&cfg);
     let parked = parked_of(&root);
     let groups = groups_of(&entries, &parked, &names_of(&root));
@@ -444,7 +394,7 @@ pub fn state(inst: &Install) -> AgentState {
 #[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_settings()?;
-    let root = load_root();
+    let root = store::load();
     let entries = custom_models(&cfg);
     let groups = groups_of(&entries, &parked_of(&root), &names_of(&root));
     let key = match groups.into_iter().find(|g| g.id == id) {
@@ -739,7 +689,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             e[IDFMT] = json!(true);
         }
     }
-    let mut root = load_root();
+    let mut root = store::load();
     let parked0 = parked_of(&root);
     let names0 = names_of(&root);
     let groups = groups_of(&entries, &parked0, &names0);
@@ -790,7 +740,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !dry_run {
         if cfg_dirty {
             let path = settings_path();
-            backup_dir = Some(do_backup(std::slice::from_ref(&path))?);
+            backup_dir = Some(backup(ID, std::slice::from_ref(&path))?);
             // Droid may have rewritten the file meanwhile: take the latest copy and replace
             // only our two keys.
             let (mut fresh, meta, had) = load_settings()?;
@@ -814,7 +764,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if store_dirty {
             store::set_value(&mut root, ID, "parked", Value::Array(w.parked));
             store::set_value(&mut root, ID, "names", Value::Object(w.names));
-            save_root(&root)?;
+            store::save(&root)?;
         }
     }
     Ok((w.diff, written, backup_dir))
@@ -863,24 +813,17 @@ mod tests {
 }
 "#;
 
-    struct Home(PathBuf);
-    impl Drop for Home {
-        fn drop(&mut self) {
-            TEST_HOME.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    type Home = TestHome;
 
     fn setup(name: &str, settings: Option<&str>) -> Home {
         std::env::set_var("AGENTPLUS_DROID_TEST_KEY", "sk-env-3333");
-        let h = std::env::temp_dir().join(format!("agentplus-droid-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&h);
+        let home = TestHome::new(&format!("droid-{name}"));
+        let h = home.0.clone();
         std::fs::create_dir_all(h.join(".factory")).unwrap();
         if let Some(c) = settings {
             std::fs::write(h.join(".factory/settings.json"), c).unwrap();
         }
-        TEST_HOME.with(|t| *t.borrow_mut() = Some(h.clone()));
-        Home(h)
+        home
     }
 
     fn cfg_of(h: &Home) -> Value {
@@ -1056,7 +999,7 @@ mod tests {
         let (d, w, b) = plan(&[Op::DeleteProvider { provider: "api-moonshot-cn".into() }], true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(before, std::fs::read(h.0.join(".factory/settings.json")).unwrap());
-        assert!(!h.0.join("agentplus-store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
         let _h2 = setup("jsonc", Some("{\n  // c\n  \"customModels\": []\n}"));
         assert!(state(&Install::default()).readonly);
         assert!(plan(&[upsert(None, "x", "https://x/v1", "chat", None, &["m"])], true).is_err());

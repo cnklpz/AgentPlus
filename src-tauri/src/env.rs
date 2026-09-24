@@ -172,3 +172,20 @@ pub fn set(id: &str) -> Result<()> {
 pub fn force(t: Target) {
     *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = Some(t);
 }
+
+#[cfg(test)]
+thread_local! {
+    static TEST_VARS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Tests: the agent's environment variables on this thread while a `util::TestHome` is set
+/// (the real process environment is never read then).
+#[cfg(test)]
+pub fn set_test_vars(vars: &[(&str, &str)]) {
+    TEST_VARS.with(|v| *v.borrow_mut() = vars.iter().map(|(k, x)| (k.to_string(), x.to_string())).collect());
+}
+
+#[cfg(test)]
+pub fn test_var(name: &str) -> Option<String> {
+    TEST_VARS.with(|v| v.borrow().iter().find(|(k, _)| k == name).map(|(_, x)| x.clone()))
+}

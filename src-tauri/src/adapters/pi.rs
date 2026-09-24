@@ -10,6 +10,7 @@ use super::{Plan, Endpoint};
 use super::pimodels::{self, Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
+use crate::store;
 use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
@@ -30,9 +31,6 @@ const PACKAGES: [&str; 2] = ["@earendil-works/pi-coding-agent", "@mariozechner/p
 
 /// `~/.pi/agent`, or `$PI_CODING_AGENT_DIR`, or the folder picked in AgentPlus.
 pub fn default_dir() -> PathBuf {
-    if let Some(r) = pimodels::test_root() {
-        return r.join("pi-agent");
-    }
     if let Some(d) = super::dir_override(ID) {
         return d;
     }
@@ -104,7 +102,7 @@ pub fn state(inst: &Install) -> AgentState {
         restartable: false,
         model_fields: vec![],
     };
-    let root = pimodels::load_store();
+    let root = store::load();
     let cfg = match load_models() {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
@@ -173,14 +171,14 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
-    fmt().endpoint(id, &cfg, &pimodels::load_store())
+    fmt().endpoint(id, &cfg, &store::load())
 }
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, had_comments) = load_models()?;
     let mut auth = f.load_auth();
-    let mut root = pimodels::load_store();
+    let mut root = store::load();
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
 
@@ -226,7 +224,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if dirty.cfg { targets.push(models_path()) }
         if dirty.auth { targets.push(auth_path()) }
         if settings.is_some() { targets.push(settings_path()) }
-        backup_dir = Some(pimodels::backup_files(ID, &targets)?);
+        backup_dir = Some(backup(ID, &targets)?);
         std::fs::create_dir_all(default_dir())?;
         if dirty.cfg {
             write_json(&models_path(), &cfg, meta)?;
@@ -245,7 +243,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     if !dry_run && dirty.store {
-        pimodels::save_store(&root)?;
+        store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
 }
@@ -311,27 +309,17 @@ mod tests {
 }
 "#;
 
-    struct Guard(PathBuf);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn setup(name: &str, models: Option<&str>) -> Guard {
-        let root = std::env::temp_dir().join(format!("agentplus-pi-test-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let d = root.join("pi-agent");
+    fn setup(name: &str, models: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("pi-{name}"));
+        crate::env::set_test_vars(&[("ENVY_KEY", "sk-env-value-5555")]);
+        let d = default_dir();
         std::fs::create_dir_all(&d).unwrap();
         if let Some(m) = models {
             std::fs::write(d.join("models.json"), m).unwrap();
         }
         std::fs::write(d.join("auth.json"), AUTH).unwrap();
         std::fs::write(d.join("settings.json"), SETTINGS).unwrap();
-        pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = Some(root.clone()));
-        pimodels::TEST_ENV.with(|e| *e.borrow_mut() = vec![("ENVY_KEY".into(), "sk-env-value-5555".into())]);
-        Guard(root)
+        home
     }
 
     fn read(p: &str) -> Value {
@@ -487,7 +475,7 @@ mod tests {
         let (d, w, b) = plan(std::slice::from_ref(&off), true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(std::fs::read(models_path()).unwrap(), before);
-        assert!(!pimodels::test_root().unwrap().join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
 
         plan(&[off], false).unwrap();
         assert!(read("models.json")["providers"].get("envy").is_none());

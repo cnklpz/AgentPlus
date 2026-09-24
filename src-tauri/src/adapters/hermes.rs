@@ -47,19 +47,11 @@ const BLOCKS: [&str; 3] = ["model", "providers", "custom_providers"];
 
 // ---------------------------------------------------------------- paths
 
-#[cfg(test)]
-static TEST_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn test_dir() -> Option<PathBuf> {
-    TEST_DIR.lock().unwrap().clone()
-}
-
 /// Default config dir: HERMES_HOME (process env, then the user environment in the registry,
 /// since AgentPlus may have started before it was set), else `%LOCALAPPDATA%\hermes`.
-/// In WSL mode `~/.hermes` of the WSL home.
+/// In WSL mode (and in tests) `~/.hermes` of the target home.
 pub fn default_dir() -> PathBuf {
-    if crate::env::is_wsl() {
+    if crate::env::is_wsl() || test_home().is_some() {
         return home().join(".hermes");
     }
     native_home().unwrap_or_else(|| home().join(".hermes"))
@@ -92,10 +84,6 @@ fn expand_percent(s: &str) -> String {
 }
 
 fn dir() -> PathBuf {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return d;
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -109,31 +97,6 @@ fn env_path() -> PathBuf {
 
 fn auth_path() -> PathBuf {
     dir().join("auth.json")
-}
-
-fn store_load() -> J {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return std::fs::read_to_string(d.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({}));
-    }
-    store::load()
-}
-
-fn store_save(v: &J) -> Result<()> {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        std::fs::write(d.join("store.json"), serde_json::to_string_pretty(v)?)?;
-        return Ok(());
-    }
-    store::save(v)
-}
-
-fn make_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return Ok(d.join("backup"));
-    }
-    backup(ID, files)
 }
 
 // ---------------------------------------------------------------- detection
@@ -715,7 +678,6 @@ fn to_model(id: &str, d: &Y, shape: Shape, visible: bool) -> Model {
     }
 }
 
-
 // ---------------------------------------------------------------- state
 
 fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &str, cur: Option<&str>) -> Provider {
@@ -918,7 +880,7 @@ pub fn state(inst: &Install) -> AgentState {
             return st;
         }
     };
-    let root = store_load();
+    let root = store::load();
     let (env, _) = dotenv::load(&env_path());
     let hidden = store::get_obj(&root, ID, "hiddenModels");
     let (cur_id, cur_src) = current(&cfg);
@@ -1000,7 +962,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
         Src::Builtin(_) => Err(anyhow!(l("Hermes 内置供应商没有可用的地址", "Hermes built-in providers have no usable base URL"))),
         Src::Inline => {
             let active = current(&cfg).1 == Src::Inline;
-            let (base, key, mode, _) = inline_values(&cfg, &store_load(), active).ok_or_else(|| anyhow!(l("找不到直连配置", "Direct config not found")))?;
+            let (base, key, mode, _) = inline_values(&cfg, &store::load(), active).ok_or_else(|| anyhow!(l("找不到直连配置", "Direct config not found")))?;
             let api = api_of(mode.as_deref()).ok_or_else(|| anyhow!(l("这个供应商的 api_mode AgentPlus 不支持", "AgentPlus doesn't support this provider's api_mode")))?;
             Ok((base, key, api.into()))
         }
@@ -1063,7 +1025,7 @@ fn plan_err_readonly(src: &Src) -> Result<()> {
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg0, text, meta) = load()?;
     let mut cfg = cfg0.clone();
-    let mut root = store_load();
+    let mut root = store::load();
     // Unlike the read-only views, a write refuses an .env it can't read (UTF-16, GBK…).
     let (env0, env_meta) = read_text_or_new(&env_path())?;
     let mut env = env0.clone();
@@ -1556,7 +1518,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             targets.push(env_path());
         }
         if !targets.is_empty() {
-            backup_dir = Some(make_backup(&targets)?);
+            backup_dir = Some(backup(ID, &targets)?);
             std::fs::create_dir_all(dir())?;
         }
         if let Some(t) = new_text {
@@ -1568,7 +1530,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             written.push(env_path());
         }
         if store_dirty {
-            store_save(&root)?;
+            store::save(&root)?;
         }
     }
     Ok((diff, written, backup_dir))
@@ -1610,8 +1572,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::fs;
-
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     const SAMPLE: &str = "\
 # Hermes config (hand-written header comment)
@@ -1660,27 +1620,16 @@ hooks:
       timeout: 15
 ";
 
-    struct Tmp(PathBuf, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            *TEST_DIR.lock().unwrap() = None;
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    /// (config dir, the temp home it lives in)
+    struct Tmp(PathBuf, #[allow(dead_code)] TestHome);
 
     fn setup(yaml: &str) -> Tmp {
-        let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::env::force(crate::env::Target::Windows);
-        let d = std::env::temp_dir().join(format!("agentplus-hermes-{}-{}", std::process::id(), rand_suffix()));
-        let _ = fs::remove_dir_all(&d);
+        let home = TestHome::new("hermes");
+        let d = dir();
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("config.yaml"), yaml).unwrap();
-        *TEST_DIR.lock().unwrap() = Some(d.clone());
-        Tmp(d, g)
-    }
-
-    fn rand_suffix() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        Tmp(d, home)
     }
 
     fn apply(ops: Vec<Op>) -> Result<Diff> {
@@ -1937,7 +1886,7 @@ hooks:
         assert!(!d.groups.is_empty());
         assert!(written.is_empty() && backup.is_none());
         assert_eq!(fs::read_to_string(t.0.join("config.yaml")).unwrap(), SAMPLE);
-        assert!(!t.0.join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
     }
 
     #[test]
@@ -2004,7 +1953,6 @@ hooks:
     #[test]
     #[ignore]
     fn dump_hermes() {
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         println!("dir: {}", dir().display());
         let inst = detect();
         println!("detect: installed={} version={:?} running={} dir={:?}", inst.installed, inst.version, inst.running, inst.dir);
@@ -2045,16 +1993,15 @@ hooks:
 
             // Real write on a temp copy of the real file (the original is only read).
             let real = fs::read_to_string(config_path()).unwrap();
-            let tmp = std::env::temp_dir().join(format!("agentplus-hermes-real-{}", rand_suffix()));
+            let home = TestHome::new("hermes-real");
+            let tmp = dir();
             fs::create_dir_all(&tmp).unwrap();
             fs::write(tmp.join("config.yaml"), &real).unwrap();
-            *TEST_DIR.lock().unwrap() = Some(tmp.clone());
             let back_to = st.current_provider.clone().unwrap();
             plan(&[Op::SetCurrentProvider { provider: t.clone() }], false).unwrap();
             plan(&[Op::SetCurrentProvider { provider: back_to }], false).unwrap();
             let after = fs::read_to_string(tmp.join("config.yaml")).unwrap();
-            *TEST_DIR.lock().unwrap() = None;
-            let _ = fs::remove_dir_all(&tmp);
+            drop(home);
             assert_eq!(untouched(&after), untouched(&real));
             let (a, b): (Y, Y) = (serde_yaml::from_str(&after).unwrap(), serde_yaml::from_str(&real).unwrap());
             assert_eq!(a, b, "switch and back must give the same config");

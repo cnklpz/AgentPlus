@@ -223,8 +223,9 @@ impl Fmt {
     /// Base URL, key and API kind of a provider.
     pub fn endpoint(&self, id: &str) -> Result<Endpoint> {
         let (cfg, _, _) = self.load(true)?;
-        let parked = store::get_obj(&store::load(), self.agent, "disabledProviders");
-        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(|| parked.get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        // Only a config without a native disabled list parks providers in the store.
+        let parked = || if self.native_disable { None } else { store::get_obj(&store::load(), self.agent, "disabledProviders").get(id).cloned() };
+        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(parked).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
         let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseURL", "Provider {id} has no baseURL")))?.to_string();
         let auth = self.load_auth().map(|x| x.0);
         let key = def

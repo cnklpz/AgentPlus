@@ -41,23 +41,11 @@ const API_KEY_AUTH: &str = "gemini-api-key";
 
 // ---------------------------------------------------------------- paths
 
-#[cfg(test)]
-static TEST_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn test_dir() -> Option<PathBuf> {
-    TEST_DIR.lock().unwrap().clone()
-}
-
 pub fn default_dir() -> PathBuf {
     home().join(".gemini")
 }
 
 fn dir() -> PathBuf {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return d;
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -67,31 +55,6 @@ fn settings_path() -> PathBuf {
 
 fn env_path() -> PathBuf {
     dir().join(".env")
-}
-
-fn store_load() -> Value {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return std::fs::read_to_string(d.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({}));
-    }
-    store::load()
-}
-
-fn store_save(v: &Value) -> Result<()> {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        std::fs::write(d.join("store.json"), serde_json::to_string_pretty(v)?)?;
-        return Ok(());
-    }
-    store::save(v)
-}
-
-fn make_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return Ok(d.join("backup"));
-    }
-    backup(ID, files)
 }
 
 // ---------------------------------------------------------------- detection
@@ -111,7 +74,6 @@ pub fn detect() -> Install {
 }
 
 // ---------------------------------------------------------------- files
-
 
 /// (settings, meta, had_comments). A missing file is `{}`.
 fn load() -> Result<(Value, TextMeta, bool)> {
@@ -136,8 +98,6 @@ fn load() -> Result<(Value, TextMeta, bool)> {
 fn profiles(root: &Value) -> Map<String, Value> {
     store::get_obj(root, ID, "profiles")
 }
-
-
 
 fn clean_base(u: &str) -> String {
     u.trim().trim_end_matches('/').to_string()
@@ -326,7 +286,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.readonly = true;
         st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments that would be lost on write, so it's read-only.").into());
     }
-    let root = store_load();
+    let root = store::load();
     let (env, _) = dotenv::load(&env_path());
     let profs = profiles(&root);
     let cur = current(&cfg, &env, &profs);
@@ -386,7 +346,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     } else if id == GOOGLE || id.starts_with(AUTH) {
         return Err(anyhow!(l("Google 账号登录没有可用的地址", "Google account sign-in has no usable base URL")));
     } else {
-        profiles(&store_load()).get(id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+        profiles(&store::load()).get(id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
     };
     let base = str_field(&p, "baseUrl");
     let base = if base.is_empty() { "https://generativelanguage.googleapis.com".to_string() } else { base };
@@ -421,7 +381,7 @@ fn set_ptr(cfg: &mut Value, path: &[&str], v: Option<Value>) {
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load()?;
     let cfg0 = cfg.clone();
-    let mut root = store_load();
+    let mut root = store::load();
     let mut profs = profiles(&root);
     // Snapshot: a change to the active profile is re-applied to the live config.
     let profs0 = profs.clone();
@@ -702,7 +662,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             targets.push(env_path());
         }
         if !targets.is_empty() {
-            backup_dir = Some(make_backup(&targets)?);
+            backup_dir = Some(backup(ID, &targets)?);
             std::fs::create_dir_all(dir())?;
         }
         if cfg_dirty {
@@ -715,7 +675,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         if store_dirty {
             store::set_value(&mut root, ID, "profiles", Value::Object(profs));
-            store_save(&root)?;
+            store::save(&root)?;
         }
     }
     Ok((diff, written, backup_dir))
@@ -729,23 +689,16 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
 
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     const SETTINGS: &str = "{\n  \"security\": {\n    \"auth\": {\n      \"selectedType\": \"oauth-personal\"\n    }\n  },\n  \"mcpServers\": {\n    \"vibe_kanban\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"vibe-kanban@latest\",\n        \"--mcp\"\n      ],\n      \"timeout\": 60000\n    }\n  }\n}";
     const ENV: &str = "# gemini env\nGEMINI_API_KEY=sk-envkey-secret-1234\nGOOGLE_GEMINI_BASE_URL=https://relay.example:8080\nOTHER=keep\n";
 
-    struct Tmp(PathBuf, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            *TEST_DIR.lock().unwrap() = None;
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    /// (config dir, the temp home it lives in)
+    struct Tmp(PathBuf, #[allow(dead_code)] TestHome);
 
     fn setup(settings: Option<&str>, env: Option<&str>) -> Tmp {
-        let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::env::force(crate::env::Target::Windows);
-        let d = std::env::temp_dir().join(format!("agentplus-gemini-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let home = TestHome::new("gemini");
+        let d = dir();
         fs::create_dir_all(&d).unwrap();
         if let Some(s) = settings {
             fs::write(d.join("settings.json"), s).unwrap();
@@ -753,8 +706,7 @@ mod tests {
         if let Some(e) = env {
             fs::write(d.join(".env"), e).unwrap();
         }
-        *TEST_DIR.lock().unwrap() = Some(d.clone());
-        Tmp(d, g)
+        Tmp(d, home)
     }
 
     fn apply(ops: Vec<Op>) -> Result<Diff> {
@@ -895,7 +847,7 @@ mod tests {
         let (d, written, backup) = plan(&[Op::UpsertProvider { provider: pi(Some(UNMANAGED), "R", "https://relay.example:8080", None, &[]) }, Op::SetCurrentProvider { provider: UNMANAGED.into() }], true).unwrap();
         assert!(!d.groups.is_empty() && written.is_empty() && backup.is_none());
         assert_eq!(fs::read_to_string(t.0.join("settings.json")).unwrap(), SETTINGS);
-        assert!(!t.0.join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
         drop(t);
         let t = setup(Some("{\n  // mine\n  \"security\": {}\n}\n"), None);
         assert!(state(&Install::default()).readonly);
@@ -919,7 +871,6 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_gemini() {
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         println!("dir: {}", dir().display());
         let inst = detect();
         println!("detect: installed={} version={:?}", inst.installed, inst.version);

@@ -12,7 +12,7 @@ use crate::process::Install;
 use crate::store;
 use crate::util::*;
 use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
@@ -27,37 +27,13 @@ pub const WSL_SCRIPT: &str = "(kilo --version || kilocode --version) 2>/dev/null
 #[allow(dead_code)]
 pub const WSL_MARKER: &str = ".config/kilo";
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Tests point the adapter at a temp home (config, auth, store and backups all inside it).
-fn test_home() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        TEST_HOME.with(|t| t.borrow().clone())
-    }
-    #[cfg(not(test))]
-    {
-        None
-    }
-}
-
-fn base_home() -> PathBuf {
-    test_home().unwrap_or_else(home)
-}
-
 /// Kilo's default config dir, `~/.config/kilo`.
 #[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
-    base_home().join(".config").join("kilo")
+    home().join(".config").join("kilo")
 }
 
 fn dir() -> PathBuf {
-    if test_home().is_some() {
-        return default_dir();
-    }
     super::dir_override(ID).unwrap_or_else(|| env_config().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(default_dir))
 }
 
@@ -82,39 +58,11 @@ fn config_path() -> PathBuf {
 }
 
 fn auth_path() -> PathBuf {
-    base_home().join(".local").join("share").join("kilo").join("auth.json")
+    home().join(".local").join("share").join("kilo").join("auth.json")
 }
 
 fn fmt() -> Fmt {
     Fmt { agent: ID, path: config_path(), auth: Some(auth_path()), native_disable: true }
-}
-
-fn load_root() -> Value {
-    match test_home() {
-        Some(h) => std::fs::read_to_string(h.join("agentplus-store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_root(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(h) => Ok(std::fs::write(h.join("agentplus-store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(h) => {
-            let d = h.join("agentplus-backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
 }
 
 // ---------- detection ----------
@@ -180,7 +128,7 @@ pub fn state(inst: &Install) -> AgentState {
         restartable: false,
         model_fields: vec![],
     };
-    let root = load_root();
+    let root = store::load();
     let cfg = match f.load(true) {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
@@ -297,7 +245,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     let mut auth = f.load_auth();
-    let mut root = load_root();
+    let mut root = store::load();
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
     let ef = f.file();
@@ -358,7 +306,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if dirty.auth {
             targets.push(auth_path());
         }
-        backup_dir = Some(do_backup(&targets)?);
+        backup_dir = Some(backup(ID, &targets)?);
         if dirty.cfg {
             if let Some(d) = config_path().parent() {
                 std::fs::create_dir_all(d)?;
@@ -377,7 +325,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     if !dry_run && dirty.store {
-        save_root(&root)?;
+        store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
 }
@@ -385,6 +333,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     const SAMPLE: &str = r#"{
   "$schema": "https://app.kilo.ai/config.json",
@@ -405,17 +354,11 @@ mod tests {
 }
 "#;
 
-    struct Home(PathBuf);
-    impl Drop for Home {
-        fn drop(&mut self) {
-            TEST_HOME.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    type Home = TestHome;
 
     fn setup(name: &str, cfg: Option<&str>, auth: Option<&str>) -> Home {
-        let h = std::env::temp_dir().join(format!("agentplus-kilo-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&h);
+        let home = TestHome::new(&format!("kilo-{name}"));
+        let h = home.0.clone();
         std::fs::create_dir_all(h.join(".config/kilo")).unwrap();
         if let Some(c) = cfg {
             std::fs::write(h.join(".config/kilo/kilo.json"), c).unwrap();
@@ -424,8 +367,7 @@ mod tests {
             std::fs::create_dir_all(h.join(".local/share/kilo")).unwrap();
             std::fs::write(h.join(".local/share/kilo/auth.json"), a).unwrap();
         }
-        TEST_HOME.with(|t| *t.borrow_mut() = Some(h.clone()));
-        Home(h)
+        home
     }
 
     fn cfg_of(h: &Home) -> Value {

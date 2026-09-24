@@ -6,17 +6,71 @@ use std::path::{Path, PathBuf};
 
 /// Home of the target environment (Windows user, or a WSL distro over \wsl.localhost).
 pub fn home() -> PathBuf {
+    if let Some(h) = test_home() {
+        return h;
+    }
     crate::env::home()
 }
 
 /// AgentPlus data always stays on the Windows side.
 pub fn agentplus_dir() -> PathBuf {
-    // Tests that run real flows point this at a temp dir so they don't leave backups behind.
+    // Tests keep the store and backups in their temp home; tests that run real flows point
+    // this at a temp dir so they don't leave backups behind.
     #[cfg(test)]
-    if let Some(d) = std::env::var_os("AGENTPLUS_HOME") {
-        return PathBuf::from(d);
+    {
+        if let Some(h) = test_home() {
+            return h.join(".agentplus");
+        }
+        if let Some(d) = std::env::var_os("AGENTPLUS_HOME") {
+            return PathBuf::from(d);
+        }
     }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".agentplus")
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: the temp folder standing in for the home folder on this thread (agent configs,
+/// the AgentPlus store and backups all go inside it). Always None outside tests.
+pub fn test_home() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        TEST_HOME.with(|t| t.borrow().clone())
+    }
+    #[cfg(not(test))]
+    {
+        None
+    }
+}
+
+/// Tests: sets a fresh, empty temp home for this thread; dropping it restores the real one
+/// and deletes the folder. The agent environment is empty meanwhile (`env::set_test_vars`).
+#[cfg(test)]
+pub struct TestHome(pub PathBuf);
+
+#[cfg(test)]
+impl TestHome {
+    pub fn new(tag: &str) -> TestHome {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let d = std::env::temp_dir().join(format!("agentplus-test-{tag}-{}-{nanos}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        TEST_HOME.with(|t| *t.borrow_mut() = Some(d.clone()));
+        crate::env::set_test_vars(&[]);
+        TestHome(d)
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestHome {
+    fn drop(&mut self) {
+        TEST_HOME.with(|t| *t.borrow_mut() = None);
+        crate::env::set_test_vars(&[]);
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 pub fn expand_tilde(p: &str) -> PathBuf {

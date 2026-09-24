@@ -39,19 +39,6 @@ const TYPES: [&str; 8] = ["openai", "openai_legacy", "openai_responses", "anthro
 
 // ---------------------------------------------------------------- paths & test hooks
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn test_home() -> Option<PathBuf> {
-    TEST_HOME.with(|h| h.borrow().clone())
-}
-#[cfg(not(test))]
-fn test_home() -> Option<PathBuf> {
-    None
-}
-
 /// `~/.kimi-code` when it exists, else the legacy `~/.kimi` when that exists.
 fn pick_dir(h: &Path) -> PathBuf {
     let code = h.join(".kimi-code");
@@ -65,7 +52,7 @@ fn pick_dir(h: &Path) -> PathBuf {
 
 /// `$KIMI_CODE_HOME` (Windows side only), else `~/.kimi-code` / `~/.kimi`.
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() {
+    if !crate::env::is_wsl() && test_home().is_none() {
         if let Some(h) = std::env::var_os("KIMI_CODE_HOME").filter(|v| !v.is_empty()) {
             return PathBuf::from(h);
         }
@@ -74,9 +61,6 @@ pub fn default_dir() -> PathBuf {
 }
 
 fn dir() -> PathBuf {
-    if let Some(t) = test_home() {
-        return pick_dir(&t);
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -87,34 +71,6 @@ fn config_path() -> PathBuf {
 /// The legacy Kimi CLI names its types differently (openai_legacy, gemini).
 fn is_legacy() -> bool {
     dir().file_name().map(|n| n == ".kimi").unwrap_or(false)
-}
-
-fn load_store() -> Value {
-    match test_home() {
-        Some(t) => std::fs::read_to_string(t.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_store(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(t) => Ok(std::fs::write(t.join("store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(t) => {
-            let d = t.join("backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
 }
 
 // ---------------------------------------------------------------- detection
@@ -149,7 +105,6 @@ pub fn detect() -> Install {
 }
 
 // ---------------------------------------------------------------- reading
-
 
 fn load() -> Result<(DocumentMut, TextMeta)> {
     let p = config_path();
@@ -391,7 +346,7 @@ pub fn state(inst: &Install) -> AgentState {
             return st;
         }
     };
-    let root = load_store();
+    let root = store::load();
     let names = store_obj(&root, "names");
     let hidden = store_obj(&root, "hiddenModels");
     let def = default_model(&doc);
@@ -435,7 +390,7 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load()?;
-    let stashed = store_obj(&load_store(), "disabledProviders").get(id).map(|r| from_text(stash_text(r))).transpose()?;
+    let stashed = store_obj(&store::load(), "disabledProviders").get(id).map(|r| from_text(stash_text(r))).transpose()?;
     let item = doc
         .get("providers")
         .and_then(|t| t.get(id))
@@ -872,7 +827,7 @@ impl Ctx {
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (doc, meta) = load()?;
-    let mut cx = Ctx { doc, root: load_store(), diff: Diff::default(), file: display_path(&config_path()), legacy: is_legacy(), cfg_dirty: false, store_dirty: false };
+    let mut cx = Ctx { doc, root: store::load(), diff: Diff::default(), file: display_path(&config_path()), legacy: is_legacy(), cfg_dirty: false, store_dirty: false };
 
     for op in ops {
         match op {
@@ -903,13 +858,13 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !dry_run {
         if cx.cfg_dirty {
             let p = config_path();
-            backup_dir = Some(backup_files(std::slice::from_ref(&p))?);
+            backup_dir = Some(backup(ID, std::slice::from_ref(&p))?);
             std::fs::create_dir_all(dir())?;
             write_text_atomic(&p, &cx.doc.to_string(), meta)?;
             written.push(p);
         }
         if cx.store_dirty {
-            save_store(&cx.root)?;
+            store::save(&cx.root)?;
         }
     }
     Ok((cx.diff, written, backup_dir))
@@ -963,16 +918,14 @@ max_context_size = 128000
 max_steps_per_run = 100 # keep
 "#;
 
-    fn setup(tag: &str, legacy: bool, sample: Option<&str>) -> PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let t = std::env::temp_dir().join(format!("agentplus-kimi-{tag}-{}-{nanos}", std::process::id()));
-        let d = t.join(if legacy { ".kimi" } else { ".kimi-code" });
+    fn setup(tag: &str, legacy: bool, sample: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("kimi-{tag}"));
+        let d = home.0.join(if legacy { ".kimi" } else { ".kimi-code" });
         fs::create_dir_all(&d).unwrap();
         if let Some(s) = sample {
             fs::write(d.join("config.toml"), s).unwrap();
         }
-        TEST_HOME.with(|h| *h.borrow_mut() = Some(t.clone()));
-        t
+        home
     }
 
     fn text() -> String {
@@ -1014,7 +967,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn reads_providers_and_models() {
-        setup("read", false, Some(SAMPLE));
+        let _home = setup("read", false, Some(SAMPLE));
         let s = st();
         assert_eq!(s.mode, "multi");
         assert!(!s.readonly);
@@ -1037,7 +990,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn create_provider_with_models() {
-        setup("create", false, Some(SAMPLE));
+        let _home = setup("create", false, Some(SAMPLE));
         let d = apply(vec![Op::UpsertProvider { provider: input(None, "My Relay", "https://my.relay/v1", "responses", Some(SECRET), &["gpt-4.1", "o3"]) }]);
         let all = lines(&d);
         assert!(!all.contains(SECRET), "{all}");
@@ -1068,7 +1021,7 @@ max_steps_per_run = 100 # keep
             Op::UpsertProvider { provider: input(None, "Chat", "https://c/v1", "chat", Some(SECRET), &["m1"]) },
             Op::UpsertProvider { provider: input(None, "Gem", "https://g", "gemini", None, &[]) },
         ]);
-        let doc: DocumentMut = fs::read_to_string(t.join(".kimi").join("config.toml")).unwrap().parse().unwrap();
+        let doc: DocumentMut = fs::read_to_string(t.0.join(".kimi").join("config.toml")).unwrap().parse().unwrap();
         assert_eq!(doc["providers"]["chat"]["type"].as_str(), Some("openai_legacy"));
         assert_eq!(doc["providers"]["gem"]["type"].as_str(), Some("gemini"));
         assert_eq!(doc["models"]["m1"]["provider"].as_str(), Some("chat"));
@@ -1077,7 +1030,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn edit_provider_keeps_comments() {
-        setup("edit", false, Some(SAMPLE));
+        let _home = setup("edit", false, Some(SAMPLE));
         let d = apply(vec![Op::UpsertProvider { provider: input(Some("relay"), "Relay", "https://relay2.example.com/v1", "responses", Some(SECRET), &[]) }]);
         assert!(!lines(&d).contains(SECRET));
         let t = text();
@@ -1094,7 +1047,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn hide_show_keeps_table_and_comment() {
-        setup("hide", false, Some(SAMPLE));
+        let _home = setup("hide", false, Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "relay".into(), model: "gpt-4.1".into(), visible: false }]);
         let t = text();
         assert!(!t.contains("gpt-4.1\"]") && !t.contains("# GPT via relay"));
@@ -1107,7 +1060,7 @@ max_steps_per_run = 100 # keep
         let t = text();
         assert!(t.contains("# GPT via relay\n[models.\"gpt-4.1\"]\nprovider = \"relay\"\nmodel = \"gpt-4.1\"\nmax_context_size = 1000000\n"), "{t}");
         assert!(t.contains("[loop_control]\nmax_steps_per_run = 100 # keep\n"));
-        assert!(store_obj(&load_store(), "hiddenModels").is_empty());
+        assert!(store_obj(&store::load(), "hiddenModels").is_empty());
         // The default model cannot be hidden or deleted.
         assert!(plan(&[Op::SetModelVisible { provider: "moonshot".into(), model: "kimi-k2".into(), visible: false }], true).is_err());
         assert!(plan(&[Op::DeleteModel { provider: "moonshot".into(), model: "kimi-k2".into() }], true).is_err());
@@ -1115,7 +1068,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn add_edit_delete_models() {
-        setup("models", false, Some(SAMPLE));
+        let _home = setup("models", false, Some(SAMPLE));
         apply(vec![
             Op::UpsertModel { provider: "relay".into(), model: model("o3", None, Some(200_000)) },
             Op::UpsertModel { provider: "relay".into(), model: model("relay-mini", Some("gpt-4.1-nano"), Some(64_000)) },
@@ -1134,7 +1087,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn disable_enable_and_delete_provider() {
-        setup("enable", false, Some(SAMPLE));
+        let _home = setup("enable", false, Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "relay".into(), model: "relay-mini".into(), visible: false }]);
         apply(vec![Op::SetProviderEnabled { provider: "relay".into(), enabled: false }]);
         let t = text();
@@ -1158,7 +1111,7 @@ max_steps_per_run = 100 # keep
         apply(vec![Op::DeleteProvider { provider: "relay".into() }]);
         let t = text();
         assert!(!t.contains("relay"), "{t}");
-        assert!(store_obj(&load_store(), "hiddenModels").is_empty());
+        assert!(store_obj(&store::load(), "hiddenModels").is_empty());
         assert!(st().providers.iter().all(|p| p.id != "relay"));
     }
 
@@ -1177,7 +1130,7 @@ max_steps_per_run = 100 # keep
         assert!(w.is_empty() && b.is_none() && !lines(&d).is_empty());
         assert!(!lines(&d).contains(SECRET));
         assert_eq!(text(), SAMPLE);
-        assert!(!t.join("store.json").exists() && !t.join("backup").exists());
+        assert!(!t.0.join(".agentplus").exists(), "no store or backup");
         assert!(plan(&[Op::SetCurrentProvider { provider: "relay".into() }], true).is_err());
         assert!(plan(&[Op::SetModelRoles { provider: "relay".into(), roles: Default::default() }], true).is_err());
         assert!(plan(&[Op::SetSetting { key: "x".into(), value: json!(true) }], true).is_err());
