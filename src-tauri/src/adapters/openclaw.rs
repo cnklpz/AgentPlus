@@ -123,14 +123,12 @@ fn split_ref(r: &str) -> (&str, Option<&str>) {
 
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    let npm = dirs::data_dir().map(|d| d.join("npm"));
-    if let Some(pkg) = npm.as_ref().map(|d| d.join("node_modules").join("openclaw").join("package.json")) {
-        if let Ok(text) = std::fs::read_to_string(pkg) {
-            inst.installed = true;
-            inst.version = serde_json::from_str::<Value>(&text).ok().and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from));
-            return inst;
-        }
+    if let Some(pkg) = crate::process::npm_global_package("openclaw").filter(|p| p.is_file()) {
+        inst.installed = true;
+        inst.version = crate::process::package_version(&pkg);
+        return inst;
     }
+    let npm = dirs::data_dir().map(|d| d.join("npm"));
     let shims = [npm.map(|d| d.join("openclaw.cmd")), dirs::data_local_dir().map(|d| d.join("pnpm").join("openclaw.cmd"))];
     inst.installed = shims.iter().flatten().any(|p| p.exists());
     inst

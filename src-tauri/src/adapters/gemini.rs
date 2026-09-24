@@ -100,10 +100,9 @@ fn make_backup(files: &[PathBuf]) -> Result<PathBuf> {
 #[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    let pkg = dirs::data_dir().map(|d| d.join("npm").join("node_modules").join("@google").join("gemini-cli").join("package.json"));
-    if let Some(text) = pkg.and_then(|p| std::fs::read_to_string(p).ok()) {
+    if let Some(pkg) = crate::process::npm_global_package("@google/gemini-cli").filter(|p| p.is_file()) {
         inst.installed = true;
-        inst.version = serde_json::from_str::<Value>(&text).ok().and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from));
+        inst.version = crate::process::package_version(&pkg);
     } else if let Some(cmd) = dirs::data_dir().map(|d| d.join("npm").join("gemini.cmd")).filter(|p| p.exists()) {
         inst.installed = true;
         inst.dir = cmd.parent().map(|p| p.to_path_buf());

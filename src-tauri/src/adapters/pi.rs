@@ -14,7 +14,7 @@ use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const ID: &str = "pi";
 #[allow(dead_code)]
@@ -60,23 +60,14 @@ fn load_models() -> Result<(Value, TextMeta, bool)> {
     Fmt::load_jsonc(&models_path(), json!({ "providers": {} }))
 }
 
-fn npm_version(root: &Path) -> Option<String> {
-    PACKAGES.iter().find_map(|p| {
-        let text = std::fs::read_to_string(root.join("node_modules").join(p).join("package.json")).ok()?;
-        serde_json::from_str::<Value>(&text).ok()?.get("version")?.as_str().map(String::from)
-    })
-}
-
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    let npm = dirs::data_dir().map(|d| d.join("npm"));
-    if let Some(npm) = &npm {
-        if let Some(v) = npm_version(npm) {
-            inst.installed = true;
-            inst.version = Some(v);
-            return inst;
-        }
+    if let Some(v) = PACKAGES.iter().find_map(|p| crate::process::npm_global_version(p)) {
+        inst.installed = true;
+        inst.version = Some(v);
+        return inst;
     }
+    let npm = dirs::data_dir().map(|d| d.join("npm"));
     let shims = [npm.map(|d| d.join("pi.cmd")), dirs::data_local_dir().map(|d| d.join("pnpm").join("pi.cmd")), dirs::home_dir().map(|h| h.join(".bun").join("bin").join("pi.exe"))];
     inst.installed = shims.iter().flatten().any(|p| p.exists());
     inst

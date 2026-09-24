@@ -119,11 +119,6 @@ fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------------------------------------------------------------- detection
 
-fn pkg_version(p: &Path) -> Option<String> {
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version")?.as_str().map(String::from)
-}
-
 /// Native binary `~/.kimi-code/bin/kimi.exe`, npm `@moonshot-ai/kimi-code`, or the legacy
 /// PyPI `kimi-cli` (`~/.local/bin/kimi.exe` / PATH). A CLI: `exe` stays None.
 pub fn detect() -> Install {
@@ -140,7 +135,7 @@ pub fn detect() -> Install {
         inst.installed = true;
         inst.version = crate::process::cli_version(&native);
         inst.dir = native.parent().map(Path::to_path_buf);
-    } else if let Some(v) = roots.iter().find_map(|r| pkg_version(&pkg(r))) {
+    } else if let Some(v) = roots.iter().find_map(|r| crate::process::package_version(&pkg(r))) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(p) = Some(home.join(".local").join("bin").join("kimi.exe")).filter(|p| p.exists()).or(on_path) {

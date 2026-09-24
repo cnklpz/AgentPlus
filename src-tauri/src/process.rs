@@ -332,15 +332,30 @@ pub(crate) fn cli_version(exe: &Path) -> Option<String> {
     v
 }
 
+/// The `version` field of a package.json.
+pub(crate) fn package_version(package_json: &Path) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(package_json).ok()?).ok()?;
+    v.get("version")?.as_str().map(String::from)
+}
+
+/// package.json of a global npm package (`%APPDATA%\npm\node_modules\<pkg>`, `pkg` may be
+/// scoped: "@scope/name").
+pub(crate) fn npm_global_package(pkg: &str) -> Option<PathBuf> {
+    let dir = pkg.split('/').fold(dirs::data_dir()?.join("npm").join("node_modules"), |d, part| d.join(part));
+    Some(dir.join("package.json"))
+}
+
+/// Version of a global npm package; None when it isn't installed there.
+pub(crate) fn npm_global_version(pkg: &str) -> Option<String> {
+    package_version(&npm_global_package(pkg)?)
+}
+
 /// Claude Code: npm global install or the native installer (~/.local/bin/claude.exe).
 fn detect_claude(inst: &mut Install) {
-    let npm = dirs::data_dir().map(|d| d.join("npm"));
-    if let Some(pkg) = npm.as_ref().map(|d| d.join("node_modules").join("@anthropic-ai").join("claude-code").join("package.json")) {
-        if let Ok(text) = std::fs::read_to_string(&pkg) {
-            inst.installed = true;
-            inst.version = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from));
-            return;
-        }
+    if let Some(pkg) = npm_global_package("@anthropic-ai/claude-code").filter(|p| p.is_file()) {
+        inst.installed = true;
+        inst.version = package_version(&pkg);
+        return;
     }
     let native = dirs::home_dir().map(|h| h.join(".local").join("bin").join("claude.exe"));
     if let Some(exe) = native.filter(|p| p.exists()) {
