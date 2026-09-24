@@ -51,10 +51,11 @@ pub fn get(text: &str, key: &str) -> Option<String> {
     values(text, key).next_back().filter(|v| !v.is_empty())
 }
 
-/// The value of the first assignment of `key`, which may be empty. Codex keeps this
-/// first-wins reading (see `adapters::codex::env_value`).
-pub fn get_first(text: &str, key: &str) -> Option<String> {
-    values(text, key).next()
+/// The value of the last assignment of `key`, which may be empty: Codex sets every pair of
+/// its .env in order, so the last one wins and an empty `KEY=` still shadows the process
+/// environment (see `adapters::codex::env_value`).
+pub fn get_last(text: &str, key: &str) -> Option<String> {
+    values(text, key).next_back()
 }
 
 /// Sets `key` (or removes it, value None), keeping every other line. The first assignment
@@ -98,10 +99,12 @@ mod tests {
     fn reads_keys_like_dotenv() {
         let text = "# K=commented\nexport K = one\nOTHER=x\n  K=\"two\" # note\nE=\n";
         assert_eq!(get(text, "K").as_deref(), Some("two"), "last assignment wins");
-        assert_eq!(get_first(text, "K").as_deref(), Some("one"));
+        assert_eq!(get_last(text, "K").as_deref(), Some("two"));
         assert_eq!(get(text, "OTHER").as_deref(), Some("x"));
         assert_eq!(get(text, "E"), None, "empty is unset");
-        assert_eq!(get_first(text, "E").as_deref(), Some(""));
+        assert_eq!(get_last(text, "E").as_deref(), Some(""));
+        assert_eq!(get_last("E=x\nE=\n", "E").as_deref(), Some(""), "a later empty assignment wins");
+        assert_eq!(get_last(text, "MISSING"), None);
         assert_eq!(get(text, "MISSING"), None);
         assert_eq!(line_key("# K=v"), None);
         assert_eq!(line_key("K"), None);
