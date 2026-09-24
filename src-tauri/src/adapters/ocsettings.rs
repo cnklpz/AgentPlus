@@ -98,7 +98,6 @@ fn read<'a>(cfg: &'a Value, key: &str) -> Option<&'a Value> {
     get(cfg, key)
 }
 
-
 /// A stored value in the Select's terms: "true"/"false" for booleans, "custom" for rule maps.
 fn select_str(v: Option<&Value>) -> Option<String> {
     match v? {
@@ -112,7 +111,6 @@ fn select_str(v: Option<&Value>) -> Option<String> {
 fn label_of(opts: &[(&'static str, &'static str, &'static str)], v: &str) -> String {
     opts.iter().find(|o| o.0 == v).map(|o| l(o.1, o.2).to_string()).unwrap_or_else(|| if v == "custom" { l("按规则细分", "Per rule").into() } else { v.to_string() })
 }
-
 
 /// Rows for one config. `global` is the global config when `cfg` is a project's.
 /// `models` / `providers` feed the suggestions.
