@@ -413,8 +413,7 @@ impl Work {
                         self.names.insert(fp(&key), json!(p.name.trim()));
                         let added: Vec<&String> = models.iter().filter(|m| !self.entries.iter().any(|e| key_of(e) == key && str_field(e, "model") == **m)).collect();
                         if !added.is_empty() {
-                            let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                            self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), key_part), true);
+                            self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), msg::key_suffix(new_key.as_deref())), true);
                         }
                         let new: Vec<Value> = added.into_iter().map(|m| Self::new_entry(&g, m, None)).collect();
                         self.entries.extend(new);

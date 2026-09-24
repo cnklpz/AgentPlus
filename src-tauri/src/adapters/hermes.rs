@@ -779,11 +779,6 @@ fn default_row(dflt: Option<&str>) -> Vec<Model> {
     dflt.map(|m| Model { id: m.into(), visible: true, readonly: true, tags: vec![Tag::default_model()], ..Default::default() }).into_iter().collect()
 }
 
-/// ` · 密钥 ••••1234` at the end of a diff line (empty without a key).
-fn key_part(key: Option<&str>) -> String {
-    key.map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default()
-}
-
 fn no_inline() -> anyhow::Error {
     anyhow!(l("找不到直连配置", "Direct config not found"))
 }
@@ -1152,7 +1147,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         provs.as_mapping_mut().unwrap().insert(yk(&id), Y::Mapping(e));
                         cx.diff.push(
                             &cx.file,
-                            trn!(ids.len(), "+ providers.{id}（{base} · {} · {n} 个模型{}）", "+ providers.{id} ({base} · {} · {n} model{})", "+ providers.{id} ({base} · {} · {n} models{})", api_label(&p.api), key_part(key)),
+                            trn!(ids.len(), "+ providers.{id}（{base} · {} · {n} 个模型{}）", "+ providers.{id} ({base} · {} · {n} model{})", "+ providers.{id} ({base} · {} · {n} models{})", api_label(&p.api), msg::key_suffix(key)),
                             true,
                         );
                     }
@@ -1187,7 +1182,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                                 if let Some(k) = key {
                                     s.insert("apiKey".into(), json!(k));
                                 }
-                                cx.diff.push(cx.store_label, tr!("直连配置：{base} · {}{}", "Direct config: {base} · {}{}", api_label(&p.api), key_part(key)), true);
+                                cx.diff.push(cx.store_label, tr!("直连配置：{base} · {}{}", "Direct config: {base} · {}{}", api_label(&p.api), msg::key_suffix(key)), true);
                                 store_dirty = true;
                             }
                             continue;

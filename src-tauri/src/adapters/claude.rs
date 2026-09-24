@@ -7,6 +7,7 @@
 //! go through the local gateway.
 
 use super::msg;
+use super::profiles::{self, model_list};
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -72,14 +73,6 @@ fn env_str(env: &Map<String, Value>, k: &str) -> Option<String> {
     env.get(k).and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty())
 }
 
-fn profiles(root: &Value) -> Map<String, Value> {
-    store::get_obj(root, ID, "profiles")
-}
-
-fn save_profiles(root: &mut Value, p: Map<String, Value>) {
-    store::set_value(root, ID, "profiles", Value::Object(p));
-}
-
 /// Claude Code appends /v1/messages itself, so a stored base never ends in /v1.
 fn claude_base(u: &str) -> String {
     let t = u.trim().trim_end_matches('/');
@@ -104,17 +97,6 @@ fn roles_of(p: &Value) -> BTreeMap<String, String> {
         .and_then(|r| r.as_object())
         .map(|o| o.iter().filter_map(|(k, v)| v.as_str().filter(|x| !x.is_empty()).map(|x| (k.clone(), x.to_string()))).collect())
         .unwrap_or_default()
-}
-
-fn model_list(p: &Value) -> Vec<(String, bool)> {
-    p.get("models")
-        .and_then(|m| m.as_array())
-        .map(|a| a.iter().filter_map(|m| Some((m.get("id")?.as_str()?.to_string(), m.get("visible").and_then(|v| v.as_bool()).unwrap_or(true)))).collect())
-        .unwrap_or_default()
-}
-
-fn set_model_list(p: &mut Value, list: &[(String, bool)]) {
-    p["models"] = Value::Array(list.iter().map(|(id, v)| json!({ "id": id, "visible": v })).collect());
 }
 
 fn models_with_roles(list: &[(String, bool)], roles: &BTreeMap<String, String>) -> Vec<Model> {
@@ -170,7 +152,7 @@ fn secret(k: &str) -> bool {
     k == TOKEN || k == API_KEY
 }
 
-fn provider_of(id: &str, p: &Value, _is_current: bool) -> Provider {
+fn provider_of(id: &str, p: &Value) -> Provider {
     let base = str_field(p, "baseUrl");
     let roles = roles_of(p);
     let key = str_field(p, "apiKey");
@@ -213,7 +195,7 @@ pub fn state(inst: &Install) -> AgentState {
     };
     let root = store::load();
     let env = env_of(&cfg);
-    let profs = profiles(&root);
+    let profs = profiles::load(&root, ID);
     let cur = current(&env, &profs);
     st.current_provider = Some(cur.clone());
 
@@ -229,7 +211,7 @@ pub fn state(inst: &Install) -> AgentState {
         ],
     ));
     for (id, p) in &profs {
-        st.providers.push(provider_of(id, p, id == &cur));
+        st.providers.push(provider_of(id, p));
     }
     if cur == UNMANAGED {
         // A relay set up by hand (or by another tool): show it so it can be adopted.
@@ -246,7 +228,7 @@ pub fn state(inst: &Install) -> AgentState {
             "keyEnv": if env_str(&env, API_KEY).is_some() && env_str(&env, TOKEN).is_none() { API_KEY } else { TOKEN },
             "roles": roles,
         });
-        let mut prov = provider_of(UNMANAGED, &p, true);
+        let mut prov = provider_of(UNMANAGED, &p);
         prov.details.push(Kv::text(lbl::note(), l("不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
         st.providers.push(prov);
         st.notes.push(l("settings.json 里有手动设置的 ANTHROPIC_BASE_URL，已显示为「settings.json 里的配置」；编辑保存一次即可由 AgentPlus 管理。", "settings.json has a hand-set ANTHROPIC_BASE_URL, shown as \"Config in settings.json\". Edit and save it once to let AgentPlus manage it.").into());
@@ -276,7 +258,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let p = if id == UNMANAGED {
         json!({ "baseUrl": env_str(&env, BASE).unwrap_or_default(), "apiKey": env_str(&env, TOKEN).or_else(|| env_str(&env, API_KEY)).unwrap_or_default() })
     } else {
-        profiles(&store::load()).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
+        profiles::load(&store::load(), ID).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
     };
     let base = str_field(&p, "baseUrl");
     if base.is_empty() {
@@ -288,10 +270,21 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     Ok((base, (!key.is_empty()).then_some(key), "anthropic".into()))
 }
 
+/// The profile whose models an op edits; the built-in entries have none.
+fn profile_mut<'a>(profs: &'a mut Map<String, Value>, id: &str) -> Result<&'a mut Value> {
+    if id == OFFICIAL {
+        return Err(anyhow!(l("官方账号没有模型列表可编辑", "The official account has no model list to edit")));
+    }
+    if id == UNMANAGED {
+        return Err(anyhow!(l("先编辑并保存一次「settings.json 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in settings.json\" once so AgentPlus takes it over, then change its models")));
+    }
+    profiles::get_mut(profs, id)
+}
+
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta) = load()?;
     let mut root = store::load();
-    let mut profs = profiles(&root);
+    let mut profs = profiles::load(&root, ID);
     let env0 = env_of(&cfg);
     let before = current(&env0, &profs);
     let mut cur = before.clone();
@@ -299,16 +292,6 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let store_label = l("AgentPlus · Claude Code 配置档", "AgentPlus · Claude Code profiles");
     let mut diff = Diff::default();
     let (mut cfg_dirty, mut store_dirty) = (false, false);
-
-    let profile = |profs: &mut Map<String, Value>, id: &str| -> Result<()> {
-        if id == OFFICIAL {
-            return Err(anyhow!(l("官方账号没有模型列表可编辑", "The official account has no model list to edit")));
-        }
-        if id == UNMANAGED {
-            return Err(anyhow!(l("先编辑并保存一次「settings.json 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in settings.json\" once so AgentPlus takes it over, then change its models")));
-        }
-        profs.get(id).map(|_| ()).ok_or_else(|| msg::no_provider(id))
-    };
 
     for op in ops {
         match op {
@@ -322,7 +305,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
                 match p.id.as_deref() {
                     None | Some(UNMANAGED) => {
-                        let id = unique_id(&slug(&p.name), |c| profs.contains_key(c) || c == OFFICIAL || c == UNMANAGED);
+                        let id = profiles::new_id(&profs, &p.name, &[OFFICIAL, UNMANAGED]);
                         let adopting = p.id.as_deref() == Some(UNMANAGED);
                         let mut roles = Map::new();
                         let mut key_env = TOKEN;
@@ -338,14 +321,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             }
                             key = key.or_else(|| env_str(&env0, TOKEN).or_else(|| env_str(&env0, API_KEY)));
                         }
-                        let models: Vec<Value> = clean_ids(&p.models).into_iter().map(|m| json!({ "id": m, "visible": true })).collect();
                         profs.insert(id.clone(), json!({
                             "name": p.name.trim(), "baseUrl": claude_base(&p.base_url), "apiKey": key.clone().unwrap_or_default(),
-                            "keyEnv": key_env, "models": models, "roles": roles,
+                            "keyEnv": key_env, "models": profiles::models_value(&p.models), "roles": roles,
                         }));
                         let adopt = if adopting { l("（接管 settings.json 里的配置）", " (takes over the config in settings.json)") } else { "" };
-                        let key_part = key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        diff.push(store_label, tr!("+ 「{}」{}（{}{}）", "+ \"{}\"{} ({}{})", p.name.trim(), adopt, claude_base(&p.base_url), key_part), true);
+                        profiles::push_added(&mut diff, store_label, p.name.trim(), adopt, &claude_base(&p.base_url), key.as_deref());
                         if adopting && cur == UNMANAGED {
                             cur = id;
                         }
@@ -353,20 +334,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     Some(OFFICIAL) => return Err(anyhow!(l("官方账号不能编辑", "The official account can't be edited"))),
                     Some(id) => {
-                        let e = profs.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
-                        let base = claude_base(&p.base_url);
-                        for (k, v) in [("name", p.name.trim()), ("baseUrl", base.as_str())] {
-                            if str_field(e, k) != v {
-                                e[k] = json!(v);
-                                diff.push(store_label, tr!("「{id}」{k} = {v}", "\"{id}\" {k} = {v}"), true);
-                                store_dirty = true;
-                            }
-                        }
-                        if let Some(k) = key {
-                            e["apiKey"] = json!(k);
-                            diff.push(store_label, tr!("「{id}」密钥 = {}", "\"{id}\" API key = {}", mask_key(&k)), true);
-                            store_dirty = true;
-                        }
+                        let e = profiles::get_mut(&mut profs, id)?;
+                        store_dirty |= profiles::edit(e, id, p.name.trim(), &claude_base(&p.base_url), key.as_deref(), &mut diff, store_label);
                     }
                 }
             }
@@ -377,10 +346,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 if provider == &cur {
                     return Err(msg::in_use(provider));
                 }
-                if profs.remove(provider).is_some() {
-                    diff.push(store_label, tr!("- 「{provider}」", "- \"{provider}\""), false);
-                    store_dirty = true;
-                }
+                profiles::delete(&mut profs, provider, &mut diff, store_label)?;
+                store_dirty = true;
             }
             Op::SetCurrentProvider { provider } => {
                 if provider != OFFICIAL && provider != UNMANAGED && !profs.contains_key(provider) {
@@ -389,53 +356,24 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 cur = provider.clone();
             }
             Op::SetModelVisible { provider, model, visible } => {
-                profile(&mut profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let mut list = model_list(p);
-                match list.iter_mut().find(|(id, _)| id == model) {
-                    Some(e) if e.1 != *visible => e.1 = *visible,
-                    Some(_) => continue,
-                    None => list.push((model.clone(), *visible)),
-                }
-                set_model_list(p, &list);
-                diff.push(store_label, if *visible { tr!("「{provider}」{model} 显示", "\"{provider}\" {model} shown") } else { tr!("「{provider}」{model} 隐藏", "\"{provider}\" {model} hidden") }, *visible);
-                store_dirty = true;
+                let p = profile_mut(&mut profs, provider)?;
+                store_dirty |= profiles::set_visible(p, provider, model, *visible, &mut diff, store_label);
             }
             Op::UpsertModel { provider, model: m } => {
-                profile(&mut profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let mut list = model_list(p);
-                let id = m.id.trim().to_string();
-                if !id.is_empty() && !list.iter().any(|(x, _)| x == &id) {
-                    list.push((id.clone(), true));
-                    set_model_list(p, &list);
-                    diff.push(store_label, tr!("「{provider}」+ {id}", "\"{provider}\" + {id}"), true);
-                    store_dirty = true;
-                }
+                let p = profile_mut(&mut profs, provider)?;
+                store_dirty |= profiles::add_model(p, provider, &m.id, &mut diff, store_label)?;
             }
             Op::DeleteModel { provider, model } => {
-                profile(&mut profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let mut list = model_list(p);
-                let n = list.len();
-                list.retain(|(x, _)| x != model);
-                if list.len() != n {
-                    set_model_list(p, &list);
-                    diff.push(store_label, tr!("「{provider}」- {model}", "\"{provider}\" - {model}"), false);
-                    store_dirty = true;
-                }
+                let p = profile_mut(&mut profs, provider)?;
+                store_dirty |= profiles::delete_model(p, provider, model, &mut diff, store_label);
             }
             Op::SetProviderModels { provider, models } => {
-                profile(&mut profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let list: Vec<(String, bool)> = clean_ids(models).into_iter().map(|m| (m, true)).collect();
-                set_model_list(p, &list);
-                diff.push(store_label, tr!("「{provider}」模型列表：{} 个", "\"{provider}\" model list: {}", list.len()), true);
+                let p = profile_mut(&mut profs, provider)?;
+                profiles::set_models(p, provider, models, &mut diff, store_label);
                 store_dirty = true;
             }
             Op::SetModelRoles { provider, roles } => {
-                profile(&mut profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
+                let p = profile_mut(&mut profs, provider)?;
                 let old = roles_of(p);
                 let new: BTreeMap<String, String> = roles.iter().filter(|(k, v)| ROLES.iter().any(|(r, ..)| r == k) && !v.trim().is_empty()).map(|(k, v)| (k.clone(), v.trim().to_string())).collect();
                 if old != new {
@@ -461,10 +399,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     "quiet" => {
                         if env_str(&env_of(&cfg), QUIET).is_some() != on {
-                            if !cfg.get("env").map(|e| e.is_object()).unwrap_or(false) {
-                                cfg["env"] = json!({});
-                            }
-                            let env = cfg["env"].as_object_mut().unwrap();
+                            let env = obj_at(&mut cfg, &["env"])?;
                             if on { env.insert(QUIET.into(), json!("1")); } else { env.remove(QUIET); }
                             diff.push(&file, format!("env.{QUIET} {}", if on { "= 1" } else { l("（删除）", "(removed)") }), on);
                             cfg_dirty = true;
@@ -486,10 +421,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         id => profs.get(id).map(|p| desired_env(Some(p))),
     };
     if let Some(want) = want {
-        if !cfg.get("env").map(|e| e.is_object()).unwrap_or(false) {
-            cfg["env"] = json!({});
-        }
-        let env = cfg["env"].as_object_mut().unwrap();
+        let env = obj_at(&mut cfg, &["env"])?;
         for (k, v) in want {
             let old = env.get(k).and_then(|x| x.as_str()).map(String::from);
             if old == v {
@@ -525,9 +457,97 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             written.push(settings_path());
         }
         if store_dirty {
-            save_profiles(&mut root, profs);
+            profiles::save(&mut root, ID, profs);
             store::save(&root)?;
         }
     }
     Ok((diff, written, backup_dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::fs;
+
+    fn setup(settings: Option<&str>) -> TestHome {
+        crate::env::force(crate::env::Target::Windows);
+        let home = TestHome::new("claude");
+        fs::create_dir_all(dir()).unwrap();
+        if let Some(s) = settings {
+            fs::write(settings_path(), s).unwrap();
+        }
+        home
+    }
+
+    fn apply(ops: Vec<Op>) -> Result<Diff> {
+        plan(&ops, false).map(|x| x.0)
+    }
+
+    fn pi(id: Option<&str>, name: &str, base: &str, key: Option<&str>, models: &[&str]) -> ProviderInput {
+        ProviderInput { id: id.map(String::from), name: name.into(), base_url: base.into(), api: "anthropic".into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, official_auth: None }
+    }
+
+    fn settings() -> Value {
+        serde_json::from_str(&fs::read_to_string(settings_path()).unwrap()).unwrap()
+    }
+
+    fn models(id: &str) -> Vec<(String, bool)> {
+        model_list(&profiles::load(&store::load(), ID)[id])
+    }
+
+    fn model(id: &str) -> ModelInput {
+        ModelInput { id: id.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn create_switch_and_back_to_official() {
+        let _h = setup(Some("{\n  \"includeCoAuthoredBy\": false\n}\n"));
+        let d = apply(vec![Op::UpsertProvider { provider: pi(None, "My Relay", "https://r/v1/", Some("sk-new-secret-5678"), &["m1", "m1", " m2 "]) }]).unwrap();
+        assert_eq!(d.groups[0].lines[0].text, "+ 「My Relay」（https://r · 密钥 ••••5678）");
+        assert_eq!(models("my-relay"), vec![("m1".into(), true), ("m2".into(), true)], "cleaned and deduped");
+        apply(vec![Op::SetModelRoles { provider: "my-relay".into(), roles: BTreeMap::from([("opus".into(), "m2".into())]) }, Op::SetCurrentProvider { provider: "my-relay".into() }]).unwrap();
+        let v = settings();
+        assert_eq!(v.pointer("/env/ANTHROPIC_BASE_URL").and_then(|x| x.as_str()), Some("https://r"));
+        assert_eq!(v.pointer("/env/ANTHROPIC_AUTH_TOKEN").and_then(|x| x.as_str()), Some("sk-new-secret-5678"));
+        assert_eq!(v.pointer("/env/ANTHROPIC_DEFAULT_OPUS_MODEL").and_then(|x| x.as_str()), Some("m2"));
+        assert_eq!(v["includeCoAuthoredBy"], json!(false));
+        assert_eq!(state(&Install::default()).current_provider.as_deref(), Some("my-relay"));
+        apply(vec![Op::SetCurrentProvider { provider: OFFICIAL.into() }]).unwrap();
+        assert!(settings().get("env").is_none(), "our variables removed, empty env dropped");
+        apply(vec![Op::DeleteProvider { provider: "my-relay".into() }]).unwrap();
+        assert!(profiles::load(&store::load(), ID).is_empty());
+    }
+
+    #[test]
+    fn unchanged_edits_are_no_ops() {
+        let _h = setup(None);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r", Some("sk-same-secret-1234"), &["m"]) }]).unwrap();
+        let store0 = fs::read_to_string(agentplus_dir().join("store.json")).unwrap();
+        // Re-entering the same key (and name / address) changes nothing.
+        let (d, written, backup) = plan(&[Op::UpsertProvider { provider: pi(Some("r"), "R", "https://r/", Some("sk-same-secret-1234"), &[]) }], false).unwrap();
+        assert!(d.groups.is_empty() && written.is_empty() && backup.is_none());
+        assert!(apply(vec![Op::UpsertModel { provider: "r".into(), model: model("m") }]).unwrap().groups.is_empty());
+        assert!(apply(vec![Op::SetModelVisible { provider: "r".into(), model: "m".into(), visible: true }]).unwrap().groups.is_empty());
+        assert_eq!(fs::read_to_string(agentplus_dir().join("store.json")).unwrap(), store0);
+    }
+
+    #[test]
+    fn invalid_ops_are_errors() {
+        let _h = setup(None);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r", None, &[]) }]).unwrap();
+        assert!(apply(vec![Op::UpsertModel { provider: "r".into(), model: model("  ") }]).is_err(), "blank model id");
+        assert!(apply(vec![Op::DeleteProvider { provider: "nope".into() }]).is_err(), "unknown provider");
+        assert!(apply(vec![Op::UpsertModel { provider: OFFICIAL.into(), model: model("m") }]).is_err());
+        apply(vec![Op::SetProviderModels { provider: "r".into(), models: vec!["a".into(), "b".into(), "a".into()] }]).unwrap();
+        assert_eq!(models("r"), vec![("a".into(), true), ("b".into(), true)]);
+    }
+
+    #[test]
+    fn non_object_env_is_refused() {
+        let raw = "{\n  \"env\": \"oops\"\n}\n";
+        let _h = setup(Some(raw));
+        assert!(apply(vec![Op::SetSetting { key: "quiet".into(), value: json!(true) }]).is_err());
+        assert_eq!(fs::read_to_string(settings_path()).unwrap(), raw);
+    }
 }
