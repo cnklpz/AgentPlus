@@ -13,8 +13,7 @@
 //! The active model is `security.auth.selectedType` + `model.name`; Qwen Code
 //! hot-reloads `modelProviders`.
 
-// Unused until the integrator wires the adapter into adapters::mod.
-
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::model::*;
 use crate::process::Install;
@@ -43,33 +42,15 @@ const OAUTH: &str = "qwen-oauth";
 
 // ---------------------------------------------------------------- paths & test hooks
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn test_home() -> Option<PathBuf> {
-    TEST_HOME.with(|h| h.borrow().clone())
-}
-#[cfg(not(test))]
-fn test_home() -> Option<PathBuf> {
-    None
-}
-
 /// `$QWEN_HOME` (Windows side only), else `~/.qwen`.
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() {
-        if let Some(h) = std::env::var_os("QWEN_HOME").filter(|v| !v.is_empty()) {
-            return PathBuf::from(h);
-        }
+    if let Some(h) = crate::env::agent_var("QWEN_HOME") {
+        return PathBuf::from(h);
     }
     home().join(".qwen")
 }
 
 fn dir() -> PathBuf {
-    if let Some(t) = test_home() {
-        return t.join(".qwen");
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -81,40 +62,7 @@ fn dotenv_path() -> PathBuf {
     dir().join(".env")
 }
 
-fn load_store() -> Value {
-    match test_home() {
-        Some(t) => std::fs::read_to_string(t.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_store(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(t) => Ok(std::fs::write(t.join("store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(t) => {
-            let d = t.join("backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
-}
-
 // ---------------------------------------------------------------- detection
-
-fn pkg_version(p: &Path) -> Option<String> {
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version")?.as_str().map(String::from)
-}
 
 /// npm global `@qwen-code/qwen-code`, or the standalone installer
 /// (`%LOCALAPPDATA%\qwen-code\bin\qwen.cmd`). A CLI: `exe` stays None.
@@ -126,14 +74,14 @@ pub fn detect() -> Install {
     if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
         roots.push(d.to_path_buf());
     }
-    if let Some(v) = roots.iter().find_map(|r| pkg_version(&pkg(r))) {
+    if let Some(v) = roots.iter().find_map(|r| crate::process::package_version(&pkg(r))) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(sd) = dirs::data_local_dir().map(|d| d.join("qwen-code")).filter(|d| d.join("bin").join("qwen.cmd").exists()) {
         inst.installed = true;
         inst.version = [sd.join("package.json"), pkg(&sd), pkg(&sd.join("lib"))]
             .iter()
-            .find_map(|p| pkg_version(p))
+            .find_map(|p| crate::process::package_version(p))
             .or_else(|| crate::process::cli_version(&sd.join("bin").join("qwen.cmd")));
         inst.dir = Some(sd);
     } else if let Some(p) = on_path {
@@ -150,41 +98,14 @@ pub fn detect() -> Install {
 
 // ---------------------------------------------------------------- reading
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
-
 /// (settings, meta, has_comments). A missing or empty file reads as fresh v4 settings.
 fn load() -> Result<(Value, TextMeta, bool)> {
-    let p = settings_path();
-    if !p.exists() {
-        return Ok((json!({ "$version": 4 }), default_meta(), false));
-    }
-    let (text, meta) = read_text(&p)?;
+    let (text, meta) = read_text_or_new(&settings_path())?;
     if text.trim().is_empty() {
         return Ok((json!({ "$version": 4 }), meta, false));
     }
-    let (clean, had) = strip_jsonc(&text);
-    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("settings.json 解析失败：{e}", "Failed to parse settings.json: {e}")))?;
-    if !v.is_object() {
-        return Err(anyhow!(l("settings.json 顶层不是对象", "settings.json is not a JSON object at the top level")));
-    }
+    let (v, had) = parse_jsonc_object(&text, "settings.json")?;
     Ok((v, meta, had))
-}
-
-fn dotenv() -> Vec<(String, String)> {
-    let Ok((text, _)) = read_text(&dotenv_path()) else { return vec![] };
-    text.lines()
-        .filter_map(|l| {
-            let l = l.trim();
-            if l.starts_with('#') {
-                return None;
-            }
-            let l = l.strip_prefix("export ").unwrap_or(l);
-            let (k, v) = l.split_once('=')?;
-            Some((k.trim().to_string(), v.trim().trim_matches('"').trim_matches('\'').to_string()))
-        })
-        .collect()
 }
 
 /// Where a key variable is set: (value, source).
@@ -192,13 +113,11 @@ fn lookup(cfg: &Value, name: &str) -> Option<(String, &'static str)> {
     if let Some(v) = cfg.get("env").and_then(|e| e.get(name)).and_then(|v| v.as_str()).filter(|v| !v.is_empty()) {
         return Some((v.to_string(), l("settings.json 的 env", "the env block of settings.json")));
     }
-    if let Some((_, v)) = dotenv().into_iter().find(|(k, v)| k == name && !v.is_empty()) {
+    if let Some(v) = crate::dotenv::get(&crate::dotenv::load(&dotenv_path()).0, name) {
         return Some((v, "~/.qwen/.env"));
     }
-    if !crate::env::is_wsl() {
-        if let Some(v) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
-            return Some((v, l("系统环境变量", "system environment variables")));
-        }
+    if let Some(v) = crate::env::agent_var(name) {
+        return Some((v, l("系统环境变量", "system environment variables")));
     }
     None
 }
@@ -228,15 +147,6 @@ fn api_of(proto: Option<&str>, e: &Value) -> &'static str {
         Some("gemini") | Some("vertex-ai") => "gemini",
         _ if s(e, "wireApi") == Some("responses") => "responses",
         _ => "chat",
-    }
-}
-
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        "gemini" => "Gemini",
-        _ => "Chat",
     }
 }
 
@@ -327,11 +237,11 @@ fn base_id(key: &str, base: Option<&str>, env: Option<&str>) -> String {
 }
 
 fn store_list(root: &Value, k: &str) -> Vec<Value> {
-    store::agent_get(root, ID, k).and_then(|x| x.as_array()).cloned().unwrap_or_default()
+    store::get_arr(root, ID, k)
 }
 
 fn store_obj(root: &Value, k: &str) -> Map<String, Value> {
-    store::agent_get(root, ID, k).and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    store::get_obj(root, ID, k)
 }
 
 fn attach(out: &mut Vec<Group>, cfg: &Value, key: &str, e: &Value, live: bool) {
@@ -386,11 +296,9 @@ fn groups(cfg: &Value, root: &Value) -> Vec<Group> {
     for i in order {
         let g = &mut out[i];
         let b = base_id(&g.key, g.base.as_deref(), g.env_key.as_deref());
-        let id = [b.clone(), format!("{b}-{}", slug(&g.key))]
-            .into_iter()
-            .chain((2..).map(|n| format!("{b}-{n}")))
-            .find(|c| !taken.contains(c))
-            .unwrap();
+        // Before numbering, a taken id tries the protocol-qualified one.
+        let by_key = format!("{b}-{}", slug(&g.key));
+        let id = if taken.contains(&b) && !taken.contains(&by_key) { by_key } else { unique_id(&b, |c| taken.contains(c)) };
         taken.insert(id.clone());
         g.id = id;
     }
@@ -468,10 +376,10 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         _ => l("未设置", "Not set").into(),
     };
     let mut details = vec![
-        Kv::mono(l("配置位置", "Config location"), tr!("modelProviders.{}（{} 个条目）", "modelProviders.{} ({} entries)", g.key, g.live.len())),
+        Kv::mono(lbl::config_location(), trn!(g.live.len(), "modelProviders.{}（{n} 个条目）", "modelProviders.{} ({n} entry)", "modelProviders.{} ({n} entries)", g.key)),
         Kv::mono("envKey", g.env_key.clone().unwrap_or_else(|| tr!("-（默认 {}）", "- (default {})", var.clone().unwrap_or_default()))),
-        Kv::text(l("密钥", "API key"), key_note),
-        Kv::text(l("状态", "Status"), if g.enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries kept in AgentPlus") }),
+        Kv::text(lbl::api_key(), key_note),
+        Kv::text(lbl::status(), if g.enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries kept in AgentPlus") }),
     ];
     if g.proto.as_deref().is_some_and(|p| p != g.key) {
         details.push(Kv::mono("providerProtocol", format!("{} → {}", g.key, g.proto.as_deref().unwrap_or(""))));
@@ -482,7 +390,6 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         base_url: g.base.clone(),
         host: g.base.as_deref().map(host_of).unwrap_or_else(|| l("默认地址", "Default URL").into()),
         apis: vec![api_label(api).into()],
-        builtin: false,
         enabled: g.enabled,
         compatible: g.proto.is_some(),
         reason: g.proto.is_none().then(|| tr!("modelProviders.{} 没有在 providerProtocol 里声明协议，Qwen Code 会忽略它", "modelProviders.{} has no protocol declared in providerProtocol, so Qwen Code ignores it", g.key)),
@@ -491,77 +398,42 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         editable: g.proto.is_some(),
         api: api.into(),
         has_key: found.is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&settings_path()), display_path(&dotenv_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&settings_path()), display_path(&dotenv_path())]);
     let cfg = match load() {
         Ok((cfg, _, had)) => {
             if had {
                 st.readonly = true;
-                st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments, which would be lost on write. Switched to read-only.").into());
+                st.notes.push(msg::comments_readonly("settings.json"));
             }
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
-    let root = load_store();
+    let root = store::load();
     let names = store_obj(&root, "names");
     let sel = selection(&cfg);
     let gs = groups(&cfg, &root);
 
     if sel.auth.as_deref() == Some(OAUTH) || dir().join("oauth_creds.json").exists() {
-        st.providers.push(Provider {
-            id: OAUTH.into(),
-            name: l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into(),
-            base_url: None,
-            host: l("Qwen OAuth 登录", "Qwen OAuth login").into(),
-            apis: vec![l("账号", "Account").into()],
-            builtin: true,
-            enabled: true,
-            compatible: true,
-            reason: None,
-            models: vec![],
-            details: vec![
-                Kv::text(l("认证方式", "Auth type"), l("qwen-oauth（~/.qwen/oauth_creds.json）", "qwen-oauth (~/.qwen/oauth_creds.json)")),
-                Kv::text(l("说明", "About"), l("Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换", "Qwen Code's built-in account login. Models are managed by Qwen Code; switch with /auth.")),
+        st.providers.push(Provider::builtin(
+            OAUTH,
+            l("Qwen 账号（OAuth）", "Qwen account (OAuth)"),
+            l("Qwen OAuth 登录", "Qwen OAuth sign-in"),
+            "chat",
+            l("账号", "Account"),
+            vec![
+                Kv::text(lbl::auth(), l("qwen-oauth（~/.qwen/oauth_creds.json）", "qwen-oauth (~/.qwen/oauth_creds.json)")),
+                Kv::text(lbl::note(), l("Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换", "Qwen Code's built-in account sign-in. Models are managed by Qwen Code; switch with /auth.")),
             ],
-            editable: false,
-            api: "chat".into(),
-            has_key: true,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
-        });
+        ));
     }
     let mut provs: Vec<Provider> = gs.iter().map(|g| provider_of(g, &cfg, &names, &sel)).collect();
     // Two unnamed providers on the same host: tell them apart by protocol.
@@ -585,11 +457,11 @@ pub fn state(inst: &Install) -> AgentState {
     let cur_name = cur.and_then(|g| st.providers.iter().find(|p| p.id == g.id)).map(|p| p.name.clone());
     let vis: usize = st.providers.iter().filter(|p| p.enabled && !p.builtin).map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::mono(l("认证方式", "Auth type"), sel.auth.clone().unwrap_or_else(|| l("-（未选择）", "- (not selected)").into())),
-        Kv::mono(l("当前模型", "Current model"), sel.model.clone().unwrap_or_else(|| "-".into())),
-        Kv::text(l("供应商", "Provider"), cur_name.unwrap_or_else(|| if sel.auth.as_deref() == Some(OAUTH) { l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into() } else { "-".into() })),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("配置文件", "Config file"), display_path(&settings_path())),
+        Kv::mono(lbl::auth(), sel.auth.clone().unwrap_or_else(|| l("-（未选择）", "- (not selected)").into())),
+        Kv::mono(lbl::current_model(), sel.model.clone().unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::provider(), cur_name.unwrap_or_else(|| if sel.auth.as_deref() == Some(OAUTH) { l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into() } else { "-".into() })),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+        Kv::mono(lbl::config_file(), display_path(&settings_path())),
     ];
     st.notes.push(l("Qwen Code 会热加载 modelProviders；在 Qwen Code 里用 /model 选择模型。", "Qwen Code hot-reloads modelProviders; pick models with /model in Qwen Code.").into());
     st.notes.push(l("密钥写入 settings.json 的 env 块（按 envKey 命名的变量），不会写进模型条目。", "API keys are written to the env block of settings.json (in the variable named by envKey), never into model entries.").into());
@@ -603,7 +475,7 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    let g = groups(&cfg, &load_store()).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let g = groups(&cfg, &store::load()).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
     let base = g.base.clone().filter(|b| !b.trim().is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")))?;
     let key = g.key_var().and_then(|v| lookup(&cfg, &v)).map(|x| x.0);
     Ok((base, key, g.api().into()))
@@ -626,7 +498,7 @@ impl Ctx {
     }
 
     fn group(&self, id: &str) -> Result<Group> {
-        self.groups().into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        self.groups().into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))
     }
 
     fn enabled_group(&self, id: &str) -> Result<Group> {
@@ -760,7 +632,7 @@ impl Ctx {
     fn transform(&mut self, g: &Group, new_key: &str, f: &dyn Fn(&mut Value)) -> Result<()> {
         if !g.enabled {
             let mut d = store_obj(&self.root, "disabledProviders");
-            let rec = d.get_mut(&g.id).ok_or_else(|| anyhow!(tr!("找不到供应商 {}", "Provider not found: {}", g.id)))?;
+            let rec = d.get_mut(&g.id).ok_or_else(|| msg::no_provider(&g.id))?;
             for k in ["entries", "hidden"] {
                 if let Some(a) = rec.get_mut(k).and_then(|x| x.as_array_mut()) {
                     a.iter_mut().filter(|e| e.is_object()).for_each(f);
@@ -815,30 +687,21 @@ impl Ctx {
         let gs = self.groups();
         let taken: HashSet<String> = gs.iter().map(|g| g.id.clone()).chain([OAUTH.to_string()]).collect();
         let used_env: HashSet<String> = gs.iter().filter_map(|g| g.env_key.clone()).collect();
-        let b = slug(p.name.trim());
-        let id = std::iter::once(b.clone())
-            .chain((2..).map(|n| format!("{b}-{n}")))
-            .find(|c| !taken.contains(c) && !used_env.contains(&agentplus_var(c)))
-            .unwrap();
+        let id = unique_id(&slug(p.name.trim()), |c| taken.contains(c) || used_env.contains(&agentplus_var(c)));
         let var = agentplus_var(&id);
         let key = key_for_api(api);
         let mut tmpl = json!({ "baseUrl": p.base_url.trim(), "envKey": var });
         if key == "openai" {
             tmpl["wireApi"] = json!(if api == "responses" { "responses" } else { "chat-completions" });
         }
-        let mut models: Vec<&str> = vec![];
-        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !models.contains(&m) {
-                models.push(m);
-            }
-        }
+        let models = clean_ids(&p.models);
         if models.is_empty() {
             self.push_skeleton(key, tmpl.clone());
             self.diff.push(store_label(), tr!("+ 「{}」{}（{} · 还没有模型，添加模型后写入 modelProviders.{key}）", "+ \"{}\" {} ({} · no models yet; written to modelProviders.{key} once you add models)", p.name.trim(), p.base_url.trim(), api_label(api)), true);
         } else {
             let entries: Vec<Value> = models.iter().map(|m| new_entry(&tmpl, m, None, None)).collect();
             self.arr(key)?.extend(entries);
-            self.diff.push(&self.file, tr!("+ modelProviders.{key}：「{}」{} · {} · {} 个模型（envKey = {var}）", "+ modelProviders.{key}: \"{}\" {} · {} · {} models (envKey = {var})", p.name.trim(), p.base_url.trim(), api_label(api), models.len()), true);
+            self.diff.push(&self.file, trn!(models.len(), "+ modelProviders.{key}：「{}」{} · {} · {n} 个模型（envKey = {var}）", "+ modelProviders.{key}: \"{}\" {} · {} · {n} model (envKey = {var})", "+ modelProviders.{key}: \"{}\" {} · {} · {n} models (envKey = {var})", p.name.trim(), p.base_url.trim(), api_label(api)), true);
             self.cfg_dirty = true;
         }
         self.set_name(&id, p.name.trim());
@@ -879,14 +742,14 @@ impl Ctx {
             self.transform(&g, &new_key, &f)?;
             let file = if g.enabled { self.file.clone() } else { store_label().to_string() };
             if base_changed {
-                self.diff.push(&file, tr!("modelProviders.{new_key}「{id}」baseUrl = \"{base}\"（{n} 个条目）", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entries)"), true);
+                self.diff.push(&file, trn!(n, "modelProviders.{new_key}「{id}」baseUrl = \"{base}\"（{n} 个条目）", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entry)", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entries)"), true);
             }
             if api_changed {
                 let moved = if new_key != g.key { tr!("，移到 modelProviders.{new_key}", ", moved to modelProviders.{new_key}") } else { String::new() };
                 self.diff.push(&file, tr!("「{id}」协议 {} → {}{moved}", "\"{id}\" protocol {} → {}{moved}", api_label(g.api()), api_label(api)), true);
             }
             if let Some(v) = &new_env {
-                self.diff.push(&file, tr!("「{id}」envKey = \"{v}\"（{n} 个条目）", "\"{id}\" envKey = \"{v}\" ({n} entries)"), true);
+                self.diff.push(&file, trn!(n, "「{id}」envKey = \"{v}\"（{n} 个条目）", "\"{id}\" envKey = \"{v}\" ({n} entry)", "\"{id}\" envKey = \"{v}\" ({n} entries)"), true);
             }
         }
         // The id follows (key, baseUrl, envKey); carry the name over if it moved.
@@ -923,7 +786,7 @@ impl Ctx {
             let h = self.take_hidden(&g, &|_| true).len();
             self.take_skeleton(&g);
             if n > 0 {
-                self.diff.push(&self.file, tr!("- modelProviders.{}：「{name}」的 {n} 个条目", "- modelProviders.{}: {n} entries of \"{name}\"", g.key), false);
+                self.diff.push(&self.file, trn!(n, "- modelProviders.{}：「{name}」的 {n} 个条目", "- modelProviders.{}: {n} entry of \"{name}\"", "- modelProviders.{}: {n} entries of \"{name}\"", g.key), false);
             }
             if h > 0 || n == 0 {
                 self.diff.push(store_label(), tr!("- 「{name}」暂存的 {h} 个隐藏模型", "- {h} stashed hidden models of \"{name}\""), false);
@@ -965,7 +828,7 @@ impl Ctx {
             self.prune(&g.key);
             let hidden = self.take_hidden(&g, &|_| true);
             self.take_skeleton(&g);
-            self.diff.push(&self.file, tr!("- modelProviders.{}：「{name}」的 {} 个条目（暂存在 AgentPlus，可恢复）", "- modelProviders.{}: {} entries of \"{name}\" (kept in AgentPlus, can be restored)", g.key, entries.len()), false);
+            self.diff.push(&self.file, trn!(entries.len(), "- modelProviders.{}：「{name}」的 {n} 个条目（暂存在 AgentPlus，可恢复）", "- modelProviders.{}: {n} entry of \"{name}\" (kept in AgentPlus, can be restored)", "- modelProviders.{}: {n} entries of \"{name}\" (kept in AgentPlus, can be restored)", g.key), false);
             d.insert(g.id.clone(), json!({ "key": g.key, "entries": entries, "hidden": hidden, "template": g.template() }));
         } else {
             let rec = d.remove(id).unwrap_or_default();
@@ -973,7 +836,7 @@ impl Ctx {
             let arr = |k: &str| rec.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
             let (entries, hidden) = (arr("entries"), arr("hidden"));
             if !entries.is_empty() {
-                self.diff.push(&self.file, tr!("+ modelProviders.{key}：「{name}」的 {} 个条目", "+ modelProviders.{key}: {} entries of \"{name}\"", entries.len()), true);
+                self.diff.push(&self.file, trn!(entries.len(), "+ modelProviders.{key}：「{name}」的 {n} 个条目", "+ modelProviders.{key}: {n} entry of \"{name}\"", "+ modelProviders.{key}: {n} entries of \"{name}\""), true);
                 self.arr(&key)?.extend(entries.clone());
                 self.cfg_dirty = true;
             } else {
@@ -1020,7 +883,7 @@ impl Ctx {
         let g = self.enabled_group(provider)?;
         let mid = m.id.trim().to_string();
         if mid.is_empty() {
-            return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+            return Err(msg::model_id_required());
         }
         let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(String::from);
         let ctx = m.context;
@@ -1099,12 +962,7 @@ impl Ctx {
 
     fn set_models(&mut self, provider: &str, models: &[String]) -> Result<()> {
         let g = self.enabled_group(provider)?;
-        let mut want: Vec<String> = vec![];
-        for m in models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !want.iter().any(|w| w == m) {
-                want.push(m.to_string());
-            }
-        }
+        let want = clean_ids(models);
         let have: Vec<String> = g.live.iter().chain(&g.hidden).filter_map(|e| s(e, "id").map(String::from)).collect();
         for id in have.iter().filter(|h| !want.contains(h)) {
             self.delete_model(provider, id)?;
@@ -1137,23 +995,23 @@ fn new_entry(tmpl: &Value, id: &str, name: Option<&str>, ctx: Option<u64>) -> Va
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg, meta, had_comments) = load()?;
-    let mut cx = Ctx { cfg, root: load_store(), diff: Diff::default(), file: display_path(&settings_path()), cfg_dirty: false, store_dirty: false };
+    let mut cx = Ctx { cfg, root: store::load(), diff: Diff::default(), file: display_path(&settings_path()), cfg_dirty: false, store_dirty: false };
 
     for op in ops {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match p.id.as_deref() {
                     None => cx.create_provider(p)?,
-                    Some(OAUTH) => return Err(anyhow!(l("Qwen 账号登录不能编辑", "The Qwen account login can't be edited"))),
+                    Some(OAUTH) => return Err(anyhow!(l("Qwen 账号登录不能编辑", "The Qwen account sign-in can't be edited"))),
                     Some(id) => cx.edit_provider(id, p)?,
                 }
             }
             Op::DeleteProvider { provider } => {
                 if provider == OAUTH {
-                    return Err(anyhow!(l("Qwen 账号登录不能删除，在 Qwen Code 里用 /auth 切换", "The Qwen account login can't be deleted; switch with /auth in Qwen Code")));
+                    return Err(anyhow!(l("Qwen 账号登录不能删除，在 Qwen Code 里用 /auth 切换", "The Qwen account sign-in can't be deleted; switch with /auth in Qwen Code")));
                 }
                 cx.delete_provider(provider)?
             }
@@ -1174,29 +1032,29 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         cx.cfg_dirty = true;
                     }
                 }
-                other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                other => return Err(msg::unknown_setting(other)),
             },
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Qwen Code 可以同时配置多个供应商，在 Qwen Code 里用 /model 选择模型", "Qwen Code can have several providers configured at once; pick models with /model in Qwen Code."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
 
     if cx.cfg_dirty && had_comments {
-        return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing to avoid losing them")));
+        return Err(msg::comments_not_written("settings.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;
     if !dry_run {
         if cx.cfg_dirty {
             let p = settings_path();
-            backup_dir = Some(backup_files(std::slice::from_ref(&p))?);
+            backup_dir = Some(backup(ID, std::slice::from_ref(&p))?);
             std::fs::create_dir_all(dir())?;
             write_json(&p, &cx.cfg, meta)?;
             written.push(p);
         }
         if cx.store_dirty {
-            save_store(&cx.root)?;
+            store::save(&cx.root)?;
         }
     }
     Ok((cx.diff, written, backup_dir))
@@ -1276,15 +1134,14 @@ mod tests {
 }
 "#;
 
-    fn setup(tag: &str, sample: Option<&str>) -> PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let t = std::env::temp_dir().join(format!("agentplus-qwen-{tag}-{}-{nanos}", std::process::id()));
+    fn setup(tag: &str, sample: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("qwen-{tag}"));
+        let t = home.0.clone();
         fs::create_dir_all(t.join(".qwen")).unwrap();
         if let Some(s) = sample {
             fs::write(t.join(".qwen").join("settings.json"), s).unwrap();
         }
-        TEST_HOME.with(|h| *h.borrow_mut() = Some(t.clone()));
-        t
+        home
     }
 
     fn cfg_now() -> Value {
@@ -1323,7 +1180,7 @@ mod tests {
 
     #[test]
     fn reads_groups_and_selection() {
-        setup("read", Some(SAMPLE));
+        let _home = setup("read", Some(SAMPLE));
         let s = st();
         assert_eq!(s.mode, "multi");
         assert!(!s.readonly);
@@ -1348,7 +1205,7 @@ mod tests {
 
     #[test]
     fn missing_file_and_create_provider() {
-        let t = setup("create", None);
+        let _home = setup("create", None);
         let s = st();
         assert!(s.providers.is_empty() && !s.readonly);
         let (d, w) = apply(vec![Op::UpsertProvider { provider: input(None, "My Relay", "https://my.relay/v1", "chat", Some(SECRET), &["m1", "m2"]) }]);
@@ -1371,17 +1228,17 @@ mod tests {
         apply(vec![Op::UpsertProvider { provider: input(None, "Empty", "https://e.x/v1", "anthropic", None, &[]) }]);
         let p = prov(&st(), "empty");
         assert!(p.models.is_empty() && p.api == "anthropic");
-        apply(vec![Op::UpsertModel { provider: "empty".into(), model: ModelInput { id: "claude-x".into(), name: None, context: Some(200000), ..Default::default() } }]);
+        let (_, _, backup) = plan(&[Op::UpsertModel { provider: "empty".into(), model: ModelInput { id: "claude-x".into(), name: None, context: Some(200000), ..Default::default() } }], false).unwrap();
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["anthropic"][0]["envKey"], "AGENTPLUS_EMPTY_API_KEY");
         assert_eq!(cfg["modelProviders"]["anthropic"][0]["generationConfig"]["contextWindowSize"], 200000);
-        assert!(store_list(&load_store(), "emptyProviders").is_empty());
-        assert!(t.join("backup").join("settings.json").exists());
+        assert!(store_list(&store::load(), "emptyProviders").is_empty());
+        assert!(backup.unwrap().join("settings.json").exists());
     }
 
     #[test]
     fn edit_provider_keeps_id_and_moves_protocol() {
-        setup("edit", Some(SAMPLE));
+        let _home = setup("edit", Some(SAMPLE));
         let (d, _) = apply(vec![Op::UpsertProvider { provider: input(Some("relay"), "Relay", "https://relay2.example.com/v1", "chat", Some(SECRET), &[]) }]);
         assert!(!lines(&d).join("\n").contains(SECRET));
         let cfg = cfg_now();
@@ -1408,7 +1265,7 @@ mod tests {
 
     #[test]
     fn delete_provider_removes_entries_and_key() {
-        setup("delete", Some(SAMPLE));
+        let _home = setup("delete", Some(SAMPLE));
         apply(vec![Op::DeleteProvider { provider: "dashscope".into() }]);
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["openai"].as_array().unwrap().len(), 1);
@@ -1422,7 +1279,7 @@ mod tests {
 
     #[test]
     fn hide_show_add_delete_models() {
-        setup("models", Some(SAMPLE));
+        let _home = setup("models", Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "dashscope".into(), model: "qwen3-max".into(), visible: false }]);
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["openai"].as_array().unwrap().len(), 2);
@@ -1435,7 +1292,7 @@ mod tests {
         let e = &cfg["modelProviders"]["openai"][1];
         assert_eq!((e["id"].as_str(), e["name"].as_str()), (Some("qwen3-max"), Some("Max")));
         assert_eq!(e["generationConfig"]["contextWindowSize"], 262144);
-        assert!(store_list(&load_store(), "hiddenModels").is_empty());
+        assert!(store_list(&store::load(), "hiddenModels").is_empty());
         // Add copies the group's baseUrl / envKey / wireApi.
         apply(vec![Op::UpsertModel { provider: "relay".into(), model: ModelInput { id: "gpt-5-mini".into(), name: None, context: None, ..Default::default() } }]);
         let cfg = cfg_now();
@@ -1454,7 +1311,7 @@ mod tests {
 
     #[test]
     fn disable_enable_provider() {
-        setup("enable", Some(SAMPLE));
+        let _home = setup("enable", Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "dashscope".into(), model: "qwen3-max".into(), visible: false }]);
         let (d, _) = apply(vec![Op::SetProviderEnabled { provider: "dashscope".into(), enabled: false }]);
         assert!(!lines(&d).is_empty());
@@ -1475,17 +1332,17 @@ mod tests {
         assert!(p.enabled);
         assert_eq!(p.name, "DS");
         assert_eq!(p.models.iter().filter(|m| !m.visible).count(), 1);
-        assert!(store_obj(&load_store(), "disabledProviders").is_empty());
+        assert!(store_obj(&store::load(), "disabledProviders").is_empty());
     }
 
     #[test]
     fn dry_run_writes_nothing_and_roundtrip_keeps_rest() {
         let t = setup("dry", Some(SAMPLE));
-        let path = t.join(".qwen").join("settings.json");
+        let path = t.0.join(".qwen").join("settings.json");
         let (d, w, b) = plan(&[Op::UpsertProvider { provider: input(None, "X", "https://x/v1", "chat", Some(SECRET), &["a"]) }, Op::SetSetting { key: "usage_stats".into(), value: json!(false) }], true).unwrap();
         assert!(w.is_empty() && b.is_none() && !lines(&d).is_empty());
         assert_eq!(fs::read_to_string(&path).unwrap(), SAMPLE);
-        assert!(!t.join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
         // A real no-op-ish write keeps everything else byte-identical.
         apply(vec![Op::SetSetting { key: "usage_stats".into(), value: json!(false) }]);
         let out = fs::read_to_string(&path).unwrap();
@@ -1498,7 +1355,7 @@ mod tests {
 
     #[test]
     fn comments_make_it_readonly() {
-        setup("jsonc", Some("{\n  // my settings\n  \"modelProviders\": {}\n}\n"));
+        let _home = setup("jsonc", Some("{\n  // my settings\n  \"modelProviders\": {}\n}\n"));
         let s = st();
         assert!(s.readonly);
         assert!(plan(&[Op::UpsertProvider { provider: input(None, "X", "https://x/v1", "chat", None, &["a"]) }], false).is_err());
@@ -1508,7 +1365,7 @@ mod tests {
 
     #[test]
     fn custom_key_needs_protocol() {
-        setup("custom", Some(r#"{"modelProviders":{"mine":[{"id":"a","baseUrl":"https://a/v1","envKey":"A_KEY"}],"ok":[{"id":"b","baseUrl":"https://b/v1","envKey":"B_KEY"}]},"providerProtocol":{"ok":"openai"}}"#));
+        let _home = setup("custom", Some(r#"{"modelProviders":{"mine":[{"id":"a","baseUrl":"https://a/v1","envKey":"A_KEY"}],"ok":[{"id":"b","baseUrl":"https://b/v1","envKey":"B_KEY"}]},"providerProtocol":{"ok":"openai"}}"#));
         let s = st();
         let a = prov(&s, "a");
         assert!(!a.compatible && !a.editable);

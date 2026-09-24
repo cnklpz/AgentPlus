@@ -8,6 +8,7 @@
 //! Keys live in `options.apiKey`, or in OpenCode's `auth.json` when that is where the
 //! user keeps them.
 
+use super::msg;
 use super::Endpoint;
 use crate::i18n::l;
 use crate::mfields;
@@ -83,14 +84,6 @@ pub fn api_of(npm: &str) -> &'static str {
     }
 }
 
-pub fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        _ => "Chat",
-    }
-}
-
 pub fn npm_for(api: &str) -> &'static str {
     match api {
         "anthropic" => "@ai-sdk/anthropic",
@@ -110,15 +103,11 @@ impl Fmt {
 
     /// Returns (config, meta, has_comments). A missing file reads as `{}` when `allow_missing`.
     pub fn load(&self, allow_missing: bool) -> Result<(Value, TextMeta, bool)> {
-        if allow_missing && !self.path.exists() {
-            return Ok((json!({ "$schema": "https://opencode.ai/config.json" }), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }, false));
+        if allow_missing {
+            return read_jsonc_object_or(&self.path, json!({ "$schema": "https://opencode.ai/config.json" }));
         }
         let (text, meta) = read_text(&self.path)?;
-        let (clean, had) = strip_jsonc(&text);
-        let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", self.name())))?;
-        if !v.is_object() {
-            return Err(anyhow!(tr!("{} 顶层不是对象", "The top level of {} is not an object", self.name())));
-        }
+        let (v, had) = parse_jsonc_object(&text, &self.name())?;
         Ok((v, meta, had))
     }
 
@@ -127,17 +116,13 @@ impl Fmt {
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
         let p = self.auth.as_ref()?;
         if !p.exists() {
-            return Some((json!({}), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }));
+            return Some((json!({}), TextMeta::NEW));
         }
         read_json(p).ok().filter(|(v, _)| v.is_object())
     }
 
-    fn stash(&self, root: &Value, key: &str) -> Map<String, Value> {
-        store::agent_get(root, self.agent, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
-    }
-
     fn disabled(&self, cfg: &Value) -> Vec<String> {
-        cfg.get("disabled_providers").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default()
+        str_list(cfg.get("disabled_providers")).unwrap_or_default()
     }
 
     fn auth_key<'a>(auth: Option<&'a Value>, id: &str) -> Option<&'a str> {
@@ -193,29 +178,25 @@ impl Fmt {
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
             apis: vec![api_label(api).into()],
-            builtin: false,
             enabled,
             compatible: true,
-            reason: None,
             models,
             details: vec![
-                Kv::mono(l("配置 ID", "Config ID"), format!("provider.{id}")),
+                Kv::mono(lbl::config_id(), format!("provider.{id}")),
                 Kv::mono("npm", if npm.is_empty() { "-".into() } else { npm.to_string() }),
-                Kv::text(l("密钥", "API key"), key_note),
-                Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { parked }),
+                Kv::text(lbl::api_key(), key_note),
+                Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { parked }),
             ],
             editable: true,
             api: api.into(),
             has_key: in_cfg || in_auth,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            ..Default::default()
         }
     }
 
     /// Custom providers in the config (enabled, natively disabled, or stashed).
     pub fn providers(&self, cfg: &Value, root: &Value) -> Vec<Provider> {
-        let hidden = self.stash(root, "hiddenModels");
+        let hidden = store::get_obj(root, self.agent, "hiddenModels");
         let auth = self.load_auth().map(|x| x.0);
         let off = self.disabled(cfg);
         let mut out = vec![];
@@ -225,7 +206,7 @@ impl Fmt {
             }
         }
         if !self.native_disable {
-            for (id, def) in &self.stash(root, "disabledProviders") {
+            for (id, def) in &store::get_obj(root, self.agent, "disabledProviders") {
                 out.push(self.provider_from(id, def, false, &hidden, auth.as_ref()));
             }
         }
@@ -235,8 +216,9 @@ impl Fmt {
     /// Base URL, key and API kind of a provider.
     pub fn endpoint(&self, id: &str) -> Result<Endpoint> {
         let (cfg, _, _) = self.load(true)?;
-        let parked = self.stash(&store::load(), "disabledProviders");
-        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(|| parked.get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        // Only a config without a native disabled list parks providers in the store.
+        let parked = || if self.native_disable { None } else { store::get_obj(&store::load(), self.agent, "disabledProviders").get(id).cloned() };
+        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(parked).ok_or_else(|| msg::no_provider(id))?;
         let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseURL", "Provider {id} has no baseURL")))?.to_string();
         let auth = self.load_auth().map(|x| x.0);
         let key = def
@@ -294,17 +276,17 @@ impl Fmt {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match &p.id {
                     None => {
-                        let parked = self.stash(root, "disabledProviders");
+                        let parked = store::get_obj(root, self.agent, "disabledProviders");
                         let providers = self.providers_obj(cfg)?;
-                        let base = slug(&p.name);
-                        let free = |c: &String| !providers.contains_key(c) && !parked.contains_key(c) && !RESERVED.with(|r| r.borrow().contains(c));
-                        let id = if free(&base) { base.clone() } else { (2..).map(|n| format!("{base}-{n}")).find(free).unwrap() };
-                        let models: Map<String, Value> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).map(|m| (m.to_string(), json!({}))).collect();
+                        let id = unique_id(&slug(&p.name), |c| providers.contains_key(c) || parked.contains_key(c) || RESERVED.with(|r| r.borrow().iter().any(|x| x == c)));
+                        let models: Map<String, Value> = clean_ids(&p.models).into_iter().map(|m| (m, json!({}))).collect();
                         let n = models.len();
+                        // The label of what gets written (an api OpenCode lacks falls back to Chat).
+                        let label = api_label(api_of(npm_for(&p.api)));
                         providers.insert(id.clone(), json!({
                             "npm": npm_for(&p.api),
                             "name": p.name.trim(),
@@ -313,11 +295,7 @@ impl Fmt {
                         }));
                         diff.push(
                             &ef,
-                            if crate::i18n::is_en() && n == 1 {
-                                format!("+ provider.{id} ({} · {} · 1 model)", p.base_url.trim(), api_label(&p.api))
-                            } else {
-                                tr!("+ provider.{id}（{} · {} · {n} 个模型）", "+ provider.{id} ({} · {} · {n} models)", p.base_url.trim(), api_label(&p.api))
-                            },
+                            trn!(n, "+ provider.{id}（{} · {label} · {n} 个模型）", "+ provider.{id} ({} · {label} · {n} model)", "+ provider.{id} ({} · {label} · {n} models)", p.base_url.trim()),
                             true,
                         );
                         dirty.cfg = true;
@@ -330,7 +308,7 @@ impl Fmt {
                         let def = if in_cfg {
                             cfg.pointer_mut(&jptr(&["provider", id])).unwrap()
                         } else {
-                            store::section(root, self.agent, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+                            store::section(root, self.agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?
                         };
                         let mut changed = vec![];
                         if def.get("name").and_then(|x| x.as_str()) != Some(p.name.trim()) {
@@ -371,7 +349,7 @@ impl Fmt {
                 let prefix = format!("{provider}|");
                 store::section(root, self.agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
                 if !removed_cfg && !removed_stash {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 if self.native_disable {
                     if let Some(list) = cfg.get_mut("disabled_providers").and_then(|x| x.as_array_mut()) {
@@ -442,7 +420,7 @@ impl Fmt {
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 for (k, v) in &m.extra {
                     mfields::check(mfields::OPENCODE, k, v)?;

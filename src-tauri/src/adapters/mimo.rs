@@ -2,6 +2,7 @@
 //! `provider.<id>.models`), app preferences in `%APPDATA%\Xiaomi MiMo\preferences.json`.
 //! Provider and model editing is shared with OpenCode (see ocfmt).
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -14,6 +15,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 pub const ID: &str = "mimo";
+pub const NAME: &str = "MiMo Desktop";
 const SKILLS: [&str; 4] = ["agents", "claude", "codex", "opencode"];
 /// (key, label zh, label en, description)
 const PREFS: [(&str, &str, &str, &str); 4] = [
@@ -41,28 +43,7 @@ fn fmt() -> Fmt {
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "MiMo Desktop".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: engine_path().parent().unwrap().to_string_lossy().to_string(),
-        files: vec![display_path(&engine_path()), display_path(&prefs_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", engine_path().parent().unwrap(), vec![display_path(&engine_path()), display_path(&prefs_path())]);
     let root = store::load();
     let f = fmt();
 
@@ -87,27 +68,19 @@ pub fn state(inst: &Install) -> AgentState {
             })
             .unwrap_or_default();
         st.providers.push(Provider {
-            id: "account".into(),
-            name: l("MiMo 账号内置", "MiMo account (built-in)").into(),
-            base_url: None,
-            host: l("小米账号登录", "Xiaomi account sign-in").into(),
-            apis: vec![l("账号", "Account").into()],
-            builtin: true,
-            enabled: true,
-            compatible: true,
-            reason: None,
             models,
-            details: vec![
-                Kv::text(l("认证方式", "Authentication"), l("小米账号登录", "Xiaomi account sign-in")),
-                Kv::mono(l("来源", "Source"), "model-catalog.json"),
-                Kv::text(l("说明", "Note"), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
-            ],
-            editable: false,
-            api: "chat".into(),
-            has_key: true,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            ..Provider::builtin(
+                "account",
+                l("MiMo 账号内置", "MiMo account (built-in)"),
+                l("小米账号登录", "Xiaomi account sign-in"),
+                "chat",
+                l("账号", "Account"),
+                vec![
+                    Kv::text(lbl::auth(), l("小米账号登录", "Xiaomi account sign-in")),
+                    Kv::mono(lbl::source(), "model-catalog.json"),
+                    Kv::text(lbl::note(), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
+                ],
+            )
         });
     }
 
@@ -115,19 +88,12 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(
-                    l(
-                        "mimocode.jsonc 含注释，写回会丢失注释，已切换为只读。",
-                        "mimocode.jsonc contains comments, which would be lost on write, so it's read-only.",
-                    )
-                    .into(),
-                );
+                st.notes.push(msg::comments_readonly("mimocode.jsonc"));
             }
             st.providers.extend(f.providers(&cfg, &root));
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
         }
     }
 
@@ -157,11 +123,11 @@ pub fn state(inst: &Install) -> AgentState {
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("供应商", "Providers"), on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", "))),
-        Kv::mono(l("默认模型", "Default model"), prefs.get("model").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
+        Kv::text(l("供应商", "Providers"), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::mono(lbl::default_model(), prefs.get("model").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
         Kv::mono(l("技能兼容", "Skill compatibility"), if skills.is_empty() { l("无", "None").into() } else { skills.join(" ") }),
-        Kv::text(l("托盘图标", "Tray icon"), if get_b("trayEnabled") { l("开", "On") } else { l("关", "Off") }),
+        Kv::text(l("托盘图标", "Tray icon"), crate::i18n::on_off(get_b("trayEnabled"))),
     ];
     st
 }
@@ -174,7 +140,8 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, cfg_meta, had_comments) = f.load(false)?;
-    let (mut prefs, prefs_meta) = read_json_object(&prefs_path())?;
+    // preferences.json is optional (state() shows defaults without it).
+    let (mut prefs, prefs_meta) = read_json_object_or_new(&prefs_path())?;
     let mut root = store::load();
     let pf = display_path(&prefs_path());
     let mut diff = Diff::default();
@@ -189,7 +156,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::SetSetting { key, value } => {
                 if key == "skills" {
-                    let want: Vec<String> = value.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                    let want: Vec<String> = str_list(Some(value)).unwrap_or_default();
                     for s in SKILLS {
                         let on = want.iter().any(|w| w == &format!("~/.{s}"));
                         let was = prefs.pointer(&format!("/skillPathCompat/{s}")).and_then(|x| x.as_bool()).unwrap_or(false);
@@ -210,20 +177,20 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         prefs_dirty = true;
                     }
                 } else {
-                    return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}")));
+                    return Err(msg::unknown_setting(key));
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("MiMo Desktop 按启用/停用管理供应商", "MiMo Desktop manages providers by enabling and disabling them"))),
             Op::UpsertProvider { .. } | Op::DeleteProvider { .. } | Op::SetProviderEnabled { .. } | Op::SetModelVisible { .. } | Op::UpsertModel { .. } | Op::DeleteModel { .. } => unreachable!("handled by ocfmt"),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models; edit the models directly"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
         }
     }
 
     let (cfg_dirty, store_dirty) = (dirty.cfg, dirty.store);
     if cfg_dirty && had_comments {
-        return Err(anyhow!(l("mimocode.jsonc 含注释，为避免丢失注释不写入", "mimocode.jsonc contains comments; not writing it so they aren't lost")));
+        return Err(msg::comments_not_written("mimocode.jsonc"));
     }
     let mut written = vec![];
     let mut backup_dir = None;

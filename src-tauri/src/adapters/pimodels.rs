@@ -8,6 +8,7 @@
 //! untouched. Unknown fields are always kept; only documented fields are ever added.
 
 
+use super::msg;
 use super::Endpoint;
 use crate::model::*;
 use crate::store;
@@ -15,7 +16,7 @@ use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Flavor {
@@ -43,10 +44,6 @@ pub struct Dirty {
     pub cfg: bool,
     pub store: bool,
     pub auth: bool,
-}
-
-pub fn blank_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
 }
 
 /// Provider ids pi-ai ships with. A config entry with one of these ids only overrides the
@@ -96,74 +93,8 @@ pub fn raw_api(id: &str, def: &Value) -> String {
     .to_string()
 }
 
-// ---------- test hooks: tests point everything (files, store, backups, env) at a temp dir ----------
-
-#[cfg(test)]
-thread_local! {
-    pub static TEST_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-    pub static TEST_ENV: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-#[cfg(test)]
-pub fn test_root() -> Option<PathBuf> {
-    TEST_ROOT.with(|t| t.borrow().clone())
-}
-#[cfg(not(test))]
-pub fn test_root() -> Option<PathBuf> {
-    None
-}
-
-pub fn load_store() -> Value {
-    match test_root() {
-        Some(r) => std::fs::read_to_string(r.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-pub fn save_store(v: &Value) -> Result<()> {
-    match test_root() {
-        Some(r) => Ok(std::fs::write(r.join("store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-pub fn backup_files(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
-    match test_root() {
-        Some(r) => {
-            let d = r.join("backups");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(agent, files),
-    }
-}
-
-/// An environment variable of the agent's environment (None inside WSL: not ours to read).
-pub fn env_var(name: &str) -> Option<String> {
-    #[cfg(test)]
-    if test_root().is_some() {
-        return TEST_ENV.with(|e| e.borrow().iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()));
-    }
-    if crate::env::is_wsl() {
-        return None;
-    }
-    std::env::var(name).ok().filter(|v| !v.is_empty())
-}
-
 fn is_env_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !s.chars().next().unwrap().is_ascii_digit()
-}
-
-fn read_env_file(p: &Path, name: &str) -> Option<String> {
-    let text = std::fs::read_to_string(p).ok()?;
-    text.lines().find_map(|l| {
-        let l = l.trim().strip_prefix("export ").unwrap_or(l.trim());
-        let (k, v) = l.split_once('=')?;
-        (k.trim() == name).then(|| v.trim().trim_matches('"').trim_matches('\'').to_string()).filter(|v| !v.is_empty())
-    })
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
@@ -183,7 +114,7 @@ impl Fmt {
     }
 
     fn lookup(&self, name: &str) -> Option<String> {
-        env_var(name).or_else(|| self.env_file.as_deref().and_then(|p| read_env_file(p, name)))
+        crate::env::agent_var(name).or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
     }
 
     /// The real key behind a config value, when it can be known without running anything.
@@ -247,21 +178,10 @@ impl Fmt {
         }
     }
 
-    /// Returns (config, meta, had_comments) of a JSON / JSONC file; missing = empty object.
-    pub fn load_jsonc(path: &Path, blank: Value) -> Result<(Value, TextMeta, bool)> {
-        if !path.exists() {
-            return Ok((blank, blank_meta(), false));
-        }
-        let (text, meta) = read_text(path)?;
-        let (clean, had) = strip_jsonc(&text);
-        let v = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", display_path(path))))?;
-        Ok((v, meta, had))
-    }
-
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
         let p = self.auth.as_ref()?;
         if !p.exists() {
-            return Some((json!({}), blank_meta()));
+            return Some((json!({}), TextMeta::NEW));
         }
         read_json(p).ok()
     }
@@ -270,23 +190,19 @@ impl Fmt {
         auth?.get(id).filter(|e| s(e, "type") == Some("api_key")).and_then(|e| e.get("key")).filter(|k| k.as_str().map(|k| !k.is_empty()).unwrap_or(false))
     }
 
-    fn stash(root: &Value, agent: &str, key: &str) -> Map<String, Value> {
-        store::agent_get(root, agent, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
-    }
-
     pub fn hidden(&self, root: &Value) -> Map<String, Value> {
-        Self::stash(root, self.agent, "hiddenModels")
+        store::get_obj(root, self.agent, "hiddenModels")
     }
 
     pub fn parked(&self, root: &Value) -> Map<String, Value> {
-        Self::stash(root, self.agent, "disabledProviders")
+        store::get_obj(root, self.agent, "disabledProviders")
     }
 
     /// Display name: pi keeps it in the config, OpenClaw's schema has no room so it lives in the store.
     fn display_name(&self, id: &str, def: &Value, root: &Value) -> String {
         match self.flavor {
             Flavor::Pi => s(def, "name").filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
-            Flavor::OpenClaw => Self::stash(root, self.agent, "names").get(id).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
+            Flavor::OpenClaw => store::get_obj(root, self.agent, "names").get(id).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
         }
     }
 
@@ -358,13 +274,13 @@ impl Fmt {
         };
         let in_auth = Self::auth_key(auth, id).is_some();
         let mut details = vec![
-            Kv::mono(l("配置 ID", "Config ID"), format!("{}.{id}", self.cfg_prefix())),
+            Kv::mono(lbl::config_id(), format!("{}.{id}", self.cfg_prefix())),
             Kv::mono("api", raw.clone()),
-            Kv::text(l("密钥", "API key"), self.key_desc(key_v, in_auth)),
-            Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
+            Kv::text(lbl::api_key(), self.key_desc(key_v, in_auth)),
+            Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
         ];
         if BUILTIN_PROVIDERS.contains(&id) {
-            details.push(Kv::text(l("说明", "About"), l("与内置供应商同名：这里的设置会合并到内置供应商上", "Same id as a built-in provider: these settings are merged into the built-in one")));
+            details.push(Kv::text(lbl::note(), l("与内置供应商同名：这里的设置会合并到内置供应商上", "Same id as a built-in provider: these settings are merged into the built-in one")));
         }
         if let Some(h) = def.get("headers").and_then(|x| x.as_object()).filter(|h| !h.is_empty()) {
             details.push(Kv::mono("headers", h.keys().cloned().collect::<Vec<_>>().join(", ")));
@@ -378,7 +294,6 @@ impl Fmt {
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
             apis: vec![known.map(|k| k.1.to_string()).unwrap_or_else(|| raw.clone())],
-            builtin: false,
             enabled,
             compatible: known.is_some(),
             reason: known.is_none().then(|| tr!("{raw} 协议，AgentPlus 不能测速或转接", "{raw} protocol: AgentPlus can't test speed or relay it")),
@@ -387,9 +302,7 @@ impl Fmt {
             editable: true,
             api: known.map(|k| k.0.to_string()).unwrap_or(raw),
             has_key: in_cfg || in_auth,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            ..Default::default()
         }
     }
 
@@ -411,7 +324,7 @@ impl Fmt {
 
     /// Base URL, key and api of a provider (auth.json wins over the config, as in pi).
     pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<Endpoint> {
-        let def = self.providers_of(cfg).and_then(|p| p.get(id)).cloned().or_else(|| self.parked(root).get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        let def = self.providers_of(cfg).and_then(|p| p.get(id)).cloned().or_else(|| self.parked(root).get(id).cloned()).ok_or_else(|| msg::no_provider(id))?;
         let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl（沿用内置地址）", "Provider {id} has no baseUrl (uses the built-in URL)")))?.to_string();
         let auth = self.load_auth().map(|a| a.0);
         let key = Self::auth_key(auth.as_ref(), id).and_then(|k| self.resolve(k)).or_else(|| def.get("apiKey").and_then(|k| self.resolve(k)));
@@ -442,7 +355,7 @@ impl Fmt {
             dirty.auth = true;
         } else {
             let prefix = self.cfg_prefix();
-            let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+            let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
             def["apiKey"] = json!(key);
             diff.push(&self.file(), format!("{prefix}.{id}.apiKey = {}", mask_key(key)), true);
             dirty.cfg = true;
@@ -490,7 +403,7 @@ impl Fmt {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let name = p.name.trim();
                 let base_url = p.base_url.trim();
@@ -500,15 +413,8 @@ impl Fmt {
                         let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("不支持的协议 {}", "Unsupported protocol: {}", p.api)))?;
                         let parked = self.parked(root);
                         let providers = self.providers_mut(cfg)?;
-                        let base = slug(name);
-                        let free = |c: &str| !providers.contains_key(c) && !parked.contains_key(c) && !BUILTIN_PROVIDERS.contains(&c);
-                        let id = if free(&base) { base.clone() } else { (2..).map(|n| format!("{base}-{n}")).find(|c| free(c)).unwrap() };
-                        let mut ids: Vec<&str> = vec![];
-                        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                            if !ids.contains(&m) {
-                                ids.push(m);
-                            }
-                        }
+                        let id = unique_id(&slug(name), |c| providers.contains_key(c) || parked.contains_key(c) || BUILTIN_PROVIDERS.contains(&c));
+                        let ids = clean_ids(&p.models);
                         let models: Vec<Value> = ids.iter().map(|m| self.new_model(m, None, None)).collect();
                         let mut def = Map::new();
                         if self.flavor == Flavor::Pi {
@@ -518,7 +424,7 @@ impl Fmt {
                         def.insert("api".into(), json!(raw));
                         def.insert("models".into(), Value::Array(models));
                         providers.insert(id.clone(), Value::Object(def));
-                        diff.push(&ef, tr!("+ {pre}.{id}（{base_url} · {raw} · {} 个模型）", "+ {pre}.{id} ({base_url} · {raw} · {} models)", ids.len()), true);
+                        diff.push(&ef, trn!(ids.len(), "+ {pre}.{id}（{base_url} · {raw} · {n} 个模型）", "+ {pre}.{id} ({base_url} · {raw} · {n} model)", "+ {pre}.{id} ({base_url} · {raw} · {n} models)"), true);
                         dirty.cfg = true;
                         if self.flavor == Flavor::OpenClaw && name != id {
                             store::section(root, agent, "names").insert(id.clone(), json!(name));
@@ -543,7 +449,7 @@ impl Fmt {
                         let def = if in_cfg {
                             self.providers_mut(cfg)?.get_mut(id).unwrap()
                         } else {
-                            store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+                            store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?
                         };
                         if !def.is_object() {
                             return Err(anyhow!(tr!("{pre}.{id} 不是对象", "{pre}.{id} is not an object")));
@@ -591,7 +497,7 @@ impl Fmt {
                 let removed_cfg = self.providers_mut(cfg)?.remove(provider).is_some();
                 let removed_stash = store::section(root, agent, "disabledProviders").remove(provider).is_some();
                 if !removed_cfg && !removed_stash {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 let prefix = format!("{provider}|");
                 store::section(root, agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
@@ -648,7 +554,7 @@ impl Fmt {
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
                 let key = format!("{provider}|{mid}");
@@ -704,12 +610,7 @@ impl Fmt {
             }
             Op::SetProviderModels { provider, models: ids } => {
                 let hidden = self.hidden(root);
-                let mut want: Vec<String> = vec![];
-                for m in ids.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                    if !want.iter().any(|w| w == m) {
-                        want.push(m.to_string());
-                    }
-                }
+                let want = clean_ids(ids);
                 let fresh: Vec<Value> = want.iter().map(|m| self.new_model(m, None, None)).collect();
                 let models = self.models_mut(cfg, provider, l("调整模型", "changing its models"))?;
                 let old = models.clone();

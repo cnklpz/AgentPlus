@@ -15,7 +15,9 @@
 //! block that contains comments or anchors is refused.
 
 
+use super::msg;
 use super::{Plan, Endpoint};
+use crate::dotenv;
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -27,14 +29,11 @@ use serde_yaml::{Mapping, Value as Y};
 use std::path::{Path, PathBuf};
 
 pub const ID: &str = "hermes";
-#[allow(dead_code)]
 pub const NAME: &str = "Hermes";
 /// Relative to the config dir.
 pub const MARKER: &str = "config.yaml";
 /// WSL: the launcher lives in ~/.local/bin, which is not on a non-login PATH.
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "(command -v hermes >/dev/null && hermes --version || $HOME/.local/bin/hermes --version) 2>/dev/null | head -n 1; pgrep -f '[b]in/hermes' >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".hermes/config.yaml";
 
 /// The synthetic provider for bare `model.provider: custom` (inline base_url / api_key).
@@ -46,19 +45,11 @@ const BLOCKS: [&str; 3] = ["model", "providers", "custom_providers"];
 
 // ---------------------------------------------------------------- paths
 
-#[cfg(test)]
-static TEST_DIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn test_dir() -> Option<PathBuf> {
-    TEST_DIR.lock().unwrap().clone()
-}
-
 /// Default config dir: HERMES_HOME (process env, then the user environment in the registry,
 /// since AgentPlus may have started before it was set), else `%LOCALAPPDATA%\hermes`.
-/// In WSL mode `~/.hermes` of the WSL home.
+/// In WSL mode (and in tests) `~/.hermes` of the target home.
 pub fn default_dir() -> PathBuf {
-    if crate::env::is_wsl() {
+    if crate::env::is_wsl() || test_home().is_some() {
         return home().join(".hermes");
     }
     native_home().unwrap_or_else(|| home().join(".hermes"))
@@ -66,7 +57,7 @@ pub fn default_dir() -> PathBuf {
 
 #[cfg(windows)]
 fn native_home() -> Option<PathBuf> {
-    let from_env = std::env::var("HERMES_HOME").ok().filter(|s| !s.trim().is_empty());
+    let from_env = crate::env::agent_var("HERMES_HOME").filter(|s| !s.trim().is_empty());
     let from_reg = || -> Option<String> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
@@ -80,21 +71,17 @@ fn native_home() -> Option<PathBuf> {
 
 #[cfg(not(windows))]
 fn native_home() -> Option<PathBuf> {
-    std::env::var("HERMES_HOME").ok().filter(|s| !s.trim().is_empty()).map(PathBuf::from)
+    crate::env::agent_var("HERMES_HOME").filter(|s| !s.trim().is_empty()).map(PathBuf::from)
 }
 
 /// `%LOCALAPPDATA%\x` → the value of the variable (REG_EXPAND_SZ values come back raw).
-#[allow(dead_code)]
+#[cfg(windows)]
 fn expand_percent(s: &str) -> String {
     let re = regex::Regex::new(r"%([^%]+)%").unwrap();
     re.replace_all(s, |c: &regex::Captures| std::env::var(&c[1]).unwrap_or_else(|_| c[0].to_string())).to_string()
 }
 
 fn dir() -> PathBuf {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return d;
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -110,31 +97,6 @@ fn auth_path() -> PathBuf {
     dir().join("auth.json")
 }
 
-fn store_load() -> J {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return std::fs::read_to_string(d.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({}));
-    }
-    store::load()
-}
-
-fn store_save(v: &J) -> Result<()> {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        std::fs::write(d.join("store.json"), serde_json::to_string_pretty(v)?)?;
-        return Ok(());
-    }
-    store::save(v)
-}
-
-fn make_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    #[cfg(test)]
-    if let Some(d) = test_dir() {
-        return Ok(d.join("backup"));
-    }
-    backup(ID, files)
-}
-
 // ---------------------------------------------------------------- detection
 
 fn pyproject_version(p: &Path) -> Option<String> {
@@ -147,7 +109,6 @@ fn pyproject_version(p: &Path) -> Option<String> {
 
 /// Windows: `<HERMES_HOME>\hermes-agent\venv\Scripts\hermes.exe`; version from pyproject.toml
 /// (no Python start-up). A CLI, so `exe` stays None.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let mut roots = vec![default_dir()];
@@ -203,7 +164,7 @@ fn j2y(v: &J) -> Y {
 fn load() -> Result<(Y, String, TextMeta)> {
     let p = config_path();
     if !p.exists() {
-        return Ok((Y::Mapping(Mapping::new()), String::new(), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }));
+        return Ok((Y::Mapping(Mapping::new()), String::new(), TextMeta::NEW));
     }
     let (text, meta) = read_text(&p)?;
     let v: Y = serde_yaml::from_str(&text).map_err(|e| anyhow!(tr!("config.yaml 解析失败：{e}", "Failed to parse config.yaml: {e}")))?;
@@ -436,61 +397,8 @@ fn emit_top(key: &str, v: &Y) -> Result<Vec<String>> {
 
 // ---------------------------------------------------------------- .env
 
-fn env_unquote(v: &str) -> String {
-    let v = v.trim();
-    if v.len() >= 2 && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\''))) {
-        return v[1..v.len() - 1].to_string();
-    }
-    // Unquoted: an inline comment starts at " #".
-    v.split(" #").next().unwrap_or(v).trim().to_string()
-}
-
-fn env_line_key(l: &str) -> Option<&str> {
-    let t = l.trim_start();
-    if t.starts_with('#') {
-        return None;
-    }
-    let t = t.strip_prefix("export ").unwrap_or(t);
-    let (k, _) = t.split_once('=')?;
-    Some(k.trim())
-}
-
-fn env_get(text: &str, key: &str) -> Option<String> {
-    text.lines().rfind(|l| env_line_key(l) == Some(key)).and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
-}
-
-/// Sets (or removes, value None) `key` in .env text, keeping every other line.
-fn env_set(text: &str, key: &str, value: Option<&str>) -> String {
-    let needs_q = |v: &str| v.chars().any(|c| c.is_whitespace() || c == '#' || c == '"' || c == '\'');
-    let line = value.map(|v| if needs_q(v) { format!("{key}=\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")) } else { format!("{key}={v}") });
-    let mut out: Vec<String> = vec![];
-    let mut done = false;
-    for l in text.split('\n') {
-        if env_line_key(l) == Some(key) {
-            if let (Some(n), false) = (&line, done) {
-                out.push(n.clone());
-            }
-            done = true;
-            continue;
-        }
-        out.push(l.to_string());
-    }
-    if let (Some(n), false) = (line, done) {
-        while out.last().map(|l| l.is_empty()).unwrap_or(false) {
-            out.pop();
-        }
-        out.push(n);
-        out.push(String::new());
-    }
-    out.join("\n")
-}
-
-fn load_env() -> (String, TextMeta) {
-    read_text_or_new(&env_path()).unwrap_or((String::new(), TextMeta::NEW))
-}
-
 fn env_key(env: &str, var: &str) -> Option<String> {
-    env_get(env, var).or_else(|| std::env::var(var).ok().filter(|v| !v.trim().is_empty()))
+    dotenv::get(env, var).or_else(|| crate::env::agent_var(var).filter(|v| !v.trim().is_empty()))
 }
 
 // ---------------------------------------------------------------- providers
@@ -660,14 +568,6 @@ fn mode_for(api: &str) -> Result<&'static str> {
     }
 }
 
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        _ => "Chat",
-    }
-}
-
 fn key_env_of(def: &Y) -> Option<String> {
     ystr(def, "key_env").or_else(|| ystr(def, "api_key_env")).or_else(|| ystr(def, "keyEnv")).or_else(|| ystr(def, "apiKeyEnv"))
 }
@@ -775,18 +675,6 @@ fn to_model(id: &str, d: &Y, shape: Shape, visible: bool) -> Model {
     }
 }
 
-fn hidden_of(root: &J) -> JMap<String, J> {
-    store::agent_get(root, ID, "hiddenModels").and_then(|x| x.as_object()).cloned().unwrap_or_default()
-}
-
-fn obj_of(root: &J, key: &str) -> JMap<String, J> {
-    store::agent_get(root, ID, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
-}
-
-fn js(v: &J, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
-
 // ---------------------------------------------------------------- state
 
 fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &str, cur: Option<&str>) -> Provider {
@@ -833,17 +721,17 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
     };
     let enabled = def.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
     let mut details = vec![
-        Kv::mono(l("配置位置", "Config location"), place),
-        Kv::mono(l("地址", "Base URL"), base.clone().unwrap_or_else(|| "-".into())),
+        Kv::mono(lbl::config_location(), place),
+        Kv::mono(lbl::base_url(), base.clone().unwrap_or_else(|| "-".into())),
         Kv::mono("api_mode", mode.clone().unwrap_or_else(|| l("（自动，按地址判断）", "(auto, based on the URL)").into())),
-        Kv::text(l("密钥", "API key"), key_note),
+        Kv::text(lbl::api_key(), key_note),
     ];
     if let Some(d) = &dflt {
-        details.push(Kv::mono(l("默认模型", "Default model"), d.clone()));
+        details.push(Kv::mono(lbl::default_model(), d.clone()));
     }
     if !enabled {
         details.push(Kv::text(
-            l("状态", "Status"),
+            lbl::status(),
             l("enabled: false（Hermes 忽略它；设为当前时会重新启用）", "enabled: false (Hermes ignores it; making it current re-enables it)"),
         ));
     }
@@ -860,7 +748,6 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
         host: base.as_deref().map(host_of).unwrap_or_default(),
         base_url: base,
         apis: vec![api.map(api_label).unwrap_or(l("其他", "Other")).into()],
-        builtin: false,
         enabled,
         compatible: reason.is_none(),
         reason,
@@ -869,9 +756,7 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
         editable: true,
         api: api.unwrap_or("chat").into(),
         has_key: key.is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
@@ -883,11 +768,11 @@ fn inline_values(cfg: &Y, root: &J, active: bool) -> Option<(String, Option<Stri
         return Some((ystr(m, "base_url").unwrap_or_default(), ystr(m, "api_key"), ystr(m, "api_mode"), model_default(cfg)));
     }
     let s = store::agent_get(root, ID, "inline")?;
-    let base = js(s, "baseUrl");
+    let base = str_field(s, "baseUrl");
     if base.is_empty() {
         return None;
     }
-    let opt = |k: &str| Some(js(s, k)).filter(|x| !x.is_empty());
+    let opt = |k: &str| Some(str_field(s, k)).filter(|x| !x.is_empty());
     Some((base, opt("apiKey"), opt("apiMode"), opt("default")))
 }
 
@@ -896,15 +781,15 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
     let api = api_of(mode.as_deref());
     let mut details = vec![
         Kv::mono(
-            l("配置位置", "Config location"),
+            lbl::config_location(),
             l("model.provider: custom（model.base_url / model.api_key）", "model.provider: custom (model.base_url / model.api_key)"),
         ),
-        Kv::mono(l("地址", "Base URL"), base.clone()),
+        Kv::mono(lbl::base_url(), base.clone()),
         Kv::mono("api_mode", mode.clone().unwrap_or_else(|| l("（自动，按地址判断）", "(auto, based on the URL)").into())),
-        Kv::text(l("密钥", "API key"), key.as_deref().map(|k| format!("model.api_key · {}", mask_key(k))).unwrap_or_else(|| l("未填写", "Not set").into())),
+        Kv::text(lbl::api_key(), key.as_deref().map(|k| format!("model.api_key · {}", mask_key(k))).unwrap_or_else(|| l("未填写", "Not set").into())),
     ];
     if let Some(n) = same_as {
-        details.push(Kv::text(l("说明", "Note"), tr!("地址和「{n}」相同；密钥写在 model 里", "Same base URL as \"{n}\"; the API key is in model")));
+        details.push(Kv::text(lbl::note(), tr!("地址和「{n}」相同；密钥写在 model 里", "Same base URL as \"{n}\"; the API key is in model")));
     }
     Provider {
         id: INLINE.into(),
@@ -912,7 +797,6 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
         host: host_of(base),
         base_url: Some(base.clone()),
         apis: vec![api.map(api_label).unwrap_or(l("其他", "Other")).into()],
-        builtin: false,
         enabled: true,
         compatible: api.is_some(),
         reason: api.is_none().then(|| tr!("api_mode = {}，AgentPlus 只能查看", "api_mode = {}; AgentPlus can only view it", mode.clone().unwrap_or_default())),
@@ -921,77 +805,48 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
         editable: true,
         api: api.unwrap_or("chat").into(),
         has_key: key.is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 fn builtin_provider(name: &str, dflt: Option<String>, known: bool) -> Provider {
     Provider {
-        id: format!("{BUILTIN}{name}"),
-        name: tr!("内置 · {name}", "Built-in · {name}"),
-        base_url: None,
-        host: l("Hermes 内置供应商", "Hermes built-in provider").into(),
-        apis: vec![l("内置", "Built-in").into()],
-        builtin: true,
-        enabled: true,
         compatible: known,
         reason: (!known).then(|| l("config.yaml 里找不到这个自定义供应商", "This custom provider isn't in config.yaml").to_string()),
         models: dflt.iter().map(|m| Model { id: m.clone(), visible: true, readonly: true, tags: vec![Tag::default_model()], ..Default::default() }).collect(),
-        details: vec![
-            Kv::mono("model.provider", name.to_string()),
-            Kv::text(
-                l("说明", "Note"),
-                l(
-                    "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
-                    "A provider built into Hermes (credentials live in .env / auth.json; manage them with hermes model / hermes auth)",
+        ..Provider::builtin(
+            format!("{BUILTIN}{name}"),
+            tr!("内置 · {name}", "Built-in · {name}"),
+            l("Hermes 内置供应商", "Hermes built-in provider"),
+            "chat",
+            l("内置", "Built-in"),
+            vec![
+                Kv::mono("model.provider", name.to_string()),
+                Kv::text(
+                    lbl::note(),
+                    l(
+                        "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
+                        "A provider built into Hermes (credentials live in .env / auth.json; manage them with hermes model / hermes auth)",
+                    ),
                 ),
-            ),
-        ],
-        editable: false,
-        api: "chat".into(),
-        has_key: true,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+            ],
+        )
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "single".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&config_path()), display_path(&env_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![l("Hermes 的改动对新会话生效；gateway（消息平台）需要重启。", "Hermes changes apply to new sessions; the gateway (messaging platforms) needs a restart.").into()],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "single", &dir(), vec![display_path(&config_path()), display_path(&env_path())]);
+    st.notes.push(l("Hermes 的改动对新会话生效；gateway（消息平台）需要重启。", "Hermes changes apply to new sessions; the gateway (messaging platforms) needs a restart.").into());
     let (cfg, text, _) = match load() {
         Ok(x) => x,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
-    let root = store_load();
-    let (env, _) = load_env();
-    let hidden = hidden_of(&root);
+    let root = store::load();
+    let (env, _) = dotenv::load(&env_path());
+    let hidden = store::get_obj(&root, ID, "hiddenModels");
     let (cur_id, cur_src) = current(&cfg);
     let cur_model = model_default(&cfg);
     st.current_provider = Some(cur_id.clone());
@@ -1010,14 +865,14 @@ pub fn state(inst: &Install) -> AgentState {
             .and_then(|d| ystr(d, "name"));
         st.providers.push(inline_provider(&vals, same));
     }
-    let builtins = obj_of(&root, "builtins");
+    let builtins = store::get_obj(&root, ID, "builtins");
     if let Src::Builtin(b) = &cur_src {
         let known = !b.to_lowercase().starts_with("custom:");
         st.providers.push(builtin_provider(b, cur_model.clone(), known));
     }
     for (b, v) in &builtins {
         if !matches!(&cur_src, Src::Builtin(x) if x == b) {
-            st.providers.push(builtin_provider(b, Some(js(v, "default")).filter(|x| !x.is_empty()), true));
+            st.providers.push(builtin_provider(b, Some(str_field(v, "default")).filter(|x| !x.is_empty()), true));
         }
     }
 
@@ -1029,7 +884,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.notes.push(tr!(
             "config.yaml 的 {} 段里有注释或锚点，写回会丢失，已切换为只读。",
             "The {} block(s) in config.yaml have comments or anchors, which would be lost on write, so it's read-only.",
-            commented.join(l("、", ", "))
+            crate::i18n::join(&commented)
         ));
     }
     if std::fs::read_to_string(auth_path()).map(|t| t.contains("\"custom:")).unwrap_or(false) {
@@ -1045,7 +900,7 @@ pub fn state(inst: &Install) -> AgentState {
     let cur_name = st.providers.iter().find(|p| p.id == cur_id).map(|p| p.name.clone()).unwrap_or_default();
     let m = cfg.get("model");
     st.current = vec![
-        Kv::text(l("供应商", "Provider"), cur_name),
+        Kv::text(lbl::provider(), cur_name),
         Kv::mono("model.provider", model_provider(&cfg)),
         Kv::mono(l("模型", "Model"), cur_model.unwrap_or_else(|| "-".into())),
     ];
@@ -1055,7 +910,7 @@ pub fn state(inst: &Install) -> AgentState {
         Src::Builtin(_) => None,
     };
     if let Some(b) = base {
-        st.current.push(Kv::mono(l("地址", "Base URL"), b));
+        st.current.push(Kv::mono(lbl::base_url(), b));
     }
     if let Some(mode) = m.and_then(|m| ystr(m, "api_mode")) {
         st.current.push(Kv::mono("api_mode", mode));
@@ -1065,18 +920,18 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    let (env, _) = load_env();
-    let src = find(&cfg, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let (env, _) = dotenv::load(&env_path());
+    let src = find(&cfg, id).ok_or_else(|| msg::no_provider(id))?;
     match &src {
         Src::Builtin(_) => Err(anyhow!(l("Hermes 内置供应商没有可用的地址", "Hermes built-in providers have no usable base URL"))),
         Src::Inline => {
             let active = current(&cfg).1 == Src::Inline;
-            let (base, key, mode, _) = inline_values(&cfg, &store_load(), active).ok_or_else(|| anyhow!(l("找不到直连配置", "Direct config not found")))?;
+            let (base, key, mode, _) = inline_values(&cfg, &store::load(), active).ok_or_else(|| anyhow!(l("找不到直连配置", "Direct config not found")))?;
             let api = api_of(mode.as_deref()).ok_or_else(|| anyhow!(l("这个供应商的 api_mode AgentPlus 不支持", "AgentPlus doesn't support this provider's api_mode")))?;
             Ok((base, key, api.into()))
         }
         _ => {
-            let def = def_of(&cfg, &src).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+            let def = def_of(&cfg, &src).ok_or_else(|| msg::no_provider(id))?;
             let base = ystr(def, url_key(def)).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
             let api = api_of(mode_of(def).as_deref()).ok_or_else(|| anyhow!(l("这个供应商的 api_mode AgentPlus 不支持", "AgentPlus doesn't support this provider's api_mode")))?;
             Ok((base, key_of(def, &env), api.into()))
@@ -1134,7 +989,7 @@ fn plan_err_readonly(src: &Src) -> Result<()> {
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg0, text, meta) = load()?;
     let mut cfg = cfg0.clone();
-    let mut root = store_load();
+    let mut root = store::load();
     // Unlike the read-only views, a write refuses an .env it can't read (UTF-16, GBK…).
     let (env0, env_meta) = read_text_or_new(&env_path())?;
     let mut env = env0.clone();
@@ -1155,16 +1010,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 match p.id.as_deref() {
                     None => {
                         if name.is_empty() {
-                            return Err(anyhow!(l("名称不能为空", "Name is required")));
+                            return Err(msg::name_required());
                         }
                         let taken: Vec<String> = entries(&cfg).iter().flat_map(|(id, s)| {
                             let mut a = entry_aliases(&cfg, s);
                             a.push(id.to_lowercase());
                             a
                         }).collect();
-                        let free = |c: &str| c != INLINE && !taken.contains(&c.to_string()) && !taken.contains(&format!("custom:{c}"));
-                        let b = slug(name);
-                        let id = if free(&b) { b.clone() } else { (2..).map(|n| format!("{b}-{n}")).find(|c| free(c)).unwrap() };
+                        let id = unique_id(&slug(name), |c| c == INLINE || taken.iter().any(|t| t == c) || taken.contains(&format!("custom:{c}")));
                         let mut e = Mapping::new();
                         e.insert(yk("name"), yk(name));
                         e.insert(yk("base_url"), yk(base));
@@ -1172,7 +1025,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             e.insert(yk("api_key"), yk(k));
                         }
                         e.insert(yk("api_mode"), yk(mode));
-                        let ids: Vec<&str> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+                        let ids = clean_ids(&p.models);
                         if let Some(first) = ids.first() {
                             e.insert(yk("default_model"), yk(first));
                         }
@@ -1190,12 +1043,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         let key_part = key.map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
                         cx.diff.push(
                             &cx.file,
-                            tr!("+ providers.{id}（{base} · {} · {} 个模型{}）", "+ providers.{id} ({base} · {} · {} model(s){})", api_label(&p.api), ids.len(), key_part),
+                            trn!(ids.len(), "+ providers.{id}（{base} · {} · {n} 个模型{}）", "+ providers.{id} ({base} · {} · {n} model{})", "+ providers.{id} ({base} · {} · {n} models{})", api_label(&p.api), key_part),
                             true,
                         );
                     }
                     Some(id) => {
-                        let src = find(&cfg, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        let src = find(&cfg, id).ok_or_else(|| msg::no_provider(id))?;
                         plan_err_readonly(&src)?;
                         if src == Src::Inline {
                             let active = current(&cfg).1 == Src::Inline;
@@ -1235,7 +1088,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             _ => unreachable!(),
                         };
                         let was_current = current(&cfg).0 == *id;
-                        let def = def_mut(&mut cfg, &src).and_then(|d| d.as_mapping_mut()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        let def = def_mut(&mut cfg, &src).and_then(|d| d.as_mapping_mut()).ok_or_else(|| msg::no_provider(id))?;
                         let dv = Y::Mapping(def.clone());
                         let (uk, mk) = (url_key(&dv), mode_key(&dv));
                         if !name.is_empty() && set_str(def, "name", Some(name)) {
@@ -1251,8 +1104,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if let Some(k) = key {
                             match key_env_of(&dv) {
                                 Some(var) => {
-                                    if env_get(&env, &var).as_deref() != Some(k) {
-                                        env = env_set(&env, &var, Some(k));
+                                    if dotenv::get(&env, &var).as_deref() != Some(k) {
+                                        env = dotenv::set(&env, &var, Some(k));
                                         cx.diff.push(&cx.envfile, format!("{var} = {}", mask_key(k)), true);
                                     }
                                 }
@@ -1285,9 +1138,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::DeleteProvider { provider } => {
-                let src = find(&cfg, provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+                let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
                 if current(&cfg).0 == *provider {
-                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商", "\"{provider}\" is in use; switch to another provider first")));
+                    return Err(msg::in_use(provider));
                 }
                 match &src {
                     Src::Dict(k) => {
@@ -1320,7 +1173,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 store_dirty |= h.len() != n;
             }
             Op::SetCurrentProvider { provider } => {
-                let src = find(&cfg, provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+                let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
                 let (cur_id, cur_src) = current(&cfg);
                 if cur_id == *provider {
                     continue;
@@ -1338,7 +1191,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         ("custom".to_string(), vals.3.clone(), vals.2.clone(), Some(vals))
                     }
                     Src::Builtin(b) => {
-                        let d = obj_of(&root, "builtins").get(b).map(|v| js(v, "default")).filter(|x| !x.is_empty());
+                        let d = store::get_obj(&root, ID, "builtins").get(b).map(|v| str_field(v, "default")).filter(|x| !x.is_empty());
                         (b.clone(), d, None, None)
                     }
                 };
@@ -1461,7 +1314,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let src = entry_src(&cfg, provider)?;
                 let mid = mi.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 let key = format!("{provider}|{mid}");
                 // A hidden model is edited in the stash.
@@ -1531,14 +1384,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let src = entry_src(&cfg, provider)?;
                 let def = def_mut(&mut cfg, &src).unwrap();
                 let (shape, rows) = model_rows(def);
-                let mut seen = vec![];
-                let new: Vec<(String, Y)> = models
-                    .iter()
-                    .map(|m| m.trim().to_string())
-                    .filter(|m| !m.is_empty() && !seen.contains(m) && {
-                        seen.push(m.clone());
-                        true
-                    })
+                let new: Vec<(String, Y)> = clean_ids(models)
+                    .into_iter()
                     .map(|m| {
                         let d = rows.iter().find(|r| r.0 == m).map(|r| r.1.clone()).unwrap_or(if shape == Shape::Map { Y::Mapping(Mapping::new()) } else { Y::Null });
                         (m, d)
@@ -1546,7 +1393,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     .collect();
                 if new != rows {
                     set_model_rows(def, shape, &new);
-                    cx.diff.push(&cx.file, tr!("{provider}.models：{} 个模型", "{provider}.models: {} model(s)", new.len()), true);
+                    cx.diff.push(&cx.file, trn!(new.len(), "{provider}.models：{n} 个模型", "{provider}.models: {n} model", "{provider}.models: {n} models"), true);
                 }
                 let prefix = format!("{provider}|");
                 let h = store::section(&mut root, ID, "hiddenModels");
@@ -1561,7 +1408,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("Hermes 只有「默认模型」一个角色", "Hermes has only one role: \"Default model\"")));
                 }
                 let Some(m) = roles.get("default").map(|m| m.trim().to_string()).filter(|m| !m.is_empty()) else { continue };
-                let src = find(&cfg, provider).ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+                let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
                 let is_current = current(&cfg).0 == *provider;
                 match &src {
                     Src::Dict(_) | Src::List(_) => {
@@ -1589,7 +1436,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Hermes 同时只用一个供应商，请用「设为当前」", "Hermes uses one provider at a time; use \"Set as current\""))),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
@@ -1635,7 +1482,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             targets.push(env_path());
         }
         if !targets.is_empty() {
-            backup_dir = Some(make_backup(&targets)?);
+            backup_dir = Some(backup(ID, &targets)?);
             std::fs::create_dir_all(dir())?;
         }
         if let Some(t) = new_text {
@@ -1647,7 +1494,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             written.push(env_path());
         }
         if store_dirty {
-            store_save(&root)?;
+            store::save(&root)?;
         }
     }
     Ok((diff, written, backup_dir))
@@ -1662,7 +1509,7 @@ fn entry_src(cfg: &Y, provider: &str) -> Result<Src> {
             "The direct config (custom in model) has no model list; change model.default in config.yaml, or add a new provider"
         ))),
         Some(Src::Builtin(_)) => Err(anyhow!(l("Hermes 内置供应商的模型用 hermes model 选择", "Pick models for Hermes built-in providers with hermes model"))),
-        None => Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}"))),
+        None => Err(msg::no_provider(provider)),
     }
 }
 
@@ -1689,8 +1536,6 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::fs;
-
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     const SAMPLE: &str = "\
 # Hermes config (hand-written header comment)
@@ -1739,27 +1584,16 @@ hooks:
       timeout: 15
 ";
 
-    struct Tmp(PathBuf, #[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
-    impl Drop for Tmp {
-        fn drop(&mut self) {
-            *TEST_DIR.lock().unwrap() = None;
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    /// (config dir, the temp home it lives in)
+    struct Tmp(PathBuf, #[allow(dead_code)] TestHome);
 
     fn setup(yaml: &str) -> Tmp {
-        let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::env::force(crate::env::Target::Windows);
-        let d = std::env::temp_dir().join(format!("agentplus-hermes-{}-{}", std::process::id(), rand_suffix()));
-        let _ = fs::remove_dir_all(&d);
+        let home = TestHome::new("hermes");
+        let d = dir();
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("config.yaml"), yaml).unwrap();
-        *TEST_DIR.lock().unwrap() = Some(d.clone());
-        Tmp(d, g)
-    }
-
-    fn rand_suffix() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        Tmp(d, home)
     }
 
     fn apply(ops: Vec<Op>) -> Result<Diff> {
@@ -2016,7 +1850,7 @@ hooks:
         assert!(!d.groups.is_empty());
         assert!(written.is_empty() && backup.is_none());
         assert_eq!(fs::read_to_string(t.0.join("config.yaml")).unwrap(), SAMPLE);
-        assert!(!t.0.join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
     }
 
     #[test]
@@ -2083,7 +1917,6 @@ hooks:
     #[test]
     #[ignore]
     fn dump_hermes() {
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         println!("dir: {}", dir().display());
         let inst = detect();
         println!("detect: installed={} version={:?} running={} dir={:?}", inst.installed, inst.version, inst.running, inst.dir);
@@ -2124,16 +1957,15 @@ hooks:
 
             // Real write on a temp copy of the real file (the original is only read).
             let real = fs::read_to_string(config_path()).unwrap();
-            let tmp = std::env::temp_dir().join(format!("agentplus-hermes-real-{}", rand_suffix()));
+            let home = TestHome::new("hermes-real");
+            let tmp = dir();
             fs::create_dir_all(&tmp).unwrap();
             fs::write(tmp.join("config.yaml"), &real).unwrap();
-            *TEST_DIR.lock().unwrap() = Some(tmp.clone());
             let back_to = st.current_provider.clone().unwrap();
             plan(&[Op::SetCurrentProvider { provider: t.clone() }], false).unwrap();
             plan(&[Op::SetCurrentProvider { provider: back_to }], false).unwrap();
             let after = fs::read_to_string(tmp.join("config.yaml")).unwrap();
-            *TEST_DIR.lock().unwrap() = None;
-            let _ = fs::remove_dir_all(&tmp);
+            drop(home);
             assert_eq!(untouched(&after), untouched(&real));
             let (a, b): (Y, Y) = (serde_yaml::from_str(&after).unwrap(), serde_yaml::from_str(&real).unwrap());
             assert_eq!(a, b, "switch and back must give the same config");

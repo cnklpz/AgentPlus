@@ -6,37 +6,32 @@
 //! Provider / model editing is shared with OpenClaw (see pimodels).
 
 
+use super::msg;
 use super::{Plan, Endpoint};
-use super::pimodels::{self, Dirty, Flavor, Fmt};
+use super::pimodels::{Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
+use crate::store;
 use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const ID: &str = "pi";
-#[allow(dead_code)]
 pub const NAME: &str = "pi";
-#[allow(dead_code)]
 pub const MARKER: &str = "settings.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "pi --version 2>/dev/null; pgrep -x pi >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".pi/agent/settings.json";
 /// npm package names, new and old.
 const PACKAGES: [&str; 2] = ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"];
 
 /// `~/.pi/agent`, or `$PI_CODING_AGENT_DIR`, or the folder picked in AgentPlus.
 pub fn default_dir() -> PathBuf {
-    if let Some(r) = pimodels::test_root() {
-        return r.join("pi-agent");
-    }
     if let Some(d) = super::dir_override(ID) {
         return d;
     }
-    if let Some(d) = pimodels::env_var("PI_CODING_AGENT_DIR") {
+    if let Some(d) = crate::env::agent_var("PI_CODING_AGENT_DIR") {
         return crate::env::resolve_path(&d);
     }
     home().join(".pi").join("agent")
@@ -57,26 +52,17 @@ fn fmt() -> Fmt {
 }
 
 fn load_models() -> Result<(Value, TextMeta, bool)> {
-    Fmt::load_jsonc(&models_path(), json!({ "providers": {} }))
-}
-
-fn npm_version(root: &Path) -> Option<String> {
-    PACKAGES.iter().find_map(|p| {
-        let text = std::fs::read_to_string(root.join("node_modules").join(p).join("package.json")).ok()?;
-        serde_json::from_str::<Value>(&text).ok()?.get("version")?.as_str().map(String::from)
-    })
+    read_jsonc_object_or(&models_path(), json!({ "providers": {} }))
 }
 
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    let npm = dirs::data_dir().map(|d| d.join("npm"));
-    if let Some(npm) = &npm {
-        if let Some(v) = npm_version(npm) {
-            inst.installed = true;
-            inst.version = Some(v);
-            return inst;
-        }
+    if let Some(v) = PACKAGES.iter().find_map(|p| crate::process::npm_global_version(p)) {
+        inst.installed = true;
+        inst.version = Some(v);
+        return inst;
     }
+    let npm = dirs::data_dir().map(|d| d.join("npm"));
     let shims = [npm.map(|d| d.join("pi.cmd")), dirs::data_local_dir().map(|d| d.join("pnpm").join("pi.cmd")), dirs::home_dir().map(|h| h.join(".bun").join("bin").join("pi.exe"))];
     inst.installed = shims.iter().flatten().any(|p| p.exists());
     inst
@@ -91,40 +77,19 @@ fn defaults() -> (Option<String>, Option<String>) {
 
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: default_dir().to_string_lossy().to_string(),
-        files: vec![f.file(), display_path(&auth_path()), display_path(&settings_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![l("改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。", "Changes take effect in new pi sessions (running sessions can pick again with /model).").into()],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
-    let root = pimodels::load_store();
+    let mut st = super::new_state(ID, NAME, inst, "multi", &default_dir(), vec![f.file(), display_path(&auth_path()), display_path(&settings_path())]);
+    st.notes.push(l("改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。", "Changes take effect in new pi sessions (running sessions can pick again with /model).").into());
+    let root = store::load();
     let cfg = match load_models() {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(l("models.json 含注释，写回会丢失注释，已切换为只读。", "models.json contains comments, which would be lost on write. Switched to read-only.").into());
+                st.notes.push(msg::comments_readonly("models.json"));
             }
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -138,28 +103,17 @@ pub fn state(inst: &Install) -> AgentState {
                 continue;
             }
             let oauth = e.get("type").and_then(|t| t.as_str()) == Some("oauth");
-            st.providers.push(Provider {
-                id: id.clone(),
-                name: id.clone(),
-                base_url: None,
-                host: if oauth { l("账号登录（/login）", "Account login (/login)").into() } else { l("内置供应商 · API Key", "Built-in provider · API Key").into() },
-                apis: vec![l("内置", "Built-in").into()],
-                builtin: true,
-                enabled: true,
-                compatible: true,
-                reason: None,
-                models: vec![],
-                details: vec![
-                    Kv::mono(l("凭据", "Credentials"), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth login") } else { "API Key" })),
-                    Kv::text(l("说明", "About"), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
+            st.providers.push(Provider::builtin(
+                id.clone(),
+                id.clone(),
+                if oauth { l("账号登录（/login）", "Account sign-in (/login)") } else { l("内置供应商 · API Key", "Built-in provider · API key") },
+                "chat",
+                l("内置", "Built-in"),
+                vec![
+                    Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
+                    Kv::text(lbl::note(), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
                 ],
-                editable: false,
-                api: "chat".into(),
-                has_key: true,
-                key_fp: None,
-                key_hint: None,
-                official_auth: false,
-            });
+            ));
         }
     }
 
@@ -167,29 +121,29 @@ pub fn state(inst: &Install) -> AgentState {
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled && !p.builtin).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("自定义供应商", "Custom providers"), if on.is_empty() { l("无", "None").into() } else { on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", ")) }),
-        Kv::mono(l("默认模型", "Default model"), match (&dp, &dm) {
+        Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::mono(lbl::default_model(), match (&dp, &dm) {
             (Some(p), Some(m)) => format!("{p}/{m}"),
             (None, Some(m)) => m.clone(),
             (Some(p), None) => tr!("{p}/（未指定）", "{p}/(not set)"),
             _ => "-".into(),
         }),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("配置文件", "Config file"), f.file()),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+        Kv::mono(lbl::config_file(), f.file()),
     ];
     st
 }
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
-    fmt().endpoint(id, &cfg, &pimodels::load_store())
+    fmt().endpoint(id, &cfg, &store::load())
 }
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, had_comments) = load_models()?;
     let mut auth = f.load_auth();
-    let mut root = pimodels::load_store();
+    let mut root = store::load();
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
 
@@ -199,7 +153,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("pi 可以同时用多个供应商：按启用/停用管理，在 pi 里用 /model 选择模型", "pi can use several providers at once: manage them by enabling/disabling, and pick models with /model in pi."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::SetSetting { key, .. } => return Err(anyhow!(tr!("pi 没有设置项 {key}", "pi has no setting {key}"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),
@@ -226,7 +180,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     }
 
     if dirty.cfg && had_comments {
-        return Err(anyhow!(l("models.json 含注释，为避免丢失注释不写入", "models.json contains comments; not writing to avoid losing them")));
+        return Err(msg::comments_not_written("models.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;
@@ -235,7 +189,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if dirty.cfg { targets.push(models_path()) }
         if dirty.auth { targets.push(auth_path()) }
         if settings.is_some() { targets.push(settings_path()) }
-        backup_dir = Some(pimodels::backup_files(ID, &targets)?);
+        backup_dir = Some(backup(ID, &targets)?);
         std::fs::create_dir_all(default_dir())?;
         if dirty.cfg {
             write_json(&models_path(), &cfg, meta)?;
@@ -254,7 +208,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     if !dry_run && dirty.store {
-        pimodels::save_store(&root)?;
+        store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
 }
@@ -320,27 +274,17 @@ mod tests {
 }
 "#;
 
-    struct Guard(PathBuf);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn setup(name: &str, models: Option<&str>) -> Guard {
-        let root = std::env::temp_dir().join(format!("agentplus-pi-test-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let d = root.join("pi-agent");
+    fn setup(name: &str, models: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("pi-{name}"));
+        crate::env::set_test_vars(&[("ENVY_KEY", "sk-env-value-5555")]);
+        let d = default_dir();
         std::fs::create_dir_all(&d).unwrap();
         if let Some(m) = models {
             std::fs::write(d.join("models.json"), m).unwrap();
         }
         std::fs::write(d.join("auth.json"), AUTH).unwrap();
         std::fs::write(d.join("settings.json"), SETTINGS).unwrap();
-        pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = Some(root.clone()));
-        pimodels::TEST_ENV.with(|e| *e.borrow_mut() = vec![("ENVY_KEY".into(), "sk-env-value-5555".into())]);
-        Guard(root)
+        home
     }
 
     fn read(p: &str) -> Value {
@@ -496,7 +440,7 @@ mod tests {
         let (d, w, b) = plan(std::slice::from_ref(&off), true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(std::fs::read(models_path()).unwrap(), before);
-        assert!(!pimodels::test_root().unwrap().join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
 
         plan(&[off], false).unwrap();
         assert!(read("models.json")["providers"].get("envy").is_none());
@@ -553,6 +497,15 @@ mod tests {
         let _g = setup("comments", Some("{\n  // my relay\n  \"providers\": {}\n}\n"));
         assert!(state(&Install::default()).readonly);
         assert!(plan(&[prov("X", "chat", None, &[])], true).is_err());
+    }
+
+    #[test]
+    fn non_object_models_json_is_refused() {
+        let _g = setup("array", Some("[]"));
+        let st = state(&Install::default());
+        assert!(st.readonly && st.notes.iter().any(|n| n.contains("models.json 顶层不是对象")), "{:?}", st.notes);
+        assert!(plan(&[prov("X", "chat", None, &["m"])], false).is_err());
+        assert_eq!(std::fs::read_to_string(default_dir().join("models.json")).unwrap(), "[]");
     }
 
     /// Read-only look at the real machine: `cargo test --lib dump_pi -- --ignored --nocapture`.

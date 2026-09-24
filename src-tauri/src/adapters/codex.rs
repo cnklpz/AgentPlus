@@ -3,7 +3,9 @@
 //! each entry's `visibility` ("list" | "hide") decides whether it shows up.
 //! Provider keys live in `~/.codex/.env` under the provider's `env_key`.
 
+use super::msg;
 use super::{Plan, Endpoint};
+use crate::dotenv;
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -15,6 +17,7 @@ use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 pub const ID: &str = "codex";
+pub const NAME: &str = "Codex";
 const EFFORTS: [&str; 7] = ["low", "medium", "high", "xhigh", "persistent", "ultra", "max"];
 
 fn inject_file() -> &'static str {
@@ -23,10 +26,10 @@ fn inject_file() -> &'static str {
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
 const FAST_TIER: &str = "priority";
 
+/// The folder picked in AgentPlus, else `$CODEX_HOME`, else `~/.codex`.
 pub fn codex_home() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| super::dir_override(ID))
+    super::dir_override(ID)
+        .or_else(|| crate::env::agent_var("CODEX_HOME").map(PathBuf::from))
         .unwrap_or_else(|| home().join(".codex"))
 }
 
@@ -166,7 +169,7 @@ fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut D
     if provider == "openai" {
         return Err(anyhow!(l("OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商", "The OpenAI official account can't use the fixed ID; switch to a custom provider first")));
     }
-    let mut table = provider_item(doc, provider).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
+    let mut table = provider_item(doc, provider).cloned().ok_or_else(|| msg::no_provider(provider))?;
     if let Some(t) = table.as_table_like_mut() {
         t.insert("name", value(format!("AgentPlus（{provider}）")));
     }
@@ -224,26 +227,21 @@ fn read_env() -> (Vec<String>, TextMeta) {
     read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
-fn env_line_key(l: &str) -> Option<&str> {
-    let l = l.trim_start();
-    let l = l.strip_prefix("export ").unwrap_or(l);
-    l.split_once('=').map(|(k, _)| k.trim())
-}
-
-/// Value of an env_key: ~/.codex/.env first, then the process environment.
+/// Value of an env_key: ~/.codex/.env first (an assignment there wins even when empty),
+/// then the process environment. The first assignment of a key counts, and `set_env`
+/// rewrites that same line.
 pub fn env_value(name: &str) -> Option<String> {
     let (lines, _) = read_env();
-    lines
-        .iter()
-        .find(|l| env_line_key(l) == Some(name))
-        .and_then(|l| l.split_once('=').map(|(_, v)| v.trim().trim_matches('"').trim_matches('\'').to_string()))
-        .or_else(|| std::env::var(name).ok())
-        .filter(|v| !v.is_empty())
+    match dotenv::get_first(&lines.join("\n"), name) {
+        Some(v) => Some(v),
+        None => crate::env::agent_var(name),
+    }
+    .filter(|v| !v.is_empty())
 }
 
 fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
     let line = format!("{name}={val}");
-    match lines.iter_mut().find(|l| env_line_key(l) == Some(name)) {
+    match lines.iter_mut().find(|l| dotenv::line_key(l) == Some(name)) {
         Some(l) => *l = line,
         None => lines.push(line),
     }
@@ -251,9 +249,9 @@ fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
 
 fn key_status(name: &str) -> &'static str {
     let (lines, _) = read_env();
-    if lines.iter().any(|l| env_line_key(l) == Some(name)) {
+    if lines.iter().any(|l| dotenv::line_key(l) == Some(name)) {
         l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
-    } else if std::env::var_os(name).is_some() {
+    } else if crate::env::agent_var(name).is_some() {
         l("已在系统环境变量配置", "set in system environment variables")
     } else {
         l("未找到，请求会失败", "not found; requests will fail")
@@ -297,29 +295,18 @@ fn sign_in_from(v: &Value) -> SignIn {
 // ---------------------------------------------------------------- read
 
 fn providers(doc: &DocumentMut) -> Vec<Provider> {
-    let mut out = vec![Provider {
-        id: "openai".into(),
-        name: l("OpenAI 官方", "OpenAI official").into(),
-        base_url: None,
-        host: l("ChatGPT 账号登录", "ChatGPT account sign-in").into(),
-        apis: vec!["Responses".into()],
-        builtin: true,
-        enabled: true,
-        compatible: true,
-        reason: None,
-        models: vec![],
-        details: vec![
-            Kv::text(l("认证方式", "Authentication"), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
+    let mut out = vec![Provider::builtin(
+        "openai",
+        l("OpenAI 官方", "OpenAI official"),
+        l("ChatGPT 账号登录", "ChatGPT account sign-in"),
+        "responses",
+        api_label("responses"),
+        vec![
+            Kv::text(lbl::auth(), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
             Kv::text("Fast", l("账号登录时 Codex 原生显示", "Shown natively by Codex when signed in with an account")),
-            Kv::mono(l("配置 ID", "Config ID"), l("openai（内置）", "openai (built-in)")),
+            Kv::mono(lbl::config_id(), l("openai（内置）", "openai (built-in)")),
         ],
-        editable: false,
-        api: "responses".into(),
-        has_key: true,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
-    }];
+    )];
     if let Some(t) = doc.get("model_providers").and_then(|i| i.as_table_like()) {
         for (id, item) in t.iter() {
             if id == FIXED_ID {
@@ -329,18 +316,19 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
             let wire = get("wire_api").unwrap_or_else(|| "responses".into());
             let base = get("base_url");
             let chat = wire == "chat";
+            let api = if chat { "chat" } else { "responses" };
             let env_key = get("env_key");
             let official_auth = item.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut details = vec![
-                Kv::mono(l("配置 ID", "Config ID"), format!("[model_providers.{id}]")),
+                Kv::mono(lbl::config_id(), format!("[model_providers.{id}]")),
                 Kv::mono("wire_api", format!("\"{wire}\"")),
             ];
             if official_auth {
                 details.push(Kv::text(l("官方登录混用", "Official sign-in mix"), l("已开启 · Codex 用 ChatGPT 账号登录，对话请求发往此供应商并使用它的密钥", "On · Codex stays signed in with ChatGPT; requests go to this provider with its own API key")));
             }
             match &env_key {
-                Some(k) => details.push(Kv::text(l("密钥", "API key"), tr!("环境变量 {k} · {}", "Environment variable {k} · {}", key_status(k)))),
-                None => details.push(Kv::text(l("密钥", "API key"), l("未设置 env_key", "env_key not set"))),
+                Some(k) => details.push(Kv::text(lbl::api_key(), tr!("环境变量 {k} · {}", "Environment variable {k} · {}", key_status(k)))),
+                None => details.push(Kv::text(lbl::api_key(), l("未设置 env_key", "env_key not set"))),
             }
             details.push(Kv::text("Fast", l("Codex 默认隐藏（可在「其他设置」注入显示）", "Hidden by Codex by default (can be shown via injection in \"Other settings\")")));
             out.push(Provider {
@@ -349,18 +337,15 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 name: get("name").unwrap_or_else(|| id.to_string()),
                 host: base.as_deref().map(host_of).unwrap_or_default(),
                 base_url: base,
-                apis: vec![if chat { "Chat".into() } else { "Responses".into() }],
-                builtin: false,
+                apis: vec![api_label(api).into()],
                 enabled: true,
                 compatible: !chat,
                 reason: if chat { Some(l("Codex 已不支持 Chat 接口", "Codex no longer supports the Chat API").into()) } else { None },
-                models: vec![],
                 editable: true,
-                api: if chat { "chat".into() } else { "responses".into() },
+                api: api.into(),
                 has_key: env_key.as_deref().and_then(env_value).is_some(),
-                key_fp: None,
-                key_hint: None,
                 official_auth,
+                ..Default::default()
             });
         }
     }
@@ -374,10 +359,7 @@ fn load_catalog(doc: &DocumentMut) -> Option<(PathBuf, Value, TextMeta)> {
 }
 
 fn custom_models(store: &Value) -> Vec<String> {
-    crate::store::agent_get(store, ID, "customModels")
-        .and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-        .unwrap_or_default()
+    crate::util::str_list(crate::store::agent_get(store, ID, "customModels")).unwrap_or_default()
 }
 
 fn set_custom_models(store: &mut Value, list: &[String]) {
@@ -387,14 +369,11 @@ fn set_custom_models(store: &mut Value, list: &[String]) {
 /// Per-provider model lists (visible slugs), kept by AgentPlus. Codex has a single
 /// catalog; switching provider swaps the stored list into it.
 fn provider_models(store: &Value) -> serde_json::Map<String, Value> {
-    crate::store::agent_get(store, ID, "providerModels").and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    crate::store::get_obj(store, ID, "providerModels")
 }
 
 fn stored_list(store: &Value, provider: &str) -> Option<Vec<String>> {
-    provider_models(store)
-        .get(provider)
-        .and_then(|l| l.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+    crate::util::str_list(provider_models(store).get(provider))
 }
 
 /// Returns true when the stored list changed.
@@ -469,7 +448,7 @@ fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff
     if shown + hidden + added.len() == 0 {
         return Ok(false);
     }
-    diff.push(cat_file, tr!("模型列表换成「{who}」的 {} 个模型（显示 {shown} 个，隐藏 {hidden} 个）", "Model list replaced with \"{who}\"'s {} model(s) ({shown} shown, {hidden} hidden)", list.len()), true);
+    diff.push(cat_file, trn!(list.len(), "模型列表换成「{who}」的 {n} 个模型（显示 {shown} 个，隐藏 {hidden} 个）", "Model list replaced with \"{who}\"'s {n} model ({shown} shown, {hidden} hidden)", "Model list replaced with \"{who}\"'s {n} models ({shown} shown, {hidden} hidden)"), true);
     for a in added {
         diff.push(cat_file, a, true);
     }
@@ -512,33 +491,11 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "Codex".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "single".into(),
-        config_dir: codex_home().to_string_lossy().to_string(),
-        files: vec![display_path(&config_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "single", &codex_home(), vec![display_path(&config_path())]);
     let (doc, _) = match load_doc() {
         Ok(d) => d,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -668,15 +625,6 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 
 // ---------------------------------------------------------------- write
 
-fn unique_id(doc: &DocumentMut, name: &str) -> String {
-    let base = slug(name);
-    let taken = |id: &str| id == "openai" || id == FIXED_ID || provider_item(doc, id).is_some();
-    if !taken(&base) {
-        return base;
-    }
-    (2..).map(|n| format!("{base}-{n}")).find(|c| !taken(c)).unwrap()
-}
-
 /// Official sign-in mix: `requires_openai_auth = true` keeps Codex on the ChatGPT sign-in
 /// (account features stay unlocked) while the provider's own key (`env_key`, which Codex
 /// prefers over the ChatGPT token) authenticates the requests to its `base_url`.
@@ -690,7 +638,7 @@ fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> 
         .get_mut("model_providers")
         .and_then(|t| t.get_mut(id))
         .and_then(|t| t.as_table_like_mut())
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        .ok_or_else(|| msg::no_provider(id))?;
     let old = t.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
     if old == on {
         return Ok(false);
@@ -746,14 +694,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("Codex 只支持 Responses 接口", "Codex only supports the Responses API")));
                 }
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let id = match &p.id {
                     Some(id) => {
-                        provider_item(&doc, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        provider_item(&doc, id).ok_or_else(|| msg::no_provider(id))?;
                         id.clone()
                     }
-                    None => unique_id(&doc, &p.name),
+                    None => unique_id(&slug(&p.name), |c| c == "openai" || c == FIXED_ID || provider_item(&doc, c).is_some()),
                 };
                 let is_new = p.id.is_none();
                 let env_key = provider_str(&doc, &id, "env_key")
@@ -832,7 +780,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                 }
                 if provider != "openai" && provider_item(&doc, provider).is_none() {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 switched = Some(provider.clone());
                 let raw = configured_provider(&doc);
@@ -862,7 +810,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
                 let id = m.id.trim().to_string();
                 if id.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 if let Some(entry) = catalog_entry(v, &id) {
                     if let Some(n) = m.name.as_deref().filter(|n| !n.trim().is_empty()) {
@@ -980,7 +928,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                 }
                 "efforts" => {
-                    let want: Vec<String> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                    let want: Vec<String> = crate::util::str_list(Some(v)).unwrap_or_default();
                     let old = efforts(&doc);
                     let ordered: Vec<&str> = EFFORTS.iter().copied().filter(|e| want.iter().any(|w| w == e)).collect();
                     for e in EFFORTS {
@@ -1003,10 +951,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         cfg_dirty = true;
                     }
                 }
-                other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                other => return Err(msg::unknown_setting(other)),
             },
             Op::SetProviderModels { provider, models } => {
-                let list: Vec<String> = models.iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect();
+                let list = clean_ids(models);
                 let cur = switched.clone().unwrap_or_else(|| before.clone());
                 if provider == &cur {
                     // The active provider's list *is* the catalog.
@@ -1021,7 +969,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex 同时只能使用一个供应商", "Codex can only use one provider at a time"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code uses model roles"))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }

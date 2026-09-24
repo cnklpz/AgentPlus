@@ -99,6 +99,20 @@ pub fn resolve_path(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// An environment variable of the agent's environment, for its config (a config folder, a
+/// key variable). That is this process's environment on Windows; in WSL mode the agent runs
+/// in the distro's shell, whose variables AgentPlus can't see, so it is None. Empty is None.
+pub fn agent_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if crate::util::test_home().is_some() {
+        return test_var(name).filter(|v| !v.is_empty());
+    }
+    if is_wsl() {
+        return None;
+    }
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 /// Runs a command inside the current WSL distro; None on failure or outside WSL.
 pub fn wsl_sh(script: &str) -> Option<String> {
     let Target::Wsl { distro, .. } = current() else { return None };
@@ -171,4 +185,21 @@ pub fn set(id: &str) -> Result<()> {
 #[cfg(test)]
 pub fn force(t: Target) {
     *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = Some(t);
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_VARS: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Tests: the agent's environment variables on this thread while a `util::TestHome` is set
+/// (the real process environment is never read then).
+#[cfg(test)]
+pub fn set_test_vars(vars: &[(&str, &str)]) {
+    TEST_VARS.with(|v| *v.borrow_mut() = vars.iter().map(|(k, x)| (k.to_string(), x.to_string())).collect());
+}
+
+#[cfg(test)]
+pub fn test_var(name: &str) -> Option<String> {
+    TEST_VARS.with(|v| v.borrow().iter().find(|(k, _)| k == name).map(|(_, x)| x.clone()))
 }

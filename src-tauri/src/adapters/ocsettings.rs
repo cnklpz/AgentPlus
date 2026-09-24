@@ -6,11 +6,12 @@
 //! the global one (objects key by key, arrays replaced, `instructions` concatenated), so a
 //! missing key means "use the global value". Project rows show that value in their labels.
 
-use crate::i18n::l;
+use super::msg;
+use crate::i18n::{join, l, on_off};
 use crate::model::{Diff, Setting};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
-use crate::util::obj_at;
+use crate::util::{obj_at, str_list};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Scope {
@@ -97,10 +98,6 @@ fn read<'a>(cfg: &'a Value, key: &str) -> Option<&'a Value> {
     get(cfg, key)
 }
 
-fn as_list(v: Option<&Value>) -> Vec<String> {
-    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default()
-}
-
 /// A stored value in the Select's terms: "true"/"false" for booleans, "custom" for rule maps.
 fn select_str(v: Option<&Value>) -> Option<String> {
     match v? {
@@ -113,10 +110,6 @@ fn select_str(v: Option<&Value>) -> Option<String> {
 
 fn label_of(opts: &[(&'static str, &'static str, &'static str)], v: &str) -> String {
     opts.iter().find(|o| o.0 == v).map(|o| l(o.1, o.2).to_string()).unwrap_or_else(|| if v == "custom" { l("按规则细分", "Per rule").into() } else { v.to_string() })
-}
-
-fn on_off(b: bool) -> &'static str {
-    if b { l("开", "On") } else { l("关", "Off") }
 }
 
 /// Rows for one config. `global` is the global config when `cfg` is a project's.
@@ -194,17 +187,17 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
             }
             Kind::List => {
                 row.kind = "list".into();
-                row.value = json!(as_list(cur));
+                row.value = json!(str_list(cur).unwrap_or_default());
                 if scope == Scope::Project {
-                    let g = as_list(inherited);
+                    let g = str_list(inherited).unwrap_or_default();
                     let tail = if s.key == "instructions" { l("和全局的合并", "Merged with global") } else { l("留空＝继承全局", "Leave empty to inherit global") };
-                    let shown = if g.is_empty() { String::new() } else { tr!("（全局：{}）", " (global: {})", g.join(l("、", ", "))) };
+                    let shown = if g.is_empty() { String::new() } else { tr!("（全局：{}）", " (global: {})", join(&g)) };
                     row.desc = tr!("{}。{tail}{shown}", "{}. {tail}{shown}", row.desc);
                 }
             }
             Kind::Providers => {
                 row.kind = "chips".into();
-                let mut v = as_list(cur);
+                let mut v = str_list(cur).unwrap_or_default();
                 let mut opts: Vec<String> = providers.to_vec();
                 // Ids listed in the file but not known here still show (and can be unticked).
                 for x in &v {
@@ -216,9 +209,9 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 row.value = json!(v);
                 row.options = opts;
                 if scope == Scope::Project {
-                    let g = as_list(inherited);
+                    let g = str_list(inherited).unwrap_or_default();
                     if !g.is_empty() {
-                        row.desc = tr!("{}。都不选＝沿用全局的 {}", "{}. None selected = use the global {}", row.desc, g.join(l("、", ", ")));
+                        row.desc = tr!("{}。都不选＝沿用全局的 {}", "{}. None selected = use the global {}", row.desc, join(&g));
                     }
                 }
             }
@@ -281,7 +274,7 @@ fn write(cfg: &mut Value, key: &str, v: Option<Value>) -> Result<()> {
 
 /// Applies one setting to `cfg`. Returns whether the file changed.
 pub fn apply(cfg: &mut Value, key: &str, value: &Value, diff: &mut Diff, file: &str) -> Result<bool> {
-    let spec = SPECS.iter().find(|s| s.key == key).ok_or_else(|| anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}")))?;
+    let spec = SPECS.iter().find(|s| s.key == key).ok_or_else(|| msg::unknown_setting(key))?;
     if value.as_str() == Some("custom") {
         return Ok(false); // "keep the rule map as it is"
     }
