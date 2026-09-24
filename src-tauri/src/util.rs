@@ -196,6 +196,21 @@ pub fn host_of(url: &str) -> String {
     }
 }
 
+/// A base URL in comparable form: trimmed, without trailing slashes, lowercase.
+pub fn norm_url(u: &str) -> String {
+    u.trim().trim_end_matches('/').to_lowercase()
+}
+
+/// `v[k]` as an owned string; empty when it is missing or not a string.
+pub fn str_field(v: &serde_json::Value, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+}
+
+/// The strings of a JSON array (other items skipped); None when `v` is not an array.
+pub fn str_list(v: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+}
+
 /// Strips `//` and `/* */` comments outside strings, plus trailing commas.
 /// Returns (clean json, had_comments).
 pub fn strip_jsonc(src: &str) -> (String, bool) {

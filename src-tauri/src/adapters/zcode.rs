@@ -62,24 +62,10 @@ fn api_short(t: &str) -> &'static str {
     }
 }
 
-fn api_label(t: &str) -> &'static str {
-    match t {
-        "openai-responses" => "Responses",
-        "anthropic-messages" => "Anthropic",
-        _ => "Chat",
-    }
-}
-
 fn rules(v: &Value) -> Vec<Value> {
     v.pointer("/config/providerConfigRules/providerRules")
         .and_then(|r| r.as_array())
         .cloned()
-        .unwrap_or_default()
-}
-
-fn str_vec(v: Option<&Value>) -> Vec<String> {
-    v.and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
         .unwrap_or_default()
 }
 
@@ -173,8 +159,8 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
         let pid = r.get("providerId").and_then(|x| x.as_str()).unwrap_or_default().to_string();
         let base = api.get("baseUrl").and_then(|x| x.as_str()).map(String::from);
         let atype = api.get("type").and_then(|x| x.as_str()).unwrap_or("");
-        let visible = str_vec(r.pointer("/config/personalModelIds"));
-        let mut order = str_vec(r.pointer("/config/modelOrder"));
+        let visible = str_list(r.pointer("/config/personalModelIds")).unwrap_or_default();
+        let mut order = str_list(r.pointer("/config/modelOrder")).unwrap_or_default();
         for m in &visible {
             if !order.contains(m) {
                 order.push(m.clone());
@@ -197,7 +183,7 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
             name: r.get("providerName").and_then(|x| x.as_str()).map(String::from).unwrap_or_else(|| pid.clone()),
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
-            apis: vec![api_label(atype).into()],
+            apis: vec![api_label(api_short(atype)).into()],
             builtin: false,
             enabled: r.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false),
             compatible: true,
@@ -354,7 +340,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 match &p.id {
                     None => {
                         let pid = new_uuid();
-                        let models: Vec<String> = p.models.iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect();
+                        let models = clean_ids(&p.models);
                         let rule = json!({
                             "providerId": pid,
                             "providerName": p.name.trim(),
@@ -371,7 +357,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if let Some(order) = pc.pointer_mut("/config/providerOrder").and_then(|x| x.as_array_mut()) {
                             order.push(json!(pid));
                         }
-                        diff.push(&pf, tr!("+ 供应商「{}」{} · {}（{} 个模型）", "+ Provider \"{}\" {} · {} ({} models)", p.name.trim(), p.base_url.trim(), api_label(api_type(&p.api)), models.len()), true);
+                        diff.push(&pf, tr!("+ 供应商「{}」{} · {}（{} 个模型）", "+ Provider \"{}\" {} · {} ({} models)", p.name.trim(), p.base_url.trim(), api_label(api_short(api_type(&p.api))), models.len()), true);
                         if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
                             diff.push(&pf, tr!("「{}」.apiKey = {}", "\"{}\".apiKey = {}", p.name.trim(), mask_key(k.trim())), true);
                         }
@@ -430,8 +416,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let r = rule_mut(&mut pc, provider)?;
                 let name = rule_name(r, provider);
                 let cfg = r.get_mut("config").ok_or_else(|| anyhow!(tr!("供应商 {provider} 缺少 config", "Provider {provider} has no config")))?;
-                let mut ids = str_vec(cfg.get("personalModelIds"));
-                let mut order = str_vec(cfg.get("modelOrder"));
+                let mut ids = str_list(cfg.get("personalModelIds")).unwrap_or_default();
+                let mut order = str_list(cfg.get("modelOrder")).unwrap_or_default();
                 if ids.contains(model) != *visible {
                     if *visible { ids.push(model.clone()) } else { ids.retain(|m| m != model) }
                     // keep the model in modelOrder so hiding never forgets it
@@ -456,8 +442,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let r = rule_mut(&mut pc, provider)?;
                 let name = rule_name(r, provider);
                 let cfg = r.get_mut("config").ok_or_else(|| anyhow!(tr!("供应商 {provider} 缺少 config", "Provider {provider} has no config")))?;
-                let mut order = str_vec(cfg.get("modelOrder"));
-                let mut ids = str_vec(cfg.get("personalModelIds"));
+                let mut order = str_list(cfg.get("modelOrder")).unwrap_or_default();
+                let mut ids = str_list(cfg.get("personalModelIds")).unwrap_or_default();
                 if !order.contains(&mid) && !ids.contains(&mid) {
                     order.push(mid.clone());
                     ids.push(mid.clone());
@@ -482,8 +468,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let r = rule_mut(&mut pc, provider)?;
                 let name = rule_name(r, provider);
                 let cfg = r.get_mut("config").ok_or_else(|| anyhow!(tr!("供应商 {provider} 缺少 config", "Provider {provider} has no config")))?;
-                let mut ids = str_vec(cfg.get("personalModelIds"));
-                let mut order = str_vec(cfg.get("modelOrder"));
+                let mut ids = str_list(cfg.get("personalModelIds")).unwrap_or_default();
+                let mut order = str_list(cfg.get("modelOrder")).unwrap_or_default();
                 ids.retain(|m| m != model);
                 order.retain(|m| m != model);
                 cfg["personalModelIds"] = json!(ids);

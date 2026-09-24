@@ -87,10 +87,6 @@ fn global_cfg() -> Value {
     opencode::fmt().load(true).map(|x| x.0).unwrap_or_else(|_| json!({}))
 }
 
-fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
-    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-}
-
 /// Effective `disabled_providers`: the project's list replaces the global one when present.
 fn disabled(cfg: &Value, global: &Value) -> Vec<String> {
     str_list(cfg.get("disabled_providers")).or_else(|| str_list(global.get("disabled_providers"))).unwrap_or_default()

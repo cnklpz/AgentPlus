@@ -45,9 +45,6 @@ pub struct Dirty {
     pub auth: bool,
 }
 
-pub fn blank_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
 
 /// Provider ids pi-ai ships with. A config entry with one of these ids only overrides the
 /// built-in, so removing it does not make "provider/model" references dangle.
@@ -250,7 +247,7 @@ impl Fmt {
     /// Returns (config, meta, had_comments) of a JSON / JSONC file; missing = empty object.
     pub fn load_jsonc(path: &Path, blank: Value) -> Result<(Value, TextMeta, bool)> {
         if !path.exists() {
-            return Ok((blank, blank_meta(), false));
+            return Ok((blank, TextMeta::NEW, false));
         }
         let (text, meta) = read_text(path)?;
         let (clean, had) = strip_jsonc(&text);
@@ -261,7 +258,7 @@ impl Fmt {
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
         let p = self.auth.as_ref()?;
         if !p.exists() {
-            return Some((json!({}), blank_meta()));
+            return Some((json!({}), TextMeta::NEW));
         }
         read_json(p).ok()
     }
@@ -270,23 +267,19 @@ impl Fmt {
         auth?.get(id).filter(|e| s(e, "type") == Some("api_key")).and_then(|e| e.get("key")).filter(|k| k.as_str().map(|k| !k.is_empty()).unwrap_or(false))
     }
 
-    fn stash(root: &Value, agent: &str, key: &str) -> Map<String, Value> {
-        store::agent_get(root, agent, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
-    }
-
     pub fn hidden(&self, root: &Value) -> Map<String, Value> {
-        Self::stash(root, self.agent, "hiddenModels")
+        store::get_obj(root, self.agent, "hiddenModels")
     }
 
     pub fn parked(&self, root: &Value) -> Map<String, Value> {
-        Self::stash(root, self.agent, "disabledProviders")
+        store::get_obj(root, self.agent, "disabledProviders")
     }
 
     /// Display name: pi keeps it in the config, OpenClaw's schema has no room so it lives in the store.
     fn display_name(&self, id: &str, def: &Value, root: &Value) -> String {
         match self.flavor {
             Flavor::Pi => s(def, "name").filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
-            Flavor::OpenClaw => Self::stash(root, self.agent, "names").get(id).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
+            Flavor::OpenClaw => store::get_obj(root, self.agent, "names").get(id).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
         }
     }
 
@@ -500,15 +493,8 @@ impl Fmt {
                         let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("不支持的协议 {}", "Unsupported protocol: {}", p.api)))?;
                         let parked = self.parked(root);
                         let providers = self.providers_mut(cfg)?;
-                        let base = slug(name);
-                        let free = |c: &str| !providers.contains_key(c) && !parked.contains_key(c) && !BUILTIN_PROVIDERS.contains(&c);
-                        let id = if free(&base) { base.clone() } else { (2..).map(|n| format!("{base}-{n}")).find(|c| free(c)).unwrap() };
-                        let mut ids: Vec<&str> = vec![];
-                        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                            if !ids.contains(&m) {
-                                ids.push(m);
-                            }
-                        }
+                        let id = unique_id(&slug(name), |c| providers.contains_key(c) || parked.contains_key(c) || BUILTIN_PROVIDERS.contains(&c));
+                        let ids = clean_ids(&p.models);
                         let models: Vec<Value> = ids.iter().map(|m| self.new_model(m, None, None)).collect();
                         let mut def = Map::new();
                         if self.flavor == Flavor::Pi {
@@ -704,12 +690,7 @@ impl Fmt {
             }
             Op::SetProviderModels { provider, models: ids } => {
                 let hidden = self.hidden(root);
-                let mut want: Vec<String> = vec![];
-                for m in ids.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                    if !want.iter().any(|w| w == m) {
-                        want.push(m.to_string());
-                    }
-                }
+                let want = clean_ids(ids);
                 let fresh: Vec<Value> = want.iter().map(|m| self.new_model(m, None, None)).collect();
                 let models = self.models_mut(cfg, provider, l("调整模型", "changing its models"))?;
                 let old = models.clone();

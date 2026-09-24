@@ -61,7 +61,7 @@ fn env_str(env: &Map<String, Value>, k: &str) -> Option<String> {
 }
 
 fn profiles(root: &Value) -> Map<String, Value> {
-    store::agent_get(root, ID, "profiles").and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    store::get_obj(root, ID, "profiles")
 }
 
 fn save_profiles(root: &mut Value, p: Map<String, Value>) {
@@ -74,13 +74,7 @@ fn claude_base(u: &str) -> String {
     t.strip_suffix("/v1").unwrap_or(t).to_string()
 }
 
-fn norm(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_lowercase()
-}
 
-fn s(v: &Value, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
 
 /// Which provider the env block currently reflects.
 fn current(env: &Map<String, Value>, profs: &Map<String, Value>) -> String {
@@ -88,9 +82,9 @@ fn current(env: &Map<String, Value>, profs: &Map<String, Value>) -> String {
     let key = env_str(env, TOKEN).or_else(|| env_str(env, API_KEY));
     profs
         .iter()
-        .filter(|(_, p)| norm(&s(p, "baseUrl")) == norm(&claude_base(&base)))
-        .find(|(_, p)| key.is_none() || s(p, "apiKey") == key.clone().unwrap_or_default())
-        .or_else(|| profs.iter().find(|(_, p)| norm(&s(p, "baseUrl")) == norm(&claude_base(&base))))
+        .filter(|(_, p)| norm_url(&str_field(p, "baseUrl")) == norm_url(&claude_base(&base)))
+        .find(|(_, p)| key.is_none() || str_field(p, "apiKey") == key.clone().unwrap_or_default())
+        .or_else(|| profs.iter().find(|(_, p)| norm_url(&str_field(p, "baseUrl")) == norm_url(&claude_base(&base))))
         .map(|(id, _)| id.clone())
         .unwrap_or_else(|| UNMANAGED.into())
 }
@@ -147,10 +141,10 @@ fn desired_env(p: Option<&Value>) -> Vec<(&'static str, Option<String>)> {
             }
         }
         Some(p) => {
-            let key_env = if s(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN };
+            let key_env = if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN };
             let other = if key_env == TOKEN { API_KEY } else { TOKEN };
-            out.push((BASE, Some(s(p, "baseUrl"))));
-            out.push((key_env, Some(s(p, "apiKey")).filter(|k| !k.is_empty())));
+            out.push((BASE, Some(str_field(p, "baseUrl"))));
+            out.push((key_env, Some(str_field(p, "apiKey")).filter(|k| !k.is_empty())));
             out.push((other, None));
             let roles = roles_of(p);
             for (role, k, _) in ROLES {
@@ -167,12 +161,12 @@ fn secret(k: &str) -> bool {
 }
 
 fn provider_of(id: &str, p: &Value, _is_current: bool) -> Provider {
-    let base = s(p, "baseUrl");
+    let base = str_field(p, "baseUrl");
     let roles = roles_of(p);
-    let key = s(p, "apiKey");
+    let key = str_field(p, "apiKey");
     let mut details = vec![
         Kv::mono(l("地址", "Base URL"), base.clone()),
-        Kv::text(l("密钥", "API key"), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{} · {}", if s(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN }, mask_key(&key)) }),
+        Kv::text(l("密钥", "API key"), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{} · {}", if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN }, mask_key(&key)) }),
     ];
     for (role, _, (zh, en)) in ROLES {
         if let Some(m) = roles.get(role) {
@@ -183,10 +177,10 @@ fn provider_of(id: &str, p: &Value, _is_current: bool) -> Provider {
     details.push(Kv::text(l("保存位置", "Stored in"), l("AgentPlus 配置档（切换时写入 settings.json 的 env）", "AgentPlus profile (written to the env block of settings.json on switch)")));
     Provider {
         id: id.into(),
-        name: s(p, "name"),
+        name: str_field(p, "name"),
         host: host_of(&base),
         base_url: Some(base),
-        apis: vec!["Anthropic".into()],
+        apis: vec![api_label("anthropic").into()],
         builtin: false,
         enabled: true,
         compatible: true,
@@ -311,13 +305,13 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     } else {
         profiles(&store::load()).get(id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
     };
-    let base = s(&p, "baseUrl");
+    let base = str_field(&p, "baseUrl");
     if base.is_empty() {
         return Err(anyhow!(l("官方账号没有可用的地址", "The official account has no usable base URL")));
     }
-    let key = s(&p, "apiKey");
+    let key = str_field(&p, "apiKey");
     // Claude Code appends /v1/messages to the base; callers append /messages.
-    let base = if norm(&base).ends_with("/v1") { base } else { format!("{}/v1", base.trim_end_matches('/')) };
+    let base = if norm_url(&base).ends_with("/v1") { base } else { format!("{}/v1", base.trim_end_matches('/')) };
     Ok((base, (!key.is_empty()).then_some(key), "anthropic".into()))
 }
 
@@ -355,8 +349,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
                 match p.id.as_deref() {
                     None | Some(UNMANAGED) => {
-                        let base = slug(&p.name);
-                        let id = if !profs.contains_key(&base) && base != OFFICIAL && base != UNMANAGED { base.clone() } else { (2..).map(|n| format!("{base}-{n}")).find(|c| !profs.contains_key(c)).unwrap() };
+                        let id = unique_id(&slug(&p.name), |c| profs.contains_key(c) || c == OFFICIAL || c == UNMANAGED);
                         let adopting = p.id.as_deref() == Some(UNMANAGED);
                         let mut roles = Map::new();
                         let mut key_env = TOKEN;
@@ -372,7 +365,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             }
                             key = key.or_else(|| env_str(&env0, TOKEN).or_else(|| env_str(&env0, API_KEY)));
                         }
-                        let models: Vec<Value> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).map(|m| json!({ "id": m, "visible": true })).collect();
+                        let models: Vec<Value> = clean_ids(&p.models).into_iter().map(|m| json!({ "id": m, "visible": true })).collect();
                         profs.insert(id.clone(), json!({
                             "name": p.name.trim(), "baseUrl": claude_base(&p.base_url), "apiKey": key.clone().unwrap_or_default(),
                             "keyEnv": key_env, "models": models, "roles": roles,
@@ -390,7 +383,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         let e = profs.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
                         let base = claude_base(&p.base_url);
                         for (k, v) in [("name", p.name.trim()), ("baseUrl", base.as_str())] {
-                            if s(e, k) != v {
+                            if str_field(e, k) != v {
                                 e[k] = json!(v);
                                 diff.push(store_label, tr!("「{id}」{k} = {v}", "\"{id}\" {k} = {v}"), true);
                                 store_dirty = true;
@@ -462,7 +455,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetProviderModels { provider, models } => {
                 profile(&mut profs, provider)?;
                 let p = profs.get_mut(provider).unwrap();
-                let list: Vec<(String, bool)> = models.iter().map(|m| (m.trim().to_string(), true)).filter(|(m, _)| !m.is_empty()).collect();
+                let list: Vec<(String, bool)> = clean_ids(models).into_iter().map(|m| (m, true)).collect();
                 set_model_list(p, &list);
                 diff.push(store_label, tr!("「{provider}」模型列表：{} 个", "\"{provider}\" model list: {}", list.len()), true);
                 store_dirty = true;

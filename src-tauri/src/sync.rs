@@ -103,9 +103,6 @@ pub struct Suggestion {
     pub ops: Vec<(String, Value)>,
 }
 
-fn norm(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_lowercase()
-}
 
 /// Compares the sync file with this machine and proposes additions.
 pub fn preview_import() -> Result<Vec<Suggestion>> {
@@ -119,7 +116,7 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
             let base = rp["baseUrl"].as_str().unwrap_or_default();
             let name = rp["name"].as_str().unwrap_or_default();
             let api = rp["api"].as_str().unwrap_or("chat");
-            let lp = local.providers.iter().find(|p| p.base_url.as_deref().map(norm) == Some(norm(base)));
+            let lp = local.providers.iter().find(|p| p.base_url.as_deref().map(norm_url) == Some(norm_url(base)));
             let rmodels: Vec<Value> = rp["models"].as_array().cloned().unwrap_or_default();
             match lp {
                 None => {

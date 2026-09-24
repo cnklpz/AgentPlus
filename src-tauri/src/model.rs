@@ -255,6 +255,38 @@ pub fn slug(name: &str) -> String {
     if s.is_empty() { "provider".into() } else { s }
 }
 
+/// `base` when it is free, else the first free `base-2`, `base-3`, …; `taken` decides for
+/// every candidate.
+pub fn unique_id(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..).map(|n| format!("{base}-{n}")).find(|c| !taken(c)).unwrap()
+}
+
+/// Model ids as typed by the user: trimmed, blanks dropped, duplicates removed (the first
+/// one stays, order is kept).
+pub fn clean_ids<S: AsRef<str>>(ids: &[S]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for id in ids.iter().map(|s| s.as_ref().trim()).filter(|s| !s.is_empty()) {
+        if !out.iter().any(|x| x == id) {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
+/// Display label of an AgentPlus api ("responses" → "Responses"); "chat" and anything
+/// unknown show as "Chat".
+pub fn api_label(api: &str) -> &'static str {
+    match api {
+        "anthropic" => "Anthropic",
+        "responses" => "Responses",
+        "gemini" => "Gemini",
+        _ => "Chat",
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct DiffLine {
     pub text: String,
@@ -326,7 +358,30 @@ impl Setting {
 
 #[cfg(test)]
 mod tests {
-    use super::{mask_key, slug};
+    use super::{api_label, clean_ids, mask_key, slug, unique_id};
+
+    #[test]
+    fn unique_id_checks_every_candidate() {
+        assert_eq!(unique_id("relay", |_| false), "relay");
+        let taken = ["relay", "relay-2", "relay-4"];
+        assert_eq!(unique_id("relay", |c| taken.contains(&c)), "relay-3");
+        // One rule for the base and the numbered ids (a reserved suffix is skipped too).
+        assert_eq!(unique_id("x", |c| c == "x" || c.ends_with("-2")), "x-3");
+    }
+
+    #[test]
+    fn clean_ids_trims_drops_and_dedupes() {
+        assert_eq!(clean_ids(&[" b ", "", "a", "b", "  ", "a ", "c"]), vec!["b", "a", "c"]);
+        assert!(clean_ids::<String>(&[]).is_empty());
+        assert_eq!(clean_ids(&["m1".to_string(), "m1".to_string()]), vec!["m1"]);
+    }
+
+    #[test]
+    fn api_labels() {
+        for (api, label) in [("anthropic", "Anthropic"), ("responses", "Responses"), ("gemini", "Gemini"), ("chat", "Chat"), ("x", "Chat"), ("", "Chat")] {
+            assert_eq!(api_label(api), label);
+        }
+    }
 
     #[test]
     fn slug_spells_chinese_in_pinyin() {
