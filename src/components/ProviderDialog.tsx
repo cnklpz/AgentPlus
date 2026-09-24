@@ -118,7 +118,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   for (const m of editing?.models ?? []) for (const r of roleList) if (m.tags.some((g) => g.id === `role:${r.role}`)) rolesOriginal[r.role] = m.id;
   const [roles, setRoles] = useState<Record<string, string>>(rolesOp && rolesOp.op === "set_model_roles" ? rolesOp.roles : rolesOriginal);
 
-  const [modelPool, addToPool] = useModelPool(() => [
+  const [modelPool, addToPool, resetPool] = useModelPool(() => [
     ...(isNew ? [] : codex ? [...(st.catalog ?? []).map((m) => m.id), ...codexStart] : claude ? [...(editing?.models ?? []).map((m) => m.id), ...codexStart] : perModels.map((m) => m.id)),
     ...checked,
   ]);
@@ -168,16 +168,15 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     setTpl(tp);
     setFetched([]);
     setErr(null);
+    // Another template: the list starts over from the models ticked now (templates only show for a new provider).
+    resetPool(tp && !(codex && isNew) ? tp.models : checked);
     if (!tp) return;
     setUnifiedNew(false);
     setName(tp.name);
     const k = only && tp.endpoints[only] ? only : tp.api;
     setKind(only ?? k);
     setBaseUrl(tp.endpoints[k]!);
-    if (!(codex && isNew)) {
-      setChecked(tp.models);
-      addToPool(tp.models);
-    }
+    if (!(codex && isNew)) setChecked(tp.models);
   };
   const setProto = (k: ApiKind) => {
     setKind(k);
