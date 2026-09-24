@@ -20,6 +20,16 @@ pub struct Install {
     /// AppUserModelID (packaged apps).
     pub aumid: Option<String>,
     pub running: bool,
+    /// Every desktop copy found when there can be several; `exe` is the one in use.
+    pub copies: Vec<DesktopCopy>,
+}
+
+/// One installed copy of a desktop app.
+#[derive(Clone, Debug)]
+pub struct DesktopCopy {
+    pub exe: PathBuf,
+    pub version: Option<String>,
+    pub running: bool,
 }
 
 #[cfg(windows)]
@@ -102,32 +112,35 @@ fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
     pkg
 }
 
+/// (DisplayName, DisplayVersion, DisplayIcon, UninstallString) of an uninstall entry.
+type UninstallEntry = (String, Option<String>, Option<String>, Option<String>);
+
+/// Every uninstall entry whose name starts with `prefix`, current user first.
 #[cfg(windows)]
-#[allow(clippy::type_complexity)]
-fn uninstall_entry(prefix: &str) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
+fn uninstall_entries(prefix: &str) -> Vec<UninstallEntry> {
     use winreg::enums::*;
     use winreg::RegKey;
     let path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
+    let mut out = vec![];
     for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
         let Ok(root) = RegKey::predef(hive).open_subkey(path) else { continue };
         for name in root.enum_keys().flatten() {
             let Ok(k) = root.open_subkey(&name) else { continue };
             let dn: String = k.get_value("DisplayName").unwrap_or_default();
             if dn.starts_with(prefix) {
-                return Some((
-                    dn,
-                    k.get_value("DisplayVersion").ok(),
-                    k.get_value("DisplayIcon").ok(),
-                    k.get_value("UninstallString").ok(),
-                ));
+                out.push((dn, k.get_value("DisplayVersion").ok(), k.get_value("DisplayIcon").ok(), k.get_value("UninstallString").ok()));
             }
         }
     }
-    None
+    out
 }
 #[cfg(not(windows))]
-fn uninstall_entry(_: &str) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
-    None
+fn uninstall_entries(_: &str) -> Vec<UninstallEntry> {
+    vec![]
+}
+
+fn uninstall_entry(prefix: &str) -> Option<UninstallEntry> {
+    uninstall_entries(prefix).into_iter().next()
 }
 
 /// The executable in a registry `DisplayIcon` / `UninstallString` value (`"C:\a b\x.exe",0`).
@@ -337,16 +350,60 @@ fn detect_claude(inst: &mut Install) {
     inst.running = any_process(|name, _| name.eq_ignore_ascii_case("claude.exe"));
 }
 
+/// Every installed copy of a desktop app registered as `prefix…` (an old and a new build can
+/// sit side by side), each with an executable that exists; `main` names it when the entry's
+/// icon doesn't.
+fn desktop_copies(prefix: &str, main: &str) -> Vec<DesktopCopy> {
+    let mut out: Vec<DesktopCopy> = vec![];
+    for (_, version, icon, uninst) in uninstall_entries(prefix) {
+        let exe = icon
+            .and_then(|i| unquote_exe(&i))
+            .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false))
+            .filter(|p| p.is_file())
+            .or_else(|| uninst.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(|d| d.join(main))).filter(|p| p.is_file()));
+        let Some(exe) = exe else { continue };
+        if !out.iter().any(|c| norm_dir(&c.exe.to_string_lossy()) == norm_dir(&exe.to_string_lossy())) {
+            out.push(DesktopCopy { exe, version, running: false });
+        }
+    }
+    out
+}
+
+/// Numeric parts of a version, for ordering ("1.18.32" > "1.14.25"; missing = oldest).
+fn version_key(v: Option<&str>) -> Vec<u64> {
+    v.unwrap_or("").split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).map(|s| s.parse().unwrap_or(0)).collect()
+}
+
+/// Which copy to use: the one picked in settings, else the one running, else the newest.
+fn choose_copy(copies: &[DesktopCopy], preferred: Option<&str>) -> usize {
+    if let Some(i) = preferred.and_then(|p| copies.iter().position(|c| norm_dir(&c.exe.to_string_lossy()) == norm_dir(p))) {
+        return i;
+    }
+    if let Some(i) = copies.iter().position(|c| c.running) {
+        return i;
+    }
+    (0..copies.len()).max_by(|&a, &b| version_key(copies[a].version.as_deref()).cmp(&version_key(copies[b].version.as_deref())).then(b.cmp(&a))).unwrap_or(0)
+}
+
+/// Store key of the desktop copy picked by hand (absent or empty = automatic).
+pub const DESKTOP_EXE: &str = "desktopExe";
+
 /// OpenCode: the desktop app (registry) or the CLI.
 fn detect_opencode(inst: &mut Install) {
-    if let Some((_, ver, icon, uninst)) = uninstall_entry("OpenCode") {
-        let exe = icon.and_then(|i| unquote_exe(&i)).filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false)).or_else(|| {
-            uninst.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(|d| d.join("OpenCode.exe"))).filter(|p| p.exists())
-        });
+    let copies = desktop_copies("OpenCode", "OpenCode.exe");
+    if !copies.is_empty() {
+        let sys = processes();
+        let mut copies = copies;
+        for c in &mut copies {
+            c.running = c.exe.parent().is_some_and(|d| !app_processes(&sys, d, Some(&c.exe)).is_empty());
+        }
+        let preferred = crate::store::get_str(&crate::store::load(), "opencode", DESKTOP_EXE).filter(|s| !s.is_empty());
+        let c = &copies[choose_copy(&copies, preferred.as_deref())];
         inst.installed = true;
-        inst.version = ver;
-        inst.dir = exe.as_ref().and_then(|e| e.parent().map(Path::to_path_buf));
-        inst.exe = exe;
+        inst.version = c.version.clone();
+        inst.dir = c.exe.parent().map(Path::to_path_buf);
+        inst.exe = Some(c.exe.clone());
+        inst.copies = copies;
         return;
     }
     let home = dirs::home_dir().unwrap_or_default();
@@ -712,7 +769,38 @@ mod tests {
             let app = app_of(&sys, &inst);
             let folder = inst.dir.as_deref().map(|d| app_processes(&sys, d, None).len()).unwrap_or(0);
             println!("{a:<10} running={} main={:?} app={} in_folder={} cli_sessions={}", inst.running, inst.exe, app.len(), folder, cli_sessions(&sys, a, &app));
+            for c in &inst.copies {
+                println!("           copy {:?} {:?} running={}", c.version, c.exe, c.running);
+            }
         }
+    }
+
+    fn copy(exe: &str, version: Option<&str>, running: bool) -> DesktopCopy {
+        DesktopCopy { exe: PathBuf::from(exe), version: version.map(String::from), running }
+    }
+
+    #[test]
+    fn choose_copy_prefers_pick_then_running_then_newest() {
+        let old = copy(r"D:\OpenCode\OpenCode.exe", Some("1.14.25"), false);
+        let new = copy(r"C:\Apps\OpenCode\OpenCode.exe", Some("1.18.32"), false);
+        let odd = copy(r"E:\oc\OpenCode.exe", None, false);
+        // Newest when none runs, whatever the registry order; no version counts as oldest.
+        assert_eq!(choose_copy(&[old.clone(), new.clone(), odd.clone()], None), 1);
+        assert_eq!(choose_copy(&[new.clone(), old.clone()], None), 0);
+        assert_eq!(choose_copy(std::slice::from_ref(&odd), None), 0);
+        // Numbers compare as numbers: 1.9 < 1.10.
+        let v19 = copy(r"C:\a\OpenCode.exe", Some("1.9.0"), false);
+        let v110 = copy(r"C:\b\OpenCode.exe", Some("1.10.0"), false);
+        assert_eq!(choose_copy(&[v110.clone(), v19.clone()], None), 0);
+        // Same version: the first one listed.
+        assert_eq!(choose_copy(&[v19.clone(), v19.clone()], None), 0);
+        // The one running wins over a newer one.
+        let old_running = DesktopCopy { running: true, ..old.clone() };
+        assert_eq!(choose_copy(&[new.clone(), old_running.clone()], None), 1);
+        // A pick wins over both, matched however the path is spelled; a stale pick is ignored.
+        assert_eq!(choose_copy(&[new.clone(), old_running.clone()], Some("c:/apps/opencode/OPENCODE.exe")), 0);
+        assert_eq!(choose_copy(&[new.clone(), old_running], Some(r"Z:\gone\OpenCode.exe")), 1);
+        assert_eq!(choose_copy(&[old, new], Some("")), 1);
     }
 
     #[test]
