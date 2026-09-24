@@ -3,6 +3,7 @@ name = "agentplus"
 version = "0.1.0"
 description = "Manage providers and model lists for coding agents"
 edition = "2021"
+license = "MIT"
 
 [lib]
 name = "agentplus_lib"
