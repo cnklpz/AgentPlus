@@ -206,40 +206,14 @@ fn provider_of(id: &str, p: &Value) -> Provider {
         host: if base.is_empty() { "generativelanguage.googleapis.com".into() } else { host_of(&base) },
         base_url: Some(if base.is_empty() { "https://generativelanguage.googleapis.com".into() } else { base }),
         apis: vec![api_label("gemini").into()],
-        builtin: false,
         enabled: true,
         compatible: true,
-        reason: None,
         models,
         details,
         editable: true,
         api: "gemini".into(),
         has_key: !key.is_empty(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
-    }
-}
-
-fn builtin(id: &str, name: &str, host: &str, details: Vec<Kv>) -> Provider {
-    Provider {
-        id: id.into(),
-        name: name.into(),
-        base_url: None,
-        host: host.into(),
-        apis: vec!["Gemini".into()],
-        builtin: true,
-        enabled: true,
-        compatible: true,
-        reason: None,
-        models: vec![],
-        details,
-        editable: false,
-        api: "gemini".into(),
-        has_key: true,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
@@ -253,33 +227,12 @@ fn unmanaged_profile(env: &str) -> Value {
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "Gemini CLI".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "single".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&settings_path()), display_path(&env_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![l("改动对新启动的 gemini 生效。", "Changes apply to newly started gemini sessions.").into()],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "single", &dir(), vec![display_path(&settings_path()), display_path(&env_path())]);
+    st.notes.push(l("改动对新启动的 gemini 生效。", "Changes apply to newly started gemini sessions.").into());
     let (cfg, _, had_comments) = match load() {
         Ok(x) => x,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -293,17 +246,19 @@ pub fn state(inst: &Install) -> AgentState {
     let cur = current(&cfg, &env, &profs);
     st.current_provider = Some(cur.clone());
 
-    st.providers.push(builtin(
+    st.providers.push(Provider::builtin(
         GOOGLE,
         l("Google 账号登录", "Google account sign-in"),
         l("Google 账号（oauth-personal）", "Google account (oauth-personal)"),
+        "gemini",
+        api_label("gemini"),
         vec![
             Kv::text(lbl::auth(), l("security.auth.selectedType = oauth-personal（凭据在 ~/.gemini/oauth_creds.json）", "security.auth.selectedType = oauth-personal (credentials in ~/.gemini/oauth_creds.json)")),
             Kv::text(lbl::note(), l("不设置 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，用 Google 账号和官方模型", "Leaves GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY unset; uses the Google account and official models")),
         ],
     ));
     if let Some(t) = cur.strip_prefix(AUTH) {
-        st.providers.push(builtin(&cur, auth_label(t), l("其他认证方式", "Other auth method"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(lbl::note(), l("在 Gemini CLI 里用 /auth 管理", "Manage it with /auth in Gemini CLI"))]));
+        st.providers.push(Provider::builtin(&cur, auth_label(t), l("其他认证方式", "Other auth method"), "gemini", api_label("gemini"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(lbl::note(), l("在 Gemini CLI 里用 /auth 管理", "Manage it with /auth in Gemini CLI"))]));
     }
     for (id, p) in &profs {
         st.providers.push(provider_of(id, p));

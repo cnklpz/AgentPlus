@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 pub const ID: &str = "zcode";
+pub const NAME: &str = "ZCode";
 
 fn dir() -> PathBuf {
     match super::dir_override(ID) {
@@ -131,27 +132,19 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
         if let Some(b) = lg.get("provider").and_then(|p| p.get(key)) {
             let models = b.get("models").and_then(|m| m.as_object()).map(|m| m.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
             out.push(Provider {
-                id: key.into(),
-                name: b.get("name").and_then(|x| x.as_str()).unwrap_or("Z.ai").to_string(),
-                base_url: None,
-                host: if oauth { l("Z.ai 账号登录", "Z.ai account sign-in").into() } else { "Z.ai API Key".into() },
-                apis: vec![l("套餐", "Plan").into()],
-                builtin: true,
-                enabled: true,
-                compatible: true,
-                reason: None,
                 models: models.into_iter().map(|id| Model { id, visible: true, readonly: true, ..Default::default() }).collect(),
-                details: vec![
-                    Kv::text(lbl::auth(), if oauth { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)") } else { "Z.ai API Key" }),
-                    Kv::mono(lbl::config_id(), key),
-                    Kv::text(lbl::note(), l("ZCode 内置，模型列表由 ZCode 管理", "Built into ZCode; its model list is managed by ZCode")),
-                ],
-                editable: false,
-                api: "chat".into(),
-                has_key: true,
-                key_fp: None,
-                key_hint: None,
-                official_auth: false,
+                ..Provider::builtin(
+                    key,
+                    b.get("name").and_then(|x| x.as_str()).unwrap_or("Z.ai").to_string(),
+                    if oauth { l("Z.ai 账号登录", "Z.ai account sign-in") } else { "Z.ai API Key" },
+                    "chat",
+                    l("套餐", "Plan"),
+                    vec![
+                        Kv::text(lbl::auth(), if oauth { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)") } else { "Z.ai API Key" }),
+                        Kv::mono(lbl::config_id(), key),
+                        Kv::text(lbl::note(), l("ZCode 内置，模型列表由 ZCode 管理", "Built into ZCode; its model list is managed by ZCode")),
+                    ],
+                )
             });
         }
     }
@@ -185,10 +178,8 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
             apis: vec![api_label(api_short(atype)).into()],
-            builtin: false,
             enabled: r.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false),
             compatible: true,
-            reason: None,
             models: order
                 .iter()
                 .map(|m| model_of(pc, &pid, m, visible.contains(m)))
@@ -196,43 +187,19 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
             editable: true,
             api: api_short(atype).into(),
             has_key,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
             id: pid,
+            ..Default::default()
         });
     }
     out
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "ZCode".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&provider_path()), display_path(&setting_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&provider_path()), display_path(&setting_path())]);
     let pc = match read_json(&provider_path()) {
         Ok((v, _)) => v,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };

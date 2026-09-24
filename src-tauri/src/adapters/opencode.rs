@@ -16,6 +16,7 @@ use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
 pub const ID: &str = "opencode";
+pub const NAME: &str = "OpenCode";
 
 fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(|| home().join(".config").join("opencode"))
@@ -58,28 +59,17 @@ pub(super) fn auth_only(f: &Fmt, known: &[Provider]) -> Vec<Provider> {
                     continue;
                 }
                 let kind = e.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                out.push(Provider {
-                    id: id.clone(),
-                    name: id.clone(),
-                    base_url: None,
-                    host: if kind == "oauth" { l("账号登录（opencode auth）", "Account sign-in (opencode auth)").into() } else { l("内置供应商 · API Key", "Built-in provider · API key").into() },
-                    apis: vec![l("内置", "Built-in").into()],
-                    builtin: true,
-                    enabled: true,
-                    compatible: true,
-                    reason: None,
-                    models: vec![],
-                    details: vec![
+                out.push(Provider::builtin(
+                    id.clone(),
+                    id.clone(),
+                    if kind == "oauth" { l("账号登录（opencode auth）", "Account sign-in (opencode auth)") } else { l("内置供应商 · API Key", "Built-in provider · API key") },
+                    "chat",
+                    l("内置", "Built-in"),
+                    vec![
                         Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if kind == "oauth" { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
                         Kv::text(lbl::note(), l("OpenCode 内置的供应商，模型列表来自 models.dev，在 OpenCode 里用 /models 选择", "A provider built into OpenCode. Its model list comes from models.dev; pick models with /models in OpenCode.")),
                     ],
-                    editable: false,
-                    api: "chat".into(),
-                    has_key: true,
-                    key_fp: None,
-                    key_hint: None,
-                    official_auth: false,
-                });
+                ));
             }
         }
     }
@@ -88,28 +78,7 @@ pub(super) fn auth_only(f: &Fmt, known: &[Provider]) -> Vec<Provider> {
 
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "OpenCode".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![f.file(), display_path(&auth_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![f.file(), display_path(&auth_path())]);
     let root = store::load();
     let cfg = match f.load(true) {
         Ok((cfg, _, had_comments)) => {
@@ -120,8 +89,7 @@ pub fn state(inst: &Install) -> AgentState {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };

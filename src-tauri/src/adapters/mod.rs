@@ -21,7 +21,7 @@ use crate::i18n::l;
 use crate::model::{bool_setting, AgentState, Diff, Op, ProviderInput, Setting};
 use crate::{process, store};
 use anyhow::{anyhow, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Messages the adapters share, worded once per language.
 pub(crate) mod msg {
@@ -71,6 +71,21 @@ pub(crate) mod msg {
     /// A change to a config file with comments.
     pub fn comments_not_written(file: &str) -> Error {
         anyhow!(tr!("{file} 含注释，为避免丢失注释不写入", "{file} contains comments; not writing it to avoid losing them"))
+    }
+}
+
+/// A fresh state: what detection found about the agent and where its config lives.
+pub(crate) fn new_state(id: &str, name: &str, inst: &process::Install, mode: &str, config_dir: &Path, files: Vec<String>) -> AgentState {
+    AgentState {
+        id: id.into(),
+        name: name.into(),
+        installed: inst.installed,
+        version: inst.version.clone(),
+        running: inst.running,
+        mode: mode.into(),
+        config_dir: config_dir.to_string_lossy().to_string(),
+        files,
+        ..Default::default()
     }
 }
 
@@ -126,11 +141,11 @@ const IN_WSL: [&str; 12] = [codex::ID, claude::ID, opencode::ID, hermes::ID, gem
 
 pub fn display_name(agent: &str) -> &'static str {
     match agent {
-        codex::ID => "Codex",
-        claude::ID => "Claude Code",
-        opencode::ID => "OpenCode",
-        zcode::ID => "ZCode",
-        mimo::ID => "MiMo Desktop",
+        codex::ID => codex::NAME,
+        claude::ID => claude::NAME,
+        opencode::ID => opencode::NAME,
+        zcode::ID => zcode::NAME,
+        mimo::ID => mimo::NAME,
         _ => ext(agent).map(|e| e.name).unwrap_or("?"),
     }
 }

@@ -305,7 +305,6 @@ impl Fmt {
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
             apis: vec![known.map(|k| k.1.to_string()).unwrap_or_else(|| raw.clone())],
-            builtin: false,
             enabled,
             compatible: known.is_some(),
             reason: known.is_none().then(|| tr!("{raw} 协议，AgentPlus 不能测速或转接", "{raw} protocol: AgentPlus can't test speed or relay it")),
@@ -314,9 +313,7 @@ impl Fmt {
             editable: true,
             api: known.map(|k| k.0.to_string()).unwrap_or(raw),
             has_key: in_cfg || in_auth,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            ..Default::default()
         }
     }
 

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentState {
     pub id: String,
@@ -57,7 +57,7 @@ pub struct ModelField {
     pub hints: Vec<String>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Provider {
     pub id: String,
@@ -84,6 +84,34 @@ pub struct Provider {
     pub key_hint: Option<String>,
     /// Codex: keeps the ChatGPT sign-in while requests go to this provider (`requires_openai_auth`).
     pub official_auth: bool,
+}
+
+impl AgentState {
+    /// The config can't be read: say why and show the agent read-only.
+    pub fn fail(&mut self, e: impl std::fmt::Display) {
+        self.notes.push(e.to_string());
+        self.readonly = true;
+    }
+}
+
+impl Provider {
+    /// A read-only provider built into the agent (an account sign-in, a vendor it ships
+    /// with): enabled, with credentials, not editable. `label` is its badge (protocol or kind).
+    pub fn builtin(id: impl Into<String>, name: impl Into<String>, host: impl Into<String>, api: &str, label: &str, details: Vec<Kv>) -> Self {
+        Provider {
+            id: id.into(),
+            name: name.into(),
+            host: host.into(),
+            apis: vec![label.into()],
+            builtin: true,
+            enabled: true,
+            compatible: true,
+            details,
+            api: api.into(),
+            has_key: true,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, Default)]

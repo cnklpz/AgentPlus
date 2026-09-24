@@ -303,41 +303,17 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
         editable: known,
         api: api.into(),
         has_key: inline.is_some() || from_env,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
     let legacy = is_legacy();
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&config_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&config_path())]);
     let (doc, _) = match load() {
         Ok(x) => x,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
