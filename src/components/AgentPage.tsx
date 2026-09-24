@@ -1,8 +1,8 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
-  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, isEnabled, isVisible, keys, mergeExtra,
-  setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, withOp,
+  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, deleteModel, isEnabled, isVisible, keys, mergeExtra, opCount,
+  providerModelCount, setModelVisible, setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
@@ -66,20 +66,17 @@ export function AgentPage(props: Props) {
     ...(props.projectsTab ? ([["projects", t("agentPage.tabProjects"), props.projectsTab.count || null]] as [Tab, string, number | null][]) : []),
     ["set", t("agentPage.tabSettings"), null],
   ];
-  const slide = useSlideDir(tab, tabs.map((t) => t[0]));
+  const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
-    <OfficialFetch pending={Object.keys(draft).length} running={st.running} restartable={st.restartable} restarting={restarting} onRestart={onRestart} onReload={props.onReload} flash={props.flash} />
+    <OfficialFetch pending={opCount(draft)} running={st.running} restartable={st.restartable} restarting={restarting} onRestart={onRestart} onReload={props.onReload} flash={props.flash} />
   ) : null;
   // Sessions should belong to the fixed id when that mode is on, else the configured provider.
   const fixedSetting = st.settings.find((s) => s.key === "fixed_id");
   const fixedOn = fixedSetting?.value === true;
   const sessionTarget = fixedOn ? "agentplus" : st.currentProvider ?? "openai";
 
-  const toggleModel = (pid: string, m: Model) => {
-    const next = !isVisible(pid, m, draft);
-    setDraft(withOp(draft, keys.visible(pid, m.id), next === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible: next }));
-  };
+  const toggleModel = (pid: string, m: Model) => setDraft(setModelVisible(draft, pid, m, !isVisible(pid, m, draft)));
 
   return (
     <main className="page">
@@ -141,7 +138,7 @@ export function AgentPage(props: Props) {
                   switching={st.currentProvider !== p.id}
                   selected={props.selectedProvider === p.id}
                   enabled={p.isNew || isEnabled(p, draft)}
-                  visible={p.isNew ? p.models.length : viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length}
+                  visible={providerModelCount(p, draft)}
                   latency={p.baseUrl ? latency[p.baseUrl] : undefined}
                   readonly={st.readonly}
                   onSelect={() => props.onSelectProvider(p.id)}
@@ -197,7 +194,7 @@ export function AgentPage(props: Props) {
                       <button key={p.id} className={`rail-item${p.id === sel.id ? " on" : ""}`} onClick={() => setRailSel(p.id)}>
                         <span className="dot" style={{ background: isEnabled(p, draft) ? "var(--ok-dot)" : "var(--faint2)" }} />
                         <span className="ellipsis grow">{p.name}</span>
-                        <span className="mono muted tiny">{viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length}/{p.models.length}</span>
+                        <span className="mono muted tiny">{visibleModelCount(p.id, p.models, draft)}/{p.models.length}</span>
                       </button>
                     ))}
                   </div>
@@ -445,7 +442,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                       onClick={async () => {
                         if (m.isNew) return setDraft(withOp(draft, keys.upsertModel(pid, m.id), null));
                         if (!(await ask({ title: t("agentPage.deleteConfirm", { id: m.id }), message: t("agentPage.deleteConfirmMsg"), danger: true }))) return;
-                        setDraft(withOp(draft, keys.deleteModel(pid, m.id), { op: "delete_model", provider: pid, model: m.id }));
+                        setDraft(deleteModel(draft, pid, m.id));
                       }}>
                       <Icon.trash size={12} />
                     </button>
@@ -576,7 +573,7 @@ function ListSetting({ value, label, disabled, onCommit }: { value: string[]; la
   const joined = value.join("\n");
   const [text, setText] = useState(joined);
   useEffect(() => setText(joined), [joined]);
-  const lines = (t: string) => t.split("\n").map((x) => x.trim()).filter(Boolean);
+  const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
   return (
     <textarea className="input mono slist" rows={Math.min(8, Math.max(2, value.length + 1))} value={text} aria-label={label} disabled={disabled}
       placeholder={t("agentPage.onePerLine")} onChange={(e) => setText(e.target.value)}
