@@ -8,7 +8,7 @@
 //! under that one lock.
 
 use crate::util::agentplus_dir;
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::Path;
@@ -22,7 +22,8 @@ fn read(p: &Path) -> Option<Value> {
     if text.trim().is_empty() {
         return None;
     }
-    serde_json::from_str(&text).ok()
+    // Every writer indexes into the top level as an object: `[]` or `1` counts as broken.
+    serde_json::from_str::<Value>(&text).ok().filter(|v| v.is_object())
 }
 
 pub fn load() -> Value {
@@ -103,17 +104,7 @@ fn write_in(dir: &Path, v: &Value) -> anyhow::Result<()> {
     }
     let tmp = dir.join(format!("store.json.{}.tmp", std::process::id()));
     fs::write(&tmp, serde_json::to_string_pretty(v)?).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
-    // Replacing can fail for a moment while another program (antivirus, editor) holds the file.
-    let mut last = None;
-    for _ in 0..10 {
-        match fs::rename(&tmp, &path) {
-            Ok(()) => return Ok(()),
-            Err(e) => last = Some(e),
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let _ = fs::remove_file(&tmp);
-    Err(anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", path.display(), last.map(|e| e.to_string()).unwrap_or_default())))
+    crate::util::replace_file(&tmp, &path, &path)
 }
 
 /// Per-agent entries are kept apart per environment: "codex" on Windows, "codex@wsl:Ubuntu" in WSL.
@@ -241,5 +232,20 @@ mod tests {
         assert_eq!(fs::read_to_string(d.join(&kept[0])).unwrap(), "{ \"library\": [ half written");
         assert_eq!(load_in(&d), json!({ "gateway": {} }));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A top level that parses but is not an object (a hand edit) loads as {} and is kept
+    /// aside too, instead of making `root["library"] = …` panic.
+    #[test]
+    fn non_object_store_loads_empty() {
+        for (i, body) in ["[]", "1", "\"x\"", "null"].into_iter().enumerate() {
+            let d = tmp_dir(&format!("nonobj{i}"));
+            fs::write(d.join("store.json"), body).unwrap();
+            assert_eq!(load_in(&d), json!({}), "{body}");
+            write_in(&d, &json!({ "a": 1 })).unwrap();
+            assert!(fs::read_dir(&d).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with("store.broken-")), "{body}");
+            assert_eq!(load_in(&d), json!({ "a": 1 }));
+            let _ = fs::remove_dir_all(&d);
+        }
     }
 }

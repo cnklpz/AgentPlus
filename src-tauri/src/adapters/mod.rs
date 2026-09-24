@@ -461,7 +461,8 @@ pub fn provider_endpoint(agent: &str, provider: &str) -> Result<Endpoint> {
 /// Turns "copy provider X from agent A (or the library)" into a normal UpsertProvider.
 fn resolve_import(agent: &str, from: &str, provider: &str, api: Option<&str>, name: Option<&str>) -> Result<Op> {
     let (src_name, base_url, key, src_api, models) = if from == crate::library::FROM {
-        crate::library::endpoint(provider)?
+        let e = crate::library::endpoint(provider)?;
+        (e.name, e.base_url, e.key, e.api, e.models)
     } else {
         let (base_url, key, api) = provider_endpoint(from, provider)?;
         let src = state(from)?;
@@ -501,7 +502,7 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
         .map(|o| match o {
             Op::ImportProvider { from_agent, provider, api, name } => resolve_import(agent, from_agent, provider, api.as_deref(), name.as_deref()),
             Op::UpsertProvider { provider: p } if p.key_from_library.is_some() => {
-                let (_, _, key, _, _) = crate::library::endpoint(p.key_from_library.as_deref().unwrap())?;
+                let key = crate::library::endpoint(p.key_from_library.as_deref().unwrap())?.key;
                 let mut p = p.clone();
                 p.api_key = key;
                 p.key_from_library = None;

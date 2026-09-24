@@ -73,14 +73,6 @@ impl Drop for TestHome {
     }
 }
 
-pub fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
-        home().join(rest)
-    } else {
-        PathBuf::from(p)
-    }
-}
-
 /// Shows a path with the home directory folded back to `~`.
 pub fn display_path(p: &Path) -> String {
     let h = home();
@@ -143,33 +135,65 @@ pub fn write_text_atomic(path: &Path, text: &str, meta: TextMeta) -> Result<()> 
     if meta.crlf {
         out = out.replace('\n', "\r\n");
     }
-    // A symlinked config (dotfile managers) is written through, so the link survives.
-    let target = match fs::symlink_metadata(path) {
+    write_bytes_atomic(path, out.as_bytes())
+}
+
+/// Replaces `path` with `bytes` as a whole (temp file + rename), so a reader never sees
+/// half a file. A symlinked config is written through (see `resolve_link`).
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let target = resolve_link(path)?;
+    let tmp = tmp_sibling(&target);
+    fs::write(&tmp, bytes).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    replace_file(&tmp, &target, path)
+}
+
+/// The file a write to `path` should replace: a symlinked config (dotfile managers) is
+/// written through, so the link survives.
+pub fn resolve_link(path: &Path) -> Result<PathBuf> {
+    Ok(match fs::symlink_metadata(path) {
         Ok(m) if m.file_type().is_symlink() => fs::canonicalize(path).with_context(|| tr!("找不到 {} 指向的文件", "Can't resolve the link {}", path.display()))?,
         _ => path.to_path_buf(),
-    };
-    let tmp = target.with_extension(format!(
-        "{}.agentplus-tmp",
-        target.extension().and_then(|e| e.to_str()).unwrap_or("")
-    ));
-    fs::write(&tmp, out.as_bytes()).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
-    // Replacing can fail for a moment while another program (antivirus, an editor) holds the file.
+    })
+}
+
+/// The temp file next to `target` that then replaces it: `config.toml.agentplus-tmp`.
+pub fn tmp_sibling(target: &Path) -> PathBuf {
+    target.with_extension(format!("{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or("")))
+}
+
+/// Renames `tmp` over `target`, retrying for a moment while another program (antivirus,
+/// an editor) holds the file. On failure `tmp` is removed; errors name the file as `shown`.
+pub fn replace_file(tmp: &Path, target: &Path, shown: &Path) -> Result<()> {
     let mut last = None;
     for _ in 0..10 {
-        match fs::rename(&tmp, &target) {
+        match fs::rename(tmp, target) {
             Ok(()) => return Ok(()),
             Err(e) => last = Some(e),
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    let _ = fs::remove_file(&tmp);
-    Err(anyhow::anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", path.display(), last.map(|e| e.to_string()).unwrap_or_default())))
+    let _ = fs::remove_file(tmp);
+    Err(anyhow::anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", shown.display(), last.map(|e| e.to_string()).unwrap_or_default())))
+}
+
+/// Size of a file in bytes; 0 when it is missing or unreadable.
+pub fn file_len(p: &Path) -> u64 {
+    fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// A folder the user named must exist before anything is done with it.
+pub fn require_dir(p: &Path) -> Result<()> {
+    if !p.is_dir() {
+        anyhow::bail!("{}", tr!("找不到文件夹：{}", "Folder not found: {}", display_path(p)));
+    }
+    Ok(())
 }
 
 /// Copies each file into `~/.agentplus/backups/<time>/<agent>/` before a write,
 /// with a `manifest.json` recording where each file came from (for rollback).
 pub fn backup(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
-    backup_tagged(agent, files, crate::i18n::l("应用配置", "Apply config"))
+    let (zh, en) = crate::history::REASON_APPLY;
+    backup_tagged(agent, files, crate::i18n::l(zh, en))
 }
 
 pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
@@ -544,6 +568,41 @@ mod tests {
         assert!(read_text(&d.join("missing.json")).is_err());
         // No temp file is left behind.
         assert!(fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A symlinked config (dotfile managers) keeps its link; the file it points at changes.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writes_go_through_symlinks() {
+        let d = tmp("symlink");
+        let (real, link) = (d.join("real.toml"), d.join("link.toml"));
+        fs::write(&real, "a = 1\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_bytes_atomic(&link, b"a = 2\n").unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "a = 2\n");
+        write_text_atomic(&link, "a = 3", TextMeta::NEW).unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "a = 3\n");
+        assert!(fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn replace_file_cleans_up_on_failure() {
+        let d = tmp("replace");
+        let tmp_file = d.join("x.agentplus-tmp");
+        fs::write(&tmp_file, "x").unwrap();
+        // A folder with content can't be replaced by a file.
+        fs::create_dir_all(d.join("dir").join("inner")).unwrap();
+        let e = replace_file(&tmp_file, &d.join("dir"), Path::new("shown.json")).unwrap_err().to_string();
+        assert!(e.starts_with("替换 shown.json 失败"), "{e}");
+        assert!(!tmp_file.exists());
+        assert!(require_dir(&d).is_ok());
+        assert!(require_dir(&d.join("nope")).unwrap_err().to_string().starts_with("找不到文件夹："));
+        fs::write(d.join("five"), "12345").unwrap();
+        assert_eq!((file_len(&d.join("nope")), file_len(&d.join("five"))), (0, 5));
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -24,12 +24,15 @@
 //! never reaches the interception.
 //! Strategy 2: live-edit the already-loaded scripts (Debugger.setScriptSource).
 
+use crate::i18n::join;
 use crate::process::Progress;
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use regex::Regex;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::OnceLock;
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
@@ -74,34 +77,45 @@ impl Patches {
     }
 }
 
+/// A regex compiled once, on first use (patches run for every bundle of every window).
+fn cached(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
+    cell.get_or_init(|| Regex::new(pattern).unwrap())
+}
+
+/// The first match replaced, or None when there is none. Every replacement adds a marker,
+/// so a match always changes the text.
+fn replace_once(src: &str, re: &Regex, rep: impl regex::Replacer) -> Option<String> {
+    match re.replacen(src, 1, rep) {
+        Cow::Borrowed(_) => None,
+        Cow::Owned(s) => Some(s),
+    }
+}
+
 /// Rewrites the Fast gate. Minified names change per release, so match on shape.
 fn patch_fast(src: &str) -> Option<String> {
-    let re = Regex::new(
-        r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1",
-    )
-    .unwrap();
-    let out = re.replacen(src, 1, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{FAST_MARK}"));
-    if out == src { None } else { Some(out.into_owned()) }
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = cached(&RE, r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1");
+    replace_once(src, re, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{FAST_MARK}"))
 }
 
 /// Makes the model-name formatter ignore `stripGptPrefix`:
 ///   return t?r.replace(/^GPT-/iu,``):r  →  return r
 fn patch_names(src: &str) -> Option<String> {
-    let re = Regex::new(r"return [\w$]+\?[\w$]+\.replace\(/\^GPT-/iu,``\):([\w$]+)").unwrap();
-    let out = re.replacen(src, 1, format!("return ${{1}}{NAMES_MARK}"));
-    if out == src { None } else { Some(out.into_owned()) }
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = cached(&RE, r"return [\w$]+\?[\w$]+\.replace\(/\^GPT-/iu,``\):([\w$]+)");
+    replace_once(src, re, format!("return ${{1}}{NAMES_MARK}"))
 }
 
 /// Makes the "rate limit reached, block sending" atom return false up front:
 ///   ({get:e})=>{let t=e(Zx),n=e(iT).data;if(t.authMethod!==`chatgpt`||…||n.rate_limit?.allowed!==!1||…)return!1;…
 ///   → ({get:e})=>{return!1;let t=…
 fn patch_quota(src: &str) -> Option<String> {
-    let re = Regex::new(
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = cached(
+        &RE,
         r"\(\{get:([\w$]+)\}\)=>\{(let [\w$]+=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\([\w$]+\)\.data;if\([\w$]+\.authMethod!==`chatgpt`[^;{}]{0,400}?\.rate_limit\?\.allowed!==!1)",
-    )
-    .unwrap();
-    let out = re.replacen(src, 1, format!("({{get:${{1}}}})=>{{return!1{QUOTA_MARK};${{2}}"));
-    if out == src { None } else { Some(out.into_owned()) }
+    );
+    replace_once(src, re, format!("({{get:${{1}}}})=>{{return!1{QUOTA_MARK};${{2}}"))
 }
 
 /// Makes the composer's usage-banner slot return its fallback content right away:
@@ -110,9 +124,9 @@ fn patch_quota(src: &str) -> Option<String> {
 /// The early return already exists (for `canShowUsageBanners` off), so every hook before
 /// it still runs as usual.
 fn patch_banner(src: &str) -> Option<String> {
-    let re = Regex::new(r"if\(![\w$]+\)return ([\w$]+);(let [\w$]+=[\w$]+\(\{hasImageGenerationLimit:)").unwrap();
-    let out = re.replacen(src, 1, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"));
-    if out == src { None } else { Some(out.into_owned()) }
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = cached(&RE, r"if\(![\w$]+\)return ([\w$]+);(let [\w$]+=[\w$]+\(\{hasImageGenerationLimit:)");
+    replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
 }
 
 /// Applies the wanted patches that aren't in `src` yet. Returns the patched source
@@ -156,7 +170,7 @@ fn not_found(missing: &[&str]) -> anyhow::Error {
     anyhow!(tr!(
         "在 Codex 界面代码里没找到「{}」的注入位置，可能是版本变了",
         "Couldn't find where to patch {} in the Codex UI code; the version may have changed",
-        missing.join(crate::i18n::l("、", ", "))
+        join(missing)
     ))
 }
 
@@ -229,11 +243,8 @@ impl Session {
 }
 
 fn page_targets(port: u16) -> Result<Vec<Value>> {
-    let v: Value = reqwest::blocking::Client::new()
-        .get(format!("http://127.0.0.1:{port}/json/list"))
-        .timeout(Duration::from_secs(2))
-        .send()?
-        .json_value()?;
+    let resp = reqwest::blocking::Client::new().get(format!("http://127.0.0.1:{port}/json/list")).timeout(Duration::from_secs(2)).send()?;
+    let v: Value = serde_json::from_str(&resp.text()?)?;
     Ok(v.as_array()
         .cloned()
         .unwrap_or_default()
@@ -241,15 +252,6 @@ fn page_targets(port: u16) -> Result<Vec<Value>> {
         .filter(|t| t.get("type").and_then(|x| x.as_str()) == Some("page"))
         .filter(|t| t.get("url").and_then(|x| x.as_str()).map(|u| u.starts_with("app://")).unwrap_or(false))
         .collect())
-}
-
-trait JsonValue {
-    fn json_value(self) -> Result<Value>;
-}
-impl JsonValue for reqwest::blocking::Response {
-    fn json_value(self) -> Result<Value> {
-        Ok(serde_json::from_str(&self.text()?)?)
-    }
 }
 
 /// The bundle a script URL belongs to. Only `.js` counts: each bundle has a same-named
@@ -414,7 +416,6 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
     pages.sort_by_key(|p| p["url"].as_str().unwrap_or("").contains('?'));
     let mut lazy = Duration::from_secs(40);
     let total = pages.len();
-    let sep = crate::i18n::l("、", ", ");
     let mut done = vec![];
     let mut missing: Option<Vec<&'static str>> = None;
     for (i, page) in pages.into_iter().enumerate() {
@@ -445,13 +446,13 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
     let missing = check_missing(want, missing)?;
     let what: Vec<&str> = want.wanted().into_iter().filter(|w| !missing.contains(w)).collect();
     on(if missing.is_empty() {
-        Progress::step("patch", "done", Some(what.join(sep)))
+        Progress::step("patch", "done", Some(join(&what)))
     } else {
-        Progress::step("patch", "warn", Some(tr!("没找到：{}", "Not found: {}", missing.join(sep))))
+        Progress::step("patch", "warn", Some(tr!("没找到：{}", "Not found: {}", join(&missing))))
     });
-    let mut msg = tr!("界面已注入：{}（{}，{} 个窗口）", "UI patched: {} ({}; {} window(s))", what.join(sep), done.join(sep), done.len());
+    let mut msg = tr!("界面已注入：{}（{}，{} 个窗口）", "UI patched: {} ({}; {} window(s))", join(&what), join(&done), done.len());
     if !missing.is_empty() {
-        msg.push_str(&tr!("；没找到「{}」的注入位置，可能是 Codex 版本变了", "; couldn't find where to patch {}, the Codex version may have changed", missing.join(sep)));
+        msg.push_str(&tr!("；没找到「{}」的注入位置，可能是 Codex 版本变了", "; couldn't find where to patch {}, the Codex version may have changed", join(&missing)));
     }
     Ok(msg)
 }

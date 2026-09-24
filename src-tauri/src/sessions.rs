@@ -145,7 +145,7 @@ fn kind_of(source: &str, thread_source: &str) -> &'static str {
 }
 
 fn config_doc() -> Option<toml_edit::DocumentMut> {
-    fs::read_to_string(codex_home().join("config.toml")).ok().and_then(|t| t.parse().ok())
+    crate::adapters::codex::load_doc().ok().map(|(d, _)| d)
 }
 
 fn current_provider_id() -> String {
@@ -292,10 +292,6 @@ fn tmp_leftovers() -> Vec<(PathBuf, u64)> {
     out
 }
 
-fn file_size(p: &Path) -> u64 {
-    fs::metadata(p).map(|m| m.len()).unwrap_or(0)
-}
-
 fn mb(b: u64) -> String {
     format!("{:.1} MB", b as f64 / 1_048_576.0)
 }
@@ -331,14 +327,14 @@ pub fn health() -> Result<Vec<HealthItem>> {
     out.push(if others.is_empty() {
         item("provider", l("会话供应商", "Session providers"), "ok", tr!("全部属于当前供应商「{}」", "All belong to the current provider \"{}\"", list.current_provider))
     } else {
-        item("provider", l("会话供应商", "Session providers"), "warn", tr!("{}，切换后在最近列表和归档里可能看不到，可在「会话」里一键修复", "{}. After switching they may not appear in Recent or Archived; fix them in one click under Sessions", others.join(l("、", ", "))))
+        item("provider", l("会话供应商", "Session providers"), "warn", tr!("{}，切换后在最近列表和归档里可能看不到，可在「会话」里一键修复", "{}. After switching they may not appear in Recent or Archived; fix them in one click under Sessions", crate::i18n::join(&others)))
     });
 
     // Providers used by sessions but missing from config
     let defined = defined_providers();
     let undefined: Vec<String> = list.providers.iter().map(|(p, _)| p.clone()).filter(|p| !p.is_empty() && !defined.contains(p)).collect();
     if !undefined.is_empty() {
-        out.push(item("undefined", l("缺少供应商配置", "Missing provider config"), "warn", tr!("会话用到的 {} 在 config.toml 里没有定义，恢复这些会话会失败", "{} used by sessions is not defined in config.toml; resuming those sessions will fail", undefined.join(l("、", ", ")))));
+        out.push(item("undefined", l("缺少供应商配置", "Missing provider config"), "warn", tr!("会话用到的 {} 在 config.toml 里没有定义，恢复这些会话会失败", "{} used by sessions is not defined in config.toml; resuming those sessions will fail", crate::i18n::join(&undefined))));
     }
 
     // Projection progress (thread_history)
@@ -376,7 +372,7 @@ pub fn health() -> Result<Vec<HealthItem>> {
     if gs.exists() {
         let ok = fs::read_to_string(&gs).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).is_some();
         out.push(if ok {
-            item("globalstate", l("桌面端界面状态", "Desktop UI state"), "ok", tr!("可以解析，{}", "Parses fine, {}", mb(file_size(&gs))))
+            item("globalstate", l("桌面端界面状态", "Desktop UI state"), "ok", tr!("可以解析，{}", "Parses fine, {}", mb(file_len(&gs))))
         } else {
             item("globalstate", l("桌面端界面状态", "Desktop UI state"), "error", l("无法解析，可从 .bak 恢复", "Can't be parsed; restore it from .bak"))
         });
@@ -385,10 +381,8 @@ pub fn health() -> Result<Vec<HealthItem>> {
     // Logs size
     let logs = home.join(LOGS_DB);
     if let Ok(db) = open_ro(&logs) {
-        let page: i64 = db.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap_or(4096);
-        let free: i64 = db.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap_or(0);
-        out.push(item("logs", l("日志库", "Log database"), if file_size(&logs) > 50 * 1_048_576 { "warn" } else { "ok" },
-            tr!("{}，其中可回收空闲 {}；可在下方清理", "{}, of which {} is reclaimable free space; clean it up below", mb(file_size(&logs)), mb((page * free) as u64))));
+        out.push(item("logs", l("日志库", "Log database"), if file_len(&logs) > 50 * 1_048_576 { "warn" } else { "ok" },
+            tr!("{}，其中可回收空闲 {}；可在下方清理", "{}, of which {} is reclaimable free space; clean it up below", mb(file_len(&logs)), mb(free_bytes(&db)))));
     }
     Ok(out)
 }
@@ -410,7 +404,7 @@ pub struct CleanupPreview {
 
 fn sqlite_files() -> Vec<PathBuf> {
     let h = codex_home();
-    let mut v: Vec<PathBuf> = ["state_5.sqlite", "logs_2.sqlite", "thread_history_1.sqlite", "memories_1.sqlite", "queue_1.sqlite", "goals_1.sqlite"]
+    let mut v: Vec<PathBuf> = [STATE_DB, LOGS_DB, HISTORY_DB, "memories_1.sqlite", "queue_1.sqlite", "goals_1.sqlite"]
         .iter()
         .map(|n| h.join(n))
         .collect();
@@ -422,32 +416,42 @@ fn wal_of(p: &Path) -> PathBuf {
     PathBuf::from(format!("{}-wal", p.display()))
 }
 
+/// Bytes on disk taken by Codex's databases, their WAL files and leftover temp files.
+fn disk_usage() -> u64 {
+    sqlite_files().iter().map(|p| file_len(p) + file_len(&wal_of(p))).sum::<u64>() + tmp_leftovers().iter().map(|t| t.1).sum::<u64>()
+}
+
+/// Free pages inside a database, in bytes (what VACUUM would give back).
+fn free_bytes(c: &Connection) -> u64 {
+    let page: i64 = c.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap_or(4096);
+    let free: i64 = c.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap_or(0);
+    (page * free) as u64
+}
+
+/// Unix time `days` days ago: log rows older than this count as old.
+fn cutoff(days: u32) -> i64 {
+    chrono::Utc::now().timestamp() - days as i64 * 86400
+}
+
 pub fn cleanup_preview(days: u32) -> Result<CleanupPreview> {
     let tmps = tmp_leftovers();
     let logs = codex_home().join(LOGS_DB);
     let (mut rows, mut old, mut free) = (0i64, 0i64, 0u64);
     if let Ok(l) = open_ro(&logs) {
         rows = l.query_row("SELECT count(*) FROM logs", [], |r| r.get(0)).unwrap_or(0);
-        let cutoff = chrono::Utc::now().timestamp() - days as i64 * 86400;
-        old = l.query_row("SELECT count(*) FROM logs WHERE ts < ?1", params![cutoff], |r| r.get(0)).unwrap_or(0);
-        let page: i64 = l.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap_or(4096);
-        let fl: i64 = l.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap_or(0);
-        free = (page * fl) as u64;
+        old = l.query_row("SELECT count(*) FROM logs WHERE ts < ?1", params![cutoff(days)], |r| r.get(0)).unwrap_or(0);
+        free = free_bytes(&l);
     }
     Ok(CleanupPreview {
         tmp_count: tmps.len(),
         tmp_bytes: tmps.iter().map(|t| t.1).sum(),
-        logs_bytes: file_size(&logs),
+        logs_bytes: file_len(&logs),
         logs_rows: rows,
         logs_old_rows: old,
         logs_free_bytes: free,
-        wal_bytes: sqlite_files().iter().map(|p| file_size(&wal_of(p))).sum(),
+        wal_bytes: sqlite_files().iter().map(|p| file_len(&wal_of(p))).sum(),
         codex_running: codex_busy(),
     })
-}
-
-fn backup_dir(tag: &str) -> Result<PathBuf> {
-    new_backup_dir(tag)
 }
 
 fn copy_db(p: &Path, dir: &Path) -> Result<()> {
@@ -464,8 +468,8 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
     if codex_busy() {
         return Err(anyhow!(l("Codex 正在运行，请先退出 Codex（包括 CLI）再清理", "Codex is running. Quit Codex (including the CLI) before cleaning up")));
     }
-    let before: u64 = sqlite_files().iter().map(|p| file_size(p) + file_size(&wal_of(p))).sum::<u64>() + tmp_leftovers().iter().map(|t| t.1).sum::<u64>();
-    let dir = backup_dir("codex-cleanup")?;
+    let before = disk_usage();
+    let dir = new_backup_dir("codex-cleanup")?;
     let mut done = vec![];
     if tmp {
         let tmps = tmp_leftovers();
@@ -478,15 +482,14 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
         let logs = codex_home().join(LOGS_DB);
         copy_db(&logs, &dir)?;
         let c = Connection::open(&logs)?;
-        let cutoff = chrono::Utc::now().timestamp() - days as i64 * 86400;
-        let n = c.execute("DELETE FROM logs WHERE ts < ?1", params![cutoff])?;
+        let n = c.execute("DELETE FROM logs WHERE ts < ?1", params![cutoff(days)])?;
         c.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
         done.push(tr!("删除 {n} 条 {days} 天前的日志并压缩", "deleted {n} log entries older than {days} days and compacted"));
     }
     if wal {
         let mut n = 0;
         for p in sqlite_files() {
-            if file_size(&wal_of(&p)) > 0 {
+            if file_len(&wal_of(&p)) > 0 {
                 let c = Connection::open(&p)?;
                 c.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
                 n += 1;
@@ -494,7 +497,7 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
         }
         done.push(tr!("截断 {n} 个 WAL 文件", "truncated {n} WAL file(s)"));
     }
-    let after: u64 = sqlite_files().iter().map(|p| file_size(p) + file_size(&wal_of(p))).sum::<u64>() + tmp_leftovers().iter().map(|t| t.1).sum::<u64>();
+    let after = disk_usage();
     Ok(tr!("{}，释放 {}（备份在 {}）", "{}; freed {} (backup in {})", done.join(l("，", ", ")), mb(before.saturating_sub(after)), display_path(&dir)))
 }
 
@@ -618,7 +621,6 @@ fn restore_lines(done: &[(PathBuf, String)]) {
 /// order). A log that can't be written completely is removed: an empty one would hide the
 /// undo button of every repair (`last_repair` reads the newest).
 fn write_repair_log(content: &str) -> Result<PathBuf> {
-    use std::io::Write;
     fs::create_dir_all(repairs_dir())?;
     for _ in 0..50 {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%3f").to_string();
@@ -650,7 +652,7 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
     if migration_version(&conn) != Some(STATE_VERSION) {
         return Err(anyhow!(l("state_5.sqlite 版本未验证，不修改", "state_5.sqlite version is unverified; not modifying it")));
     }
-    let dir = backup_dir("codex-repair")?;
+    let dir = new_backup_dir("codex-repair")?;
     copy_db(&db, &dir)?;
     let index = rollout_index();
     let mut entries = vec![];

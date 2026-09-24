@@ -30,12 +30,42 @@ pub struct EnvInfo {
 /// A distro that is shut down takes a few seconds to boot on the first call.
 const WSL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Environment id of this Windows user; a distro's is `wsl:<distro>` (`wsl_id`).
+const WINDOWS: &str = "windows";
+const WSL_PREFIX: &str = "wsl:";
+
+fn wsl_id(distro: &str) -> String {
+    format!("{WSL_PREFIX}{distro}")
+}
+
+fn windows_label() -> &'static str {
+    crate::i18n::l("本机 · Windows", "This PC · Windows")
+}
+
+fn wsl_label(distro: &str) -> String {
+    format!("WSL · {distro}")
+}
+
+/// A Linux path inside a distro, as a path Windows can open (`\\wsl.localhost\<distro>\…`).
+fn wsl_unc(distro: &str, unix: &str) -> PathBuf {
+    let mut p = PathBuf::from(format!(r"\\wsl.localhost\{distro}\"));
+    for part in unix.split('/').filter(|s| !s.is_empty()) {
+        p.push(part);
+    }
+    p
+}
+
+/// Runs `sh -c script` in a distro (booting it if needed). None when wsl.exe fails or times out.
+fn wsl_run(distro: &str, script: &str) -> Option<std::process::Output> {
+    output_within(Command::new("wsl.exe").args(["-d", distro, "-e", "sh", "-c", script]), WSL_TIMEOUT)
+}
+
 fn load() -> Target {
     let s = crate::store::load();
     let e = s.get("env");
-    let id = e.and_then(|e| e.get("id")).and_then(|v| v.as_str()).unwrap_or("windows");
+    let id = e.and_then(|e| e.get("id")).and_then(|v| v.as_str()).unwrap_or(WINDOWS);
     let home = e.and_then(|e| e.get("home")).and_then(|v| v.as_str());
-    match (id.strip_prefix("wsl:"), home) {
+    match (id.strip_prefix(WSL_PREFIX), home) {
         (Some(d), Some(h)) if !d.is_empty() && h.starts_with('/') => Target::Wsl { distro: d.into(), unix_home: h.into() },
         _ => Target::Windows,
     }
@@ -56,15 +86,15 @@ pub fn is_wsl() -> bool {
 
 pub fn id() -> String {
     match current() {
-        Target::Windows => "windows".into(),
-        Target::Wsl { distro, .. } => format!("wsl:{distro}"),
+        Target::Windows => WINDOWS.into(),
+        Target::Wsl { distro, .. } => wsl_id(&distro),
     }
 }
 
 pub fn label() -> String {
     match current() {
-        Target::Windows => crate::i18n::l("本机 · Windows", "This PC · Windows").into(),
-        Target::Wsl { distro, .. } => format!("WSL · {distro}"),
+        Target::Windows => windows_label().into(),
+        Target::Wsl { distro, .. } => wsl_label(&distro),
     }
 }
 
@@ -72,13 +102,7 @@ pub fn label() -> String {
 pub fn home() -> PathBuf {
     match current() {
         Target::Windows => dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")),
-        Target::Wsl { distro, unix_home } => {
-            let mut p = PathBuf::from(format!(r"\\wsl.localhost\{distro}\"));
-            for part in unix_home.split('/').filter(|s| !s.is_empty()) {
-                p.push(part);
-            }
-            p
-        }
+        Target::Wsl { distro, unix_home } => wsl_unc(&distro, &unix_home),
     }
 }
 
@@ -87,14 +111,11 @@ pub fn home() -> PathBuf {
 pub fn resolve_path(s: &str) -> PathBuf {
     let s = s.trim();
     if let Some(rest) = s.strip_prefix("~/").or_else(|| s.strip_prefix("~\\")) {
-        return home().join(rest.replace('\\', "/"));
+        // util::home: the same folder, but it follows a test home.
+        return crate::util::home().join(rest.replace('\\', "/"));
     }
     if let (Target::Wsl { distro, .. }, true) = (current(), s.starts_with('/')) {
-        let mut p = PathBuf::from(format!(r"\\wsl.localhost\{distro}\"));
-        for part in s.split('/').filter(|x| !x.is_empty()) {
-            p.push(part);
-        }
-        return p;
+        return wsl_unc(&distro, s);
     }
     PathBuf::from(s)
 }
@@ -116,7 +137,7 @@ pub fn agent_var(name: &str) -> Option<String> {
 /// Runs a command inside the current WSL distro; None on failure or outside WSL.
 pub fn wsl_sh(script: &str) -> Option<String> {
     let Target::Wsl { distro, .. } = current() else { return None };
-    let out = output_within(Command::new("wsl.exe").args(["-d", &distro, "-e", "sh", "-c", script]), WSL_TIMEOUT)?;
+    let out = wsl_run(&distro, script)?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
@@ -135,18 +156,22 @@ fn distros() -> Vec<String> {
 pub fn list() -> Vec<EnvInfo> {
     let cur = id();
     let mut v = vec![EnvInfo {
-        id: "windows".into(),
-        label: crate::i18n::l("本机 · Windows", "This PC · Windows").into(),
+        id: WINDOWS.into(),
+        label: windows_label().into(),
         detail: dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_default(),
-        current: cur == "windows",
+        current: cur == WINDOWS,
     }];
     for d in distros() {
-        let id = format!("wsl:{d}");
+        let id = wsl_id(&d);
         v.push(EnvInfo {
             current: cur == id,
             id,
-            label: format!("WSL · {d}"),
-            detail: crate::i18n::l("Codex CLI 的配置与会话；ZCode、MiMo Desktop 只在 Windows 上", "Codex CLI config and sessions; ZCode and MiMo Desktop are Windows-only").into(),
+            label: wsl_label(&d),
+            detail: crate::i18n::l(
+                "CLI Agent（Codex、Claude Code、OpenCode 等）的配置与 Codex 会话；ZCode、MiMo Desktop 只在 Windows 上",
+                "Configs of CLI agents (Codex, Claude Code, OpenCode…) and Codex sessions; ZCode and MiMo Desktop are Windows-only",
+            )
+            .into(),
         });
     }
     v
@@ -154,13 +179,14 @@ pub fn list() -> Vec<EnvInfo> {
 
 /// Switches the target. For WSL, asks the distro for its $HOME (starts it if needed).
 pub fn set(id: &str) -> Result<()> {
-    let target = if id == "windows" {
+    let target = if id == WINDOWS {
         Target::Windows
-    } else if let Some(d) = id.strip_prefix("wsl:") {
+    } else if let Some(d) = id.strip_prefix(WSL_PREFIX) {
         if !distros().iter().any(|x| x == d) {
             return Err(anyhow!(tr!("没有找到 WSL 发行版 {d}", "WSL distro not found: {d}")));
         }
-        let out = output_within(Command::new("wsl.exe").args(["-d", d, "-e", "sh", "-c", "printf %s \"$HOME\""]), WSL_TIMEOUT)
+        // The exit status is not checked: only a printed absolute path counts.
+        let out = wsl_run(d, "printf %s \"$HOME\"")
             .ok_or_else(|| anyhow!(tr!("启动 WSL 发行版 {d} 失败或超时", "WSL distro {d} failed to start or timed out")))?;
         let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !h.starts_with('/') {
@@ -173,8 +199,8 @@ pub fn set(id: &str) -> Result<()> {
     // Runs off the main thread (set_env is async), so load and save under the store lock.
     crate::store::update(|s| {
         s["env"] = match &target {
-            Target::Windows => json!({ "id": "windows" }),
-            Target::Wsl { distro, unix_home } => json!({ "id": format!("wsl:{distro}"), "home": unix_home }),
+            Target::Windows => json!({ "id": WINDOWS }),
+            Target::Wsl { distro, unix_home } => json!({ "id": wsl_id(distro), "home": unix_home }),
         };
         Ok(())
     })?;
