@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type ApiKind, api } from "../api";
-import { AGENT_NAME, API_LABEL, type Group, ONLY_API, type Use, gatewayCapable, writableAgents } from "../services";
+import { AGENT_NAME, API_LABEL, type Group, ONLY_API, PROTOCOLS, type Protocol, type Use, freeAgents, gatewayCapable, useKey } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { Modal } from "./Modal";
 import { ErrorBox, Seg, ToggleRow } from "./controls";
-import { TemplatePicker } from "./TemplatePicker";
+import { ModelPicker, useModelPool } from "./ModelPicker";
+import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t } from "../i18n";
-import { errText, isHttpUrl, toggled, toggledIn } from "../util";
+import { errText, isHttpUrl, toggled } from "../util";
 
 export interface ServiceSave {
   name: string;
@@ -35,11 +36,11 @@ interface Props {
   onClose: () => void;
 }
 
-const API_OPTIONS: { v: ApiKind; label: string; hint: TKey }[] = [
-  { v: "responses", label: "Responses", hint: "serviceDialog.hintResponses" },
-  { v: "chat", label: "Chat", hint: "serviceDialog.hintChat" },
-  { v: "anthropic", label: "Anthropic", hint: "serviceDialog.hintAnthropic" },
-];
+const API_HINT: Record<Protocol, TKey> = {
+  responses: "serviceDialog.hintResponses",
+  chat: "common.apiHintChat",
+  anthropic: "common.apiHintAnthropic",
+};
 
 export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props) {
   const isNew = !group;
@@ -48,28 +49,26 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   const [kind, setKind] = useState<ApiKind>(group?.api ?? "responses");
   const [key, setKey] = useState("");
   const [models, setModels] = useState<string[]>(group?.lib?.models ?? []);
-  const [fetched, setFetched] = useState<string[] | null>(null);
-  const [manual, setManual] = useState("");
+  const [pool, addToPool] = useModelPool(() => group?.lib?.models ?? []);
   const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
 
   const editable = (group?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && u.state !== "removing");
-  const uid = (u: Use) => `${u.agent.id}:${u.p!.id}`;
-  const [sync, setSync] = useState<Set<string>>(new Set(editable.map(uid)));
-  const free = writableAgents(agents).filter((a) => !(group?.uses ?? []).some((u) => u.agent.id === a.id && u.state !== "removing"));
+  const [sync, setSync] = useState<Set<string>>(new Set(editable.map(useKey)));
+  const free = freeAgents(agents, group);
   const [addTo, setAddTo] = useState<Set<AgentId>>(new Set());
   const [viaGw, setViaGw] = useState(false);
   const [tpl, setTpl] = useState<Template | null>(null);
-  const pickTpl = (t: Template | null) => {
-    setTpl(t);
-    setFetched(null);
-    if (!t) return;
-    setName(t.name);
-    setKind(t.api);
-    setBaseUrl(t.endpoints[t.api]!);
-    setModels(t.models);
+  const pickTpl = (tp: Template | null) => {
+    setTpl(tp);
+    if (!tp) return;
+    setName(tp.name);
+    setKind(tp.api);
+    setBaseUrl(tp.endpoints[tp.api]!);
+    setModels(tp.models);
+    addToPool(tp.models);
   };
   const setProto = (k: ApiKind) => {
     setKind(k);
@@ -108,7 +107,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
       const list = !key.trim() && src && !changedAddr
         ? await api.fetchModels(src.agent.id, src.p!.id)
         : await api.fetchModelsUrl(url, key.trim() || null, kind);
-      setFetched(list);
+      addToPool(list);
       if (models.length === 0) setModels(list.slice(0, 20));
     } catch (e) {
       setErr(t("common.fetchFailed", { err: errText(e) }));
@@ -117,11 +116,9 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
     }
   };
 
-  const toggle = (m: string) => setModels((l) => toggledIn(l, m));
-  const addManual = () => {
-    const ids = manual.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  const addManual = (ids: string[]) => {
+    addToPool(ids);
     setModels((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
-    setManual("");
   };
 
   const save = async () => {
@@ -131,7 +128,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
     try {
       await onSave({
         name: name.trim(), baseUrl: url, api: kind, apiKey: key.trim() || null, models,
-        sync: changed ? editable.filter((u) => sync.has(uid(u))) : [],
+        sync: changed ? editable.filter((u) => sync.has(useKey(u))) : [],
         addTo: [...addTo].filter((a) => !blockedBy(a) && !altFor(a)),
         gateway: viaGw,
         alt: (["responses", "chat", "anthropic", "gemini"] as ApiKind[]).map((k) => ({
@@ -143,8 +140,6 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
       setSaving(false);
     }
   };
-
-  const all = [...new Set([...(fetched ?? []), ...models])];
 
   const foot = (
     <>
@@ -172,9 +167,9 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
         <div className="field">
           <span>{t("serviceDialog.protocol")}</span>
           <Seg value={kind} onChange={setProto} label={t("serviceDialog.protocol")}
-            options={API_OPTIONS.map((o) => {
-              const missing = !!tpl && !tpl.endpoints[o.v];
-              return { value: o.v, label: o.label, disabled: missing, title: missing ? t("serviceDialog.protoMissing", { vendor: tpl!.vendor, api: o.label }) : t(o.hint) };
+            options={PROTOCOLS.map((v) => {
+              const missing = !!tpl && !tpl.endpoints[v];
+              return { value: v, label: API_LABEL[v], disabled: missing, title: missing ? t("serviceDialog.protoMissing", { vendor: tpl!.vendor, api: API_LABEL[v] }) : t(API_HINT[v]) };
             })} />
           <em className="muted tiny">
             {tpl
@@ -188,7 +183,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
             placeholder={group?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("common.keyKeepPlaceholder") : "sk-..."} />
           <em className="muted tiny">
             {t("serviceDialog.keyStorage")}
-            {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("common.getKey", { vendor: tpl.vendor })}</button></>}
+            {tpl && <TemplateKeyLink tpl={tpl} />}
           </em>
         </label>
       </div>
@@ -200,20 +195,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
             <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
           </button>
         </div>
-        <div className="pick-list wide">
-          {all.length === 0 && <div className="muted small">{t("serviceDialog.noModels")}</div>}
-          {all.map((m) => (
-            <label key={m} className="pick">
-              <input type="checkbox" checked={models.includes(m)} onChange={() => toggle(m)} />
-              <span className="mono small">{m}</span>
-            </label>
-          ))}
-        </div>
-        <div className="row gap6">
-          <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("common.manualModelsPlaceholder")} />
-          <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
-        </div>
+        <ModelPicker pool={pool} checked={models} onChange={setModels} onAdd={addManual} empty={t("serviceDialog.noModels")} />
       </div>
 
       {editable.length > 0 && (
@@ -221,9 +203,9 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
           <span>{t("serviceDialog.syncTo")} {!changed && <em className="muted tiny">{t("serviceDialog.syncHint")}</em>}</span>
           <div className="agent-picks">
             {editable.map((u) => (
-              <label key={uid(u)} className={`apick${sync.has(uid(u)) && changed ? " on" : ""}${!changed ? " dim" : ""}`}>
-                <input type="checkbox" disabled={!changed} checked={sync.has(uid(u))}
-                  onChange={() => setSync((p) => toggled(p, uid(u)))} />
+              <label key={useKey(u)} className={`apick${sync.has(useKey(u)) && changed ? " on" : ""}${!changed ? " dim" : ""}`}>
+                <input type="checkbox" disabled={!changed} checked={sync.has(useKey(u))}
+                  onChange={() => setSync((p) => toggled(p, useKey(u)))} />
                 <AgentIcon id={u.agent.id} size={18} />
                 <span className="small ellipsis">{u.agent.name} · {u.p!.name}</span>
               </label>

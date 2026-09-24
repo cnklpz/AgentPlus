@@ -51,8 +51,6 @@ const en: typeof zh = {
   fetchFromUrl: "Fetch from URL",
   urlInvalid: "Must start with http:// or https://",
   saving: "Saving…",
-  getKey: "Get a key from {vendor} ↗",
-  manualModelsPlaceholder: "Add model IDs manually, separated by spaces",
   keyKeepPlaceholder: "Already set; leave blank to keep it",
   providerNamePlaceholder: "e.g. Relay A",
   baseUrlLabel: "Base URL",
@@ -79,6 +77,8 @@ const en: typeof zh = {
   undo: "Undo",
   editProvider: "Edit provider",
   addProvider: "Add provider",
+  apiHintChat: "OpenAI-compatible Chat Completions (/v1/chat/completions)",
+  apiHintAnthropic: "Anthropic Messages API (/v1/messages)",
 };
 
 export default en;

@@ -50,8 +50,6 @@ export default {
   fetchFromUrl: "从地址拉取",
   urlInvalid: "需要以 http:// 或 https:// 开头",
   saving: "保存中…",
-  getKey: "去 {vendor} 获取 Key ↗",
-  manualModelsPlaceholder: "手动添加模型 ID，多个用空格分隔",
   keyKeepPlaceholder: "已设置，留空表示不修改",
   providerNamePlaceholder: "例如：中转 A",
   baseUrlLabel: "地址（Base URL）",
@@ -78,4 +76,6 @@ export default {
   undo: "撤销",
   editProvider: "编辑供应商",
   addProvider: "添加供应商",
+  apiHintChat: "OpenAI 兼容 Chat Completions（/v1/chat/completions）",
+  apiHintAnthropic: "Anthropic Messages 接口（/v1/messages）",
 };

@@ -1,8 +1,6 @@
 // src/components/ProviderDialog.tsx
 export default {
   apiResponsesHint: "OpenAI Responses 接口（/v1/responses）",
-  apiChatHint: "OpenAI 兼容 Chat Completions（/v1/chat/completions）",
-  apiAnthropicHint: "Anthropic Messages 接口（/v1/messages）",
   apiGeminiHint: "Google Gemini 协议（generateContent）",
   roleDefault: "默认",
   roleOpus: "Opus",
@@ -58,7 +56,6 @@ export default {
   claudeUnmanagedNote: "这是 settings.json 里手动写的配置，先保存一次交给 AgentPlus 管理，再来设置模型。",
   claudeNote: "这个供应商可用的模型；下面给 Claude Code 的各个角色选用哪个。",
   pickNote: "勾选的模型会出现在 {agent} 的模型选择器里。",
-  selectedN: "已选 {n} 个",
   codexEmpty: "还没有给这个供应商设置列表，切换过去时会沿用当时的列表。",
   empty: "还没有模型，可以拉取或手动添加。",
   roleAssign: "模型分配",
