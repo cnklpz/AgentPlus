@@ -150,15 +150,12 @@ pub fn detect() -> Install {
 
 // ---------------------------------------------------------------- reading
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
 
 /// (settings, meta, has_comments). A missing or empty file reads as fresh v4 settings.
 fn load() -> Result<(Value, TextMeta, bool)> {
     let p = settings_path();
     if !p.exists() {
-        return Ok((json!({ "$version": 4 }), default_meta(), false));
+        return Ok((json!({ "$version": 4 }), TextMeta::NEW, false));
     }
     let (text, meta) = read_text(&p)?;
     if text.trim().is_empty() {
@@ -228,15 +225,6 @@ fn api_of(proto: Option<&str>, e: &Value) -> &'static str {
         Some("gemini") | Some("vertex-ai") => "gemini",
         _ if s(e, "wireApi") == Some("responses") => "responses",
         _ => "chat",
-    }
-}
-
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        "gemini" => "Gemini",
-        _ => "Chat",
     }
 }
 
@@ -327,11 +315,11 @@ fn base_id(key: &str, base: Option<&str>, env: Option<&str>) -> String {
 }
 
 fn store_list(root: &Value, k: &str) -> Vec<Value> {
-    store::agent_get(root, ID, k).and_then(|x| x.as_array()).cloned().unwrap_or_default()
+    store::get_arr(root, ID, k)
 }
 
 fn store_obj(root: &Value, k: &str) -> Map<String, Value> {
-    store::agent_get(root, ID, k).and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    store::get_obj(root, ID, k)
 }
 
 fn attach(out: &mut Vec<Group>, cfg: &Value, key: &str, e: &Value, live: bool) {
@@ -386,11 +374,9 @@ fn groups(cfg: &Value, root: &Value) -> Vec<Group> {
     for i in order {
         let g = &mut out[i];
         let b = base_id(&g.key, g.base.as_deref(), g.env_key.as_deref());
-        let id = [b.clone(), format!("{b}-{}", slug(&g.key))]
-            .into_iter()
-            .chain((2..).map(|n| format!("{b}-{n}")))
-            .find(|c| !taken.contains(c))
-            .unwrap();
+        // Before numbering, a taken id tries the protocol-qualified one.
+        let by_key = format!("{b}-{}", slug(&g.key));
+        let id = if taken.contains(&b) && !taken.contains(&by_key) { by_key } else { unique_id(&b, |c| taken.contains(c)) };
         taken.insert(id.clone());
         g.id = id;
     }
@@ -815,23 +801,14 @@ impl Ctx {
         let gs = self.groups();
         let taken: HashSet<String> = gs.iter().map(|g| g.id.clone()).chain([OAUTH.to_string()]).collect();
         let used_env: HashSet<String> = gs.iter().filter_map(|g| g.env_key.clone()).collect();
-        let b = slug(p.name.trim());
-        let id = std::iter::once(b.clone())
-            .chain((2..).map(|n| format!("{b}-{n}")))
-            .find(|c| !taken.contains(c) && !used_env.contains(&agentplus_var(c)))
-            .unwrap();
+        let id = unique_id(&slug(p.name.trim()), |c| taken.contains(c) || used_env.contains(&agentplus_var(c)));
         let var = agentplus_var(&id);
         let key = key_for_api(api);
         let mut tmpl = json!({ "baseUrl": p.base_url.trim(), "envKey": var });
         if key == "openai" {
             tmpl["wireApi"] = json!(if api == "responses" { "responses" } else { "chat-completions" });
         }
-        let mut models: Vec<&str> = vec![];
-        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !models.contains(&m) {
-                models.push(m);
-            }
-        }
+        let models = clean_ids(&p.models);
         if models.is_empty() {
             self.push_skeleton(key, tmpl.clone());
             self.diff.push(store_label(), tr!("+ 「{}」{}（{} · 还没有模型，添加模型后写入 modelProviders.{key}）", "+ \"{}\" {} ({} · no models yet; written to modelProviders.{key} once you add models)", p.name.trim(), p.base_url.trim(), api_label(api)), true);
@@ -1099,12 +1076,7 @@ impl Ctx {
 
     fn set_models(&mut self, provider: &str, models: &[String]) -> Result<()> {
         let g = self.enabled_group(provider)?;
-        let mut want: Vec<String> = vec![];
-        for m in models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !want.iter().any(|w| w == m) {
-                want.push(m.to_string());
-            }
-        }
+        let want = clean_ids(models);
         let have: Vec<String> = g.live.iter().chain(&g.hidden).filter_map(|e| s(e, "id").map(String::from)).collect();
         for id in have.iter().filter(|h| !want.contains(h)) {
             self.delete_model(provider, id)?;

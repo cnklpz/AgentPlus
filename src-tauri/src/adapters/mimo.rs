@@ -189,7 +189,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::SetSetting { key, value } => {
                 if key == "skills" {
-                    let want: Vec<String> = value.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                    let want: Vec<String> = str_list(Some(value)).unwrap_or_default();
                     for s in SKILLS {
                         let on = want.iter().any(|w| w == &format!("~/.{s}"));
                         let was = prefs.pointer(&format!("/skillPathCompat/{s}")).and_then(|x| x.as_bool()).unwrap_or(false);

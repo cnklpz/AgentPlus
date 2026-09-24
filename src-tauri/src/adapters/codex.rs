@@ -329,6 +329,7 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
             let wire = get("wire_api").unwrap_or_else(|| "responses".into());
             let base = get("base_url");
             let chat = wire == "chat";
+            let api = if chat { "chat" } else { "responses" };
             let env_key = get("env_key");
             let official_auth = item.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut details = vec![
@@ -349,14 +350,14 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 name: get("name").unwrap_or_else(|| id.to_string()),
                 host: base.as_deref().map(host_of).unwrap_or_default(),
                 base_url: base,
-                apis: vec![if chat { "Chat".into() } else { "Responses".into() }],
+                apis: vec![api_label(api).into()],
                 builtin: false,
                 enabled: true,
                 compatible: !chat,
                 reason: if chat { Some(l("Codex 已不支持 Chat 接口", "Codex no longer supports the Chat API").into()) } else { None },
                 models: vec![],
                 editable: true,
-                api: if chat { "chat".into() } else { "responses".into() },
+                api: api.into(),
                 has_key: env_key.as_deref().and_then(env_value).is_some(),
                 key_fp: None,
                 key_hint: None,
@@ -374,10 +375,7 @@ fn load_catalog(doc: &DocumentMut) -> Option<(PathBuf, Value, TextMeta)> {
 }
 
 fn custom_models(store: &Value) -> Vec<String> {
-    crate::store::agent_get(store, ID, "customModels")
-        .and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-        .unwrap_or_default()
+    crate::util::str_list(crate::store::agent_get(store, ID, "customModels")).unwrap_or_default()
 }
 
 fn set_custom_models(store: &mut Value, list: &[String]) {
@@ -387,14 +385,11 @@ fn set_custom_models(store: &mut Value, list: &[String]) {
 /// Per-provider model lists (visible slugs), kept by AgentPlus. Codex has a single
 /// catalog; switching provider swaps the stored list into it.
 fn provider_models(store: &Value) -> serde_json::Map<String, Value> {
-    crate::store::agent_get(store, ID, "providerModels").and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    crate::store::get_obj(store, ID, "providerModels")
 }
 
 fn stored_list(store: &Value, provider: &str) -> Option<Vec<String>> {
-    provider_models(store)
-        .get(provider)
-        .and_then(|l| l.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+    crate::util::str_list(provider_models(store).get(provider))
 }
 
 /// Returns true when the stored list changed.
@@ -668,15 +663,6 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 
 // ---------------------------------------------------------------- write
 
-fn unique_id(doc: &DocumentMut, name: &str) -> String {
-    let base = slug(name);
-    let taken = |id: &str| id == "openai" || id == FIXED_ID || provider_item(doc, id).is_some();
-    if !taken(&base) {
-        return base;
-    }
-    (2..).map(|n| format!("{base}-{n}")).find(|c| !taken(c)).unwrap()
-}
-
 /// Official sign-in mix: `requires_openai_auth = true` keeps Codex on the ChatGPT sign-in
 /// (account features stay unlocked) while the provider's own key (`env_key`, which Codex
 /// prefers over the ChatGPT token) authenticates the requests to its `base_url`.
@@ -753,7 +739,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         provider_item(&doc, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
                         id.clone()
                     }
-                    None => unique_id(&doc, &p.name),
+                    None => unique_id(&slug(&p.name), |c| c == "openai" || c == FIXED_ID || provider_item(&doc, c).is_some()),
                 };
                 let is_new = p.id.is_none();
                 let env_key = provider_str(&doc, &id, "env_key")
@@ -980,7 +966,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                 }
                 "efforts" => {
-                    let want: Vec<String> = v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                    let want: Vec<String> = crate::util::str_list(Some(v)).unwrap_or_default();
                     let old = efforts(&doc);
                     let ordered: Vec<&str> = EFFORTS.iter().copied().filter(|e| want.iter().any(|w| w == e)).collect();
                     for e in EFFORTS {
@@ -1006,7 +992,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
             },
             Op::SetProviderModels { provider, models } => {
-                let list: Vec<String> = models.iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect();
+                let list = clean_ids(models);
                 let cur = switched.clone().unwrap_or_else(|| before.clone());
                 if provider == &cur {
                     // The active provider's list *is* the catalog.

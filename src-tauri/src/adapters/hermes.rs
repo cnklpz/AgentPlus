@@ -203,7 +203,7 @@ fn j2y(v: &J) -> Y {
 fn load() -> Result<(Y, String, TextMeta)> {
     let p = config_path();
     if !p.exists() {
-        return Ok((Y::Mapping(Mapping::new()), String::new(), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }));
+        return Ok((Y::Mapping(Mapping::new()), String::new(), TextMeta::NEW));
     }
     let (text, meta) = read_text(&p)?;
     let v: Y = serde_yaml::from_str(&text).map_err(|e| anyhow!(tr!("config.yaml 解析失败：{e}", "Failed to parse config.yaml: {e}")))?;
@@ -660,14 +660,6 @@ fn mode_for(api: &str) -> Result<&'static str> {
     }
 }
 
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        _ => "Chat",
-    }
-}
-
 fn key_env_of(def: &Y) -> Option<String> {
     ystr(def, "key_env").or_else(|| ystr(def, "api_key_env")).or_else(|| ystr(def, "keyEnv")).or_else(|| ystr(def, "apiKeyEnv"))
 }
@@ -775,17 +767,6 @@ fn to_model(id: &str, d: &Y, shape: Shape, visible: bool) -> Model {
     }
 }
 
-fn hidden_of(root: &J) -> JMap<String, J> {
-    store::agent_get(root, ID, "hiddenModels").and_then(|x| x.as_object()).cloned().unwrap_or_default()
-}
-
-fn obj_of(root: &J, key: &str) -> JMap<String, J> {
-    store::agent_get(root, ID, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
-}
-
-fn js(v: &J, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
 
 // ---------------------------------------------------------------- state
 
@@ -883,11 +864,11 @@ fn inline_values(cfg: &Y, root: &J, active: bool) -> Option<(String, Option<Stri
         return Some((ystr(m, "base_url").unwrap_or_default(), ystr(m, "api_key"), ystr(m, "api_mode"), model_default(cfg)));
     }
     let s = store::agent_get(root, ID, "inline")?;
-    let base = js(s, "baseUrl");
+    let base = str_field(s, "baseUrl");
     if base.is_empty() {
         return None;
     }
-    let opt = |k: &str| Some(js(s, k)).filter(|x| !x.is_empty());
+    let opt = |k: &str| Some(str_field(s, k)).filter(|x| !x.is_empty());
     Some((base, opt("apiKey"), opt("apiMode"), opt("default")))
 }
 
@@ -991,7 +972,7 @@ pub fn state(inst: &Install) -> AgentState {
     };
     let root = store_load();
     let (env, _) = load_env();
-    let hidden = hidden_of(&root);
+    let hidden = store::get_obj(&root, ID, "hiddenModels");
     let (cur_id, cur_src) = current(&cfg);
     let cur_model = model_default(&cfg);
     st.current_provider = Some(cur_id.clone());
@@ -1010,14 +991,14 @@ pub fn state(inst: &Install) -> AgentState {
             .and_then(|d| ystr(d, "name"));
         st.providers.push(inline_provider(&vals, same));
     }
-    let builtins = obj_of(&root, "builtins");
+    let builtins = store::get_obj(&root, ID, "builtins");
     if let Src::Builtin(b) = &cur_src {
         let known = !b.to_lowercase().starts_with("custom:");
         st.providers.push(builtin_provider(b, cur_model.clone(), known));
     }
     for (b, v) in &builtins {
         if !matches!(&cur_src, Src::Builtin(x) if x == b) {
-            st.providers.push(builtin_provider(b, Some(js(v, "default")).filter(|x| !x.is_empty()), true));
+            st.providers.push(builtin_provider(b, Some(str_field(v, "default")).filter(|x| !x.is_empty()), true));
         }
     }
 
@@ -1162,9 +1143,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             a.push(id.to_lowercase());
                             a
                         }).collect();
-                        let free = |c: &str| c != INLINE && !taken.contains(&c.to_string()) && !taken.contains(&format!("custom:{c}"));
-                        let b = slug(name);
-                        let id = if free(&b) { b.clone() } else { (2..).map(|n| format!("{b}-{n}")).find(|c| free(c)).unwrap() };
+                        let id = unique_id(&slug(name), |c| c == INLINE || taken.iter().any(|t| t == c) || taken.contains(&format!("custom:{c}")));
                         let mut e = Mapping::new();
                         e.insert(yk("name"), yk(name));
                         e.insert(yk("base_url"), yk(base));
@@ -1172,7 +1151,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             e.insert(yk("api_key"), yk(k));
                         }
                         e.insert(yk("api_mode"), yk(mode));
-                        let ids: Vec<&str> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+                        let ids = clean_ids(&p.models);
                         if let Some(first) = ids.first() {
                             e.insert(yk("default_model"), yk(first));
                         }
@@ -1338,7 +1317,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         ("custom".to_string(), vals.3.clone(), vals.2.clone(), Some(vals))
                     }
                     Src::Builtin(b) => {
-                        let d = obj_of(&root, "builtins").get(b).map(|v| js(v, "default")).filter(|x| !x.is_empty());
+                        let d = store::get_obj(&root, ID, "builtins").get(b).map(|v| str_field(v, "default")).filter(|x| !x.is_empty());
                         (b.clone(), d, None, None)
                     }
                 };
@@ -1531,14 +1510,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let src = entry_src(&cfg, provider)?;
                 let def = def_mut(&mut cfg, &src).unwrap();
                 let (shape, rows) = model_rows(def);
-                let mut seen = vec![];
-                let new: Vec<(String, Y)> = models
-                    .iter()
-                    .map(|m| m.trim().to_string())
-                    .filter(|m| !m.is_empty() && !seen.contains(m) && {
-                        seen.push(m.clone());
-                        true
-                    })
+                let new: Vec<(String, Y)> = clean_ids(models)
+                    .into_iter()
                     .map(|m| {
                         let d = rows.iter().find(|r| r.0 == m).map(|r| r.1.clone()).unwrap_or(if shape == Shape::Map { Y::Mapping(Mapping::new()) } else { Y::Null });
                         (m, d)

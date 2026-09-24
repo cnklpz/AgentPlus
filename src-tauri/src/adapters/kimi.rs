@@ -155,14 +155,11 @@ pub fn detect() -> Install {
 
 // ---------------------------------------------------------------- reading
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
 
 fn load() -> Result<(DocumentMut, TextMeta)> {
     let p = config_path();
     if !p.exists() {
-        return Ok((DocumentMut::new(), default_meta()));
+        return Ok((DocumentMut::new(), TextMeta::NEW));
     }
     let (text, meta) = read_text(&p)?;
     let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Failed to parse config.toml: {e}")))?;
@@ -193,15 +190,6 @@ fn api_of(ty: &str) -> &'static str {
     }
 }
 
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        "gemini" => "Gemini",
-        _ => "Chat",
-    }
-}
-
 fn type_for(api: &str, legacy: bool) -> &'static str {
     match (api, legacy) {
         ("responses", _) => "openai_responses",
@@ -221,7 +209,7 @@ fn check_api(api: &str) -> Result<&str> {
 }
 
 fn store_obj(root: &Value, k: &str) -> Map<String, Value> {
-    store::agent_get(root, ID, k).and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    store::get_obj(root, ID, k)
 }
 
 fn env_set(var: &str) -> bool {
@@ -634,12 +622,8 @@ impl Ctx {
 
     fn add_model(&mut self, pid: &str, mid: &str, ctx: Option<u64>) -> Result<String> {
         let all = self.all_keys();
-        let key = if !all.contains(mid) {
-            mid.to_string()
-        } else {
-            let b = format!("{pid}/{mid}");
-            std::iter::once(b.clone()).chain((2..).map(|n| format!("{b}-{n}"))).find(|c| !all.contains(c)).unwrap()
-        };
+        // A models key taken by another provider's model gets the provider as prefix.
+        let key = if !all.contains(mid) { mid.to_string() } else { unique_id(&format!("{pid}/{mid}"), |c| all.contains(c)) };
         let c = ctx.unwrap_or(DEFAULT_CTX);
         let mut t = Table::new();
         t.insert("provider", value(pid));
@@ -655,8 +639,7 @@ impl Ctx {
         let api = check_api(&p.api)?;
         let mut taken: HashSet<String> = table_items(&self.doc, "providers").into_iter().map(|(k, _)| k).collect();
         taken.extend(store_obj(&self.root, "disabledProviders").keys().cloned());
-        let b = slug(p.name.trim());
-        let id = std::iter::once(b.clone()).chain((2..).map(|n| format!("{b}-{n}"))).find(|c| !taken.contains(c)).unwrap();
+        let id = unique_id(&slug(p.name.trim()), |c| taken.contains(c));
         let ty = type_for(api, self.legacy);
         let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
         let mut t = Table::new();
@@ -670,12 +653,8 @@ impl Ctx {
         }
         self.cfg_dirty = true;
         self.set_name(&id, p.name.trim());
-        let mut seen: Vec<&str> = vec![];
-        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !seen.contains(&m) {
-                seen.push(m);
-                self.add_model(&id, m, None)?;
-            }
+        for m in clean_ids(&p.models) {
+            self.add_model(&id, &m, None)?;
         }
         Ok(())
     }
@@ -866,12 +845,7 @@ impl Ctx {
     /// Makes exactly `want` the provider's visible models; entries match by key or upstream name.
     fn set_models(&mut self, pid: &str, want: &[String]) -> Result<()> {
         self.live_provider(pid)?;
-        let mut list: Vec<String> = vec![];
-        for m in want.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !list.iter().any(|x| x == m) {
-                list.push(m.to_string());
-            }
-        }
+        let list = clean_ids(want);
         let keep = |k: &str, up: &Option<String>| list.iter().any(|w| w == k || Some(w) == up.as_ref());
         let def = default_model(&self.doc);
         let (live, hidden) = (self.live_models(pid), self.hidden_models(pid));

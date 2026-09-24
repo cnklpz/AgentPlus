@@ -112,15 +112,12 @@ pub fn detect() -> Install {
 
 // ---------------------------------------------------------------- files
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
 
 /// (settings, meta, had_comments). A missing file is `{}`.
 fn load() -> Result<(Value, TextMeta, bool)> {
     let p = settings_path();
     if !p.exists() {
-        return Ok((json!({}), default_meta(), false));
+        return Ok((json!({}), TextMeta::NEW, false));
     }
     let (text, meta) = read_text(&p)?;
     if text.trim().is_empty() {
@@ -135,7 +132,7 @@ fn load() -> Result<(Value, TextMeta, bool)> {
 }
 
 fn load_env() -> (String, TextMeta) {
-    read_text_or_new(&env_path()).unwrap_or_else(|_| (String::new(), default_meta()))
+    read_text_or_new(&env_path()).unwrap_or_else(|_| (String::new(), TextMeta::NEW))
 }
 
 fn env_unquote(v: &str) -> String {
@@ -189,16 +186,10 @@ fn env_set(text: &str, key: &str, value: Option<&str>) -> String {
 // ---------------------------------------------------------------- profiles
 
 fn profiles(root: &Value) -> Map<String, Value> {
-    store::agent_get(root, ID, "profiles").and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    store::get_obj(root, ID, "profiles")
 }
 
-fn s(v: &Value, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
 
-fn norm(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_lowercase()
-}
 
 fn clean_base(u: &str) -> String {
     u.trim().trim_end_matches('/').to_string()
@@ -217,7 +208,7 @@ fn set_model_list(p: &mut Value, list: &[(String, bool)]) {
 
 /// The model written to `model.name`: the chosen default, else the first visible model.
 fn default_model(p: &Value) -> Option<String> {
-    Some(s(p, "defaultModel")).filter(|m| !m.is_empty()).or_else(|| model_list(p).into_iter().find(|(_, v)| *v).map(|(id, _)| id))
+    Some(str_field(p, "defaultModel")).filter(|m| !m.is_empty()).or_else(|| model_list(p).into_iter().find(|(_, v)| *v).map(|(id, _)| id))
 }
 
 fn auth_type(cfg: &Value) -> Option<String> {
@@ -248,15 +239,15 @@ fn effective_auth(cfg: &Value, env: &str) -> Option<String> {
 
 /// A profile matching the .env values (address first, key to tell same-address profiles apart).
 fn matching_profile(env: &str, profs: &Map<String, Value>) -> Option<String> {
-    let base = env_get(env, BASE).map(|b| norm(&b)).unwrap_or_default();
+    let base = env_get(env, BASE).map(|b| norm_url(&b)).unwrap_or_default();
     let key = env_get(env, KEY);
     if base.is_empty() && key.is_none() {
         return None;
     }
-    let same_base: Vec<(&String, &Value)> = profs.iter().filter(|(_, p)| norm(&s(p, "baseUrl")) == base).collect();
+    let same_base: Vec<(&String, &Value)> = profs.iter().filter(|(_, p)| norm_url(&str_field(p, "baseUrl")) == base).collect();
     same_base
         .iter()
-        .find(|(_, p)| key.as_deref().map(|k| s(p, "apiKey") == k).unwrap_or(true))
+        .find(|(_, p)| key.as_deref().map(|k| str_field(p, "apiKey") == k).unwrap_or(true))
         .or_else(|| same_base.iter().find(|_| !base.is_empty()))
         .map(|(id, _)| (*id).clone())
 }
@@ -285,8 +276,8 @@ fn stored_in_label() -> &'static str {
 }
 
 fn provider_of(id: &str, p: &Value) -> Provider {
-    let base = s(p, "baseUrl");
-    let key = s(p, "apiKey");
+    let base = str_field(p, "baseUrl");
+    let key = str_field(p, "apiKey");
     let dflt = default_model(p);
     let models = model_list(p)
         .into_iter()
@@ -302,10 +293,10 @@ fn provider_of(id: &str, p: &Value) -> Provider {
     details.push(Kv::text(stored_in_label(), l("AgentPlus 配置档（切换时写入 ~/.gemini/.env 和 settings.json）", "AgentPlus profile (written to ~/.gemini/.env and settings.json on switch)")));
     Provider {
         id: id.into(),
-        name: s(p, "name"),
+        name: str_field(p, "name"),
         host: if base.is_empty() { "generativelanguage.googleapis.com".into() } else { host_of(&base) },
         base_url: Some(if base.is_empty() { "https://generativelanguage.googleapis.com".into() } else { base }),
-        apis: vec!["Gemini".into()],
+        apis: vec![api_label("gemini").into()],
         builtin: false,
         enabled: true,
         compatible: true,
@@ -449,9 +440,9 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     } else {
         profiles(&store_load()).get(id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
     };
-    let base = s(&p, "baseUrl");
+    let base = str_field(&p, "baseUrl");
     let base = if base.is_empty() { "https://generativelanguage.googleapis.com".to_string() } else { base };
-    let key = s(&p, "apiKey");
+    let key = str_field(&p, "apiKey");
     Ok((base, (!key.is_empty()).then_some(key), "gemini".into()))
 }
 
@@ -520,12 +511,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
                 match p.id.as_deref() {
                     None | Some(UNMANAGED) => {
-                        let b = slug(&p.name);
-                        let reserved = |c: &str| profs.contains_key(c) || c == GOOGLE || c == UNMANAGED;
-                        let id = if !reserved(&b) { b.clone() } else { (2..).map(|n| format!("{b}-{n}")).find(|c| !reserved(c)).unwrap() };
+                        let id = unique_id(&slug(&p.name), |c| profs.contains_key(c) || c == GOOGLE || c == UNMANAGED);
                         let adopting = p.id.as_deref() == Some(UNMANAGED);
                         let key = if adopting { key.or_else(|| env_get(&env0, KEY)) } else { key };
-                        let models: Vec<Value> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).map(|m| json!({ "id": m, "visible": true })).collect();
+                        let models: Vec<Value> = clean_ids(&p.models).into_iter().map(|m| json!({ "id": m, "visible": true })).collect();
                         let mut prof = json!({ "name": p.name.trim(), "baseUrl": base, "apiKey": key.clone().unwrap_or_default(), "models": models });
                         if adopting {
                             if let Some(m) = model_name(&cfg) {
@@ -551,14 +540,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     Some(id) => {
                         let e = profs.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
                         for (k, v) in [("name", p.name.trim()), ("baseUrl", base.as_str())] {
-                            if s(e, k) != v {
+                            if str_field(e, k) != v {
                                 e[k] = json!(v);
                                 diff.push(store_label, tr!("「{id}」{k} = {v}", "\"{id}\" {k} = {v}"), true);
                                 store_dirty = true;
                             }
                         }
                         if let Some(k) = key {
-                            if s(e, "apiKey") != k {
+                            if str_field(e, "apiKey") != k {
                                 e["apiKey"] = json!(k);
                                 diff.push(store_label, tr!("「{id}」密钥 = {}", "\"{id}\" API key = {}", mask_key(&k)), true);
                                 store_dirty = true;
@@ -601,7 +590,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     Some(_) => continue,
                     None => list.push((model.clone(), *visible)),
                 }
-                if !*visible && s(p, "defaultModel") == *model {
+                if !*visible && str_field(p, "defaultModel") == *model {
                     return Err(anyhow!(tr!("{model} 是默认模型，不能隐藏；先换一个默认模型", "{model} is the default model and can't be hidden; choose another default model first")));
                 }
                 set_model_list(p, &list);
@@ -631,7 +620,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 list.retain(|(x, _)| x != model);
                 if list.len() != n {
                     set_model_list(p, &list);
-                    if s(p, "defaultModel") == *model {
+                    if str_field(p, "defaultModel") == *model {
                         if let Some(o) = p.as_object_mut() {
                             o.remove("defaultModel");
                         }
@@ -643,15 +632,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetProviderModels { provider, models } => {
                 profile(&profs, provider)?;
                 let p = profs.get_mut(provider).unwrap();
-                let mut seen: Vec<String> = vec![];
-                for m in models.iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()) {
-                    if !seen.contains(&m) {
-                        seen.push(m);
-                    }
-                }
-                let list: Vec<(String, bool)> = seen.into_iter().map(|m| (m, true)).collect();
+                let list: Vec<(String, bool)> = clean_ids(models).into_iter().map(|m| (m, true)).collect();
                 set_model_list(p, &list);
-                if !list.iter().any(|(m, _)| *m == s(p, "defaultModel")) {
+                if !list.iter().any(|(m, _)| *m == str_field(p, "defaultModel")) {
                     if let Some(o) = p.as_object_mut() {
                         o.remove("defaultModel");
                     }
@@ -666,7 +649,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 profile(&profs, provider)?;
                 let p = profs.get_mut(provider).unwrap();
                 let want = roles.get("default").map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
-                if want.clone().unwrap_or_default() != s(p, "defaultModel") {
+                if want.clone().unwrap_or_default() != str_field(p, "defaultModel") {
                     match &want {
                         Some(m) => {
                             p["defaultModel"] = json!(m);
@@ -713,8 +696,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         GOOGLE | UNMANAGED => None,
         id if id.starts_with(AUTH) => None,
         id if switching || profs0.get(id) != profs.get(id) => profs.get(id).map(|p| {
-            let base = Some(s(p, "baseUrl")).filter(|b| !b.is_empty());
-            let key = Some(s(p, "apiKey")).filter(|k| !k.is_empty());
+            let base = Some(str_field(p, "baseUrl")).filter(|b| !b.is_empty());
+            let key = Some(str_field(p, "apiKey")).filter(|k| !k.is_empty());
             (base, key, API_KEY_AUTH, default_model(p))
         }),
         _ => None,

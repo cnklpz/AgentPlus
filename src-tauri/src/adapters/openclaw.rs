@@ -83,7 +83,7 @@ fn integers(v: &mut Value) {
 fn load() -> Result<(Value, TextMeta, Option<String>)> {
     let p = config_path();
     if !p.exists() {
-        return Ok((json!({}), pimodels::blank_meta(), None));
+        return Ok((json!({}), TextMeta::NEW, None));
     }
     let (text, meta) = read_text(&p)?;
     if let Ok(v) = serde_json::from_str::<Value>(&text) {
@@ -108,7 +108,7 @@ fn default_model(cfg: &Value) -> (Option<String>, Vec<String>) {
         Some(Value::String(s)) => (Some(s.clone()).filter(|s| !s.is_empty()), vec![]),
         Some(o @ Value::Object(_)) => (
             o.get("primary").and_then(|x| x.as_str()).map(String::from).filter(|s| !s.is_empty()),
-            o.get("fallbacks").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            str_list(o.get("fallbacks")).unwrap_or_default(),
         ),
         _ => (None, vec![]),
     }

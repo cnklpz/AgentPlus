@@ -10,7 +10,7 @@ use crate::i18n::l;
 use crate::model::{Diff, Setting};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
-use crate::util::obj_at;
+use crate::util::{obj_at, str_list};
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Scope {
@@ -97,9 +97,6 @@ fn read<'a>(cfg: &'a Value, key: &str) -> Option<&'a Value> {
     get(cfg, key)
 }
 
-fn as_list(v: Option<&Value>) -> Vec<String> {
-    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default()
-}
 
 /// A stored value in the Select's terms: "true"/"false" for booleans, "custom" for rule maps.
 fn select_str(v: Option<&Value>) -> Option<String> {
@@ -194,9 +191,9 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
             }
             Kind::List => {
                 row.kind = "list".into();
-                row.value = json!(as_list(cur));
+                row.value = json!(str_list(cur).unwrap_or_default());
                 if scope == Scope::Project {
-                    let g = as_list(inherited);
+                    let g = str_list(inherited).unwrap_or_default();
                     let tail = if s.key == "instructions" { l("和全局的合并", "Merged with global") } else { l("留空＝继承全局", "Leave empty to inherit global") };
                     let shown = if g.is_empty() { String::new() } else { tr!("（全局：{}）", " (global: {})", g.join(l("、", ", "))) };
                     row.desc = tr!("{}。{tail}{shown}", "{}. {tail}{shown}", row.desc);
@@ -204,7 +201,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
             }
             Kind::Providers => {
                 row.kind = "chips".into();
-                let mut v = as_list(cur);
+                let mut v = str_list(cur).unwrap_or_default();
                 let mut opts: Vec<String> = providers.to_vec();
                 // Ids listed in the file but not known here still show (and can be unticked).
                 for x in &v {
@@ -216,7 +213,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 row.value = json!(v);
                 row.options = opts;
                 if scope == Scope::Project {
-                    let g = as_list(inherited);
+                    let g = str_list(inherited).unwrap_or_default();
                     if !g.is_empty() {
                         row.desc = tr!("{}。都不选＝沿用全局的 {}", "{}. None selected = use the global {}", row.desc, g.join(l("、", ", ")));
                     }

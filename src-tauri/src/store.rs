@@ -155,6 +155,16 @@ pub fn agent_get<'a>(root: &'a Value, agent: &str, key: &str) -> Option<&'a Valu
     root.get(scoped(agent)).and_then(|a| a.get(key))
 }
 
+/// A copy of `store[agent][key]` as an object; empty when it is missing or not an object.
+pub fn get_obj(root: &Value, agent: &str, key: &str) -> Map<String, Value> {
+    agent_get(root, agent, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
+}
+
+/// A copy of `store[agent][key]` as an array; empty when it is missing or not an array.
+pub fn get_arr(root: &Value, agent: &str, key: &str) -> Vec<Value> {
+    agent_get(root, agent, key).and_then(|x| x.as_array()).cloned().unwrap_or_default()
+}
+
 pub fn get_flag(root: &Value, agent: &str, key: &str) -> bool {
     root.get(scoped(agent)).and_then(|a| a.get(key)).and_then(|v| v.as_bool()).unwrap_or(false)
 }

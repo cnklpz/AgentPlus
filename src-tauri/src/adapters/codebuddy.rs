@@ -173,9 +173,6 @@ pub fn detect() -> Install {
 
 // ---------- format helpers ----------
 
-fn s(v: &Value, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
 
 /// Full `…/chat/completions` URL → base URL.
 fn base_of(url: &str) -> String {
@@ -206,7 +203,7 @@ fn resolve_key(k: &str) -> Option<String> {
 type Key = (String, String, String); // (base, apiKey, vendor)
 
 fn key_of(e: &Value) -> Key {
-    (base_of(&s(e, "url")), s(e, "apiKey"), s(e, "vendor"))
+    (base_of(&str_field(e, "url")), str_field(e, "apiKey"), str_field(e, "vendor"))
 }
 
 fn host(base: &str) -> String {
@@ -229,8 +226,7 @@ fn groups_of(entries: &[Value], parked: &[Value]) -> Vec<Group> {
             continue;
         }
         let vendor = if k.2.trim().is_empty() { host(&k.0) } else { k.2.trim().to_string() };
-        let b = slug(&vendor);
-        let id = if out.iter().any(|g| g.id == b) { (2..).map(|n| format!("{b}-{n}")).find(|c| !out.iter().any(|g| &g.id == c)).unwrap() } else { b };
+        let id = unique_id(&slug(&vendor), |c| out.iter().any(|g| g.id == c));
         out.push(Group { id, key: k, name: vendor });
     }
     // Same vendor twice: tell them apart by host.
@@ -242,18 +238,15 @@ fn groups_of(entries: &[Value], parked: &[Value]) -> Vec<Group> {
 }
 
 fn parked_of(root: &Value) -> Vec<Value> {
-    store::agent_get(root, ID, "parked").and_then(|x| x.as_array()).cloned().unwrap_or_default()
+    store::get_arr(root, ID, "parked")
 }
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
 
 /// (models.json, meta, had_comments); a missing file reads as `{"models": []}`.
 fn load_models() -> Result<(Value, TextMeta, bool)> {
     let p = models_path();
     if !p.exists() {
-        return Ok((json!({ "models": [] }), default_meta(), false));
+        return Ok((json!({ "models": [] }), TextMeta::NEW, false));
     }
     let (text, meta) = read_text(&p)?;
     let (clean, had) = strip_jsonc(&text);
@@ -270,7 +263,7 @@ fn entries_of(cfg: &Value) -> Vec<Value> {
 
 /// None = no `availableModels` (every model shows).
 fn available_of(cfg: &Value) -> Option<Vec<String>> {
-    cfg.get("availableModels").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+    str_list(cfg.get("availableModels"))
 }
 
 fn default_model() -> Option<String> {
@@ -288,14 +281,14 @@ fn model_of(e: &Value, visible: bool) -> Model {
     if e.get("supportsReasoning").and_then(|x| x.as_bool()) == Some(true) {
         tags.push(Tag::new("cap:reasoning", l("推理", "Reasoning")));
     }
-    let name = s(e, "name");
+    let name = str_field(e, "name");
     Model {
-        id: s(e, "id"),
+        id: str_field(e, "id"),
         visible,
         readonly: false,
         tags,
         ctx: ctx.map(fmt_ctx),
-        name: (!name.trim().is_empty() && name != s(e, "id")).then_some(name),
+        name: (!name.trim().is_empty() && name != str_field(e, "id")).then_some(name),
         context: ctx,
         deletable: true,
         extra: mfields::read(e, mfields::CODEBUDDY),
@@ -314,7 +307,7 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
     let mine = |e: &Value| key_of(e) == g.key;
     let active: Vec<&Value> = entries.iter().filter(|e| mine(e)).collect();
     let enabled = !active.is_empty();
-    let mut models: Vec<Model> = active.iter().map(|e| model_of(e, avail.map(|a| a.contains(&s(e, "id"))).unwrap_or(true))).collect();
+    let mut models: Vec<Model> = active.iter().map(|e| model_of(e, avail.map(|a| a.contains(&str_field(e, "id"))).unwrap_or(true))).collect();
     if !enabled {
         for p in parked {
             if let Some(e) = p.get("entry").filter(|e| mine(e)) {
@@ -327,7 +320,7 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
         name: g.name.clone(),
         base_url: Some(g.key.0.clone()),
         host: host_of(&g.key.0),
-        apis: vec!["Chat".into()],
+        apis: vec![api_label("chat").into()],
         builtin: false,
         enabled,
         compatible: true,
@@ -450,7 +443,7 @@ impl Work {
 
     /// Model ids are global in CodeBuddy (selection and availableModels use them).
     fn owner_of(&self, mid: &str) -> Option<Key> {
-        self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).find(|e| s(e, "id") == mid).map(key_of)
+        self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).find(|e| str_field(e, "id") == mid).map(key_of)
     }
 
     fn check_free(&self, g: &Group, mid: &str) -> Result<()> {
@@ -517,12 +510,7 @@ impl Work {
                 let vendor = p.name.trim().to_string();
                 match &p.id {
                     None => {
-                        let mut models: Vec<&str> = vec![];
-                        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                            if !models.contains(&m) {
-                                models.push(m);
-                            }
-                        }
+                        let models = clean_ids(&p.models);
                         if models.is_empty() {
                             return Err(anyhow!(l("CodeBuddy 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型", "Each CodeBuddy model entry carries its own base URL and API key: add at least one model when creating a provider")));
                         }
@@ -530,8 +518,7 @@ impl Work {
                         let g = match self.groups.iter().find(|g| g.key == key) {
                             Some(g) => g.clone(),
                             None => {
-                                let b = slug(&vendor);
-                                let id = if self.groups.iter().any(|g| g.id == b) { (2..).map(|n| format!("{b}-{n}")).find(|c| !self.groups.iter().any(|g| &g.id == c)).unwrap() } else { b };
+                                let id = unique_id(&slug(&vendor), |c| self.groups.iter().any(|g| g.id == c));
                                 let g = Group { id, key: key.clone(), name: vendor.clone() };
                                 self.groups.push(g.clone());
                                 g
@@ -542,7 +529,7 @@ impl Work {
                         }
                         let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
                         self.diff.push(&file, tr!("+ 「{vendor}」{} 个模型（{}{}）", "+ \"{vendor}\" {} model(s) ({}{})", models.len(), url_of(&base), key_part), true);
-                        for m in models {
+                        for m in &models {
                             if self.owner_of(m).is_none() {
                                 self.entries.push(Self::new_entry(&key, m, None, None));
                                 self.show(m);
@@ -585,7 +572,7 @@ impl Work {
             }
             Op::DeleteProvider { provider } => {
                 let g = self.group(provider)?;
-                let gone: Vec<String> = self.entries.iter().filter(|e| key_of(e) == g.key).map(|e| s(e, "id")).collect();
+                let gone: Vec<String> = self.entries.iter().filter(|e| key_of(e) == g.key).map(|e| str_field(e, "id")).collect();
                 self.entries.retain(|e| key_of(e) != g.key);
                 for m in &gone {
                     self.unlist(m);
@@ -606,7 +593,7 @@ impl Work {
                     }
                     for p in back {
                         let Some(e) = p.get("entry").cloned() else { continue };
-                        let mid = s(&e, "id");
+                        let mid = str_field(&e, "id");
                         if self.owner_of(&mid).is_some() {
                             return Err(anyhow!(tr!("模型 ID {mid} 已被其他供应商使用，无法恢复「{}」", "Model ID {mid} is used by another provider; can't restore \"{}\"", g.name)));
                         }
@@ -622,7 +609,7 @@ impl Work {
                         self.diff.push(&file, tr!("- 「{}」{} 个模型（暂存在 AgentPlus，可恢复）", "- \"{}\" {} model(s) (parked in AgentPlus, restorable)", g.name, out.len()), false);
                     }
                     for e in out {
-                        let mid = s(&e, "id");
+                        let mid = str_field(&e, "id");
                         let visible = self.avail.as_ref().map(|a| a.contains(&mid)).unwrap_or(true);
                         self.unlist(&mid);
                         self.parked.push(json!({ "visible": visible, "entry": e }));
@@ -632,7 +619,7 @@ impl Work {
             Op::SetModelVisible { provider, model, visible } => {
                 let g = self.group(provider)?;
                 self.require_enabled(&g)?;
-                if !self.entries.iter().any(|e| key_of(e) == g.key && &s(e, "id") == model) {
+                if !self.entries.iter().any(|e| key_of(e) == g.key && &str_field(e, "id") == model) {
                     return Err(anyhow!(tr!("「{}」里没有模型 {model}", "\"{}\" has no model {model}", g.name)));
                 }
                 let now = self.avail.as_ref().map(|a| a.contains(model)).unwrap_or(true);
@@ -645,7 +632,7 @@ impl Work {
                 } else {
                     if self.avail.is_none() {
                         // First hide: create the list with every custom model that shows today.
-                        self.avail = Some(self.entries.iter().map(|e| s(e, "id")).collect());
+                        self.avail = Some(self.entries.iter().map(|e| str_field(e, "id")).collect());
                         self.diff.push(&file, l("+ availableModels（之后只显示列出的模型；内置模型如需显示请手动加入）", "+ availableModels (from now on only listed models show; add built-in models by hand if you want them)"), true);
                     }
                     self.unlist(model);
@@ -675,10 +662,10 @@ impl Work {
                 let mut lines = vec![];
                 let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
                 let mut edit = |e: &mut Value| {
-                    if s(e, "id") != mid {
+                    if str_field(e, "id") != mid {
                         return;
                     }
-                    if let Some(n) = name.filter(|n| s(e, "name") != *n) {
+                    if let Some(n) = name.filter(|n| str_field(e, "name") != *n) {
                         e["name"] = json!(n);
                         lines.push(format!("models.{mid}.name = {n}"));
                     }
@@ -690,7 +677,7 @@ impl Work {
                         lines.push(format!("models.{mid}.{l}"));
                     }
                 };
-                let in_cfg = self.entries.iter().any(|e| s(e, "id") == mid);
+                let in_cfg = self.entries.iter().any(|e| str_field(e, "id") == mid);
                 if in_cfg {
                     self.entries.iter_mut().for_each(&mut edit);
                 } else {
@@ -704,8 +691,8 @@ impl Work {
             Op::DeleteModel { provider, model } => {
                 let g = self.group(provider)?;
                 let n = self.entries.len() + self.parked.len();
-                self.entries.retain(|e| !(key_of(e) == g.key && &s(e, "id") == model));
-                self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &s(e, "id") == model).unwrap_or(false));
+                self.entries.retain(|e| !(key_of(e) == g.key && &str_field(e, "id") == model));
+                self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &str_field(e, "id") == model).unwrap_or(false));
                 if self.entries.len() + self.parked.len() != n {
                     self.unlist(model);
                     self.diff.push(&file, tr!("models - {model}（{}，删除）", "models - {model} ({}, deleted)", g.name), false);
@@ -714,20 +701,15 @@ impl Work {
             Op::SetProviderModels { provider, models } => {
                 let g = self.group(provider)?;
                 self.require_enabled(&g)?;
-                let mut want: Vec<String> = vec![];
-                for m in models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                    if !want.iter().any(|w| w == m) {
-                        want.push(m.to_string());
-                    }
-                }
+                let want = clean_ids(models);
                 if want.is_empty() {
                     return Err(anyhow!(l("至少保留一个模型；不要这个供应商的话请直接删除", "Keep at least one model; delete the provider if you don't need it")));
                 }
                 for m in &want {
                     self.check_free(&g, m)?;
                 }
-                let gone: Vec<String> = self.entries.iter().filter(|e| key_of(e) == g.key && !want.contains(&s(e, "id"))).map(|e| s(e, "id")).collect();
-                self.entries.retain(|e| key_of(e) != g.key || want.contains(&s(e, "id")));
+                let gone: Vec<String> = self.entries.iter().filter(|e| key_of(e) == g.key && !want.contains(&str_field(e, "id"))).map(|e| str_field(e, "id")).collect();
+                self.entries.retain(|e| key_of(e) != g.key || want.contains(&str_field(e, "id")));
                 for m in gone {
                     self.unlist(&m);
                     self.diff.push(&file, tr!("models - {m}（{}）", "models - {m} ({})", g.name), false);
@@ -873,7 +855,7 @@ mod tests {
     }
 
     fn ids(c: &Value) -> Vec<String> {
-        c["models"].as_array().unwrap().iter().map(|e| s(e, "id")).collect()
+        c["models"].as_array().unwrap().iter().map(|e| str_field(e, "id")).collect()
     }
 
     #[test]
