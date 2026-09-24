@@ -73,6 +73,11 @@ pub(crate) mod msg {
     pub fn comments_not_written(file: &str) -> Error {
         anyhow!(tr!("{file} 含注释，为避免丢失注释不写入", "{file} contains comments; not writing it to avoid losing them"))
     }
+
+    /// ` · 密钥 ••••1234` at the end of a diff line (empty without a key).
+    pub fn key_suffix(key: Option<&str>) -> String {
+        key.map(|k| tr!(" · 密钥 {}", " · API key {}", crate::model::mask_key(k))).unwrap_or_default()
+    }
 }
 
 /// A fresh state: what detection found about the agent and where its config lives.
