@@ -103,10 +103,6 @@ pub struct Suggestion {
     pub ops: Vec<(String, Value)>,
 }
 
-fn norm(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_lowercase()
-}
-
 /// Compares the sync file with this machine and proposes additions.
 pub fn preview_import() -> Result<Vec<Suggestion>> {
     let path = sync_path()?;
@@ -119,7 +115,7 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
             let base = rp["baseUrl"].as_str().unwrap_or_default();
             let name = rp["name"].as_str().unwrap_or_default();
             let api = rp["api"].as_str().unwrap_or("chat");
-            let lp = local.providers.iter().find(|p| p.base_url.as_deref().map(norm) == Some(norm(base)));
+            let lp = local.providers.iter().find(|p| p.base_url.as_deref().map(norm_url) == Some(norm_url(base)));
             let rmodels: Vec<Value> = rp["models"].as_array().cloned().unwrap_or_default();
             match lp {
                 None => {
@@ -128,7 +124,7 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                     out.push(Suggestion {
                         agent: a.into(),
                         title: tr!("添加供应商「{name}」", "Add provider \"{name}\""),
-                        detail: tr!("{base} · {} 个模型 · 密钥需要在本机填写", "{base} · {} model(s) · API key must be entered on this device", ids.len()),
+                        detail: trn!(ids.len(), "{base} · {n} 个模型 · 密钥需要在本机填写", "{base} · {n} model · API key must be entered on this device", "{base} · {n} models · API key must be entered on this device"),
                         ops: vec![(key, json!({ "op": "upsert_provider", "provider": { "id": null, "name": name, "baseUrl": base, "api": api, "apiKey": null, "models": ids } }))],
                     });
                 }
@@ -147,8 +143,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                             .collect();
                         out.push(Suggestion {
                             agent: a.into(),
-                            title: tr!("「{}」补充 {} 个模型", "Add {1} model(s) to \"{0}\"", lp.name, missing.len()),
-                            detail: missing.iter().filter_map(|m| m["id"].as_str()).take(6).collect::<Vec<_>>().join(crate::i18n::l("、", ", ")),
+                            title: trn!(missing.len(), "「{}」补充 {n} 个模型", "Add {n} model to \"{}\"", "Add {n} models to \"{}\"", lp.name),
+                            detail: crate::i18n::join(&missing.iter().filter_map(|m| m["id"].as_str()).take(6).collect::<Vec<_>>()),
                             ops,
                         });
                     }
@@ -167,8 +163,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                     .collect();
                 out.push(Suggestion {
                     agent: a.into(),
-                    title: tr!("Codex 模型目录补充 {} 个自定义模型", "Add {} custom model(s) to the Codex model catalog", missing.len()),
-                    detail: missing.iter().filter_map(|m| m["id"].as_str().map(String::from)).collect::<Vec<_>>().join(crate::i18n::l("、", ", ")),
+                    title: trn!(missing.len(), "Codex 模型目录补充 {n} 个自定义模型", "Add {n} custom model to the Codex model catalog", "Add {n} custom models to the Codex model catalog"),
+                    detail: crate::i18n::join(&missing.iter().filter_map(|m| m["id"].as_str()).collect::<Vec<_>>()),
                     ops,
                 });
             }

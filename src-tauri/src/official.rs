@@ -14,7 +14,7 @@
 
 use crate::adapters::codex::{codex_home, ID};
 use crate::store;
-use crate::util::{backup_tagged, display_path, expand_tilde, read_json, read_text, write_json, write_text_atomic, TextMeta};
+use crate::util::{backup_tagged, display_path, expand_tilde, read_json, read_text, str_list, write_json, write_text_atomic, TextMeta};
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -169,13 +169,10 @@ pub fn finish() -> Result<Vec<FetchModel>> {
 
     // New catalog = the cache file as-is, plus AgentPlus's custom models from the old one.
     let (mut cache, _) = read_json(&cache_path())?;
-    let custom: Vec<String> = store::agent_get(&root, ID, "customModels")
-        .and_then(|x| x.as_array())
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-        .unwrap_or_default();
+    let custom: Vec<String> = str_list(store::agent_get(&root, ID, "customModels")).unwrap_or_default();
     let (old, meta) = match read_json(&catalog) {
         Ok((v, m)) => (Some(v), m),
-        Err(_) => (None, TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }),
+        Err(_) => (None, TextMeta::NEW),
     };
     if let (Some(old), Some(list)) = (old, cache.get_mut("models").and_then(|m| m.as_array_mut())) {
         for m in old.get("models").and_then(|m| m.as_array()).into_iter().flatten() {

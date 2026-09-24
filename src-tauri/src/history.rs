@@ -40,7 +40,7 @@ fn root() -> PathBuf {
 /// Original locations for backups made before manifests existed.
 fn legacy_path(agent: &str, name: &str) -> Option<PathBuf> {
     let h = home();
-    let codex = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
+    let codex = crate::env::agent_var("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
     let app = dirs::config_dir().unwrap_or_else(|| h.clone()).join("Xiaomi MiMo");
     Some(match (agent, name) {
         ("codex", "config.toml" | "models.json" | ".env") => codex.join(name),
@@ -87,7 +87,7 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
     } else if !missing.is_empty() {
         // Rolling back would recreate files nobody uses any more (e.g. a deleted temp dir).
         blocked_missing = true;
-        Some(tr!("原文件已不存在：{}", "Original file no longer exists: {}", missing.join(l("、", ", "))))
+        Some(tr!("原文件已不存在：{}", "Original file no longer exists: {}", crate::i18n::join(&missing)))
     } else {
         None
     };

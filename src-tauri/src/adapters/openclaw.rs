@@ -11,10 +11,12 @@
 //! baseUrl / apiKey win over openclaw.json, so address / key changes are mirrored there.
 
 
+use super::msg;
 use super::{Plan, Endpoint};
-use super::pimodels::{self, Dirty, Flavor, Fmt};
+use super::pimodels::{Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
+use crate::store;
 use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
@@ -23,30 +25,24 @@ use std::path::PathBuf;
 
 pub const ID: &str = "openclaw";
 pub const NAME: &str = "OpenClaw";
-#[allow(dead_code)]
 pub const MARKER: &str = "openclaw.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "openclaw --version 2>/dev/null; (pgrep -x openclaw-gatewa || pgrep -x openclaw) >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".openclaw/openclaw.json";
 
 /// `~/.openclaw` (or `$OPENCLAW_STATE_DIR`, or the folder picked in AgentPlus).
 pub fn default_dir() -> PathBuf {
-    if let Some(r) = pimodels::test_root() {
-        return r.join("openclaw");
-    }
     if let Some(d) = super::dir_override(ID) {
         return d;
     }
-    if let Some(d) = pimodels::env_var("OPENCLAW_STATE_DIR") {
+    if let Some(d) = crate::env::agent_var("OPENCLAW_STATE_DIR") {
         return crate::env::resolve_path(&d);
     }
     home().join(".openclaw")
 }
 
 fn config_path() -> PathBuf {
-    if pimodels::test_root().is_none() && super::dir_override(ID).is_none() {
-        if let Some(p) = pimodels::env_var("OPENCLAW_CONFIG_PATH") {
+    if super::dir_override(ID).is_none() {
+        if let Some(p) = crate::env::agent_var("OPENCLAW_CONFIG_PATH") {
             return crate::env::resolve_path(&p);
         }
     }
@@ -83,7 +79,7 @@ fn integers(v: &mut Value) {
 fn load() -> Result<(Value, TextMeta, Option<String>)> {
     let p = config_path();
     if !p.exists() {
-        return Ok((json!({}), pimodels::blank_meta(), None));
+        return Ok((json!({}), TextMeta::NEW, None));
     }
     let (text, meta) = read_text(&p)?;
     if let Ok(v) = serde_json::from_str::<Value>(&text) {
@@ -108,7 +104,7 @@ fn default_model(cfg: &Value) -> (Option<String>, Vec<String>) {
         Some(Value::String(s)) => (Some(s.clone()).filter(|s| !s.is_empty()), vec![]),
         Some(o @ Value::Object(_)) => (
             o.get("primary").and_then(|x| x.as_str()).map(String::from).filter(|s| !s.is_empty()),
-            o.get("fallbacks").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default(),
+            str_list(o.get("fallbacks")).unwrap_or_default(),
         ),
         _ => (None, vec![]),
     }
@@ -123,14 +119,12 @@ fn split_ref(r: &str) -> (&str, Option<&str>) {
 
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    let npm = dirs::data_dir().map(|d| d.join("npm"));
-    if let Some(pkg) = npm.as_ref().map(|d| d.join("node_modules").join("openclaw").join("package.json")) {
-        if let Ok(text) = std::fs::read_to_string(pkg) {
-            inst.installed = true;
-            inst.version = serde_json::from_str::<Value>(&text).ok().and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from));
-            return inst;
-        }
+    if let Some(pkg) = crate::process::npm_global_package("openclaw").filter(|p| p.is_file()) {
+        inst.installed = true;
+        inst.version = crate::process::package_version(&pkg);
+        return inst;
     }
+    let npm = dirs::data_dir().map(|d| d.join("npm"));
     let shims = [npm.map(|d| d.join("openclaw.cmd")), dirs::data_local_dir().map(|d| d.join("pnpm").join("openclaw.cmd"))];
     inst.installed = shims.iter().flatten().any(|p| p.exists());
     inst
@@ -141,28 +135,8 @@ pub fn state(inst: &Install) -> AgentState {
     let gen = generated();
     let mut files = vec![f.file()];
     files.extend(gen.iter().map(|p| display_path(p)));
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: default_dir().to_string_lossy().to_string(),
-        files,
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![l("OpenClaw 的 gateway 会热加载配置，改动保存后即生效。", "The OpenClaw gateway hot-reloads its config, so changes take effect once saved.").into()],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &default_dir(), files);
+    st.notes.push(l("OpenClaw 的 gateway 会热加载配置，改动保存后即生效。", "The OpenClaw gateway hot-reloads its config, so changes take effect once saved.").into());
     if !gen.is_empty() {
         st.notes.push(l("agents/*/agent/models.json 是 OpenClaw 生成的，其中的 baseUrl / apiKey 优先于 openclaw.json；改地址或密钥时 AgentPlus 会一并同步。", "agents/*/agent/models.json is generated by OpenClaw and its baseUrl / apiKey override openclaw.json. AgentPlus updates them too when you change a base URL or API key.").into());
     }
@@ -172,7 +146,7 @@ pub fn state(inst: &Install) -> AgentState {
             st.notes.push(l("发现旧版 Clawdbot / Moltbot 的配置目录；运行一次 openclaw 会迁移到 ~/.openclaw。", "Found an old Clawdbot / Moltbot config folder. Run openclaw once to migrate it to ~/.openclaw.").into());
         }
     }
-    let root = pimodels::load_store();
+    let root = store::load();
     let cfg = match load() {
         Ok((cfg, _, ro)) => {
             if let Some(why) = ro {
@@ -182,8 +156,7 @@ pub fn state(inst: &Install) -> AgentState {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -199,27 +172,27 @@ pub fn state(inst: &Install) -> AgentState {
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("自定义供应商", "Custom providers"), if on.is_empty() { l("无", "None").into() } else { on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", ")) }),
-        Kv::mono(l("默认模型", "Default model"), primary.unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::mono(lbl::default_model(), primary.unwrap_or_else(|| "-".into())),
     ];
     if !fallbacks.is_empty() {
         st.current.push(Kv::mono(l("备用模型", "Fallback models"), fallbacks.join(", ")));
     }
-    st.current.push(Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")));
-    st.current.push(Kv::mono(l("配置文件", "Config file"), f.file()));
+    st.current.push(Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")));
+    st.current.push(Kv::mono(lbl::config_file(), f.file()));
     st
 }
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    fmt().endpoint(id, &cfg, &pimodels::load_store())
+    fmt().endpoint(id, &cfg, &store::load())
 }
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, readonly) = load()?;
     let cfg0 = cfg.clone();
-    let mut root = pimodels::load_store();
+    let mut root = store::load();
     let mut none = None;
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
@@ -231,7 +204,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenClaw 可以同时用多个供应商：按启用/停用管理，默认模型在 OpenClaw 里设置", "OpenClaw can use several providers at once: manage them by enabling/disabling, and set the default model in OpenClaw."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::SetSetting { key, .. } => return Err(anyhow!(tr!("OpenClaw 没有设置项 {key}", "OpenClaw has no setting {key}"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),
@@ -313,7 +286,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !dry_run && dirty.cfg {
         let mut targets = vec![config_path()];
         targets.extend(gen_out.iter().map(|g| g.0.clone()));
-        backup_dir = Some(pimodels::backup_files(ID, &targets)?);
+        backup_dir = Some(backup(ID, &targets)?);
         if let Some(d) = config_path().parent() {
             std::fs::create_dir_all(d)?;
         }
@@ -325,7 +298,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     if !dry_run && dirty.store {
-        pimodels::save_store(&root)?;
+        store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
 }
@@ -438,27 +411,17 @@ mod tests {
 }
 "#;
 
-    struct Guard(PathBuf);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn setup(name: &str, cfg: Option<&str>) -> Guard {
-        let root = std::env::temp_dir().join(format!("agentplus-openclaw-test-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let d = root.join("openclaw");
+    fn setup(name: &str, cfg: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("openclaw-{name}"));
+        crate::env::set_test_vars(&[("MYPROXY_API_KEY", "sk-env-proxy-3333")]);
+        let d = default_dir();
         std::fs::create_dir_all(d.join("agents").join("main").join("agent")).unwrap();
         if let Some(c) = cfg {
             std::fs::write(d.join("openclaw.json"), c).unwrap();
         }
         std::fs::write(d.join("agents/main/agent/models.json"), GENERATED).unwrap();
         std::fs::write(d.join(".env"), "PLAIN_ONLY=1\nFROM_DOTENV=sk-dotenv-2222\n").unwrap();
-        pimodels::TEST_ROOT.with(|t| *t.borrow_mut() = Some(root.clone()));
-        pimodels::TEST_ENV.with(|e| *e.borrow_mut() = vec![("MYPROXY_API_KEY".into(), "sk-env-proxy-3333".into())]);
-        Guard(root)
+        home
     }
 
     fn cfg() -> Value {

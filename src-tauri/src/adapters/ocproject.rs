@@ -8,6 +8,7 @@
 //! Keys go to the global `auth.json` like everywhere else in OpenCode, never into the
 //! project file (which is usually committed).
 
+use super::msg;
 use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt, RESERVED};
 use super::ocsettings::{self, Scope};
@@ -87,10 +88,6 @@ fn global_cfg() -> Value {
     opencode::fmt().load(true).map(|x| x.0).unwrap_or_else(|_| json!({}))
 }
 
-fn str_list(v: Option<&Value>) -> Option<Vec<String>> {
-    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-}
-
 /// Effective `disabled_providers`: the project's list replaces the global one when present.
 fn disabled(cfg: &Value, global: &Value) -> Vec<String> {
     str_list(cfg.get("disabled_providers")).or_else(|| str_list(global.get("disabled_providers"))).unwrap_or_default()
@@ -104,28 +101,9 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let dir = dir_of(agent)?;
     let f = fmt(agent, &dir);
     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| display_path(&dir));
-    let mut st = AgentState {
-        id: agent.into(),
-        name,
-        installed: true,
-        version: None,
-        running: false,
-        mode: "multi".into(),
-        config_dir: dir.to_string_lossy().to_string(),
-        files: vec![f.file(), display_path(&opencode::auth_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    // A folder is always "installed"; OpenCode itself is detected on the global entry.
+    let found = crate::process::Install { installed: true, ..Default::default() };
+    let mut st = super::new_state(agent, &name, &found, "multi", &dir, vec![f.file(), display_path(&opencode::auth_path())]);
     if !dir.is_dir() {
         st.readonly = true;
         st.notes.push(tr!("找不到文件夹 {}，可能已经移动或删除。", "Folder {} not found. It may have been moved or deleted.", display_path(&dir)));
@@ -136,13 +114,12 @@ pub fn state(agent: &str) -> Result<AgentState> {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(tr!("{} 含注释，写回会丢失注释，已切换为只读。", "{} contains comments, which would be lost on write. Switched to read-only.", f.path.file_name().unwrap().to_string_lossy()));
+                st.notes.push(msg::comments_readonly(&f.path.file_name().unwrap().to_string_lossy()));
             }
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return Ok(st);
         }
     };
@@ -155,7 +132,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let mut own = f.providers(&cfg, &root);
     for p in own.iter_mut() {
         p.enabled = !off.contains(&p.id);
-        p.details.push(Kv::text(l("来源", "Source"), l("项目配置", "Project config")));
+        p.details.push(Kv::text(lbl::source(), l("项目配置", "Project config")));
         if global_ids.contains(&p.id) {
             p.details.push(Kv::text(l("注意", "Note"), l("全局配置里也有同名供应商，OpenCode 会把两份合并（项目的优先）", "The global config has a provider with the same id. OpenCode merges the two (the project wins).")));
         }
@@ -171,8 +148,8 @@ pub fn state(agent: &str) -> Result<AgentState> {
             m.readonly = true;
             m.deletable = false;
         }
-        g.details.retain(|kv| kv.k != l("状态", "Status"));
-        g.details.push(Kv::text(l("来源", "Source"), l("全局配置（继承）：项目里只能启用或停用；要单独改地址或模型，先复制到项目", "Global config (inherited): the project can only enable or disable it. To change its base URL or models, copy it to the project first.")));
+        g.details.retain(|kv| kv.k != lbl::status());
+        g.details.push(Kv::text(lbl::source(), l("全局配置（继承）：项目里只能启用或停用；要单独改地址或模型，先复制到项目", "Global config (inherited): the project can only enable or disable it. To change its base URL or models, copy it to the project first.")));
     }
     let mut all = own;
     all.append(&mut inherited);
@@ -194,8 +171,8 @@ pub fn state(agent: &str) -> Result<AgentState> {
     st.current = vec![
         Kv::mono(l("项目配置", "Project config"), if exists { f.file() } else { tr!("{}（还没有，应用时创建）", "{} (not created yet, will be created on apply)", f.file()) }),
         Kv::mono(l("全局配置", "Global config"), gf.file()),
-        Kv::text(l("项目供应商", "Project providers"), if own_names.is_empty() { l("无", "None").into() } else { own_names.join(l("、", ", ")) }),
-        Kv::mono(l("默认模型", "Default model"), model.unwrap_or_else(|| "-".into())),
+        Kv::text(l("项目供应商", "Project providers"), lbl::names_or_none(&own_names)),
+        Kv::mono(lbl::default_model(), model.unwrap_or_else(|| "-".into())),
     ];
 
     if !exists {
@@ -204,7 +181,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     st.notes.push(l("项目配置和全局配置合并生效，同名的键以项目为准。API Key 统一存进 ~/.local/share/opencode/auth.json，不写进项目文件。", "The project config is merged with the global config; for keys in both, the project wins. API keys are stored in ~/.local/share/opencode/auth.json, never in the project file.").into());
     let others = other_files(&dir, &f.path);
     if !others.is_empty() {
-        st.notes.push(tr!("OpenCode 还会读取：{}（AgentPlus 只编辑 {}）", "OpenCode also reads: {} (AgentPlus only edits {})", others.iter().map(|p| display_path(p)).collect::<Vec<_>>().join(l("、", ", ")), f.file()));
+        st.notes.push(tr!("OpenCode 还会读取：{}（AgentPlus 只编辑 {}）", "OpenCode also reads: {} (AgentPlus only edits {})", crate::i18n::join(&others.iter().map(|p| display_path(p)).collect::<Vec<_>>()), f.file()));
     }
     let inline: Vec<String> = cfg
         .get("provider")
@@ -212,7 +189,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
         .map(|o| o.iter().filter(|(_, d)| d.pointer("/options/apiKey").and_then(|k| k.as_str()).map(|k| !k.is_empty() && !k.starts_with('{')).unwrap_or(false)).map(|(id, _)| id.clone()).collect())
         .unwrap_or_default();
     if !inline.is_empty() && git_root(&dir).is_some() {
-        st.notes.push(tr!("项目文件里有明文 apiKey（{}），提交到 git 前记得处理。", "The project file contains a plain-text apiKey ({}). Remember to deal with it before committing to git.", inline.join(l("、", ", "))));
+        st.notes.push(tr!("项目文件里有明文 apiKey（{}），提交到 git 前记得处理。", "The project file contains a plain-text apiKey ({}). Remember to deal with it before committing to git.", crate::i18n::join(&inline)));
     }
     Ok(st)
 }
@@ -295,8 +272,8 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
                 return Err(inherited_err(p.id.as_deref().unwrap()));
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenCode 按启用/停用管理供应商，默认模型在「其他设置」里选", "OpenCode manages providers by enabling/disabling them. Choose the default model under \"Other settings\"."))),
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models. Edit the models directly."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             _ => {}
         }
         if !f.apply(op, &mut cfg, &mut root, &mut auth, &mut diff, &mut dirty)? {
@@ -305,7 +282,7 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     }
 
     if dirty.cfg && had_comments {
-        return Err(anyhow!(l("配置文件含注释，为避免丢失注释不写入", "The config file contains comments; not writing to avoid losing them")));
+        return Err(msg::comments_not_written(&path.file_name().unwrap().to_string_lossy()));
     }
     let mut written = vec![];
     let mut backup_dir = None;

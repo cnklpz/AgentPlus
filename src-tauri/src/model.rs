@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentState {
     pub id: String,
@@ -57,7 +57,7 @@ pub struct ModelField {
     pub hints: Vec<String>,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Provider {
     pub id: String,
@@ -84,6 +84,34 @@ pub struct Provider {
     pub key_hint: Option<String>,
     /// Codex: keeps the ChatGPT sign-in while requests go to this provider (`requires_openai_auth`).
     pub official_auth: bool,
+}
+
+impl AgentState {
+    /// The config can't be read: say why and show the agent read-only.
+    pub fn fail(&mut self, e: impl std::fmt::Display) {
+        self.notes.push(e.to_string());
+        self.readonly = true;
+    }
+}
+
+impl Provider {
+    /// A read-only provider built into the agent (an account sign-in, a vendor it ships
+    /// with): enabled, with credentials, not editable. `label` is its badge (protocol or kind).
+    pub fn builtin(id: impl Into<String>, name: impl Into<String>, host: impl Into<String>, api: &str, label: &str, details: Vec<Kv>) -> Self {
+        Provider {
+            id: id.into(),
+            name: name.into(),
+            host: host.into(),
+            apis: vec![label.into()],
+            builtin: true,
+            enabled: true,
+            compatible: true,
+            details,
+            api: api.into(),
+            has_key: true,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -132,6 +160,69 @@ impl Kv {
     }
     pub fn text(k: &str, v: impl Into<String>) -> Self {
         Kv { k: k.into(), v: v.into(), mono: false }
+    }
+}
+
+/// Labels of `Kv` rows several adapters show, so each reads the same everywhere.
+pub(crate) mod lbl {
+    use crate::i18n::l;
+
+    pub fn api_key() -> &'static str {
+        l("密钥", "API key")
+    }
+    pub fn auth() -> &'static str {
+        l("认证方式", "Authentication")
+    }
+    pub fn base_url() -> &'static str {
+        l("地址", "Base URL")
+    }
+    pub fn config_file() -> &'static str {
+        l("配置文件", "Config file")
+    }
+    pub fn config_id() -> &'static str {
+        l("配置 ID", "Config ID")
+    }
+    pub fn config_location() -> &'static str {
+        l("配置位置", "Config location")
+    }
+    pub fn credentials() -> &'static str {
+        l("凭据", "Credentials")
+    }
+    pub fn current_model() -> &'static str {
+        l("当前模型", "Current model")
+    }
+    pub fn custom_models() -> &'static str {
+        l("自定义模型", "Custom models")
+    }
+    pub fn custom_providers() -> &'static str {
+        l("自定义供应商", "Custom providers")
+    }
+    pub fn default_model() -> &'static str {
+        l("默认模型", "Default model")
+    }
+    pub fn note() -> &'static str {
+        l("说明", "Note")
+    }
+    pub fn provider() -> &'static str {
+        l("供应商", "Provider")
+    }
+    pub fn small_model() -> &'static str {
+        l("小模型", "Small model")
+    }
+    pub fn source() -> &'static str {
+        l("来源", "Source")
+    }
+    pub fn status() -> &'static str {
+        l("状态", "Status")
+    }
+    pub fn visible_models() -> &'static str {
+        l("可见模型", "Visible models")
+    }
+
+    /// A summary row's list of names ("A、B" / "A, B"), or "None".
+    pub fn names_or_none<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> String {
+        let names: Vec<String> = names.into_iter().map(|s| s.as_ref().to_string()).collect();
+        if names.is_empty() { l("无", "None").into() } else { crate::i18n::join(&names) }
     }
 }
 
@@ -255,6 +346,38 @@ pub fn slug(name: &str) -> String {
     if s.is_empty() { "provider".into() } else { s }
 }
 
+/// `base` when it is free, else the first free `base-2`, `base-3`, …; `taken` decides for
+/// every candidate.
+pub fn unique_id(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..).map(|n| format!("{base}-{n}")).find(|c| !taken(c)).unwrap()
+}
+
+/// Model ids as typed by the user: trimmed, blanks dropped, duplicates removed (the first
+/// one stays, order is kept).
+pub fn clean_ids<S: AsRef<str>>(ids: &[S]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for id in ids.iter().map(|s| s.as_ref().trim()).filter(|s| !s.is_empty()) {
+        if !out.iter().any(|x| x == id) {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
+/// Display label of an AgentPlus api ("responses" → "Responses"); "chat" and anything
+/// unknown show as "Chat".
+pub fn api_label(api: &str) -> &'static str {
+    match api {
+        "anthropic" => "Anthropic",
+        "responses" => "Responses",
+        "gemini" => "Gemini",
+        _ => "Chat",
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct DiffLine {
     pub text: String,
@@ -326,7 +449,36 @@ impl Setting {
 
 #[cfg(test)]
 mod tests {
-    use super::{mask_key, slug};
+    use super::{api_label, clean_ids, mask_key, slug, unique_id};
+
+    #[test]
+    fn unique_id_checks_every_candidate() {
+        assert_eq!(unique_id("relay", |_| false), "relay");
+        let taken = ["relay", "relay-2", "relay-4"];
+        assert_eq!(unique_id("relay", |c| taken.contains(&c)), "relay-3");
+        // One rule for the base and the numbered ids (a reserved suffix is skipped too).
+        assert_eq!(unique_id("x", |c| c == "x" || c.ends_with("-2")), "x-3");
+    }
+
+    #[test]
+    fn clean_ids_trims_drops_and_dedupes() {
+        assert_eq!(clean_ids(&[" b ", "", "a", "b", "  ", "a ", "c"]), vec!["b", "a", "c"]);
+        assert!(clean_ids::<String>(&[]).is_empty());
+        assert_eq!(clean_ids(&["m1".to_string(), "m1".to_string()]), vec!["m1"]);
+    }
+
+    #[test]
+    fn names_or_none() {
+        assert_eq!(super::lbl::names_or_none(["a", "b"]), "a、b");
+        assert_eq!(super::lbl::names_or_none(Vec::<String>::new()), "无");
+    }
+
+    #[test]
+    fn api_labels() {
+        for (api, label) in [("anthropic", "Anthropic"), ("responses", "Responses"), ("gemini", "Gemini"), ("chat", "Chat"), ("x", "Chat"), ("", "Chat")] {
+            assert_eq!(api_label(api), label);
+        }
+    }
 
     #[test]
     fn slug_spells_chinese_in_pinyin() {
