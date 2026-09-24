@@ -450,7 +450,6 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
     let (done_tx, done) = mpsc::channel::<()>();
     let flag = stop.clone();
     std::thread::Builder::new().name("agentplus-gateway".into()).spawn(move || {
-        let _done = done_tx;
         for conn in listener.incoming() {
             if flag.load(Ordering::SeqCst) {
                 break;
@@ -475,6 +474,11 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
                 handle(s)
             });
         }
+        // Close the listener before telling `stop` we are done: captured values would
+        // otherwise drop only after the closure's locals, so `stop` could return while
+        // the port is still taken.
+        drop(listener);
+        drop(done_tx);
     })?;
     *RUNTIME.lock().unwrap() = Some(Runtime { port, stop, done });
     Ok(())
