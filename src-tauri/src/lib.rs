@@ -65,7 +65,7 @@ async fn test_latency(url: String) -> Result<u64, String> {
 }
 
 /// Restarts an agent (or starts it when it isn't running). For Codex with UI injection on
-/// (Fast, full model names, send after quota), starts it with a local DevTools port and patches the UI once
+/// (Fast, full model names, send after quota, hidden usage banners), starts it with a local DevTools port and patches the UI once
 /// it is up. Each step is reported on `on_progress` while it runs.
 #[tauri::command]
 async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>) -> Result<String, String> {
