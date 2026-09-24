@@ -25,17 +25,13 @@ pub struct AgentState {
     pub notes: Vec<String>,
     pub readonly: bool,
     /// Codex only: not on the fixed id yet, but could be (a custom provider is active).
-    #[serde(default)]
     pub fixed_pending: bool,
     /// Codex only: prefill "turn on fixed id" as a pending change (user hasn't declined).
-    #[serde(default)]
     pub fixed_prompt: bool,
     /// A desktop app AgentPlus can restart (CLI agents pick up changes on their next run).
-    #[serde(default)]
     pub restartable: bool,
     /// Per-model settings beyond name / context this agent's config understands.
     /// Filled in adapters::state.
-    #[serde(default)]
     pub model_fields: Vec<ModelField>,
 }
 
@@ -139,7 +135,7 @@ pub struct Setting {
     pub group: String,
     pub label: String,
     pub desc: String,
-    /// "bool" or "chips"
+    /// "bool" | "chips" | "select"
     pub kind: String,
     pub value: Value,
     pub options: Vec<String>,
@@ -300,7 +296,6 @@ pub fn key_fingerprint(k: &str) -> String {
     format!("{:010x}", h >> 24)
 }
 
-/// Masks a secret for display: "••••abcd".
 /// A badge on a model. `id` is stable (`fast`, `custom`, `cap:image`, `role:default`, …) for
 /// the UI to act on; `label` is display text in the current language.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -325,6 +320,7 @@ impl Tag {
     }
 }
 
+/// Masks a secret for display: "••••abcd".
 pub fn mask_key(k: &str) -> String {
     // A short key would be mostly (or entirely) shown by its last four characters.
     if k.chars().count() < 8 {
