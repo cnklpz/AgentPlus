@@ -203,12 +203,6 @@ src-tauri/src/          后端
 
 </details>
 
-## 参与贡献
-
-欢迎通过 [Issues](https://github.com/cnklpz/AgentPlus/issues) 反馈问题和建议。
-
-目前暂不接受代码贡献（Pull Request）。以后开放时，提交代码前需要签署贡献者许可协议（CLA），授权作者以 AGPLv3 以外的方式（包括商业授权）使用你贡献的代码。
-
 ## 许可证
 
 Copyright (C) 2026 cnklpz
