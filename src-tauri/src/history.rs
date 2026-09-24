@@ -53,10 +53,11 @@ fn fmt_mtime(m: &fs::Metadata) -> Option<String> {
     m.modified().ok().map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
-/// Original locations for backups made before manifests existed.
+/// Original locations for backups made before manifests existed. Codex files go back to
+/// the folder the adapter edits (the one picked in AgentPlus, else `$CODEX_HOME` / `~/.codex`).
 fn legacy_path(agent: &str, name: &str) -> Option<PathBuf> {
     let h = home();
-    let codex = crate::env::agent_var("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
+    let codex = crate::adapters::codex::codex_home();
     let app = dirs::config_dir().unwrap_or_else(|| h.clone()).join("Xiaomi MiMo");
     Some(match (agent, name) {
         ("codex", "config.toml" | "models.json" | ".env") => codex.join(name),
