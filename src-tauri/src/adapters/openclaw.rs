@@ -171,17 +171,8 @@ pub fn state(inst: &Install) -> AgentState {
     st.providers = f.providers(&cfg, &root, None);
 
     let (primary, fallbacks) = default_model(&cfg);
-    let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
-    let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
-    st.current = vec![
-        Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
-        Kv::mono(lbl::default_model(), primary.unwrap_or_else(|| "-".into())),
-    ];
-    if !fallbacks.is_empty() {
-        st.current.push(Kv::mono(l("备用模型", "Fallback models"), fallbacks.join(", ")));
-    }
-    st.current.push(Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")));
-    st.current.push(Kv::mono(lbl::config_file(), f.file()));
+    let fallbacks = (!fallbacks.is_empty()).then(|| Kv::mono(l("备用模型", "Fallback models"), fallbacks.join(", ")));
+    st.current = f.summary(&st.providers, primary.unwrap_or_else(|| "-".into()), fallbacks);
     st
 }
 
@@ -207,7 +198,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenClaw 可以同时用多个供应商：按启用/停用管理，默认模型在 OpenClaw 里设置", "OpenClaw can use several providers at once: manage them by enabling/disabling, and set the default model in OpenClaw."))),
             Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("OpenClaw 没有设置项 {key}", "OpenClaw has no setting {key}"))),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),
         }
@@ -477,6 +468,17 @@ mod tests {
         c["models"]["providers"]["plain"]["apiKey"] = json!("${NOT_SET}");
         std::fs::write(config_path(), serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(provider_endpoint("plain").unwrap().1, None);
+        let key_desc = || {
+            let st = state(&Install::default());
+            let p = st.providers.into_iter().find(|p| p.id == "plain").unwrap();
+            p.details.into_iter().find(|k| k.k == lbl::api_key()).unwrap().v
+        };
+        assert_eq!(key_desc(), "环境变量 NOT_SET（当前未设置）");
+        // Several references: the detail panel says so instead of naming a bogus variable.
+        c["models"]["providers"]["plain"]["apiKey"] = json!("${MYPROXY_API_KEY}${FROM_DOTENV}");
+        std::fs::write(config_path(), serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(provider_endpoint("plain").unwrap().1.as_deref(), Some("sk-env-proxy-3333sk-dotenv-2222"));
+        assert_eq!(key_desc(), "含环境变量引用");
     }
 
     #[test]

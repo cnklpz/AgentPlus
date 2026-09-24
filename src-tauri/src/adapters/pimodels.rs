@@ -54,26 +54,27 @@ pub const BUILTIN_PROVIDERS: [&str; 24] = [
     "vercel-ai-gateway", "zai", "minimax", "minimax-cn", "huggingface", "kimi-coding", "opencode", "deepseek", "moonshot",
 ];
 
-/// (AgentPlus api, label) of a pi-ai `api` value; None for protocols AgentPlus cannot speak.
-pub fn api_of(raw: &str) -> Option<(&'static str, &'static str)> {
-    match raw {
-        "openai-completions" => Some(("chat", "Chat")),
-        "openai-responses" => Some(("responses", "Responses")),
-        "anthropic-messages" => Some(("anthropic", "Anthropic")),
-        "google-generative-ai" => Some(("gemini", "Gemini")),
-        _ => None,
-    }
+/// (pi-ai `api` value, AgentPlus api) for the protocols AgentPlus can speak.
+const APIS: [(&str, &str); 4] = [
+    ("openai-completions", "chat"),
+    ("openai-responses", "responses"),
+    ("anthropic-messages", "anthropic"),
+    ("google-generative-ai", "gemini"),
+];
+
+/// The AgentPlus api of a pi-ai `api` value; None for protocols AgentPlus cannot speak.
+fn api_of(raw: &str) -> Option<&'static str> {
+    APIS.iter().find(|a| a.0 == raw).map(|a| a.1)
 }
 
 /// The pi-ai `api` value for an AgentPlus api.
-pub fn raw_for(api: &str) -> Option<&'static str> {
-    match api {
-        "chat" => Some("openai-completions"),
-        "responses" => Some("openai-responses"),
-        "anthropic" => Some("anthropic-messages"),
-        "gemini" => Some("google-generative-ai"),
-        _ => None,
-    }
+fn raw_for(api: &str) -> Option<&'static str> {
+    APIS.iter().find(|a| a.1 == api).map(|a| a.0)
+}
+
+/// The AgentPlus api of a pi-ai `api` value, or the value itself for other protocols.
+fn family(raw: &str) -> String {
+    api_of(raw).map(String::from).unwrap_or_else(|| raw.to_string())
 }
 
 /// The provider's `api`: its own field, else its first model's, else the built-in's protocol.
@@ -101,6 +102,24 @@ fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(|x| x.as_str())
 }
 
+/// OpenClaw's `${VAR}` reference.
+fn env_ref_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap())
+}
+
+/// Where a config `apiKey` string takes the key from.
+enum KeySrc<'a> {
+    /// pi's `!command`, which AgentPlus never runs.
+    Cmd,
+    /// One environment variable.
+    Env(&'a str),
+    /// OpenClaw: text with `${VAR}` references inside.
+    Template,
+    /// The key itself.
+    Literal,
+}
+
 impl Fmt {
     pub fn file(&self) -> String {
         display_path(&self.path)
@@ -117,32 +136,43 @@ impl Fmt {
         crate::env::agent_var(name).or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
     }
 
+    /// How a (trimmed, non-empty) `apiKey` string is read. `resolve` and `key_desc` both go
+    /// through this so the detail panel describes the key that is actually used.
+    fn key_source<'a>(&self, raw: &'a str) -> KeySrc<'a> {
+        match self.flavor {
+            Flavor::Pi => {
+                if raw.starts_with('!') {
+                    KeySrc::Cmd
+                } else if let Some(n) = raw.strip_prefix("${").and_then(|r| r.strip_suffix('}')).or_else(|| raw.strip_prefix('$')) {
+                    KeySrc::Env(n)
+                } else if is_env_name(raw) && self.lookup(raw).is_some() {
+                    // pi also treats a bare string as an env var name when that variable exists.
+                    KeySrc::Env(raw)
+                } else {
+                    KeySrc::Literal
+                }
+            }
+            Flavor::OpenClaw => match env_ref_re().captures(raw) {
+                Some(c) if c.get(0).map(|m| m.len()) == Some(raw.len()) => KeySrc::Env(c.get(1).unwrap().as_str()),
+                Some(_) => KeySrc::Template,
+                None => KeySrc::Literal,
+            },
+        }
+    }
+
     /// The real key behind a config value, when it can be known without running anything.
     pub fn resolve(&self, v: &Value) -> Option<String> {
         let raw = v.as_str()?.trim();
         if raw.is_empty() {
             return None;
         }
-        match self.flavor {
-            Flavor::Pi => {
-                if raw.starts_with('!') {
-                    return None;
-                }
-                if let Some(n) = raw.strip_prefix("${").and_then(|r| r.strip_suffix('}')).or_else(|| raw.strip_prefix('$')) {
-                    return self.lookup(n);
-                }
-                // pi also treats a bare string as an env var name when that variable exists.
-                if is_env_name(raw) {
-                    if let Some(v) = self.lookup(raw) {
-                        return Some(v);
-                    }
-                }
-                Some(raw.to_string())
-            }
-            Flavor::OpenClaw => {
-                let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+        match self.key_source(raw) {
+            KeySrc::Cmd => None,
+            KeySrc::Env(n) => self.lookup(n),
+            KeySrc::Literal => Some(raw.to_string()),
+            KeySrc::Template => {
                 let mut missing = false;
-                let out = re.replace_all(raw, |c: &regex::Captures| self.lookup(&c[1]).unwrap_or_else(|| {
+                let out = env_ref_re().replace_all(raw, |c: &regex::Captures| self.lookup(&c[1]).unwrap_or_else(|| {
                     missing = true;
                     String::new()
                 }));
@@ -156,18 +186,12 @@ impl Fmt {
         let fname = self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let cfg = match v {
             Some(Value::Object(o)) => Some(tr!("SecretRef（{}）", "SecretRef ({})", o.get("source").and_then(|x| x.as_str()).unwrap_or("?"))),
-            Some(Value::String(k)) if !k.trim().is_empty() => {
-                let k = k.trim();
-                Some(if self.flavor == Flavor::Pi && k.starts_with('!') {
-                    l("shell 命令（AgentPlus 不执行）", "Shell command (AgentPlus doesn't run it)").to_string()
-                } else if let Some(n) = k.strip_prefix("${").and_then(|r| r.strip_suffix('}')).or_else(|| k.strip_prefix('$').filter(|_| self.flavor == Flavor::Pi)) {
-                    tr!("环境变量 {n}{}", "Environment variable {n}{}", if self.lookup(n).is_some() { "" } else { l("（当前未设置）", " (not set now)") })
-                } else if k.contains("${") {
-                    l("含环境变量引用", "Contains environment variable references").to_string()
-                } else {
-                    tr!("明文保存在 {fname}", "Stored in plain text in {fname}")
-                })
-            }
+            Some(Value::String(k)) if !k.trim().is_empty() => Some(match self.key_source(k.trim()) {
+                KeySrc::Cmd => l("shell 命令（AgentPlus 不执行）", "Shell command (AgentPlus doesn't run it)").to_string(),
+                KeySrc::Env(n) => tr!("环境变量 {n}{}", "Environment variable {n}{}", if self.lookup(n).is_some() { "" } else { l("（当前未设置）", " (not set now)") }),
+                KeySrc::Template => l("含环境变量引用", "Contains environment variable references").to_string(),
+                KeySrc::Literal => tr!("明文保存在 {fname}", "Stored in plain text in {fname}"),
+            }),
             _ => None,
         };
         match (in_auth, cfg) {
@@ -190,19 +214,26 @@ impl Fmt {
         auth?.get(id).filter(|e| s(e, "type") == Some("api_key")).and_then(|e| e.get("key")).filter(|k| k.as_str().map(|k| !k.is_empty()).unwrap_or(false))
     }
 
-    pub fn hidden(&self, root: &Value) -> Map<String, Value> {
-        store::get_obj(root, self.agent, "hiddenModels")
+    /// A map this agent keeps in the AgentPlus store, borrowed rather than copied.
+    fn stash<'a>(&self, root: &'a Value, key: &str) -> Option<&'a Map<String, Value>> {
+        store::agent_get(root, self.agent, key).and_then(|x| x.as_object())
     }
 
-    pub fn parked(&self, root: &Value) -> Map<String, Value> {
-        store::get_obj(root, self.agent, "disabledProviders")
+    /// Definitions of hidden models, keyed "<provider>|<model>".
+    fn hidden<'a>(&self, root: &'a Value) -> Option<&'a Map<String, Value>> {
+        self.stash(root, "hiddenModels")
+    }
+
+    /// The definition of a disabled provider, parked in the store.
+    fn parked<'a>(&self, root: &'a Value, id: &str) -> Option<&'a Value> {
+        self.stash(root, "disabledProviders")?.get(id)
     }
 
     /// Display name: pi keeps it in the config, OpenClaw's schema has no room so it lives in the store.
     fn display_name(&self, id: &str, def: &Value, root: &Value) -> String {
         match self.flavor {
             Flavor::Pi => s(def, "name").filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
-            Flavor::OpenClaw => store::get_obj(root, self.agent, "names").get(id).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
+            Flavor::OpenClaw => self.stash(root, "names").and_then(|n| n.get(id)).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
         }
     }
 
@@ -253,13 +284,13 @@ impl Fmt {
         })
     }
 
-    fn provider_from(&self, id: &str, def: &Value, enabled: bool, root: &Value, auth: Option<&Value>) -> Provider {
+    fn provider_from(&self, id: &str, def: &Value, enabled: bool, root: &Value, hidden: Option<&Map<String, Value>>, auth: Option<&Value>) -> Provider {
         let base = s(def, "baseUrl").map(String::from).filter(|b| !b.is_empty());
         let raw = raw_api(id, def);
         let known = api_of(&raw);
         let mut models: Vec<Model> = def.get("models").and_then(|m| m.as_array()).map(|a| a.iter().filter_map(|m| self.model_from(m, true)).collect()).unwrap_or_default();
         let prefix = format!("{id}|");
-        for (k, d) in &self.hidden(root) {
+        for (k, d) in hidden.into_iter().flatten() {
             if k.starts_with(&prefix) {
                 if let Some(m) = self.model_from(d, false) {
                     models.push(m);
@@ -293,14 +324,14 @@ impl Fmt {
             name: self.display_name(id, def, root),
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
-            apis: vec![known.map(|k| k.1.to_string()).unwrap_or_else(|| raw.clone())],
+            apis: vec![known.map(|k| api_label(k).to_string()).unwrap_or_else(|| raw.clone())],
             enabled,
             compatible: known.is_some(),
             reason: known.is_none().then(|| tr!("{raw} 协议，AgentPlus 不能测速或转接", "{raw} protocol: AgentPlus can't test speed or relay it")),
             models,
             details,
             editable: true,
-            api: known.map(|k| k.0.to_string()).unwrap_or(raw),
+            api: family(&raw),
             has_key: in_cfg || in_auth,
             ..Default::default()
         }
@@ -309,27 +340,43 @@ impl Fmt {
     /// Configured providers (enabled) plus the ones parked in the store (disabled).
     pub fn providers(&self, cfg: &Value, root: &Value, auth: Option<&Value>) -> Vec<Provider> {
         let mut out = vec![];
+        let hidden = self.hidden(root);
         if let Some(p) = self.providers_of(cfg) {
             for (id, def) in p {
-                out.push(self.provider_from(id, def, true, root, auth));
+                out.push(self.provider_from(id, def, true, root, hidden, auth));
             }
         }
-        for (id, def) in &self.parked(root) {
+        for (id, def) in self.stash(root, "disabledProviders").into_iter().flatten() {
             if !out.iter().any(|p| &p.id == id) {
-                out.push(self.provider_from(id, def, false, root, auth));
+                out.push(self.provider_from(id, def, false, root, hidden, auth));
             }
         }
         out
     }
 
+    /// The state summary: custom providers, the default model, `extra`, visible models and
+    /// the config file.
+    pub fn summary(&self, providers: &[Provider], default_model: String, extra: Option<Kv>) -> Vec<Kv> {
+        let on: Vec<&Provider> = providers.iter().filter(|p| p.enabled && !p.builtin).collect();
+        let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
+        let mut rows = vec![
+            Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
+            Kv::mono(lbl::default_model(), default_model),
+        ];
+        rows.extend(extra);
+        rows.push(Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")));
+        rows.push(Kv::mono(lbl::config_file(), self.file()));
+        rows
+    }
+
     /// Base URL, key and api of a provider (auth.json wins over the config, as in pi).
     pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<Endpoint> {
-        let def = self.providers_of(cfg).and_then(|p| p.get(id)).cloned().or_else(|| self.parked(root).get(id).cloned()).ok_or_else(|| msg::no_provider(id))?;
+        let def = self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id)).cloned().ok_or_else(|| msg::no_provider(id))?;
         let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl（沿用内置地址）", "Provider {id} has no baseUrl (uses the built-in URL)")))?.to_string();
         let auth = self.load_auth().map(|a| a.0);
         let key = Self::auth_key(auth.as_ref(), id).and_then(|k| self.resolve(k)).or_else(|| def.get("apiKey").and_then(|k| self.resolve(k)));
         let raw = raw_api(id, &def);
-        Ok((base, key, api_of(&raw).map(|k| k.0.to_string()).unwrap_or(raw)))
+        Ok((base, key, family(&raw)))
     }
 
     /// Whether `provider/model` is still defined in the config (built-in providers always count).
@@ -346,14 +393,21 @@ impl Fmt {
         }
     }
 
+    /// Replaces the key of `id`'s API-key entry in pi's auth.json. False when it has none.
+    fn set_auth_key(&self, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> bool {
+        if Self::auth_key(auth.as_ref().map(|a| &a.0), id).is_none() {
+            return false;
+        }
+        let (Some((a, _)), Some(path)) = (auth.as_mut(), self.auth.as_ref()) else { return false };
+        a[id]["key"] = json!(key);
+        diff.push(&display_path(path), format!("{id}.key = {}", mask_key(key)), true);
+        dirty.auth = true;
+        true
+    }
+
     fn set_key(&self, cfg: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<()> {
         // Keep the key where it already is: pi's auth.json entry, else inline apiKey.
-        let in_auth = Self::auth_key(auth.as_ref().map(|a| &a.0), id).is_some();
-        if let (true, Some((a, _))) = (in_auth, auth.as_mut()) {
-            a[id]["key"] = json!(key);
-            diff.push(&display_path(self.auth.as_ref().unwrap()), format!("{id}.key = {}", mask_key(key)), true);
-            dirty.auth = true;
-        } else {
+        if !self.set_auth_key(auth, id, key, diff, dirty) {
             let prefix = self.cfg_prefix();
             let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
             def["apiKey"] = json!(key);
@@ -411,9 +465,8 @@ impl Fmt {
                 match &p.id {
                     None => {
                         let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("不支持的协议 {}", "Unsupported protocol: {}", p.api)))?;
-                        let parked = self.parked(root);
                         let providers = self.providers_mut(cfg)?;
-                        let id = unique_id(&slug(name), |c| providers.contains_key(c) || parked.contains_key(c) || BUILTIN_PROVIDERS.contains(&c));
+                        let id = unique_id(&slug(name), |c| providers.contains_key(c) || self.parked(root, c).is_some() || BUILTIN_PROVIDERS.contains(&c));
                         let ids = clean_ids(&p.models);
                         let models: Vec<Value> = ids.iter().map(|m| self.new_model(m, None, None)).collect();
                         let mut def = Map::new();
@@ -439,7 +492,7 @@ impl Fmt {
                     Some(id) => {
                         let in_cfg = self.providers_of(cfg).map(|p| p.contains_key(id)).unwrap_or(false);
                         let flavor = self.flavor;
-                        let cur_name = self.display_name(id, self.providers_of(cfg).and_then(|p| p.get(id)).or(self.parked(root).get(id)).unwrap_or(&Value::Null), root);
+                        let cur_name = self.display_name(id, self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id)).unwrap_or(&Value::Null), root);
                         if flavor == Flavor::OpenClaw && cur_name != name {
                             let names = store::section(root, agent, "names");
                             if name == id { names.remove(id) } else { names.insert(id.clone(), json!(name)) };
@@ -464,8 +517,7 @@ impl Fmt {
                             changed.push(format!("baseUrl = \"{base_url}\""));
                         }
                         let raw_now = raw_api(id, def);
-                        let fam_now = api_of(&raw_now).map(|k| k.0.to_string()).unwrap_or_else(|| raw_now.clone());
-                        if p.api != fam_now {
+                        if p.api != family(&raw_now) {
                             let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("不支持的协议 {}", "Unsupported protocol: {}", p.api)))?;
                             if api_of(&raw_now).is_none() {
                                 return Err(anyhow!(tr!("{id} 用的是 {raw_now} 协议，AgentPlus 不改它的协议", "{id} uses the {raw_now} protocol; AgentPlus doesn't change its protocol")));
@@ -480,14 +532,13 @@ impl Fmt {
                         if let Some(k) = key {
                             if in_cfg {
                                 self.set_key(cfg, auth, id, k, diff, dirty)?;
-                            } else if Self::auth_key(auth.as_ref().map(|a| &a.0), id).is_some() {
-                                auth.as_mut().unwrap().0[id]["key"] = json!(k);
-                                diff.push(&display_path(self.auth.as_ref().unwrap()), format!("{id}.key = {}", mask_key(k)), true);
-                                dirty.auth = true;
-                            } else if let Some(def) = store::section(root, agent, "disabledProviders").get_mut(id) {
-                                def["apiKey"] = json!(k);
-                                diff.push(&ef, tr!("{pre}.{id}.apiKey = {}（停用中，启用时写入）", "{pre}.{id}.apiKey = {} (disabled; written when enabled)", mask_key(k)), true);
-                                dirty.store = true;
+                            } else if !self.set_auth_key(auth, id, k, diff, dirty) {
+                                // Disabled, key inline: it goes back into the parked definition.
+                                if let Some(def) = store::section(root, agent, "disabledProviders").get_mut(id) {
+                                    def["apiKey"] = json!(k);
+                                    diff.push(&ef, tr!("{pre}.{id}.apiKey = {}（停用中，启用时写入）", "{pre}.{id}.apiKey = {} (disabled; written when enabled)", mask_key(k)), true);
+                                    dirty.store = true;
+                                }
                             }
                         }
                     }
@@ -502,7 +553,16 @@ impl Fmt {
                 let prefix = format!("{provider}|");
                 store::section(root, agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
                 store::section(root, agent, "names").remove(provider);
-                let kept_key = Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some();
+                let mut kept_key = Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some();
+                // The key of a provider pi ships stays in auth.json (pi keeps using it); any other
+                // auth.json entry would come back as a built-in provider that can't be removed.
+                if kept_key && !BUILTIN_PROVIDERS.contains(&provider.as_str()) {
+                    if let Some(o) = auth.as_mut().and_then(|a| a.0.as_object_mut()) {
+                        o.remove(provider);
+                        dirty.auth = true;
+                        kept_key = false;
+                    }
+                }
                 let line = if kept_key {
                     tr!("- {pre}.{provider}（含它的模型；auth.json 里的密钥保留）", "- {pre}.{provider} (with its models; the API key in auth.json is kept)")
                 } else {
@@ -558,7 +618,7 @@ impl Fmt {
                 }
                 let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
                 let key = format!("{provider}|{mid}");
-                let in_stash = self.hidden(root).contains_key(&key);
+                let in_stash = self.hidden(root).is_some_and(|h| h.contains_key(&key));
                 let mut fresh = self.new_model(&mid, name, m.context);
                 crate::mfields::write(&mut fresh, self.specs(), &m.extra)?;
                 let def: &mut Value = if in_stash {
@@ -617,14 +677,14 @@ impl Fmt {
                 let next: Vec<Value> = want
                     .iter()
                     .zip(fresh)
-                    .map(|(id, f)| old.iter().find(|d| s(d, "id") == Some(id.as_str())).cloned().or_else(|| hidden.get(&format!("{provider}|{id}")).cloned()).unwrap_or(f))
+                    .map(|(id, f)| old.iter().find(|d| s(d, "id") == Some(id.as_str())).or_else(|| hidden.and_then(|h| h.get(&format!("{provider}|{id}")))).cloned().unwrap_or(f))
                     .collect();
-                let ids_of = |v: &[Value]| v.iter().filter_map(|d| s(d, "id").map(String::from)).collect::<Vec<_>>();
-                if ids_of(&old) != want {
-                    for id in ids_of(&old).iter().filter(|x| !want.contains(x)) {
+                let old_ids: Vec<String> = old.iter().filter_map(|d| s(d, "id").map(String::from)).collect();
+                if old_ids != want {
+                    for id in old_ids.iter().filter(|x| !want.contains(x)) {
                         diff.push(&ef, format!("{pre}.{provider}.models - \"{id}\""), false);
                     }
-                    for id in want.iter().filter(|x| !ids_of(&old).contains(x)) {
+                    for id in want.iter().filter(|x| !old_ids.contains(x)) {
                         diff.push(&ef, format!("{pre}.{provider}.models + \"{id}\""), true);
                     }
                     *models = next;
