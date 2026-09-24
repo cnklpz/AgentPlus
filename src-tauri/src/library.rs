@@ -123,8 +123,14 @@ pub fn delete(id: &str) -> Result<()> {
     })
 }
 
-/// (name, base_url, key, api, models) of a library entry, for copying into an agent.
-pub type LibEndpoint = (String, String, Option<String>, String, Vec<String>);
+/// A library entry with its key, for copying into an agent or calling its upstream.
+pub struct LibEndpoint {
+    pub name: String,
+    pub base_url: String,
+    pub key: Option<String>,
+    pub api: String,
+    pub models: Vec<String>,
+}
 
 pub fn endpoint(id: &str) -> Result<LibEndpoint> {
     endpoint_in(&store::load(), id)
@@ -134,6 +140,11 @@ pub fn endpoint(id: &str) -> Result<LibEndpoint> {
 pub fn endpoint_in(root: &Value, id: &str) -> Result<LibEndpoint> {
     let e = entries(root).into_iter().find(|e| str_field(e, "id") == id).ok_or_else(|| anyhow!(tr!("供应商库里没有 {id}", "Not in the provider library: {id}")))?;
     let key = str_field(&e, "apiKey");
-    let le = to_entry(&e);
-    Ok((le.name, le.base_url, (!key.is_empty()).then_some(key), le.api, le.models))
+    Ok(LibEndpoint {
+        name: str_field(&e, "name"),
+        base_url: str_field(&e, "baseUrl"),
+        key: (!key.is_empty()).then_some(key),
+        api: str_field(&e, "api"),
+        models: str_list(e.get("models")).unwrap_or_default(),
+    })
 }
