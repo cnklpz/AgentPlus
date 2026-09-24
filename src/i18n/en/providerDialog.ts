@@ -2,8 +2,6 @@ import type zh from "../zh/providerDialog";
 
 const en: typeof zh = {
   apiResponsesHint: "OpenAI Responses API (/v1/responses)",
-  apiChatHint: "OpenAI-compatible Chat Completions (/v1/chat/completions)",
-  apiAnthropicHint: "Anthropic Messages API (/v1/messages)",
   apiGeminiHint: "Google Gemini protocol (generateContent)",
   roleDefault: "Default",
   roleOpus: "Opus",
@@ -59,7 +57,6 @@ const en: typeof zh = {
   claudeUnmanagedNote: "This config was written by hand in settings.json. Save it once to let AgentPlus manage it, then set up its models.",
   claudeNote: "Models available from this provider; choose which one each Claude Code role uses below.",
   pickNote: "Checked models appear in {agent}'s model picker.",
-  selectedN: "{n} selected",
   codexEmpty: "No list set for this provider yet; switching to it keeps the list in use at that time.",
   empty: "No models yet; fetch them or add them by hand.",
   roleAssign: "Model roles",

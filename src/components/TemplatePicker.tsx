@@ -1,3 +1,4 @@
+import { api } from "../api";
 import { type Template, VENDORS, planLabel } from "../templates";
 import { Dropdown } from "./Dropdown";
 import { Seg } from "./controls";
@@ -5,7 +6,7 @@ import { Icon, VendorIcon } from "./icons";
 import { t } from "../i18n";
 
 /** Vendor dropdown, plus a plan switch for vendors with both a coding plan and pay as you go. */
-export function TemplatePicker({ value, onPick }: { value: Template | null; onPick: (t: Template | null) => void }) {
+export function TemplatePicker({ value, onPick }: { value: Template | null; onPick: (tpl: Template | null) => void }) {
   const vendor = value ? VENDORS.find((v) => v.id === value.icon) ?? null : null;
   return (
     <div className="field tpl-dd">
@@ -24,5 +25,12 @@ export function TemplatePicker({ value, onPick }: { value: Template | null; onPi
       </div>
       {value?.note && <em className="muted tiny">{value.note}</em>}
     </div>
+  );
+}
+
+/** The template vendor's page for getting a key (after the key field's hint, space-separated). */
+export function TemplateKeyLink({ tpl }: { tpl: Template }) {
+  return (
+    <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("templatePicker.getKey", { vendor: tpl.vendor })}</button></>
   );
 }

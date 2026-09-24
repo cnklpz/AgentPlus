@@ -1,8 +1,6 @@
 // src/components/ServiceDialog.tsx
 export default {
   hintResponses: "OpenAI Responses 接口（/v1/responses），Codex 只支持这种",
-  hintChat: "OpenAI 兼容 Chat Completions（/v1/chat/completions）",
-  hintAnthropic: "Anthropic Messages 接口（/v1/messages）",
   blockedGateway: "{agent} 只支持 Google Gemini 协议，本地网关不能转换成它",
   blockedProto: "{agent} 只支持 {api} 接口；打开「使用本地网关」可以转换后接入",
   addGroupTo: "给「{station}」添加分组",

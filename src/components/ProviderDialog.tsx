@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ProviderInput, api, isProjectId } from "../api";
 import { type Draft, type ViewProvider, isVisible, keys, viewModels } from "../draft";
-import { API_LABEL, GATEWAY_KEY, ONLY_API, gatewayCapable, gatewayPoolBase, gatewayPoolIds } from "../services";
+import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { Modal } from "./Modal";
 import { ErrorBox, Seg, ToggleRow } from "./controls";
-import { TemplatePicker } from "./TemplatePicker";
+import { ModelPicker, useModelPool } from "./ModelPicker";
+import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t, tn } from "../i18n";
 import { scrub } from "../privacy";
@@ -49,11 +50,12 @@ interface Props {
   ensureGateway: () => Promise<GatewayStatus>;
 }
 
-const API_OPTIONS: { v: ApiKind; label: string; hint: TKey }[] = [
-  { v: "responses", label: "Responses", hint: "providerDialog.apiResponsesHint" },
-  { v: "chat", label: "Chat", hint: "providerDialog.apiChatHint" },
-  { v: "anthropic", label: "Anthropic", hint: "providerDialog.apiAnthropicHint" },
-];
+const API_HINT: Record<ApiKind, TKey> = {
+  responses: "providerDialog.apiResponsesHint",
+  chat: "common.apiHintChat",
+  anthropic: "common.apiHintAnthropic",
+  gemini: "providerDialog.apiGeminiHint",
+};
 
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -93,7 +95,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const [unifiedNew, setUnifiedNew] = useState(false);
   /** Forwards the unified provider may use; empty = all of them. */
   const [pool, setPool] = useState<string[]>(() => (isNew ? [] : gatewayPoolIds(editing?.baseUrl) ?? []));
-  const poolBase = gatewayPoolBase(gateway?.port ?? 18650, pool);
+  const poolBase = gatewayPoolBase(gateway?.port ?? DEFAULT_GATEWAY_PORT, pool);
   const [err, setErr] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
   const [tpl, setTpl] = useState<Template | null>(null);
@@ -110,19 +112,16 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     isNew ? editing?.models.map((m) => m.id) ?? [] : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id),
   );
   const [fetched, setFetched] = useState<string[]>([]);
-  const [manual, setManual] = useState("");
   const [fetching, setFetching] = useState(false);
-  const [filter, setFilter] = useState("");
   const rolesOp = editing ? draft[keys.roles(editing.id)] : undefined;
   const rolesOriginal: Record<string, string> = {};
   for (const m of editing?.models ?? []) for (const r of roleList) if (m.tags.some((g) => g.id === `role:${r.role}`)) rolesOriginal[r.role] = m.id;
   const [roles, setRoles] = useState<Record<string, string>>(rolesOp && rolesOp.op === "set_model_roles" ? rolesOp.roles : rolesOriginal);
 
-  const candidates = useMemo(() => {
-    const base = isNew ? [] : codex ? [...(st.catalog ?? []).map((m) => m.id), ...codexStart] : claude ? [...(editing?.models ?? []).map((m) => m.id), ...codexStart] : perModels.map((m) => m.id);
-    return [...new Set([...base, ...checked, ...fetched])];
-  }, [fetched, checked.length]);
-  const shown = candidates.filter((m) => !filter.trim() || m.toLowerCase().includes(filter.trim().toLowerCase()));
+  const [modelPool, addToPool] = useModelPool(() => [
+    ...(isNew ? [] : codex ? [...(st.catalog ?? []).map((m) => m.id), ...codexStart] : claude ? [...(editing?.models ?? []).map((m) => m.id), ...codexStart] : perModels.map((m) => m.id)),
+    ...checked,
+  ]);
 
   // Focus the first field once, when the dialog opens (not on every parent re-render).
   useEffect(() => { first.current?.focus(); }, []);
@@ -150,6 +149,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         list = await api.fetchModelsUrl(baseUrl.trim(), key.trim() || null, tplForward ? tpl!.api : kind);
       }
       setFetched(list);
+      addToPool(list);
       if (checked.length === 0) setChecked(list.slice(0, 20));
     } catch (e) {
       setErr(t("common.fetchFailed", { err: errText(e) }));
@@ -158,12 +158,10 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     }
   };
 
-  const toggle = (m: string) => setChecked((l) => toggledIn(l, m));
-  const addManual = () => {
-    const ids = manual.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  const addManual = (ids: string[]) => {
+    addToPool(ids);
     setChecked((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
     setFetched((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
-    setManual("");
   };
 
   const pickTpl = (tp: Template | null) => {
@@ -176,7 +174,10 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     const k = only && tp.endpoints[only] ? only : tp.api;
     setKind(only ?? k);
     setBaseUrl(tp.endpoints[k]!);
-    if (!(codex && isNew)) setChecked(tp.models);
+    if (!(codex && isNew)) {
+      setChecked(tp.models);
+      addToPool(tp.models);
+    }
   };
   const setProto = (k: ApiKind) => {
     setKind(k);
@@ -309,7 +310,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <div className="field">
           <span className="field-label">{t("providerDialog.gatewayProtocol")}</span>
           <Seg value={kind} onChange={setKind} label={t("providerDialog.gatewayProtocol")}
-            options={API_OPTIONS.map((o) => ({ value: o.v, label: o.label, title: t(o.hint) }))} />
+            options={PROTOCOLS.map((v) => ({ value: v, label: API_LABEL[v], title: t(API_HINT[v]) }))} />
           <em className="muted tiny">{t("providerDialog.gatewayProtocolNote")}</em>
         </div>
       )}
@@ -325,11 +326,11 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
             <div className="field">
               <span className="field-label">{t("providerDialog.apiType")}</span>
               <Seg value={kind} onChange={setProto} label={t("providerDialog.apiType")}
-                options={(only === "gemini" ? [{ v: "gemini" as ApiKind, label: "Gemini", hint: "providerDialog.apiGeminiHint" as TKey }] : API_OPTIONS).map((o) => {
-                  const missing = !!tpl && !only && !tpl.endpoints[o.v];
+                options={(only === "gemini" ? (["gemini"] as const) : PROTOCOLS).map((v: ApiKind) => {
+                  const missing = !!tpl && !only && !tpl.endpoints[v];
                   return {
-                    value: o.v, label: o.label, disabled: (!!only && o.v !== only) || missing,
-                    title: only && o.v !== only ? t("providerDialog.onlySupports", { agent: st.name, api: API_LABEL[only] }) : missing ? t("providerDialog.vendorNoApi", { vendor: tpl!.vendor, api: o.label }) : t(o.hint),
+                    value: v, label: API_LABEL[v], disabled: (!!only && v !== only) || missing,
+                    title: only && v !== only ? t("providerDialog.onlySupports", { agent: st.name, api: API_LABEL[only] }) : missing ? t("providerDialog.vendorNoApi", { vendor: tpl!.vendor, api: API_LABEL[v] }) : t(API_HINT[v]),
                   };
                 })} />
             </div>
@@ -339,7 +340,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                 placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
               <em className="muted tiny">
                 {tplForward ? t("providerDialog.keyForward") : keyHint}
-                {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("common.getKey", { vendor: tpl.vendor })}</button></>}
+                {tpl && <TemplateKeyLink tpl={tpl} />}
               </em>
             </div>
           </div>
@@ -372,29 +373,9 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
               : t("providerDialog.pickNote", { agent: st.name })}
         </em>
         {!(codex && isNew) && !unmanaged && (
-          <>
-            <div className="mpick-bar">
-              <span className="tiny muted">{t("providerDialog.selectedN", { n: checked.length })}</span>
-              {candidates.length > 8 && <input className="input mono mpick-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("common.filter")} />}
-              <span className="grow" />
-              {candidates.length > 0 && <button type="button" className="link tiny" onClick={() => setChecked(checked.length === candidates.length ? [] : candidates)}>{checked.length === candidates.length ? t("common.selectNone") : t("common.selectAll")}</button>}
-            </div>
-            <div className="pick-list wide">
-              {candidates.length === 0 && <div className="muted small">{codex && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}</div>}
-              {shown.map((m) => (
-                <label key={m} className="pick">
-                  <input type="checkbox" checked={checked.includes(m)} onChange={() => toggle(m)} />
-                  <span className="mono small">{m}</span>
-                  {fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m) && !isNew && <span className="mtag new">{t("common.tagNew")}</span>}
-                </label>
-              ))}
-            </div>
-            <div className="row gap6">
-              <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("common.manualModelsPlaceholder")} />
-              <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
-            </div>
-          </>
+          <ModelPicker bar pool={modelPool} checked={checked} onChange={setChecked} onAdd={addManual}
+            empty={codex && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}
+            isNew={(m) => !isNew && fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m)} />
         )}
       </div>
       {roleList.length > 0 && !isNew && !unmanaged && (
@@ -434,7 +415,7 @@ function ForwardPicker({ routes, value, onChange }: { routes: GatewayRouteView[]
       ) : (
         <div className="fwd-pick">
           {usable.map((r) => {
-            const b = r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
+            const b = tripped(r);
             return (
               <label key={r.id} className={`fwd-opt${value.includes(r.id) ? " on" : ""}`} title={scrub(b?.reason) ?? `${scrub(r.upstreamUrl) ?? ""}${r.models.length ? tn("providerDialog.fwdModels", r.models.length) : ""}`}>
                 <input type="checkbox" checked={value.includes(r.id)} onChange={() => toggle(r.id)} />
