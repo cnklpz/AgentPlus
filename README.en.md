@@ -4,7 +4,7 @@
 
 # AgentPlus
 
-**One place to manage providers and model lists for all your AI coding agents**
+**All-in-one management of providers and model lists for all your AI coding agents**
 
 Codex · Claude Code · OpenCode · ZCode · MiMo Desktop · Gemini CLI · Qwen Code · Kimi Code and 7 more
 
