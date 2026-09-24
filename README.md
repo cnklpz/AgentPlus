@@ -84,3 +84,7 @@ docs/design.html        设计方案
 AgentPlus 自己的数据保存在 `~/.agentplus/`（`store.json` 和 `backups/`）。
 
 多语言和代码约定见 [CLAUDE.md](CLAUDE.md)：界面上的文字不许写死，新增文案要同时写中英文。
+
+## 许可证
+
+[MIT](LICENSE)
