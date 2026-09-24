@@ -68,7 +68,7 @@ pub fn id() -> String {
 
 pub fn label() -> String {
     match current() {
-        Target::Windows => "本机 · Windows".into(),
+        Target::Windows => crate::i18n::l("本机 · Windows", "This PC · Windows").into(),
         Target::Wsl { distro, .. } => format!("WSL · {distro}"),
     }
 }
@@ -127,7 +127,7 @@ pub fn list() -> Vec<EnvInfo> {
     let cur = id();
     let mut v = vec![EnvInfo {
         id: "windows".into(),
-        label: "本机 · Windows".into(),
+        label: crate::i18n::l("本机 · Windows", "This PC · Windows").into(),
         detail: dirs::home_dir().map(|h| h.to_string_lossy().to_string()).unwrap_or_default(),
         current: cur == "windows",
     }];
@@ -137,7 +137,7 @@ pub fn list() -> Vec<EnvInfo> {
             current: cur == id,
             id,
             label: format!("WSL · {d}"),
-            detail: "Codex CLI 的配置与会话；ZCode、MiMo Desktop 只在 Windows 上".into(),
+            detail: crate::i18n::l("Codex CLI 的配置与会话；ZCode、MiMo Desktop 只在 Windows 上", "Codex CLI config and sessions; ZCode and MiMo Desktop are Windows-only").into(),
         });
     }
     v
@@ -149,25 +149,27 @@ pub fn set(id: &str) -> Result<()> {
         Target::Windows
     } else if let Some(d) = id.strip_prefix("wsl:") {
         if !distros().iter().any(|x| x == d) {
-            return Err(anyhow!("没有找到 WSL 发行版 {d}"));
+            return Err(anyhow!(tr!("没有找到 WSL 发行版 {d}", "WSL distro not found: {d}")));
         }
         let out = no_window(Command::new("wsl.exe").args(["-d", d, "-e", "sh", "-c", "printf %s \"$HOME\""]))
             .output()
-            .map_err(|e| anyhow!("启动 WSL 失败：{e}"))?;
+            .map_err(|e| anyhow!(tr!("启动 WSL 失败：{e}", "Failed to start WSL: {e}")))?;
         let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !h.starts_with('/') {
-            return Err(anyhow!("读取 {d} 的 HOME 失败"));
+            return Err(anyhow!(tr!("读取 {d} 的 HOME 失败", "Failed to read HOME in {d}")));
         }
         Target::Wsl { distro: d.into(), unix_home: h }
     } else {
-        return Err(anyhow!("未知环境 {id}"));
+        return Err(anyhow!(tr!("未知环境 {id}", "Unknown environment {id}")));
     };
-    let mut s = crate::store::load();
-    s["env"] = match &target {
-        Target::Windows => json!({ "id": "windows" }),
-        Target::Wsl { distro, unix_home } => json!({ "id": format!("wsl:{distro}"), "home": unix_home }),
-    };
-    crate::store::save(&s)?;
+    // Runs off the main thread (set_env is async), so load and save under the store lock.
+    crate::store::update(|s| {
+        s["env"] = match &target {
+            Target::Windows => json!({ "id": "windows" }),
+            Target::Wsl { distro, unix_home } => json!({ "id": format!("wsl:{distro}"), "home": unix_home }),
+        };
+        Ok(())
+    })?;
     *CURRENT.write().unwrap() = Some(target);
     Ok(())
 }

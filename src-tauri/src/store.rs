@@ -1,23 +1,88 @@
 //! AgentPlus's own state in `~/.agentplus/store.json`:
 //! per-agent switches and definitions stashed while a model/provider is hidden.
+//!
+//! The file is read from many threads at once (the gateway reads it on every request),
+//! so it is only ever replaced whole (temp file + rename): a reader sees the old or the
+//! new content, never half of it. Writes are serialized by `WRITE`; code that runs off
+//! the main thread and changes the store uses `update` so the load and save happen
+//! under that one lock.
 
 use crate::util::agentplus_dir;
+use anyhow::{anyhow, Context};
 use serde_json::{json, Map, Value};
 use std::fs;
+use std::path::Path;
+use std::sync::Mutex;
+use std::time::Duration;
+
+static WRITE: Mutex<()> = Mutex::new(());
+
+fn read(p: &Path) -> Option<Value> {
+    let text = fs::read_to_string(p).ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    serde_json::from_str(&text).ok()
+}
 
 pub fn load() -> Value {
-    let p = agentplus_dir().join("store.json");
-    fs::read_to_string(p)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({}))
+    load_in(&agentplus_dir())
+}
+
+fn load_in(dir: &Path) -> Value {
+    let p = dir.join("store.json");
+    // Another program may be halfway through writing it: give it a moment.
+    for i in 0..3 {
+        if let Some(v) = read(&p) {
+            return v;
+        }
+        if !p.exists() || i == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    json!({})
 }
 
 pub fn save(v: &Value) -> anyhow::Result<()> {
-    let dir = agentplus_dir();
-    fs::create_dir_all(&dir)?;
-    fs::write(dir.join("store.json"), serde_json::to_string_pretty(v)?)?;
-    Ok(())
+    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    write(v)
+}
+
+/// Load, change, save under the write lock (for callers outside the main thread).
+pub fn update<T>(f: impl FnOnce(&mut Value) -> anyhow::Result<T>) -> anyhow::Result<T> {
+    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v = load();
+    let out = f(&mut v)?;
+    write(&v)?;
+    Ok(out)
+}
+
+fn write(v: &Value) -> anyhow::Result<()> {
+    write_in(&agentplus_dir(), v)
+}
+
+fn write_in(dir: &Path, v: &Value) -> anyhow::Result<()> {
+    fs::create_dir_all(dir)?;
+    let path = dir.join("store.json");
+    // A file that exists but does not parse loaded as {}: keep it instead of overwriting it.
+    if path.exists() && read(&path).is_none() && fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
+        let keep = dir.join(format!("store.broken-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        fs::copy(&path, &keep).with_context(|| tr!("备份无法解析的 {} 失败", "Failed to back up unparsable {}", path.display()))?;
+    }
+    let tmp = dir.join(format!("store.json.{}.tmp", std::process::id()));
+    fs::write(&tmp, serde_json::to_string_pretty(v)?).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    // Replacing can fail for a moment while another program (antivirus, editor) holds the file.
+    let mut last = None;
+    for _ in 0..10 {
+        match fs::rename(&tmp, &path) {
+            Ok(()) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = fs::remove_file(&tmp);
+    Err(anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", path.display(), last.map(|e| e.to_string()).unwrap_or_default())))
 }
 
 /// Per-agent entries are kept apart per environment: "codex" on Windows, "codex@wsl:Ubuntu" in WSL.
@@ -77,4 +142,63 @@ pub fn set_str(root: &mut Value, agent: &str, key: &str, v: &str) {
 
 pub fn set_value(root: &mut Value, agent: &str, key: &str, v: Value) {
     agent_obj(root, agent).insert(key.to_string(), v);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("agentplus-store-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Readers running while the store is rewritten over and over never see a partial file.
+    #[test]
+    fn readers_never_see_a_torn_file() {
+        let d = tmp_dir("torn");
+        let big: Vec<String> = (0..2000).map(|i| format!("entry-{i}")).collect();
+        write_in(&d, &json!({ "library": big, "n": 0 })).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let readers: Vec<_> = (0..4)
+            .map(|_| {
+                let (d, stop) = (d.clone(), stop.clone());
+                std::thread::spawn(move || {
+                    let mut n = 0;
+                    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        let v = load_in(&d);
+                        assert_eq!(v["library"].as_array().map(|a| a.len()), Some(2000), "read a partial store");
+                        n += 1;
+                    }
+                    n
+                })
+            })
+            .collect();
+        for i in 1..40 {
+            write_in(&d, &json!({ "library": big, "n": i })).unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        for r in readers {
+            assert!(r.join().unwrap() > 0);
+        }
+        assert_eq!(load_in(&d)["n"], 39);
+        assert!(!fs::read_dir(&d).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".tmp")), "temp file left behind");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A store that does not parse is kept aside before anything overwrites it.
+    #[test]
+    fn broken_store_is_backed_up_before_overwrite() {
+        let d = tmp_dir("broken");
+        fs::write(d.join("store.json"), "{ \"library\": [ half written").unwrap();
+        assert_eq!(load_in(&d), json!({}));
+        write_in(&d, &json!({ "gateway": {} })).unwrap();
+        let kept: Vec<_> = fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).filter(|n| n.starts_with("store.broken-")).collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(fs::read_to_string(d.join(&kept[0])).unwrap(), "{ \"library\": [ half written");
+        assert_eq!(load_in(&d), json!({ "gateway": {} }));
+        let _ = fs::remove_dir_all(&d);
+    }
 }

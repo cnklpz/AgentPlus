@@ -105,15 +105,100 @@ pub fn any_process(pred: impl Fn(&str, &str) -> bool) -> bool {
 }
 
 /// Inside WSL only the Codex CLI exists; the desktop apps are Windows-only.
+/// First token that looks like a version ("2.1.226 (Claude Code)" → "2.1.226").
+fn version_in(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|w| w.trim_start_matches('v'))
+        .find(|w| w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && w.contains('.'))
+        .map(String::from)
+}
+
+/// Inside WSL only CLIs exist; the desktop apps are Windows-only.
 fn detect_wsl(agent: &str) -> Install {
     let mut inst = Install::default();
-    if agent != "codex" {
-        return inst;
-    }
-    let out = crate::env::wsl_sh("codex --version 2>/dev/null; pgrep -x codex >/dev/null && echo @running; true").unwrap_or_default();
-    inst.version = out.lines().find(|l| !l.starts_with('@')).map(|l| l.trim_start_matches("codex-cli").trim().to_string()).filter(|v| !v.is_empty());
-    inst.installed = inst.version.is_some() || crate::util::home().join(".codex").exists();
+    let (script, marker) = match agent {
+        "codex" => ("codex --version 2>/dev/null; pgrep -x codex >/dev/null && echo @running; true", ".codex"),
+        "claude" => ("claude --version 2>/dev/null; pgrep -x claude >/dev/null && echo @running; true", ".claude/settings.json"),
+        "opencode" => (
+            "(command -v opencode >/dev/null && opencode --version || $HOME/.opencode/bin/opencode --version) 2>/dev/null; pgrep -x opencode >/dev/null && echo @running; true",
+            ".config/opencode",
+        ),
+        _ => match crate::adapters::ext(agent) {
+            Some(e) => (e.wsl_script, e.wsl_marker),
+            None => return inst,
+        },
+    };
+    let out = crate::env::wsl_sh(script).unwrap_or_default();
+    inst.version = out.lines().find(|l| !l.starts_with('@')).and_then(version_in);
+    inst.installed = inst.version.is_some() || crate::util::home().join(marker).exists();
     inst.running = out.lines().any(|l| l == "@running");
+    inst
+}
+
+/// Version printed by a CLI (`<exe> --version`), cached per path.
+fn cli_version(exe: &Path) -> Option<String> {
+    static CACHE: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, v)) = CACHE.lock().unwrap().iter().find(|(p, _)| p == exe) {
+        return v.clone();
+    }
+    let v = no_window(Command::new(exe).arg("--version")).output().ok().and_then(|o| version_in(&String::from_utf8_lossy(&o.stdout)));
+    CACHE.lock().unwrap().push((exe.to_path_buf(), v.clone()));
+    v
+}
+
+/// Claude Code: npm global install or the native installer (~/.local/bin/claude.exe).
+fn detect_claude(inst: &mut Install) {
+    let npm = dirs::data_dir().map(|d| d.join("npm"));
+    if let Some(pkg) = npm.as_ref().map(|d| d.join("node_modules").join("@anthropic-ai").join("claude-code").join("package.json")) {
+        if let Ok(text) = std::fs::read_to_string(&pkg) {
+            inst.installed = true;
+            inst.version = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from));
+            return;
+        }
+    }
+    let native = dirs::home_dir().map(|h| h.join(".local").join("bin").join("claude.exe"));
+    if let Some(exe) = native.filter(|p| p.exists()) {
+        inst.installed = true;
+        inst.version = cli_version(&exe);
+    }
+    inst.running = any_process(|name, _| name.eq_ignore_ascii_case("claude.exe"));
+}
+
+/// OpenCode: the desktop app (registry) or the CLI.
+fn detect_opencode(inst: &mut Install) {
+    if let Some((_, ver, icon, uninst)) = uninstall_entry("OpenCode") {
+        let exe = icon.map(|i| unquote_exe(&i)).filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false)).or_else(|| {
+            uninst.map(|u| unquote_exe(&u)).and_then(|p| p.parent().map(|d| d.join("OpenCode.exe"))).filter(|p| p.exists())
+        });
+        inst.installed = true;
+        inst.version = ver;
+        inst.dir = exe.as_ref().and_then(|e| e.parent().map(Path::to_path_buf));
+        inst.exe = exe;
+        return;
+    }
+    let home = dirs::home_dir().unwrap_or_default();
+    let candidates = [home.join(".opencode").join("bin").join("opencode.exe"), dirs::data_dir().unwrap_or_default().join("npm").join("opencode.cmd")];
+    if let Some(exe) = candidates.iter().find(|p| p.exists()) {
+        inst.installed = true;
+        if exe.extension().map(|e| e == "exe").unwrap_or(false) {
+            inst.version = cli_version(exe);
+        }
+    }
+    inst.running = any_process(|name, _| name.eq_ignore_ascii_case("opencode.exe"));
+}
+
+/** Trae (international or CN build); detection only. */
+pub fn detect_trae() -> Install {
+    let mut inst = Install::default();
+    if let Some((_, ver, icon, _)) = uninstall_entry("Trae (User)").or_else(|| uninstall_entry("TraeCode")).or_else(|| uninstall_entry("Trae")) {
+        let exe = icon.map(|i| unquote_exe(&i));
+        inst.installed = exe.as_ref().map(|e| e.exists()).unwrap_or(false);
+        inst.version = ver;
+        inst.dir = exe.as_ref().and_then(|e| e.parent().map(Path::to_path_buf));
+    }
+    if let Some(d) = &inst.dir {
+        inst.running = !processes_in(d).is_empty();
+    }
     inst
 }
 
@@ -140,6 +225,8 @@ pub fn detect(agent: &str) -> Install {
                 inst.dir = dir;
             }
         }
+        "claude" => detect_claude(&mut inst),
+        "opencode" => detect_opencode(&mut inst),
         "mimo" => {
             if let Some((_, ver, icon, _)) = uninstall_entry("Xiaomi MiMo") {
                 let exe = icon.map(|i| unquote_exe(&i));
@@ -149,7 +236,11 @@ pub fn detect(agent: &str) -> Install {
                 inst.exe = exe;
             }
         }
-        _ => {}
+        other => {
+            if let Some(e) = crate::adapters::ext(other) {
+                return (e.detect)();
+            }
+        }
     }
     if let Some(d) = &inst.dir {
         inst.running = !processes_in(d).is_empty();
@@ -157,8 +248,24 @@ pub fn detect(agent: &str) -> Install {
     inst
 }
 
+/// Progress of a restart, sent to the UI while it runs.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Progress {
+    /// The steps this run goes through, in order: "stop", "start", then "port", "patch" for UI injection.
+    Plan { steps: Vec<&'static str> },
+    /// `status`: "active" | "done" | "skip" | "warn".
+    Step { step: &'static str, status: &'static str, detail: Option<String> },
+}
+
+impl Progress {
+    pub fn step(step: &'static str, status: &'static str, detail: Option<String>) -> Self {
+        Progress::Step { step, status, detail }
+    }
+}
+
 /// Kills every process started from the agent's folder and waits for them to exit.
-fn stop(dir: &Path) -> Result<()> {
+fn stop(dir: &Path, on: &dyn Fn(Progress)) -> Result<()> {
     let mut sys = System::new();
     sys.refresh_processes(ProcessesToUpdate::All, true);
     for pid in processes_in(dir) {
@@ -167,13 +274,21 @@ fn stop(dir: &Path) -> Result<()> {
         }
     }
     let t0 = Instant::now();
-    while !processes_in(dir).is_empty() {
+    let mut left_seen = usize::MAX;
+    loop {
+        let left = processes_in(dir).len();
+        if left == 0 {
+            return Ok(());
+        }
+        if left != left_seen {
+            left_seen = left;
+            on(Progress::step("stop", "active", Some(tr!("等待 {left} 个进程退出", "Waiting for {left} process(es) to exit"))));
+        }
         if t0.elapsed() > Duration::from_secs(10) {
-            return Err(anyhow!("进程没有在 10 秒内退出"));
+            return Err(anyhow!(crate::i18n::l("进程没有在 10 秒内退出", "The process did not exit within 10 seconds")));
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -189,22 +304,30 @@ fn activate(aumid: &str, args: &str) -> Result<u32> {
 }
 #[cfg(not(windows))]
 fn activate(_: &str, _: &str) -> Result<u32> {
-    Err(anyhow!("仅支持 Windows"))
+    Err(anyhow!(crate::i18n::l("仅支持 Windows", "Windows only")))
 }
 
-/// Restarts the agent. `args` are passed to the new process (e.g. a debug port).
-pub fn restart(agent: &str, args: &str) -> Result<()> {
+/// Restarts the agent, or starts it when it isn't running; returns whether it was running.
+/// `args` are passed to the new process (e.g. a debug port).
+pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<bool> {
     if crate::env::is_wsl() {
-        return Err(anyhow!("WSL 里的 Codex 是命令行工具，不用重启：新开的 codex 会话会读取新配置"));
+        return Err(anyhow!(crate::i18n::l("WSL 里的 Codex 是命令行工具，不用重启：新开的 codex 会话会读取新配置", "Codex in WSL is a command-line tool and doesn't need a restart: new codex sessions read the new config")));
     }
     let inst = detect(agent);
     if !inst.installed {
-        return Err(anyhow!("没有检测到安装"));
+        return Err(anyhow!(crate::i18n::l("没有检测到安装", "No installation detected")));
     }
-    if let Some(d) = &inst.dir {
-        stop(d)?;
+    let running = inst.dir.as_deref().map(processes_in).unwrap_or_default().len();
+    match &inst.dir {
+        Some(d) if running > 0 => {
+            on(Progress::step("stop", "active", Some(tr!("正在结束 {running} 个进程", "Ending {running} process(es)"))));
+            stop(d, on)?;
+            on(Progress::step("stop", "done", None));
+            std::thread::sleep(Duration::from_millis(400));
+        }
+        _ => on(Progress::step("stop", "skip", Some(crate::i18n::l("没有在运行", "Not running").into()))),
     }
-    std::thread::sleep(Duration::from_millis(400));
+    on(Progress::step("start", "active", None));
     if let Some(aumid) = &inst.aumid {
         activate(aumid, args)?;
     } else if let Some(exe) = &inst.exe {
@@ -212,9 +335,27 @@ pub fn restart(agent: &str, args: &str) -> Result<()> {
         if !args.is_empty() {
             cmd.args(args.split_whitespace());
         }
-        cmd.spawn().map_err(|e| anyhow!("启动失败：{e}"))?;
+        cmd.spawn().map_err(|e| anyhow!(tr!("启动失败：{e}", "Failed to start: {e}")))?;
     }
-    Ok(())
+    // Wait until its process shows up, so "done" means it is actually up.
+    if let Some(d) = &inst.dir {
+        on(Progress::step("start", "active", Some(crate::i18n::l("等待进程出现", "Waiting for the process").into())));
+        let t0 = Instant::now();
+        while processes_in(d).is_empty() {
+            if t0.elapsed() > Duration::from_secs(15) {
+                on(Progress::step("start", "warn", Some(crate::i18n::l("15 秒内没有看到它的进程，可能还在启动", "No process seen within 15 seconds; it may still be starting").into())));
+                return Ok(running > 0);
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
+    on(Progress::step("start", "done", None));
+    Ok(running > 0)
+}
+
+/// Whether the agent's app is running now (cheap; used to keep the Start/Restart button honest).
+pub fn running(agent: &str) -> bool {
+    detect(agent).running
 }
 
 pub fn open_dir(dir: &str) -> Result<()> {

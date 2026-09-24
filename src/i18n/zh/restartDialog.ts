@@ -1,0 +1,19 @@
+// src/components/RestartDialog.tsx
+export default {
+  titleRestart: "正在重启 {name}",
+  titleStart: "正在启动 {name}",
+  doneRestart: "{name} 已重启",
+  doneStart: "{name} 已启动",
+  failedRestart: "{name} 重启失败",
+  failedStart: "{name} 启动失败",
+  preparing: "准备中…",
+  stepStop: "关闭 {name}",
+  stepStart: "启动 {name}",
+  stepPort: "连接调试端口",
+  stepPatch: "注入界面补丁",
+  skipped: "已跳过",
+  elapsed: "已用 {s} 秒",
+  took: "用时 {s} 秒",
+  background: "后台运行",
+  settingsHint: "可在「设置 › 界面」改为简略提示",
+};

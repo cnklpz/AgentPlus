@@ -30,6 +30,31 @@ pub struct AgentState {
     /// Codex only: prefill "turn on fixed id" as a pending change (user hasn't declined).
     #[serde(default)]
     pub fixed_prompt: bool,
+    /// A desktop app AgentPlus can restart (CLI agents pick up changes on their next run).
+    #[serde(default)]
+    pub restartable: bool,
+    /// Per-model settings beyond name / context this agent's config understands.
+    /// Filled in adapters::state.
+    #[serde(default)]
+    pub model_fields: Vec<ModelField>,
+}
+
+/// One per-model setting (e.g. image input, max output tokens). `key` is its path inside
+/// the model's entry and the key of `Model::extra` / `ModelInput::extra`.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelField {
+    pub key: String,
+    /// Stable group id ("io" | "gen"); `group` is its display label.
+    pub gid: String,
+    pub group: String,
+    pub label: String,
+    pub desc: String,
+    /// "bool" | "number" | "chips" | "select"
+    pub kind: String,
+    pub options: Vec<String>,
+    /// One short label per option (same order).
+    pub hints: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -52,6 +77,13 @@ pub struct Provider {
     /// "responses" | "chat" | "anthropic" (for the edit form).
     pub api: String,
     pub has_key: bool,
+    /// Short one-way fingerprint of the key: tells entries with the same key apart
+    /// from entries with different keys (e.g. a relay's protocol groups). Filled in adapters::state.
+    pub key_fp: Option<String>,
+    /// "••••abcd"
+    pub key_hint: Option<String>,
+    /// Codex: keeps the ChatGPT sign-in while requests go to this provider (`requires_openai_auth`).
+    pub official_auth: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -68,6 +100,8 @@ pub struct Model {
     pub context: Option<u64>,
     /// Can be removed from the list (custom / user-added models).
     pub deletable: bool,
+    /// Values of the agent's model fields that are set, by field key.
+    pub extra: std::collections::BTreeMap<String, Value>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -114,6 +148,10 @@ pub enum Op {
     /// Add a model to a provider's list, or edit its name / context window.
     UpsertModel { provider: String, model: ModelInput },
     DeleteModel { provider: String, model: String },
+    /// Codex: the model list that belongs to one provider (swapped into the catalog on switch).
+    SetProviderModels { provider: String, models: Vec<String> },
+    /// Claude Code: which model each role uses for one provider (default / opus / sonnet / haiku / subagent).
+    SetModelRoles { provider: String, roles: std::collections::BTreeMap<String, String> },
     /// Copy a provider (address, key, visible models) from another agent, or from the
     /// shared library (from_agent = "library"). Resolved in the backend so the key never
     /// reaches the UI. `api` / `name` override what the source says.
@@ -142,14 +180,33 @@ pub struct ProviderInput {
     /// Initial model ids for a new provider.
     #[serde(default)]
     pub models: Vec<String>,
+    /// Take the key from this library entry (resolved in the backend; the UI never has it).
+    #[serde(default)]
+    pub key_from_library: Option<String>,
+    /// Codex: official sign-in mixed with this provider. None = keep as is.
+    #[serde(default)]
+    pub official_auth: Option<bool>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInput {
     pub id: String,
     pub name: Option<String>,
     pub context: Option<u64>,
+    /// Model fields to change, by key; null clears one (back to the agent's default).
+    #[serde(default)]
+    pub extra: std::collections::BTreeMap<String, Value>,
+}
+
+/// One-way 40-bit fingerprint of a secret (FNV-1a), for grouping only.
+pub fn key_fingerprint(k: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in k.trim().bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{:010x}", h >> 24)
 }
 
 /// Masks a secret for display: "••••abcd".
@@ -158,9 +215,10 @@ pub fn mask_key(k: &str) -> String {
     format!("••••{tail}")
 }
 
-/// Turns a display name into a config-safe id ("My Relay" -> "my-relay").
+/// Turns a display name into a config-safe id ("My Relay" -> "my-relay"; Chinese is
+/// spelled in pinyin: "中转站" -> "zhong-zhuan-zhan").
 pub fn slug(name: &str) -> String {
-    let s: String = name
+    let s: String = deunicode::deunicode(name)
         .to_lowercase()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -235,5 +293,19 @@ impl Setting {
     pub fn with_hints(mut self, hints: &[&str]) -> Self {
         self.hints = hints.iter().map(|s| s.to_string()).collect();
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slug;
+
+    #[test]
+    fn slug_spells_chinese_in_pinyin() {
+        assert_eq!(slug("My Relay"), "my-relay");
+        assert_eq!(slug("中转站"), "zhong-zhuan-zhan");
+        assert_eq!(slug("中转站OP"), "zhong-zhuan-zhan-op");
+        assert_eq!(slug("小米 MiMo"), "xiao-mi-mimo");
+        assert_eq!(slug("!!!"), "provider");
     }
 }

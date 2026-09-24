@@ -1,4 +1,4 @@
-import type { AgentId, AgentState } from "../api";
+import type { AgentId, AgentState, ApiKind, GatewayRouteView } from "../api";
 import { type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, viewModels } from "../draft";
 import { AgentIcon, Icon } from "./icons";
 import { Bars, type Latency, colorFor, initials, latencyView, serviceKey } from "./ProviderCard";
@@ -17,9 +17,15 @@ interface Props {
   onEdit: () => void;
   onDelete: () => void;
   onUndo: () => void;
+  /** Gateway state of this provider: undefined = direct; null = points at a route that no longer exists. */
+  gatewayRoute: GatewayRouteView | null | undefined;
 }
 
-export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest, onAction, onModels, onCopy, onEdit, onDelete, onUndo }: Props) {
+import { ProviderTest } from "./ProviderTest";
+import { API_LABEL } from "../services";
+import { t } from "../i18n";
+
+export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest, onAction, onModels, onCopy, onEdit, onDelete, onUndo, gatewayRoute }: Props) {
   const enabled = p.isNew || isEnabled(p, draft);
   const off = st.mode === "multi" && !enabled;
   const isCurrent = st.mode === "single" && currentProvider(st, draft) === p.id;
@@ -36,7 +42,14 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
       )
     : [];
 
-  const status = p.isDeleted ? "将删除（应用后生效）" : p.isNew ? "新增（应用后生效）" : !p.compatible ? "不兼容" : off ? "已停用" : isCurrent ? "当前使用" : p.builtin ? "内置" : st.mode === "multi" ? "已启用" : "可切换";
+  const status = p.isDeleted ? t("providerDetail.statusDeleting")
+    : p.isNew ? t("providerDetail.statusNew")
+    : !p.compatible ? t("providerDetail.statusIncompatible")
+    : off ? t("common.disabled")
+    : isCurrent ? t("providerDetail.statusCurrent")
+    : p.builtin ? t("providerDetail.statusBuiltin")
+    : st.mode === "multi" ? t("common.enabled")
+    : t("providerDetail.statusSwitchable");
 
   return (
     <section className="pdetail">
@@ -46,7 +59,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
           <div className="strong ellipsis">{p.name}</div>
           <div className="muted tiny">{status}</div>
         </div>
-        <button className="icon-btn" aria-label="关闭详情" onClick={onClose}>
+        <button className="icon-btn" aria-label={t("providerDetail.closeDetails")} onClick={onClose}>
           <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M1 1l10 10M11 1 1 11" /></svg>
         </button>
       </div>
@@ -55,20 +68,44 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         <div className="pdetail-lat">
           <Bars level={lat.level} />
           <span className={`lat${lat.live ? (lat.level >= 2 ? " good" : " slow") : ""}`}>{lat.text}</span>
-          {p.baseUrl && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />重新测速</button>}
+          {p.baseUrl && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />{t("providerDetail.retest")}</button>}
         </div>
       )}
 
+      {p.baseUrl && p.compatible && (() => {
+        // Codex: one shared catalog; others: this provider's own list (visible first).
+        const list = st.catalog ? st.catalog.filter((m) => m.visible).map((m) => m.id) : [...p.models].sort((a, b) => Number(b.visible) - Number(a.visible)).map((m) => m.id);
+        const configured = st.current.find((r) => r.k === "model")?.v ?? null;
+        return (
+          <ProviderTest
+            source={p.isNew ? null : { agent: st.id, provider: p.id }}
+            models={list}
+            defaultModel={configured}
+            disabled={p.isNew ? t("providerDetail.testAfterApply") : null}
+          />
+        );
+      })()}
+
       <div className="kv">
         <div className="kv-row">
-          <span className="muted small">地址</span>
+          <span className="muted small">{t("common.baseUrl")}</span>
           <span className="row gap6 minw0">
-            <span className="mono small wrap grow">{p.baseUrl ?? p.host}</span>
-            {p.baseUrl && <button className="link tiny" onClick={() => onCopy(p.baseUrl!)}>复制</button>}
+            <span className="mono small ellipsis grow minw0" title={p.baseUrl ?? p.host}>{p.baseUrl ?? p.host}</span>
+            {p.baseUrl && <button className="icon-btn sm" aria-label={t("providerDetail.copyUrl")} title={t("providerDetail.copyUrl")} onClick={() => onCopy(p.baseUrl!)}><Icon.copy size={12} /></button>}
           </span>
         </div>
-        <div className="kv-row"><span className="muted small">接口</span><span className="small">{p.apis.join(" · ")}</span></div>
-        {p.isNew && <div className="kv-row"><span className="muted small">密钥</span><span className="small">{p.hasKey ? "已填写" : "未填写"}</span></div>}
+        <div className="kv-row"><span className="muted small">{t("providerDetail.api")}</span><span className="small">{p.apis.join(" · ")}</span></div>
+        {gatewayRoute !== undefined && (
+          <div className="kv-row">
+            <span className="muted small">{t("providerDetail.connection")}</span>
+            <span className="small wrap">
+              {gatewayRoute
+                ? <>{t("providerDetail.viaGateway", { from: API_LABEL[p.api as ApiKind], to: API_LABEL[gatewayRoute.upstreamApi] })}<br /><span className="mono tiny muted">{gatewayRoute.upstreamUrl}</span></>
+                : <span className="warn-text">{t("providerDetail.gatewayMissing")}</span>}
+            </span>
+          </div>
+        )}
+        {p.isNew && <div className="kv-row"><span className="muted small">{t("common.apiKey")}</span><span className="small">{p.hasKey ? t("providerDetail.keyFilled") : t("providerDetail.keyEmpty")}</span></div>}
         {p.details.map((d) => (
           <div key={d.k} className="kv-row">
             <span className="muted small">{d.k}</span>
@@ -76,17 +113,17 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
           </div>
         ))}
         <div className="kv-row">
-          <span className="muted small">模型</span>
+          <span className="muted small">{t("common.models")}</span>
           <span className="row gap6">
-            <span className="small">{visible}/{p.models.length} 可见</span>
-            {p.models.length > 0 && !p.isNew && <button className="link tiny" onClick={onModels}>查看模型列表</button>}
+            <span className="small">{t("providerDetail.visibleOf", { visible, total: p.models.length })}</span>
+            {p.models.length > 0 && !p.isNew && <button className="link tiny" onClick={onModels}>{t("providerDetail.viewModels")}</button>}
           </span>
         </div>
       </div>
 
       {elsewhere.length > 0 && (
         <div className="pdetail-also">
-          <span className="muted tiny">同一服务也配置在</span>
+          <span className="muted tiny">{t("providerDetail.alsoIn")}</span>
           {elsewhere.map((e, i) => (
             <span key={i} className="also-chip"><AgentIcon id={e.id} size={16} />{e.name} · {e.provider}</span>
           ))}
@@ -95,22 +132,22 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
 
       {p.isDeleted || p.isNew ? (
         <div className="grid2">
-          {p.isNew && <button className="btn full" onClick={onEdit}>编辑</button>}
-          <button className="btn full" onClick={onUndo}>{p.isNew ? "撤销添加" : "撤销删除"}</button>
+          {p.isNew && <button className="btn full" onClick={onEdit}>{t("common.edit")}</button>}
+          <button className="btn full" onClick={onUndo}>{p.isNew ? t("providerDetail.undoAdd") : t("providerDetail.undoDelete")}</button>
         </div>
       ) : (
         <>
           {p.compatible && !(st.mode === "multi" && p.builtin) && (
             st.mode === "single" ? (
-              <button className="btn full" disabled={isCurrent || st.readonly} onClick={onAction}>{isCurrent ? "正在使用" : "设为当前供应商"}</button>
+              <button className="btn full" disabled={isCurrent || st.readonly} onClick={onAction}>{isCurrent ? t("providerDetail.inUse") : t("providerDetail.setCurrent")}</button>
             ) : (
-              <button className="btn full" disabled={st.readonly} onClick={onAction}>{enabled ? "停用这个供应商" : "启用这个供应商"}</button>
+              <button className="btn full" disabled={st.readonly} onClick={onAction}>{enabled ? t("providerDetail.disableThis") : t("providerDetail.enableThis")}</button>
             )
           )}
           {p.editable && (
             <div className="grid2">
-              <button className="btn full" disabled={st.readonly} onClick={onEdit}>编辑</button>
-              <button className="btn full danger" disabled={st.readonly || isCurrent} title={isCurrent ? "正在使用，先切换到其他供应商" : undefined} onClick={onDelete}>删除</button>
+              <button className="btn full" disabled={st.readonly} onClick={onEdit}>{t("common.edit")}</button>
+              <button className="btn full danger" disabled={st.readonly || isCurrent} title={isCurrent ? t("providerDetail.deleteInUse") : undefined} onClick={onDelete}>{t("common.delete")}</button>
             </div>
           )}
         </>

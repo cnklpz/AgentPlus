@@ -3,6 +3,7 @@
 //! each entry's `visibility` ("list" | "hide") decides whether it shows up.
 //! Provider keys live in `~/.codex/.env` under the provider's `env_key`.
 
+use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
 use crate::store;
@@ -14,7 +15,10 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 pub const ID: &str = "codex";
 const EFFORTS: [&str; 7] = ["low", "medium", "high", "xhigh", "persistent", "ultra", "max"];
-const INJECT_FILE: &str = "AgentPlus · Codex 界面注入";
+
+fn inject_file() -> &'static str {
+    l("AgentPlus · Codex 界面注入", "AgentPlus · Codex UI injection")
+}
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
 const FAST_TIER: &str = "priority";
 
@@ -35,7 +39,7 @@ fn env_path() -> PathBuf {
 
 fn load_doc() -> Result<(DocumentMut, TextMeta)> {
     let (text, meta) = read_text(&config_path())?;
-    let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!("config.toml 解析失败：{e}"))?;
+    let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Couldn't parse config.toml: {e}")))?;
     Ok((doc, meta))
 }
 
@@ -91,9 +95,9 @@ fn provider_str(doc: &DocumentMut, id: &str, key: &str) -> Option<String> {
 /// `model_provider` at it.
 fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut Diff, cfg_file: &str) -> Result<()> {
     if provider == "openai" {
-        return Err(anyhow!("OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商"));
+        return Err(anyhow!(l("OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商", "The OpenAI official account can't use the fixed ID; switch to a custom provider first")));
     }
-    let mut table = provider_item(doc, provider).cloned().ok_or_else(|| anyhow!("找不到供应商 {provider}"))?;
+    let mut table = provider_item(doc, provider).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")))?;
     if let Some(t) = table.as_table_like_mut() {
         t.insert("name", value(format!("AgentPlus（{provider}）")));
     }
@@ -103,7 +107,7 @@ fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut D
         doc["model_provider"] = value(FIXED_ID);
         diff.push(cfg_file, format!("model_provider = \"{raw}\" → \"{FIXED_ID}\""), true);
     }
-    diff.push(cfg_file, format!("[model_providers.{FIXED_ID}] ← 复制「{provider}」的整段配置（地址、密钥变量、接口、认证方式）"), true);
+    diff.push(cfg_file, tr!("[model_providers.{FIXED_ID}] ← 复制「{provider}」的整段配置（地址、密钥变量、接口、认证方式）", "[model_providers.{FIXED_ID}] ← copy the whole \"{provider}\" section (base URL, key variable, API, auth)"), true);
     store::set_str(store, ID, "fixedSource", provider);
     Ok(())
 }
@@ -166,11 +170,45 @@ fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
 fn key_status(name: &str) -> &'static str {
     let (lines, _) = read_env();
     if lines.iter().any(|l| env_line_key(l) == Some(name)) {
-        "已在 ~/.codex/.env 配置"
+        l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
     } else if std::env::var_os(name).is_some() {
-        "已在系统环境变量配置"
+        l("已在系统环境变量配置", "set in system environment variables")
     } else {
-        "未找到，请求会失败"
+        l("未找到，请求会失败", "not found; requests will fail")
+    }
+}
+
+// ---------------------------------------------------------------- ~/.codex/auth.json
+
+#[derive(Debug, PartialEq)]
+enum SignIn {
+    ChatGpt,
+    ApiKey,
+    None,
+    /// Credentials kept in the OS keyring; AgentPlus can't tell.
+    Unknown,
+}
+
+/// How Codex is signed in, following its own rule: an explicit `auth_mode` wins,
+/// otherwise a non-empty `OPENAI_API_KEY` means API-key mode.
+fn sign_in(doc: &DocumentMut) -> SignIn {
+    let Ok((v, _)) = read_json(&codex_home().join("auth.json")) else {
+        let store = doc.get("cli_auth_credentials_store").and_then(|v| v.as_str()).unwrap_or("file");
+        return if store == "file" { SignIn::None } else { SignIn::Unknown };
+    };
+    sign_in_from(&v)
+}
+
+fn sign_in_from(v: &Value) -> SignIn {
+    let key = v.get("OPENAI_API_KEY").and_then(|x| x.as_str()).is_some_and(|x| !x.trim().is_empty());
+    let tokens = v.get("tokens").and_then(|t| t.get("refresh_token").or_else(|| t.get("access_token"))).and_then(|x| x.as_str()).is_some_and(|x| !x.is_empty());
+    match v.get("auth_mode").and_then(|x| x.as_str()) {
+        Some("chatgpt") | Some("chatgptAuthTokens") if tokens => SignIn::ChatGpt,
+        Some("apikey") | Some("apiKey") if key => SignIn::ApiKey,
+        Some(_) => SignIn::None,
+        None if key => SignIn::ApiKey,
+        None if tokens => SignIn::ChatGpt,
+        None => SignIn::None,
     }
 }
 
@@ -179,9 +217,9 @@ fn key_status(name: &str) -> &'static str {
 fn providers(doc: &DocumentMut) -> Vec<Provider> {
     let mut out = vec![Provider {
         id: "openai".into(),
-        name: "OpenAI 官方".into(),
+        name: l("OpenAI 官方", "OpenAI official").into(),
         base_url: None,
-        host: "ChatGPT 账号登录".into(),
+        host: l("ChatGPT 账号登录", "ChatGPT account sign-in").into(),
         apis: vec!["Responses".into()],
         builtin: true,
         enabled: true,
@@ -189,13 +227,16 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
         reason: None,
         models: vec![],
         details: vec![
-            Kv::text("认证方式", "ChatGPT 账号登录（~/.codex/auth.json）"),
-            Kv::text("Fast", "账号登录时 Codex 原生显示"),
-            Kv::mono("配置 ID", "openai（内置）"),
+            Kv::text(l("认证方式", "Authentication"), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
+            Kv::text("Fast", l("账号登录时 Codex 原生显示", "Shown natively by Codex when signed in with an account")),
+            Kv::mono(l("配置 ID", "Config ID"), l("openai（内置）", "openai (built-in)")),
         ],
         editable: false,
         api: "responses".into(),
         has_key: true,
+        key_fp: None,
+        key_hint: None,
+        official_auth: false,
     }];
     if let Some(t) = doc.get("model_providers").and_then(|i| i.as_table_like()) {
         for (id, item) in t.iter() {
@@ -207,15 +248,19 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
             let base = get("base_url");
             let chat = wire == "chat";
             let env_key = get("env_key");
+            let official_auth = item.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut details = vec![
-                Kv::mono("配置 ID", format!("[model_providers.{id}]")),
+                Kv::mono(l("配置 ID", "Config ID"), format!("[model_providers.{id}]")),
                 Kv::mono("wire_api", format!("\"{wire}\"")),
             ];
-            match &env_key {
-                Some(k) => details.push(Kv::text("密钥", format!("环境变量 {k} · {}", key_status(k)))),
-                None => details.push(Kv::text("密钥", "未设置 env_key")),
+            if official_auth {
+                details.push(Kv::text(l("官方登录混用", "Official sign-in mix"), l("已开启 · Codex 用 ChatGPT 账号登录，对话请求发往此供应商并使用它的密钥", "On · Codex stays signed in with ChatGPT; requests go to this provider with its own API key")));
             }
-            details.push(Kv::text("Fast", "Codex 默认隐藏（可在「其他设置」注入显示）"));
+            match &env_key {
+                Some(k) => details.push(Kv::text(l("密钥", "API key"), tr!("环境变量 {k} · {}", "Environment variable {k} · {}", key_status(k)))),
+                None => details.push(Kv::text(l("密钥", "API key"), l("未设置 env_key", "env_key not set"))),
+            }
+            details.push(Kv::text("Fast", l("Codex 默认隐藏（可在「其他设置」注入显示）", "Hidden by Codex by default (can be shown via injection in \"Other settings\")")));
             out.push(Provider {
                 details,
                 id: id.to_string(),
@@ -226,11 +271,14 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 builtin: false,
                 enabled: true,
                 compatible: !chat,
-                reason: if chat { Some("Codex 已不支持 Chat 接口".into()) } else { None },
+                reason: if chat { Some(l("Codex 已不支持 Chat 接口", "Codex no longer supports the Chat API").into()) } else { None },
                 models: vec![],
                 editable: true,
                 api: if chat { "chat".into() } else { "responses".into() },
                 has_key: env_key.as_deref().and_then(env_value).is_some(),
+                key_fp: None,
+                key_hint: None,
+                official_auth,
             });
         }
     }
@@ -254,6 +302,98 @@ fn set_custom_models(store: &mut Value, list: &[String]) {
     store::set_value(store, ID, "customModels", Value::from(list.to_vec()));
 }
 
+/// Per-provider model lists (visible slugs), kept by AgentPlus. Codex has a single
+/// catalog; switching provider swaps the stored list into it.
+fn provider_models(store: &Value) -> serde_json::Map<String, Value> {
+    crate::store::agent_get(store, ID, "providerModels").and_then(|x| x.as_object()).cloned().unwrap_or_default()
+}
+
+fn stored_list(store: &Value, provider: &str) -> Option<Vec<String>> {
+    provider_models(store)
+        .get(provider)
+        .and_then(|l| l.as_array())
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+}
+
+/// Returns true when the stored list changed.
+fn set_stored_list(store: &mut Value, provider: &str, list: &[String]) -> bool {
+    if stored_list(store, provider).as_deref() == Some(list) {
+        return false;
+    }
+    let mut all = provider_models(store);
+    all.insert(provider.to_string(), Value::from(list.to_vec()));
+    store::set_value(store, ID, "providerModels", Value::Object(all));
+    true
+}
+
+fn visible_slugs(v: &Value) -> Vec<String> {
+    v.get("models")
+        .and_then(|m| m.as_array())
+        .map(|a| {
+            a.iter()
+                .filter(|m| m.get("visibility").and_then(|x| x.as_str()) != Some("hide"))
+                .filter_map(|m| m.get("slug").and_then(|s| s.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Adds a user model to the catalog, cloning an existing entry so Codex gets every field.
+fn add_custom_model(v: &mut Value, store: &mut Value, id: &str, name: Option<&str>, context: Option<u64>) -> Result<String> {
+    let models = v.get_mut("models").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!(l("模型目录格式不对", "The model catalog has an unexpected format")))?;
+    let mut entry = models.first().cloned().ok_or_else(|| anyhow!(l("模型目录是空的，没有可参照的条目", "The model catalog is empty; no entry to copy from")))?;
+    let prio = models.iter().filter_map(|x| x.get("priority").and_then(|p| p.as_i64())).max().unwrap_or(0) + 1;
+    let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(id).to_string();
+    entry["slug"] = Value::from(id);
+    entry["display_name"] = Value::from(name.as_str());
+    entry["description"] = Value::from("自定义模型（AgentPlus 添加）");
+    entry["visibility"] = Value::from("list");
+    entry["priority"] = Value::from(prio);
+    for k in ["availability_nux", "upgrade"] {
+        if entry.get(k).is_some() {
+            entry[k] = Value::Null;
+        }
+    }
+    if let Some(c) = context {
+        entry["context_window"] = Value::from(c);
+    }
+    models.push(entry);
+    let mut custom = custom_models(store);
+    custom.push(id.to_string());
+    set_custom_models(store, &custom);
+    let ctx = context.map(|c| tr!("，上下文 {}", ", context {}", fmt_ctx(c))).unwrap_or_default();
+    Ok(tr!("+ {id}（{name}{ctx}）", "+ {id} ({name}{ctx})"))
+}
+
+/// Makes exactly `list` visible in the catalog (adding unknown slugs as custom models).
+fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff, cat_file: &str, who: &str) -> Result<bool> {
+    let (mut shown, mut hidden) = (0, 0);
+    if let Some(models) = v.get_mut("models").and_then(|x| x.as_array_mut()) {
+        for m in models.iter_mut() {
+            let Some(slug) = m.get("slug").and_then(|s| s.as_str()).map(String::from) else { continue };
+            let want = if list.contains(&slug) { "list" } else { "hide" };
+            if m.get("visibility").and_then(|x| x.as_str()).unwrap_or("list") != want {
+                m["visibility"] = Value::from(want);
+                if want == "list" { shown += 1 } else { hidden += 1 }
+            }
+        }
+    }
+    let mut added = vec![];
+    for id in list {
+        if catalog_entry(v, id).is_none() {
+            added.push(add_custom_model(v, store, id, None, None)?);
+        }
+    }
+    if shown + hidden + added.len() == 0 {
+        return Ok(false);
+    }
+    diff.push(cat_file, tr!("模型列表换成「{who}」的 {} 个模型（显示 {shown} 个，隐藏 {hidden} 个）", "Model list replaced with \"{who}\"'s {} model(s) ({shown} shown, {hidden} hidden)", list.len()), true);
+    for a in added {
+        diff.push(cat_file, a, true);
+    }
+    Ok(true)
+}
+
 fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
     let empty = vec![];
     let list = v.get("models").and_then(|m| m.as_array()).unwrap_or(&empty);
@@ -271,7 +411,7 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
                 tags.push("Fast".to_string());
             }
             if is_custom {
-                tags.push("自定义".to_string());
+                tags.push(l("自定义", "Custom").to_string());
             }
             let context = m.get("context_window").and_then(|x| x.as_u64());
             Some(Model {
@@ -282,6 +422,7 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
                 name: m.get("display_name").and_then(|x| x.as_str()).map(String::from),
                 context,
                 deletable: is_custom,
+                extra: crate::mfields::read(m, crate::mfields::CODEX),
                 id,
             })
         })
@@ -308,6 +449,8 @@ pub fn state(inst: &Install) -> AgentState {
         readonly: false,
         fixed_pending: false,
         fixed_prompt: false,
+        restartable: false,
+        model_fields: vec![],
     };
     let (doc, _) = match load_doc() {
         Ok(d) => d,
@@ -331,61 +474,96 @@ pub fn state(inst: &Install) -> AgentState {
         st.files.push(display_path(&p));
         st.catalog_file = Some(display_path(&p));
         st.catalog = Some(catalog_models(&v, &custom_models(&store)));
+        // Each provider's own list: the live catalog for the current one, the stored list for others.
+        let live = visible_slugs(&v);
+        for p in st.providers.iter_mut() {
+            let list = if p.id == cur { Some(live.clone()) } else { stored_list(&store, &p.id) };
+            p.models = list
+                .unwrap_or_default()
+                .into_iter()
+                .map(|id| Model { id, visible: true, readonly: true, ..Default::default() })
+                .collect();
+        }
     } else {
-        st.notes.push("config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。".into());
+        st.notes.push(l("config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。", "config.toml has no model_catalog_json, so Codex fetches the model list online and it can't be edited here.").into());
     }
 
     let inject = store::get_flag(&store, ID, "fastInject");
+    let full_names = store::get_flag(&store, ID, "fullModelNames");
     let tier = service_tier(&doc);
     let sl = status_line(&doc);
     let effs = efforts(&doc);
     st.settings = vec![
-        bool_setting("fixed_id", "供应商切换", "固定供应商 ID（推荐开启）",
-            "开启后 model_provider 固定为 agentplus，切换供应商只改它的地址和密钥，会话不会因为切换而从 Codex 的最近列表和归档里消失。开启时会把当前供应商复制过去；关闭时 model_provider 改回当前供应商。", fixed),
-        bool_setting("fast_inject", "Fast", "在 Codex 中显示 Fast",
-            "Codex 只在 ChatGPT 账号登录时显示 Fast，用自定义供应商会被隐藏。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制。", inject),
-        bool_setting("fast_default", "Fast", "默认使用 Fast",
-            "写入 service_tier = \"priority\"（与 Codex 自己切换 Fast 时写入的值相同）。供应商需要支持 priority 档位。", is_fast_tier(&tier)),
-        bool_setting("fast_cli", "Fast", "Codex CLI 状态栏显示 fast-mode",
-            "CLI 与桌面版共用配置，在 [tui].status_line 里追加 fast-mode。", sl.as_ref().map(|l| l.iter().any(|x| x == "fast-mode")).unwrap_or(false)),
-        chips_setting("efforts", "推理强度", "选择器里可选的推理强度",
-            "勾选的档位会出现在 Codex 桌面版的推理强度菜单里（[desktop] enabled-reasoning-efforts）。模型不支持的档位不会显示。", effs.clone(), &EFFORTS)
+        bool_setting("fixed_id", l("供应商切换", "Provider switching"), l("固定供应商 ID（推荐开启）", "Fixed provider ID (recommended)"),
+            l("开启后 model_provider 固定为 agentplus，切换供应商只改它的地址和密钥，会话不会因为切换而从 Codex 的最近列表和归档里消失。开启时会把当前供应商复制过去；关闭时 model_provider 改回当前供应商。",
+              "When on, model_provider stays agentplus and switching providers only changes its base URL and API key, so sessions don't disappear from Codex's recent list and archive after a switch. Turning it on copies the current provider over; turning it off points model_provider back at the current provider."), fixed),
+        bool_setting("fast_inject", "Fast", l("在 Codex 中显示 Fast", "Show Fast in Codex"),
+            l("Codex 只在 ChatGPT 账号登录时显示 Fast，用自定义供应商会被隐藏。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制。",
+              "Codex only shows Fast when signed in with a ChatGPT account and hides it for custom providers. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads."), inject),
+        bool_setting("fast_default", "Fast", l("默认使用 Fast", "Use Fast by default"),
+            l("写入 service_tier = \"priority\"（与 Codex 自己切换 Fast 时写入的值相同）。供应商需要支持 priority 档位。",
+              "Writes service_tier = \"priority\" (the same value Codex writes when you pick Fast). The provider must support the priority tier."), is_fast_tier(&tier)),
+        bool_setting("fast_cli", "Fast", l("Codex CLI 状态栏显示 fast-mode", "Show fast-mode in the Codex CLI status line"),
+            l("CLI 与桌面版共用配置，在 [tui].status_line 里追加 fast-mode。", "The CLI shares its config with the desktop app; appends fast-mode to [tui].status_line."), sl.as_ref().map(|x| x.iter().any(|x| x == "fast-mode")).unwrap_or(false)),
+        chips_setting("efforts", l("推理强度", "Reasoning effort"), l("选择器里可选的推理强度", "Reasoning efforts offered in the picker"),
+            l("勾选的档位会出现在 Codex 桌面版的推理强度菜单里（[desktop] enabled-reasoning-efforts）。模型不支持的档位不会显示。",
+              "Checked levels appear in the Codex desktop reasoning effort menu ([desktop] enabled-reasoning-efforts). Levels a model doesn't support are not shown."), effs.clone(), &EFFORTS)
             .with_hints(&[
-                "回复最快，推理较浅",
-                "速度和深度平衡，适合日常任务",
-                "推理更深，适合复杂问题",
-                "比 high 更深的推理",
-                "持久模式：做完请求后继续主动做后续有用的工作，直到没有可做的",
-                "最高推理，并自动把任务拆给子代理（部分模型支持）",
-                "最高推理深度，适合最难的问题",
+                l("回复最快，推理较浅", "Fastest replies, light reasoning"),
+                l("速度和深度平衡，适合日常任务", "Balances speed and depth; good for everyday tasks"),
+                l("推理更深，适合复杂问题", "Deeper reasoning for complex problems"),
+                l("比 high 更深的推理", "Deeper reasoning than high"),
+                l("持久模式：做完请求后继续主动做后续有用的工作，直到没有可做的", "Persistent mode: after the request, keeps doing useful follow-up work until nothing is left"),
+                l("最高推理，并自动把任务拆给子代理（部分模型支持）", "Maximum reasoning, automatically splitting tasks across subagents (some models)"),
+                l("最高推理深度，适合最难的问题", "Maximum reasoning depth for the hardest problems"),
             ]),
-        bool_setting("ctx_usage", "界面", "显示上下文用量", "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
-        bool_setting("plain", "界面", "纯文本输入框", "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
+        bool_setting("full_names", l("界面", "Interface"), l("显示完整模型名", "Show full model names"),
+            l("Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。",
+              "Codex shows full model names only when signed in with a ChatGPT account; with custom providers it drops the \"GPT-\" prefix (GPT-6 Sol shows as 6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and turns this shortening off when the UI loads."), full_names),
+        bool_setting("ctx_usage", l("界面", "Interface"), l("显示上下文用量", "Show context usage"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
+        bool_setting("plain", l("界面", "Interface"), l("纯文本输入框", "Plain text composer"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
     ];
 
     let prov = st.providers.iter().find(|p| p.id == cur);
     let custom = prov.map(|p| !p.builtin).unwrap_or(false);
+    let mixed = prov.is_some_and(|p| p.official_auth);
+    let signed = mixed.then(|| sign_in(&doc));
+    match signed {
+        Some(SignIn::None) => st.notes.push(l("当前供应商开启了官方登录混用，但 Codex 还没有登录 ChatGPT 账号：在 Codex 里登录后，对话才会发往中转站。", "The current provider uses the official sign-in mix, but Codex isn't signed in with a ChatGPT account yet. Sign in in Codex so requests can go to the relay.").into()),
+        Some(SignIn::ApiKey) => st.notes.push(l("当前供应商开启了官方登录混用，但 Codex 现在是 API Key 登录（~/.codex/auth.json），官方账号功能不会解锁：在 Codex 里退出后改用 ChatGPT 账号登录。", "The current provider uses the official sign-in mix, but Codex is signed in with an API key (~/.codex/auth.json), so account features stay locked. Sign out in Codex and sign in with a ChatGPT account.").into()),
+        _ => {}
+    }
     st.current = vec![
         Kv::mono("model_provider", format!("\"{raw}\"")),
         Kv::text(
-            "固定 ID",
+            l("固定 ID", "Fixed ID"),
             if fixed {
-                format!("已开启 · 指向「{cur}」")
+                tr!("已开启 · 指向「{cur}」", "On · points at \"{cur}\"")
             } else if st.fixed_prompt {
-                "预开启 · 切换供应商时写入".to_string()
+                l("预开启 · 切换供应商时写入", "Pre-enabled · written on provider switch").to_string()
             } else {
-                "未开启".to_string()
+                l("未开启", "Off").to_string()
             },
         ),
-        Kv::mono("base_url", prov.and_then(|p| p.base_url.clone()).unwrap_or_else(|| "ChatGPT 账号".into())),
+        Kv::mono("base_url", prov.and_then(|p| p.base_url.clone()).unwrap_or_else(|| l("ChatGPT 账号", "ChatGPT account").into())),
+        Kv::text(
+            l("官方登录混用", "Official sign-in mix"),
+            match signed {
+                None => l("未开启", "Off"),
+                Some(SignIn::ChatGpt) => l("已开启 · ChatGPT 已登录", "On · signed in with ChatGPT"),
+                Some(SignIn::ApiKey) => l("已开启 · 但当前是 API Key 登录", "On · but signed in with an API key"),
+                Some(SignIn::None) => l("已开启 · ChatGPT 未登录", "On · not signed in with ChatGPT"),
+                Some(SignIn::Unknown) => l("已开启 · 登录凭据在系统钥匙串", "On · credentials are in the system keyring"),
+            },
+        ),
         Kv::mono("model", doc.get("model").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
         Kv::mono("service_tier", format!("\"{tier}\"")),
-        Kv::text("Fast 选项", if inject { "注入显示（经 AgentPlus 启动时生效）" } else if custom { "被 Codex 隐藏" } else { "官方账号可见" }),
-        Kv::mono("模型目录", match &st.catalog {
-            Some(c) => format!("{}/{} 可见", c.iter().filter(|m| m.visible).count(), c.len()),
-            None => "在线获取".into(),
+        Kv::text(l("Fast 选项", "Fast option"), if inject { l("注入显示（经 AgentPlus 启动时生效）", "Injected (takes effect when launched via AgentPlus)") } else if custom { l("被 Codex 隐藏", "Hidden by Codex") } else { l("官方账号可见", "Visible with the official account") }),
+        Kv::mono(l("模型目录", "Model catalog"), match &st.catalog {
+            Some(c) => tr!("{}/{} 可见", "{}/{} visible", c.iter().filter(|m| m.visible).count(), c.len()),
+            None => l("在线获取", "Fetched online").into(),
         }),
-        Kv::mono("推理强度", effs.join(" ")),
+        Kv::mono(l("推理强度", "Reasoning effort"), effs.join(" ")),
     ];
     st
 }
@@ -393,7 +571,7 @@ pub fn state(inst: &Install) -> AgentState {
 /// Base URL + key of a provider, for fetching its model list.
 pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
     let (doc, _) = load_doc()?;
-    let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!("供应商 {id} 没有 base_url"))?;
+    let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
     let key = provider_str(&doc, id, "env_key").and_then(|k| env_value(&k));
     Ok((base, key, "responses".into()))
 }
@@ -409,8 +587,37 @@ fn unique_id(doc: &DocumentMut, name: &str) -> String {
     (2..).map(|n| format!("{base}-{n}")).find(|c| !taken(c)).unwrap()
 }
 
+/// Official sign-in mix: `requires_openai_auth = true` keeps Codex on the ChatGPT sign-in
+/// (account features stay unlocked) while the provider's own key (`env_key`, which Codex
+/// prefers over the ChatGPT token) authenticates the requests to its `base_url`.
+/// Returns true when the table changed.
+fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> {
+    // Codex treats a provider named exactly "OpenAI" as its own backend (server-side compaction etc.), which relays don't support.
+    if on && provider_str(doc, id, "name").as_deref() == Some("OpenAI") {
+        return Err(anyhow!(l("开启官方登录混用时，供应商名称不能是 OpenAI（Codex 会把它当成官方后端），请换个名称", "With official sign-in mix on, the provider can't be named OpenAI (Codex treats that name as its own backend); pick another name")));
+    }
+    let t = doc
+        .get_mut("model_providers")
+        .and_then(|t| t.get_mut(id))
+        .and_then(|t| t.as_table_like_mut())
+        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let old = t.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
+    if old == on {
+        return Ok(false);
+    }
+    if on {
+        t.insert("requires_openai_auth", value(true));
+    } else {
+        t.remove("requires_openai_auth");
+    }
+    Ok(true)
+}
+
 /// Applies `ops` in memory, records the diff, and writes files unless `dry_run`.
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+    if crate::official::active() {
+        return Err(anyhow!(l("正在获取官方模型列表，config.toml 是临时状态；先在「模型列表」里完成或取消获取", "Fetching the official model list; config.toml is in a temporary state. Finish or cancel the fetch in \"Model list\" first")));
+    }
     let (mut doc, meta) = load_doc()?;
     let cfg_file = display_path(&config_path());
     let env_file = display_path(&env_path());
@@ -437,19 +644,21 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
     };
     let mut ordered: Vec<&Op> = ops.iter().collect();
     ordered.sort_by_key(|o| rank(o));
+    let before = current_provider(&doc, &store);
+    let mut switched: Option<String> = None;
 
     for op in ordered {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.api != "responses" {
-                    return Err(anyhow!("Codex 只支持 Responses 接口"));
+                    return Err(anyhow!(l("Codex 只支持 Responses 接口", "Codex only supports the Responses API")));
                 }
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!("名称和地址不能为空"));
+                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
                 }
                 let id = match &p.id {
                     Some(id) => {
-                        provider_item(&doc, id).ok_or_else(|| anyhow!("找不到供应商 {id}"))?;
+                        provider_item(&doc, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
                         id.clone()
                     }
                     None => unique_id(&doc, &p.name),
@@ -478,6 +687,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         diff.push(&cfg_file, format!("[model_providers.{id}] env_key = \"{env_key}\""), true);
                     }
                 }
+                if let Some(on) = p.official_auth {
+                    if set_official_auth(&mut doc, &id, on)? {
+                        if on {
+                            diff.push(&cfg_file, tr!("[model_providers.{id}] requires_openai_auth = true（官方登录混用：保留 ChatGPT 登录，请求发往此供应商）", "[model_providers.{id}] requires_openai_auth = true (official sign-in mix: keep the ChatGPT sign-in, send requests to this provider)"), true);
+                        } else {
+                            diff.push(&cfg_file, tr!("[model_providers.{id}] - requires_openai_auth（关闭官方登录混用）", "[model_providers.{id}] - requires_openai_auth (official sign-in mix off)"), false);
+                        }
+                    }
+                }
                 cfg_dirty = true;
                 if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
                     set_env(&mut env_lines, &env_key, k.trim());
@@ -494,7 +712,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 let raw = configured_provider(&doc);
                 let src = store::get_str(&store, ID, "fixedSource");
                 if &raw == provider || (raw == FIXED_ID && src.as_deref() == Some(provider.as_str())) {
-                    return Err(anyhow!("「{provider}」正在使用，先切换到其他供应商再删除"));
+                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商再删除", "\"{provider}\" is in use; switch to another provider before deleting it")));
                 }
                 let removed = doc
                     .get_mut("model_providers")
@@ -502,11 +720,26 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     .and_then(|t| t.remove(provider))
                     .is_some();
                 if removed {
-                    diff.push(&cfg_file, format!("- [model_providers.{provider}]（~/.codex/.env 里的密钥保留）"), false);
+                    diff.push(&cfg_file, tr!("- [model_providers.{provider}]（~/.codex/.env 里的密钥保留）", "- [model_providers.{provider}] (API key in ~/.codex/.env is kept)"), false);
                     cfg_dirty = true;
                 }
             }
             Op::SetCurrentProvider { provider } => {
+                // Keep the old provider's list, then bring in the new one's.
+                if let Some((_, v, _)) = catalog.as_mut() {
+                    if provider != &before {
+                        if set_stored_list(&mut store, &before, &visible_slugs(v)) {
+                            store_dirty = true;
+                        }
+                        if let Some(list) = stored_list(&store, provider) {
+                            if apply_list(v, &mut store, &list, &mut diff, &cat_file, provider)? {
+                                cat_dirty = true;
+                                store_dirty = true;
+                            }
+                        }
+                    }
+                }
+                switched = Some(provider.clone());
                 let raw = configured_provider(&doc);
                 if provider == "openai" || !fixed {
                     if &raw != provider {
@@ -521,8 +754,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 }
             }
             Op::SetModelVisible { model, visible, .. } => {
-                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!("没有可编辑的模型目录"))?;
-                let entry = catalog_entry(v, model).ok_or_else(|| anyhow!("模型目录里没有 {model}"))?;
+                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
+                let entry = catalog_entry(v, model).ok_or_else(|| anyhow!(tr!("模型目录里没有 {model}", "{model} is not in the model catalog")))?;
                 let want = if *visible { "list" } else { "hide" };
                 let old = entry.get("visibility").and_then(|s| s.as_str()).unwrap_or("list").to_string();
                 if old != want {
@@ -532,10 +765,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 }
             }
             Op::UpsertModel { model: m, .. } => {
-                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!("没有可编辑的模型目录"))?;
+                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
                 let id = m.id.trim().to_string();
                 if id.is_empty() {
-                    return Err(anyhow!("模型 ID 不能为空"));
+                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
                 }
                 if let Some(entry) = catalog_entry(v, &id) {
                     if let Some(n) = m.name.as_deref().filter(|n| !n.trim().is_empty()) {
@@ -553,39 +786,27 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         }
                     }
                 } else {
-                    let models = v.get_mut("models").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!("模型目录格式不对"))?;
-                    // Reuse an existing entry as the template so Codex gets every field it expects.
-                    let mut entry = models.first().cloned().ok_or_else(|| anyhow!("模型目录是空的，没有可参照的条目"))?;
-                    let prio = models.iter().filter_map(|x| x.get("priority").and_then(|p| p.as_i64())).max().unwrap_or(0) + 1;
-                    let name = m.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| id.clone());
-                    entry["slug"] = Value::from(id.as_str());
-                    entry["display_name"] = Value::from(name.as_str());
-                    entry["description"] = Value::from("自定义模型（AgentPlus 添加）");
-                    entry["visibility"] = Value::from("list");
-                    entry["priority"] = Value::from(prio);
-                    for k in ["availability_nux", "upgrade"] {
-                        if entry.get(k).is_some() {
-                            entry[k] = Value::Null;
-                        }
+                    for (k, x) in &m.extra {
+                        crate::mfields::check(crate::mfields::CODEX, k, x)?;
                     }
-                    if let Some(c) = m.context {
-                        entry["context_window"] = Value::from(c);
-                    }
-                    models.push(entry);
-                    let mut custom = custom_models(&store);
-                    custom.push(id.clone());
-                    set_custom_models(&mut store, &custom);
-                    diff.push(&cat_file, format!("+ {id}（{name}{}）", m.context.map(|c| format!("，上下文 {}", fmt_ctx(c))).unwrap_or_default()), true);
+                    let line = add_custom_model(v, &mut store, &id, m.name.as_deref(), m.context)?;
+                    diff.push(&cat_file, line, true);
                     cat_dirty = true;
                     store_dirty = true;
+                }
+                if let Some(entry) = catalog_entry(v, &id) {
+                    for l in crate::mfields::write(entry, crate::mfields::CODEX, &m.extra)? {
+                        diff.push(&cat_file, format!("{id}  {l}"), true);
+                        cat_dirty = true;
+                    }
                 }
             }
             Op::DeleteModel { model, .. } => {
                 let mut custom = custom_models(&store);
                 if !custom.contains(model) {
-                    return Err(anyhow!("{model} 是 Codex 自带的模型，只能隐藏不能删除"));
+                    return Err(anyhow!(tr!("{model} 是 Codex 自带的模型，只能隐藏不能删除", "{model} is a built-in Codex model; it can be hidden but not deleted")));
                 }
-                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!("没有可编辑的模型目录"))?;
+                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
                 if let Some(models) = v.get_mut("models").and_then(|x| x.as_array_mut()) {
                     models.retain(|m| m.get("slug").and_then(|s| s.as_str()) != Some(model));
                 }
@@ -606,7 +827,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         store_dirty = true;
                     } else if !on && raw == FIXED_ID {
                         doc["model_provider"] = value(cur.as_str());
-                        diff.push(&cfg_file, format!("model_provider = \"{FIXED_ID}\" → \"{cur}\"（关闭固定 ID）"), false);
+                        diff.push(&cfg_file, tr!("model_provider = \"{FIXED_ID}\" → \"{cur}\"（关闭固定 ID）", "model_provider = \"{FIXED_ID}\" → \"{cur}\" (fixed ID off)"), false);
                         cfg_dirty = true;
                     }
                 }
@@ -614,7 +835,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     let on = v.as_bool().unwrap_or(false);
                     if store::get_flag(&store, ID, "fastInject") != on {
                         store::set_flag(&mut store, ID, "fastInject", on);
-                        diff.push(INJECT_FILE, if on { "+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）" } else { "- 停用 Fast 显示注入" }, on);
+                        diff.push(inject_file(), if on { l("+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable Fast display injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用 Fast 显示注入", "- Disable Fast display injection") }, on);
+                        store_dirty = true;
+                    }
+                }
+                "full_names" => {
+                    let on = v.as_bool().unwrap_or(false);
+                    if store::get_flag(&store, ID, "fullModelNames") != on {
+                        store::set_flag(&mut store, ID, "fullModelNames", on);
+                        diff.push(inject_file(), if on { l("+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用完整模型名注入", "- Disable full model name injection") }, on);
                         store_dirty = true;
                     }
                 }
@@ -665,10 +894,34 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         cfg_dirty = true;
                     }
                 }
-                other => return Err(anyhow!("未知设置 {other}")),
+                other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
             },
-            Op::SetProviderEnabled { .. } => return Err(anyhow!("Codex 同时只能使用一个供应商")),
+            Op::SetProviderModels { provider, models } => {
+                let list: Vec<String> = models.iter().map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect();
+                let cur = switched.clone().unwrap_or_else(|| before.clone());
+                if provider == &cur {
+                    // The active provider's list *is* the catalog.
+                    let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
+                    if apply_list(v, &mut store, &list, &mut diff, &cat_file, provider)? {
+                        cat_dirty = true;
+                        store_dirty = true;
+                    }
+                } else if set_stored_list(&mut store, provider, &list) {
+                    diff.push(l("AgentPlus · 各供应商的模型列表", "AgentPlus · per-provider model lists"), tr!("「{provider}」的模型列表：{} 个（切换到它时生效）", "\"{provider}\" model list: {} (takes effect when you switch to it)", list.len()), true);
+                    store_dirty = true;
+                }
+            }
+            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex 同时只能使用一个供应商", "Codex can only use one provider at a time"))),
+            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code uses model roles"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+        }
+    }
+
+    // The active provider's stored list always mirrors the catalog.
+    if let Some((_, v, _)) = catalog.as_ref() {
+        let cur = switched.unwrap_or(before);
+        if set_stored_list(&mut store, &cur, &visible_slugs(v)) {
+            store_dirty = true;
         }
     }
 
@@ -721,6 +974,54 @@ pub fn dismiss_fixed_prompt() -> Result<()> {
     store::save(&s)
 }
 
-pub fn fast_inject_enabled() -> bool {
-    store::get_flag(&store::load(), ID, "fastInject")
+/// UI patches to apply when AgentPlus restarts Codex.
+pub fn ui_patches() -> crate::cdp::Patches {
+    let s = store::load();
+    crate::cdp::Patches { fast: store::get_flag(&s, ID, "fastInject"), full_names: store::get_flag(&s, ID, "fullModelNames") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn official_auth_toggles_requires_openai_auth() {
+        let mut doc = "[model_providers.relay]
+name = \"relay\"
+base_url = \"https://r.example.com/v1\"
+wire_api = \"responses\"
+env_key = \"RELAY_API_KEY\"
+".parse::<DocumentMut>().unwrap();
+        assert!(set_official_auth(&mut doc, "relay", true).unwrap());
+        assert!(!set_official_auth(&mut doc, "relay", true).unwrap());
+        let text = doc.to_string();
+        assert!(text.contains("requires_openai_auth = true"));
+        assert!(text.contains("env_key = \"RELAY_API_KEY\""), "the relay key must stay on env_key");
+        assert!(providers(&doc).iter().any(|p| p.id == "relay" && p.official_auth));
+        assert!(set_official_auth(&mut doc, "relay", false).unwrap());
+        assert!(!doc.to_string().contains("requires_openai_auth"));
+        assert!(set_official_auth(&mut doc, "missing", true).is_err());
+    }
+
+    #[test]
+    fn official_auth_rejects_the_openai_name() {
+        let mut doc = "[model_providers.x]
+name = \"OpenAI\"
+base_url = \"https://r.example.com/v1\"
+".parse::<DocumentMut>().unwrap();
+        assert!(set_official_auth(&mut doc, "x", true).is_err());
+        assert!(!set_official_auth(&mut doc, "x", false).unwrap());
+    }
+
+    #[test]
+    fn reads_sign_in_mode() {
+        let tokens = json!({ "id_token": "i", "access_token": "a", "refresh_token": "r" });
+        assert_eq!(sign_in_from(&json!({ "auth_mode": "chatgpt", "OPENAI_API_KEY": null, "tokens": tokens })), SignIn::ChatGpt);
+        assert_eq!(sign_in_from(&json!({ "OPENAI_API_KEY": null, "tokens": tokens })), SignIn::ChatGpt);
+        assert_eq!(sign_in_from(&json!({ "OPENAI_API_KEY": "sk-x", "tokens": tokens })), SignIn::ApiKey);
+        assert_eq!(sign_in_from(&json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "sk-x" })), SignIn::ApiKey);
+        assert_eq!(sign_in_from(&json!({ "auth_mode": "chatgpt", "OPENAI_API_KEY": null })), SignIn::None);
+        assert_eq!(sign_in_from(&json!({})), SignIn::None);
+    }
 }

@@ -26,6 +26,10 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tungstenite = "0.24"
 sysinfo = "0.32"
 rusqlite = { version = "0.32", features = ["bundled"] }
+serde_yaml = "0.9"
+json5 = "0.4"
+deunicode = "1.6.2"
+getrandom = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

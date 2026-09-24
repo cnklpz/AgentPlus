@@ -1,0 +1,35 @@
+import type zh from "../zh/serviceDetail";
+
+const en: typeof zh = {
+  builtinNoDelete: "Built-in providers can't be deleted",
+  inUse: "In use; switch Codex to another provider first",
+  detailsAria: "{name} details",
+  accountLogin: "Account sign-in",
+  hostGroups: "{host} · {n} group|{host} · {n} groups",
+  closeDetails: "Close details",
+  retest: "Test again",
+  groups: "Groups",
+  addGroup: "Add group",
+  uses: "{n} use|{n} uses",
+  copyUrl: "Copy URL",
+  notSet: "Not set",
+  inLibrary: "In library",
+  editGroup: "Edit group",
+  deleteGroup: "Delete group",
+  deleteFrom: "Delete \"{name}\" from where?",
+  reason: "({why})",
+  removeFromLibrary: "Remove from provider library (URL and API key)",
+  deleteQueued: "Deletions in agents are queued as pending changes first",
+  catalogModels: "Model catalog: {n}",
+  nModels: "{n} model|{n} models",
+  undo: "Undo",
+  removeFrom: "Remove from {agent}",
+  needsProto: "Needs {need}; this group is {api}, can convert through the gateway",
+  notAdded: "Not added",
+  addViaGatewayTitle: "Add with protocol conversion through the local gateway",
+  addViaGateway: "Add via gateway",
+  viaGatewayTitle: "Route through the local gateway: convert protocols, share one API key, see request logs",
+  viaGateway: "Via gateway",
+};
+
+export default en;

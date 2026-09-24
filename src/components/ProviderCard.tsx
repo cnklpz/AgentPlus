@@ -1,6 +1,7 @@
 import type { KeyboardEvent, MouseEvent } from "react";
 import type { Provider } from "../api";
 import type { ViewProvider } from "../draft";
+import { t, tn } from "../i18n";
 
 export type Latency = number | "pending" | string | undefined;
 
@@ -13,7 +14,7 @@ export function serviceKey(p: Provider): string {
 
 /** Same service host → same avatar color, so duplicates across agents read as one. */
 export function colorFor(p: Provider): string {
-  if (p.builtin) return "#121722";
+  if (p.builtin) return "var(--avatar-builtin)";
   const key = serviceKey(p) || p.id;
   let h = 0;
   for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0;
@@ -33,12 +34,12 @@ export function latencyView(p: Provider, off: boolean, latency: Latency): { text
   const live = typeof latency === "number" && p.compatible && !off;
   const level = !live ? 0 : (latency as number) < 200 ? 3 : (latency as number) < 400 ? 2 : 1;
   let text: string;
-  if (!p.compatible) text = p.reason ?? "不兼容";
-  else if (off) text = "停用中，不测速";
-  else if (!p.baseUrl) text = "账号登录";
-  else if (latency === "pending") text = "测速中…";
+  if (!p.compatible) text = p.reason ?? t("providerCard.incompatible");
+  else if (off) text = t("providerCard.offNoTest");
+  else if (!p.baseUrl) text = t("providerCard.accountLogin");
+  else if (latency === "pending") text = t("providerCard.testing");
   else if (typeof latency === "number") text = `${latency} ms`;
-  else text = latency ?? "未测速";
+  else text = latency ?? t("providerCard.untested");
   return { text, level, live };
 }
 
@@ -46,7 +47,7 @@ export function Bars({ level }: { level: number }) {
   return (
     <span className="bars" aria-hidden="true">
       {[5, 8, 12].map((h, i) => (
-        <span key={h} style={{ height: h, background: i < level ? (level >= 2 ? "#16A34A" : "#D97706") : "#D5DAE1" }} />
+        <span key={h} style={{ height: h, background: i < level ? (level >= 2 ? "#16A34A" : "#D97706") : "var(--line-dash)" }} />
       ))}
     </span>
   );
@@ -71,12 +72,12 @@ interface Props {
 export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, latency, readonly, onSelect, onAction, onModels, onTest }: Props) {
   const off = mode === "multi" && !enabled;
   let tag: { text: string; cls: string } | null = null;
-  if (p.isDeleted) tag = { text: "将删除", cls: "tag-del" };
-  else if (p.isNew) tag = { text: "新 · 未应用", cls: "tag-new" };
-  else if (!p.compatible) tag = { text: "不兼容", cls: "tag-muted" };
-  else if (off) tag = { text: "已停用", cls: "tag-muted" };
-  else if (isCurrent) tag = { text: "当前", cls: "tag-accent" };
-  else if (p.builtin) tag = { text: "内置", cls: "tag-soft" };
+  if (p.isDeleted) tag = { text: t("providerCard.tagDeleting"), cls: "tag-del" };
+  else if (p.isNew) tag = { text: t("providerCard.tagNew"), cls: "tag-new" };
+  else if (!p.compatible) tag = { text: t("providerCard.incompatible"), cls: "tag-muted" };
+  else if (off) tag = { text: t("common.disabled"), cls: "tag-muted" };
+  else if (isCurrent) tag = { text: t("providerCard.tagCurrent"), cls: "tag-accent" };
+  else if (p.builtin) tag = { text: t("providerCard.tagBuiltin"), cls: "tag-soft" };
 
   const lat = latencyView(p, off, latency);
   const total = p.models.length;
@@ -90,7 +91,10 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
       role="button"
       tabIndex={0}
       aria-pressed={selected}
-      aria-label={`${p.name} 详情`}
+      aria-label={t("providerCard.ariaDetails", { name: p.name })}
+      data-url={p.baseUrl ?? undefined}
+      data-ctx="provider"
+      data-pid={p.id}
       onClick={onSelect}
       onKeyDown={onKey}
     >
@@ -106,15 +110,16 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
       </div>
       <div className="pcard-meta">
         {p.apis.map((a) => <span key={a} className="api-chip">{a}</span>)}
-        {p.isEdited && !p.isDeleted && <span className="api-chip edited">已修改</span>}
+        {p.officialAuth && <span className="api-chip" title={t("providerCard.officialAuthHint")}>{t("providerCard.officialAuth")}</span>}
+        {p.isEdited && !p.isDeleted && <span className="api-chip edited">{t("providerCard.edited")}</span>}
         {total > 0 && p.compatible && !pending && (
-          <button className="link" onClick={stop(onModels)}>{visible}/{total} 个模型可见</button>
+          <button className="link" onClick={stop(onModels)}>{tn("providerCard.visibleModels", total, { visible })}</button>
         )}
-        {p.isNew && <span className="tiny muted">{total} 个模型</span>}
+        {p.isNew && <span className="tiny muted">{tn("providerCard.modelCount", total)}</span>}
       </div>
       <div className="pcard-foot">
         {p.baseUrl && p.compatible && !off && !pending ? (
-          <button className="lat-btn" title="点一下重新测速" onClick={stop(onTest)} disabled={latency === "pending"}>
+          <button className="lat-btn" title={t("providerCard.retestHint")} onClick={stop(onTest)} disabled={latency === "pending"}>
             <Bars level={lat.level} />
             <span className={`lat${lat.live ? (lat.level >= 2 ? " good" : " slow") : ""}`}>{lat.text}</span>
             <span className="lat-re" aria-hidden="true">↻</span>
@@ -122,18 +127,18 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
         ) : (
           <>
             <Bars level={0} />
-            <span className="lat">{pending ? (p.isNew ? "应用后生效" : "应用后删除") : lat.text}</span>
+            <span className="lat">{pending ? (p.isNew ? t("providerCard.afterApply") : t("providerCard.deleteOnApply")) : lat.text}</span>
           </>
         )}
         <span className="grow" />
         {p.compatible && !pending && !(mode === "multi" && p.builtin) && (
           mode === "single" ? (
             <button className={`pbtn${isCurrent ? " on" : ""}`} aria-pressed={isCurrent} disabled={readonly || isCurrent} onClick={stop(onAction)}>
-              {isCurrent ? "正在使用" : "设为当前"}
+              {isCurrent ? t("providerCard.inUse") : t("providerCard.setCurrent")}
             </button>
           ) : (
             <button className={`pbtn${enabled ? " enabled" : ""}`} aria-pressed={enabled} disabled={readonly} onClick={stop(onAction)}>
-              {enabled ? "已启用" : "已停用"}
+              {enabled ? t("common.enabled") : t("common.disabled")}
             </button>
           )
         )}

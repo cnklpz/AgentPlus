@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { EnvInfo } from "../api";
 import { Icon } from "./icons";
+import { t } from "../i18n";
 
 interface Props {
   envs: EnvInfo[];
@@ -34,16 +35,16 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
         className={`env-btn${open ? " open" : ""}${wsl ? " wsl" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        title="切换要管理的环境"
+        title={t("envSwitch.switchTitle")}
         onClick={() => { if (!open) onOpen(); setOpen((o) => !o); }}
       >
         {wsl ? <Icon.terminal /> : <Icon.monitor />}
-        <span>{switching ? "切换中…" : current?.label ?? "本机 · Windows"}</span>
+        <span>{switching ? t("envSwitch.switching") : current?.label ?? t("envSwitch.localWindows")}</span>
         <Icon.chevron />
       </button>
       {open && (
         <div className="dd-menu env-menu" role="menu">
-          <div className="env-menu-head tiny muted">管理哪里的配置</div>
+          <div className="env-menu-head tiny muted">{t("envSwitch.menuHead")}</div>
           {envs.map((e) => (
             <button key={e.id} role="menuitemradio" aria-checked={e.current} className={`dd-item env-item${e.current ? " sel" : ""}`}
               onClick={() => { setOpen(false); if (!e.current) onPick(e.id); }}>
@@ -55,7 +56,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
               {e.current && <Icon.check size={13} />}
             </button>
           ))}
-          {envs.length <= 1 && <div className="tiny muted env-empty">没有检测到 WSL 发行版</div>}
+          {envs.length <= 1 && <div className="tiny muted env-empty">{t("envSwitch.noWsl")}</div>}
         </div>
       )}
     </div>

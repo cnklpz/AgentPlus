@@ -1,0 +1,36 @@
+import type zh from "../zh/commandPalette";
+
+const en: typeof zh = {
+  groupAgent: "Agent",
+  groupPage: "Page",
+  groupProvider: "Provider",
+  groupSetting: "Setting",
+  groupModel: "Model",
+  groupSession: "Session",
+  providers: "Providers",
+  providersHint: "Provider library shared by all agents: add, edit, sync to each agent",
+  projects: "Projects",
+  projectsHint: "OpenCode config for a single project folder: providers, default model, permissions",
+  gateway: "Local gateway",
+  gatewayHint: "Protocol conversion between Chat, Responses and Anthropic",
+  history: "History & rollback",
+  historyHint: "Backups & rollback",
+  sync: "Multi-device sync",
+  syncHint: "Export / import",
+  settings: "AgentPlus settings",
+  settingsHint: "Environment, animations, latency tests, data folder",
+  detect: "Agent detection",
+  detectHint: "Detected agents; set config folders manually",
+  tabProviders: "Providers",
+  tabModels: "Model list",
+  tabSettings: "Other settings",
+  tabSessions: "Sessions",
+  tabMaint: "Maintenance",
+  catalogHint: "{agent} · Model catalog",
+  sessionHint: "Codex session · {provider} · {cwd}",
+  placeholder: "Search agents, providers, models, settings, sessions…",
+  noResults: "Nothing found for \"{q}\"",
+  foot: "↑↓ select · Enter open · Esc close",
+};
+
+export default en;
