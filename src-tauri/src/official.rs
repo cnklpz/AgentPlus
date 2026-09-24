@@ -14,7 +14,7 @@
 
 use crate::adapters::codex::{catalog_path, chatgpt_signed_in, codex_home, config_path, load_doc, ID};
 use crate::store;
-use crate::util::{backup_tagged, display_path, read_json, str_list, write_bytes_atomic, write_json, write_text_atomic, TextMeta};
+use crate::util::{backup_tagged, display_path, read_json, str_field, str_list, write_bytes_atomic, write_json, write_text_atomic, TextMeta};
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -197,7 +197,7 @@ pub fn finish() -> Result<Vec<FetchModel>> {
         .filter_map(|m| {
             Some(FetchModel {
                 slug: m.get("slug")?.as_str()?.to_string(),
-                name: m.get("display_name").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                name: str_field(m, "display_name"),
                 visible: m.get("visibility").and_then(|x| x.as_str()) != Some("hide"),
             })
         })

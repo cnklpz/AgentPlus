@@ -181,11 +181,7 @@ async fn test_provider(agent: String, provider: String, model: String) -> Result
 /// Model ids straight from a library entry's upstream (used while an agent goes through the gateway).
 #[tauri::command]
 async fn fetch_models_lib(id: String) -> Result<Vec<String>, String> {
-    blocking(move || {
-        let (base, key, api) = adapters::provider_endpoint(library::FROM, &id)?;
-        net::list_models(&base, key.as_deref(), &api).map_err(anyhow::Error::msg)
-    })
-    .await
+    fetch_models(library::FROM.to_string(), id).await
 }
 
 /// Model ids for a provider being added (key typed in the form).
