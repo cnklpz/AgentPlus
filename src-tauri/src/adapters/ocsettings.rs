@@ -78,12 +78,9 @@ const SPECS: &[Spec] = &[
     Spec { key: "watcher.ignore", group: G_FILES, label: ("文件监视忽略", "File watcher ignore"), desc: ("watcher.ignore：每行一个 glob（如 node_modules/**、dist/**）", "watcher.ignore: one glob per line (e.g. node_modules/**, dist/**)"), kind: Kind::List, global_only: false },
 ];
 
-fn get<'a>(cfg: &'a Value, key: &str) -> Option<&'a Value> {
-    let mut cur = cfg;
-    for part in key.split('.') {
-        cur = cur.get(part)?;
-    }
-    Some(cur)
+/// A dotted key as a JSON pointer (keys hold no `~` or `/`).
+fn pointer(key: &str) -> String {
+    format!("/{}", key.replace('.', "/"))
 }
 
 /// Current value of a key, honoring `permission` given as one string for every tool.
@@ -95,7 +92,7 @@ fn read<'a>(cfg: &'a Value, key: &str) -> Option<&'a Value> {
             None => None,
         };
     }
-    get(cfg, key)
+    cfg.pointer(&pointer(key))
 }
 
 /// A stored value in the Select's terms: "true"/"false" for booleans, "custom" for rule maps.
@@ -197,7 +194,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
             }
             Kind::Providers => {
                 row.kind = "chips".into();
-                let mut v = str_list(cur).unwrap_or_default();
+                let v = str_list(cur).unwrap_or_default();
                 let mut opts: Vec<String> = providers.to_vec();
                 // Ids listed in the file but not known here still show (and can be unticked).
                 for x in &v {
@@ -205,7 +202,6 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                         opts.push(x.clone());
                     }
                 }
-                v.retain(|x| opts.contains(x));
                 row.value = json!(v);
                 row.options = opts;
                 if scope == Scope::Project {
@@ -247,34 +243,27 @@ fn to_stored(kind: &Kind, key: &str, v: &Value) -> Result<Option<Value>> {
 /// holds something other than an object is an error, not overwritten.
 fn write(cfg: &mut Value, key: &str, v: Option<Value>) -> Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
-    if parts.len() == 1 {
-        match v {
-            Some(v) => { obj_at(cfg, &[])?.insert(key.into(), v); }
-            None => { obj_at(cfg, &[])?.remove(key); }
-        }
-        return Ok(());
-    }
-    let (head, leaf) = (parts[0], parts[1]);
+    let (leaf, parents) = parts.split_last().expect("split yields at least one part");
     match v {
         Some(v) => {
-            obj_at(cfg, &[head])?.insert(leaf.into(), v);
+            obj_at(cfg, parents)?.insert(leaf.to_string(), v);
         }
         None => {
-            let root = obj_at(cfg, &[])?;
-            if let Some(p) = root.get_mut(head).and_then(|p| p.as_object_mut()) {
-                p.remove(leaf);
-                if p.is_empty() {
-                    root.remove(head);
-                }
-            }
+            obj_at(cfg, &[])?;
+            crate::mfields::remove(cfg, &pointer(key));
         }
     }
     Ok(())
 }
 
+/// Rows for some keys of a global config only (Kilo, which keeps OpenCode's schema for them).
+pub fn rows_only(cfg: &Value, keys: &[&str]) -> Vec<Setting> {
+    rows(cfg, None, Scope::Global, &[], &[]).into_iter().filter(|r| keys.contains(&r.key.as_str())).collect()
+}
+
 /// Applies one setting to `cfg`. Returns whether the file changed.
-pub fn apply(cfg: &mut Value, key: &str, value: &Value, diff: &mut Diff, file: &str) -> Result<bool> {
-    let spec = SPECS.iter().find(|s| s.key == key).ok_or_else(|| msg::unknown_setting(key))?;
+pub fn apply(cfg: &mut Value, key: &str, value: &Value, scope: Scope, diff: &mut Diff, file: &str) -> Result<bool> {
+    let spec = SPECS.iter().find(|s| s.key == key && !(s.global_only && scope == Scope::Project)).ok_or_else(|| msg::unknown_setting(key))?;
     if value.as_str() == Some("custom") {
         return Ok(false); // "keep the rule map as it is"
     }
@@ -309,26 +298,40 @@ mod tests {
     fn set_and_unset_nested() {
         let mut cfg = json!({ "model": "a/b" });
         let mut d = Diff::default();
-        assert!(apply(&mut cfg, "compaction.auto", &json!(false), &mut d, "f").unwrap());
+        assert!(apply(&mut cfg, "compaction.auto", &json!(false), Scope::Global, &mut d, "f").unwrap());
         assert_eq!(cfg["compaction"]["auto"], json!(false));
-        assert!(apply(&mut cfg, "compaction.auto", &json!(""), &mut d, "f").unwrap());
+        assert!(apply(&mut cfg, "compaction.auto", &json!(""), Scope::Global, &mut d, "f").unwrap());
         assert!(cfg.get("compaction").is_none());
-        assert!(!apply(&mut cfg, "model", &json!("a/b"), &mut d, "f").unwrap());
-        assert!(apply(&mut cfg, "model", &json!(" "), &mut d, "f").unwrap());
+        assert!(!apply(&mut cfg, "model", &json!("a/b"), Scope::Global, &mut d, "f").unwrap());
+        assert!(apply(&mut cfg, "model", &json!(" "), Scope::Global, &mut d, "f").unwrap());
         assert!(cfg.get("model").is_none());
+    }
+
+    #[test]
+    fn global_only_keys_are_refused_in_projects() {
+        let mut cfg = json!({});
+        let mut d = Diff::default();
+        assert!(apply(&mut cfg, "autoupdate", &json!("notify"), Scope::Project, &mut d, "f").is_err());
+        assert!(cfg.get("autoupdate").is_none());
+        assert!(apply(&mut cfg, "autoupdate", &json!("notify"), Scope::Global, &mut d, "f").unwrap());
+        assert_eq!(cfg["autoupdate"], json!("notify"));
+        // A parent that isn't an object is an error, not overwritten.
+        let mut cfg = json!({ "compaction": true });
+        assert!(apply(&mut cfg, "compaction.auto", &json!(false), Scope::Global, &mut d, "f").is_err());
+        assert_eq!(cfg["compaction"], json!(true));
     }
 
     #[test]
     fn permission_string_is_spread() {
         let mut cfg = json!({ "permission": "ask" });
         let mut d = Diff::default();
-        assert!(apply(&mut cfg, "permission.bash", &json!("deny"), &mut d, "f").unwrap());
+        assert!(apply(&mut cfg, "permission.bash", &json!("deny"), Scope::Global, &mut d, "f").unwrap());
         assert_eq!(cfg["permission"]["bash"], json!("deny"));
         assert_eq!(cfg["permission"]["edit"], json!("ask"));
         assert_eq!(cfg["permission"]["read"], json!("ask"));
         // Rule maps are kept when "custom" comes back.
         let mut cfg = json!({ "permission": { "bash": { "git *": "allow" } } });
-        assert!(!apply(&mut cfg, "permission.bash", &json!("custom"), &mut d, "f").unwrap());
+        assert!(!apply(&mut cfg, "permission.bash", &json!("custom"), Scope::Global, &mut d, "f").unwrap());
     }
 
     #[test]

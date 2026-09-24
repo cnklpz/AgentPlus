@@ -9,6 +9,8 @@ export default {
   idLocked: "ID 是请求里发给供应商的模型名，不能改；要换 ID 请删掉后重新添加。",
   displayName: "显示名",
   displayNamePlaceholder: "可选，留空显示 ID",
+  upstreamModel: "上游模型",
+  upstreamModelPlaceholder: "可选，留空时与模型 ID 相同",
   context: "上下文窗口",
   contextPlaceholder: "如 128k / 1m / 200000",
   contextBad: "写成数字，可以带 k / m",

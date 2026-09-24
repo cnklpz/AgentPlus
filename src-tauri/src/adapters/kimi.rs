@@ -520,17 +520,18 @@ impl Ctx {
         }
     }
 
-    fn add_model(&mut self, pid: &str, mid: &str, ctx: Option<u64>) -> Result<String> {
+    /// Adds `[models.<key>]` sending `upstream` as the model id; returns the key used.
+    fn add_model(&mut self, pid: &str, key: &str, upstream: &str, ctx: Option<u64>) -> Result<String> {
         let all = self.all_keys();
         // A models key taken by another provider's model gets the provider as prefix.
-        let key = if !all.contains(mid) { mid.to_string() } else { unique_id(&format!("{pid}/{mid}"), |c| all.contains(c)) };
+        let key = if !all.contains(key) { key.to_string() } else { unique_id(&format!("{pid}/{key}"), |c| all.contains(c)) };
         let c = ctx.unwrap_or(DEFAULT_CTX);
         let mut t = Table::new();
         t.insert("provider", value(pid));
-        t.insert("model", value(mid));
+        t.insert("model", value(upstream));
         t.insert("max_context_size", value(c as i64));
         self.parent("models")?.insert(&key, Item::Table(t));
-        self.diff.push(&self.file, format!("+ [models.\"{key}\"] provider = \"{pid}\", model = \"{mid}\", max_context_size = {c}"), true);
+        self.diff.push(&self.file, format!("+ [models.\"{key}\"] provider = \"{pid}\", model = \"{upstream}\", max_context_size = {c}"), true);
         self.cfg_dirty = true;
         Ok(key)
     }
@@ -554,7 +555,7 @@ impl Ctx {
         self.cfg_dirty = true;
         self.set_name(&id, p.name.trim());
         for m in clean_ids(&p.models) {
-            self.add_model(&id, &m, None)?;
+            self.add_model(&id, &m, &m, None)?;
         }
         Ok(())
     }
@@ -747,7 +748,8 @@ impl Ctx {
             }
             return Ok(());
         }
-        let key = self.add_model(pid, mid, m.context)?;
+        // Kimi's per-model "name" is the upstream model id (`model = …`), as on edit.
+        let key = self.add_model(pid, mid, name.unwrap_or(mid), m.context)?;
         for l in edit_model_in(&mut self.doc, &key, None, None, &m.extra) {
             self.diff.push(&self.file, l, true);
         }
@@ -802,7 +804,7 @@ impl Ctx {
             match hidden.iter().find(|x| hit(x)) {
                 Some((k, _)) => self.set_visible(pid, k, true)?,
                 None => {
-                    self.add_model(pid, w, None)?;
+                    self.add_model(pid, w, w, None)?;
                 }
             }
         }
@@ -1071,6 +1073,26 @@ max_steps_per_run = 100 # keep
         apply(vec![Op::SetProviderModels { provider: "relay".into(), models: vec!["gpt-4.1-nano".into(), "gpt-5".into()] }]);
         let ids: Vec<String> = prov(&st(), "relay").models.iter().map(|m| m.id.clone()).collect();
         assert_eq!(ids, ["relay-mini", "gpt-5"]);
+    }
+
+    #[test]
+    fn added_model_name_is_its_upstream_model() {
+        let _home = setup("add-upstream", false, Some(SAMPLE));
+        let d = apply(vec![
+            Op::UpsertModel { provider: "relay".into(), model: model("k", Some("gpt-x"), None) },
+            Op::UpsertModel { provider: "relay".into(), model: model("plain", Some("  "), None) },
+            // Key taken by another provider: prefixed key, the name still goes upstream.
+            Op::UpsertModel { provider: "envy".into(), model: model("gpt-4.1", Some("claude-x"), None) },
+        ]);
+        let doc: DocumentMut = text().parse().unwrap();
+        assert_eq!(doc["models"]["k"]["model"].as_str(), Some("gpt-x"));
+        assert_eq!(doc["models"]["k"]["provider"].as_str(), Some("relay"));
+        assert_eq!(doc["models"]["plain"]["model"].as_str(), Some("plain"));
+        assert_eq!(doc["models"]["envy/gpt-4.1"]["model"].as_str(), Some("claude-x"));
+        assert_eq!(doc["models"]["gpt-4.1"]["model"].as_str(), Some("gpt-4.1"));
+        assert!(lines(&d).contains("+ [models.\"k\"] provider = \"relay\", model = \"gpt-x\""), "{}", lines(&d));
+        let m = prov(&st(), "relay").models.into_iter().find(|m| m.id == "k").unwrap();
+        assert_eq!(m.name.as_deref(), Some("gpt-x"));
     }
 
     #[test]
