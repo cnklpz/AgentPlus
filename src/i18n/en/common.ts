@@ -19,6 +19,7 @@ const en: typeof zh = {
   apply: "Apply",
   reset: "Reset",
   search: "Search",
+  notAvailable: "Not available yet",
   none: "None",
   unknown: "Unknown",
   yes: "Yes",
@@ -41,6 +42,8 @@ const en: typeof zh = {
   details: "Details",
   restart: "Restart",
   optional: "Optional",
+  minimizeToTray: "Minimize to tray",
+  quitApp: "Quit",
 };
 
 export default en;

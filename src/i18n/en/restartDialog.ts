@@ -17,7 +17,8 @@ const en: typeof zh = {
   elapsed: "{s}s elapsed",
   took: "Took {s}s",
   background: "Run in background",
-  settingsHint: "Switch to a brief notice in Settings › Interface",
+  cancelStart: "Cancel start",
+  cancelRestart: "Cancel restart",
 };
 
 export default en;

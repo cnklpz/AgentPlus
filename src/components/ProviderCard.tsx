@@ -2,6 +2,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import type { Provider } from "../api";
 import type { ViewProvider } from "../draft";
 import { t, tn } from "../i18n";
+import { scrub, scrubHost } from "../privacy";
 
 export type Latency = number | "pending" | string | undefined;
 
@@ -34,12 +35,12 @@ export function latencyView(p: Provider, off: boolean, latency: Latency): { text
   const live = typeof latency === "number" && p.compatible && !off;
   const level = !live ? 0 : (latency as number) < 200 ? 3 : (latency as number) < 400 ? 2 : 1;
   let text: string;
-  if (!p.compatible) text = p.reason ?? t("providerCard.incompatible");
+  if (!p.compatible) text = scrub(p.reason) ?? t("providerCard.incompatible");
   else if (off) text = t("providerCard.offNoTest");
   else if (!p.baseUrl) text = t("providerCard.accountLogin");
   else if (latency === "pending") text = t("providerCard.testing");
   else if (typeof latency === "number") text = `${latency} ms`;
-  else text = latency ?? t("providerCard.untested");
+  else text = scrub(latency) ?? t("providerCard.untested");
   return { text, level, live };
 }
 
@@ -57,6 +58,8 @@ interface Props {
   p: ViewProvider;
   mode: "single" | "multi";
   isCurrent: boolean;
+  /** Current only in the draft: the switch hasn't been written yet. */
+  switching: boolean;
   selected: boolean;
   enabled: boolean;
   visible: number;
@@ -69,20 +72,22 @@ interface Props {
   onTest: () => void;
 }
 
-export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, latency, readonly, onSelect, onAction, onModels, onTest }: Props) {
+export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled, visible, latency, readonly, onSelect, onAction, onModels, onTest }: Props) {
   const off = mode === "multi" && !enabled;
   let tag: { text: string; cls: string } | null = null;
   if (p.isDeleted) tag = { text: t("providerCard.tagDeleting"), cls: "tag-del" };
   else if (p.isNew) tag = { text: t("providerCard.tagNew"), cls: "tag-new" };
   else if (!p.compatible) tag = { text: t("providerCard.incompatible"), cls: "tag-muted" };
   else if (off) tag = { text: t("common.disabled"), cls: "tag-muted" };
+  else if (isCurrent && switching) tag = { text: t("providerCard.tagSwitching"), cls: "tag-new" };
   else if (isCurrent) tag = { text: t("providerCard.tagCurrent"), cls: "tag-accent" };
   else if (p.builtin) tag = { text: t("providerCard.tagBuiltin"), cls: "tag-soft" };
 
   const lat = latencyView(p, off, latency);
   const total = p.models.length;
   const stop = (fn: () => void) => (e: MouseEvent) => { e.stopPropagation(); fn(); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(); } };
+  // Only the card itself: Enter / Space on a button inside it activates that button.
+  const onKey = (e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSelect(); } };
 
   const pending = p.isNew || p.isDeleted;
   return (
@@ -105,7 +110,7 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
             <span className="ellipsis">{p.name}</span>
             {tag && <span className={`ptag ${tag.cls}`}>{tag.text}</span>}
           </span>
-          <span className="pcard-host mono ellipsis">{p.host || "—"}</span>
+          <span className="pcard-host mono ellipsis">{scrubHost(p.host) || "—"}</span>
         </span>
       </div>
       <div className="pcard-meta">
@@ -134,7 +139,7 @@ export function ProviderCard({ p, mode, isCurrent, selected, enabled, visible, l
         {p.compatible && !pending && !(mode === "multi" && p.builtin) && (
           mode === "single" ? (
             <button className={`pbtn${isCurrent ? " on" : ""}`} aria-pressed={isCurrent} disabled={readonly || isCurrent} onClick={stop(onAction)}>
-              {isCurrent ? t("providerCard.inUse") : t("providerCard.setCurrent")}
+              {!isCurrent ? t("providerCard.setCurrent") : switching ? t("providerCard.switchOnApply") : t("providerCard.inUse")}
             </button>
           ) : (
             <button className={`pbtn${enabled ? " enabled" : ""}`} aria-pressed={enabled} disabled={readonly} onClick={stop(onAction)}>

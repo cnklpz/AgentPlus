@@ -1,7 +1,8 @@
 # AgentPlus 项目规范
 
 Tauri 2（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）。
-检查：前端 `npx tsc --noEmit`，后端在 `src-tauri/` 下 `cargo check` / `cargo test`。
+检查：前端 `npm run check`（`tsc --noEmit` + `vitest run`），后端在 `src-tauri/` 下
+`cargo clippy --all-targets`（保持零警告）/ `cargo test`。改动逻辑时给边界情况补单元测试。
 
 ## 多语言（i18n）
 

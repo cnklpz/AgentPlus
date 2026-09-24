@@ -11,7 +11,7 @@
 
 // Unused until the integrator wires the adapter into adapters::mod.
 
-
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -119,67 +119,9 @@ fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------------------------------------------------------------- detection
 
-#[cfg(windows)]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000)
-}
-#[cfg(not(windows))]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    cmd
-}
-
-fn which(names: &[&str]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
-}
-
 fn pkg_version(p: &Path) -> Option<String> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
     v.get("version")?.as_str().map(String::from)
-}
-
-fn version_in(text: &str) -> Option<String> {
-    text.split_whitespace()
-        .map(|w| w.trim_start_matches('v').trim_end_matches(','))
-        .find(|w| w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && w.contains('.'))
-        .map(String::from)
-}
-
-/// `<exe> --version`, cached per path, killed after 5 s.
-fn cli_version(exe: &Path) -> Option<String> {
-    use std::process::{Command, Stdio};
-    static CACHE: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
-    if let Some((_, v)) = CACHE.lock().unwrap().iter().find(|(p, _)| p == exe) {
-        return v.clone();
-    }
-    let is_cmd = exe.extension().map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")).unwrap_or(false);
-    let mut cmd = if is_cmd {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(exe);
-        c
-    } else {
-        Command::new(exe)
-    };
-    cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let v = no_window(&mut cmd).spawn().ok().and_then(|mut child| {
-        let t0 = std::time::Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if t0.elapsed() < std::time::Duration::from_secs(5) => std::thread::sleep(std::time::Duration::from_millis(50)),
-                _ => {
-                    let _ = child.kill();
-                    return None;
-                }
-            }
-        }
-        let mut out = String::new();
-        std::io::Read::read_to_string(child.stdout.as_mut()?, &mut out).ok()?;
-        version_in(&out)
-    });
-    CACHE.lock().unwrap().push((exe.to_path_buf(), v.clone()));
-    v
 }
 
 /// Native binary `~/.kimi-code/bin/kimi.exe`, npm `@moonshot-ai/kimi-code`, or the legacy
@@ -189,21 +131,21 @@ pub fn detect() -> Install {
     let home = dirs::home_dir().unwrap_or_default();
     let native = home.join(".kimi-code").join("bin").join("kimi.exe");
     let pkg = |root: &Path| root.join("node_modules").join("@moonshot-ai").join("kimi-code").join("package.json");
-    let on_path = which(&["kimi.exe", "kimi.cmd", "kimi"]);
+    let on_path = crate::process::on_path(&["kimi.exe", "kimi.cmd", "kimi"]);
     let mut roots: Vec<PathBuf> = dirs::data_dir().map(|d| d.join("npm")).into_iter().collect();
     if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
         roots.push(d.to_path_buf());
     }
     if native.exists() {
         inst.installed = true;
-        inst.version = cli_version(&native);
+        inst.version = crate::process::cli_version(&native);
         inst.dir = native.parent().map(Path::to_path_buf);
     } else if let Some(v) = roots.iter().find_map(|r| pkg_version(&pkg(r))) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(p) = Some(home.join(".local").join("bin").join("kimi.exe")).filter(|p| p.exists()).or(on_path) {
         inst.installed = true;
-        inst.version = cli_version(&p);
+        inst.version = crate::process::cli_version(&p);
     }
     if inst.installed {
         inst.running = crate::process::any_process(|name, _| name.eq_ignore_ascii_case("kimi.exe"));
@@ -345,10 +287,10 @@ fn model_of(key: &str, item: &Item, visible: bool, def: Option<&str>) -> Model {
     let context = item.get("max_context_size").and_then(|v| v.as_integer()).filter(|n| *n > 0).map(|n| n as u64);
     let mut tags = vec![];
     if def == Some(key) {
-        tags.push(l("默认", "Default").to_string());
+        tags.push(Tag::default_model());
     }
     if let Some(caps) = item.get("capabilities").and_then(|v| v.as_array()) {
-        tags.extend(caps.iter().filter_map(|c| c.as_str().map(String::from)));
+        tags.extend(caps.iter().filter_map(|c| c.as_str()).map(|c| Tag::new(format!("cap:{c}"), c)));
     }
     Model {
         id: key.into(),
@@ -508,7 +450,7 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load()?;
     let stashed = store_obj(&load_store(), "disabledProviders").get(id).map(|r| from_text(stash_text(r))).transpose()?;
     let item = doc
@@ -948,7 +890,7 @@ impl Ctx {
             if live.iter().any(hit) {
                 continue;
             }
-            match hidden.iter().find(|x| hit(*x)) {
+            match hidden.iter().find(|x| hit(x)) {
                 Some((k, _)) => self.set_visible(pid, k, true)?,
                 None => {
                     self.add_model(pid, w, None)?;
@@ -959,7 +901,7 @@ impl Ctx {
     }
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (doc, meta) = load()?;
     let mut cx = Ctx { doc, root: load_store(), diff: Diff::default(), file: display_path(&config_path()), legacy: is_legacy(), cfg_dirty: false, store_dirty: false };
 
@@ -1110,7 +1052,7 @@ max_steps_per_run = 100 # keep
         assert_eq!(s.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["moonshot", "relay", "envy"]);
         let m = prov(&s, "moonshot");
         assert!(m.builtin && m.has_key && m.api == "chat");
-        assert!(m.models[0].tags.contains(&"默认".to_string()));
+        assert!(m.models[0].tags.contains(&Tag::default_model()));
         assert_eq!(m.models[0].name.as_deref(), Some("kimi-k2-0905-preview"));
         assert_eq!(m.models[0].ctx.as_deref(), Some("262K"));
         let r = prov(&s, "relay");

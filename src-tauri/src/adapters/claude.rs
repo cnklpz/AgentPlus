@@ -6,6 +6,7 @@
 //! Claude Code speaks the Anthropic Messages protocol only; relays with other protocols
 //! go through the local gateway.
 
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -46,9 +47,9 @@ fn settings_path() -> PathBuf {
 
 fn load() -> Result<(Value, TextMeta)> {
     if !settings_path().exists() {
-        return Ok((json!({}), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }));
+        return Ok((json!({}), TextMeta::NEW));
     }
-    read_json(&settings_path())
+    read_json_object(&settings_path())
 }
 
 fn env_of(cfg: &Value) -> Map<String, Value> {
@@ -126,7 +127,7 @@ fn models_with_roles(list: &[(String, bool)], roles: &BTreeMap<String, String>) 
     for m in out.iter_mut() {
         for (role, _, (zh, en)) in ROLES {
             if roles.get(role) == Some(&m.id) {
-                m.tags.push(l(zh, en).to_string());
+                m.tags.push(Tag::new(format!("role:{role}"), l(zh, en)));
             }
         }
     }
@@ -302,7 +303,7 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _) = load()?;
     let env = env_of(&cfg);
     let p = if id == UNMANAGED {
@@ -320,7 +321,7 @@ pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
     Ok((base, (!key.is_empty()).then_some(key), "anthropic".into()))
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta) = load()?;
     let mut root = store::load();
     let mut profs = profiles(&root);

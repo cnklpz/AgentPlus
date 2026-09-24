@@ -60,9 +60,12 @@ npm run tauri build    # 打包安装程序
 检查与测试：
 
 ```bash
-npx tsc --noEmit                          # 前端类型检查
-cd src-tauri && cargo check && cargo test # 后端
+npm run check                                   # 前端：类型检查 + 单元测试（vitest）
+cd src-tauri && cargo clippy --all-targets && cargo test   # 后端：lint + 单元测试
 ```
+
+`cargo test` 里标了 `#[ignore]` 的用例会读本机真实的 Agent 配置（只读），需要时用
+`cargo test <名字> -- --ignored --nocapture` 单独运行。
 
 ### 目录结构
 

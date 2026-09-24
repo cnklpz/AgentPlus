@@ -18,6 +18,7 @@ export default {
   apply: "应用",
   reset: "重置",
   search: "搜索",
+  notAvailable: "暂未开放",
   none: "无",
   unknown: "未知",
   yes: "是",
@@ -40,4 +41,6 @@ export default {
   details: "详情",
   restart: "重启",
   optional: "可选",
+  minimizeToTray: "最小化到托盘",
+  quitApp: "退出程序",
 };

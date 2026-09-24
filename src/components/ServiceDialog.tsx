@@ -6,6 +6,7 @@ import { AgentIcon, Icon } from "./icons";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t } from "../i18n";
+import { scrub } from "../privacy";
 
 export interface ServiceSave {
   name: string;
@@ -163,7 +164,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
             </label>
             <label className="field">
               <span>{t("serviceDialog.baseUrlLabel")}</span>
-              <input className="input mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+              <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
               {baseUrl && !urlOk && <em className="field-err">{t("serviceDialog.urlInvalid")}</em>}
             </label>
           </div>
@@ -270,7 +271,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
             </div>
           )}
 
-          {err && <div className="err">{err}</div>}
+          {err && <div className="err">{scrub(err)}</div>}
         </div>
 
         <div className="modal-foot">

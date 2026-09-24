@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { type FetchedModel, type OfficialFetch as Status, api } from "../api";
 import { Icon } from "./icons";
 import { t, tn, tx } from "../i18n";
+import { scrub } from "../privacy";
 
 interface Props {
   /** Pending Codex changes block the flow (config.toml is swapped temporarily). */
@@ -105,7 +106,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
         <div className="ofetch-body">
           <div className="ofetch-note warn">
             <Icon.key size={13} />
-            <span>{tx("officialFetch.confirmNote", { plan: <b>{t("officialFetch.planAll")}</b>, catalog: st?.catalogPath ?? "models.json" })}</span>
+            <span>{tx("officialFetch.confirmNote", { plan: <b>{t("officialFetch.planAll")}</b>, catalog: scrub(st?.catalogPath) ?? "models.json" })}</span>
           </div>
           <div className="row gap6">
             <span className="grow" />
@@ -121,7 +122,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
             <span className="ofetch-n">1</span>
             <div className="grow minw0">
               <strong className="small">{t("officialFetch.restartCodex")}</strong>
-              <div className="tiny muted">{tx("officialFetch.restartDesc", { dir: <span className="mono">{st?.backupDir}</span> })}</div>
+              <div className="tiny muted">{tx("officialFetch.restartDesc", { dir: <span className="mono">{scrub(st?.backupDir)}</span> })}</div>
             </div>
             {restartable ? (
               <button className="btn primary small" disabled={restarting} onClick={onRestart}>
@@ -133,7 +134,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
             <span className="ofetch-n">2</span>
             <div className="grow minw0">
               <strong className="small">{t("officialFetch.loginTitle")}</strong>
-              <div className="tiny muted">{tx("officialFetch.loginDesc", { detected: st?.chatgptLogin ? t("officialFetch.loginDetected") : "", path: <span className="mono">{st?.cachePath}</span> })}</div>
+              <div className="tiny muted">{tx("officialFetch.loginDesc", { detected: st?.chatgptLogin ? t("officialFetch.loginDetected") : "", path: <span className="mono">{scrub(st?.cachePath)}</span> })}</div>
             </div>
           </div>
           <div className="ofetch-wait">
@@ -149,7 +150,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
       {step === "ready" && (
         <div className="ofetch-body">
           <div className="ofetch-note ok">
-            <Icon.check size={13} /><span>{tx("officialFetch.readyNote", { count: <b>{st?.cacheModels}</b>, catalog: <span className="mono">{st?.catalogPath}</span> })}</span>
+            <Icon.check size={13} /><span>{tx("officialFetch.readyNote", { count: <b>{st?.cacheModels}</b>, catalog: <span className="mono">{scrub(st?.catalogPath)}</span> })}</span>
           </div>
           <div className="row gap6">
             <button className="btn small danger" disabled={busy} onClick={cancel}>{t("officialFetch.cancelRestore")}</button>

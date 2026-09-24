@@ -31,12 +31,14 @@ pub fn load() -> Value {
 
 fn load_in(dir: &Path) -> Value {
     let p = dir.join("store.json");
-    // Another program may be halfway through writing it: give it a moment.
+    // Another program may be halfway through writing it: give it a moment. A file that
+    // has been broken for a while is not retried (the gateway loads this on every request).
+    let fresh = || fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(2));
     for i in 0..3 {
         if let Some(v) = read(&p) {
             return v;
         }
-        if !p.exists() || i == 2 {
+        if i == 2 || !fresh() {
             break;
         }
         std::thread::sleep(Duration::from_millis(30));
@@ -44,14 +46,43 @@ fn load_in(dir: &Path) -> Value {
     json!({})
 }
 
+thread_local! {
+    /// This thread holds `WRITE` through `transaction`.
+    static HELD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Takes `WRITE` unless this thread already holds it (inside `transaction`).
+fn lock() -> Option<std::sync::MutexGuard<'static, ()>> {
+    if HELD.with(|h| h.get()) {
+        return None;
+    }
+    Some(WRITE.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Runs `f` holding the write lock, so a `load` … `save` inside it can't lose a change
+/// another thread makes with `update` in between. `save` / `update` inside `f` don't lock again.
+pub fn transaction<T>(f: impl FnOnce() -> T) -> T {
+    struct Release(Option<std::sync::MutexGuard<'static, ()>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            if self.0.is_some() {
+                HELD.with(|h| h.set(false));
+            }
+        }
+    }
+    let _r = Release(lock());
+    HELD.with(|h| h.set(true));
+    f()
+}
+
 pub fn save(v: &Value) -> anyhow::Result<()> {
-    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = lock();
     write(v)
 }
 
 /// Load, change, save under the write lock (for callers outside the main thread).
 pub fn update<T>(f: impl FnOnce(&mut Value) -> anyhow::Result<T>) -> anyhow::Result<T> {
-    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = lock();
     let mut v = load();
     let out = f(&mut v)?;
     write(&v)?;

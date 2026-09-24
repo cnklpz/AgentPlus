@@ -8,10 +8,13 @@ use crate::i18n::l;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 const MAX_COOLDOWN: u64 = 600;
+/// Longest first pause a config may ask for.
+const MAX_COOLDOWN_SETTING: u64 = 3600;
 /// A probe that never reports back (e.g. a stream still running) frees its slot after this.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -44,6 +47,13 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Limits in range (store.json may have been edited by hand).
+    pub fn clamped(self) -> Self {
+        Config { threshold: self.threshold.clamp(1, 100), cooldown_secs: self.cooldown_secs.clamp(5, MAX_COOLDOWN_SETTING), ..self }
+    }
+}
+
 #[derive(Default)]
 struct State {
     /// Failures in a row since the last success.
@@ -51,7 +61,8 @@ struct State {
     /// Trips in a row (sets the pause length).
     trips: u32,
     open_until: Option<Instant>,
-    probing: Option<Instant>,
+    /// The probe under way: when it was let through, and its ticket.
+    probing: Option<(Instant, u64)>,
     /// Error that tripped the breaker (or the latest one while it is still closed).
     reason: Option<String>,
     /// Wall-clock time of the trip, for display.
@@ -59,9 +70,34 @@ struct State {
     paused_secs: u64,
 }
 
-fn states() -> &'static Mutex<HashMap<String, State>> {
+fn states() -> MutexGuard<'static, HashMap<String, State>> {
     static S: OnceLock<Mutex<HashMap<String, State>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(HashMap::new()))
+    // A panic elsewhere while holding the lock must not take every later request down with it.
+    S.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// What `admit` handed a call; `record` needs it back. Only the current probe (or AgentPlus's
+/// own test) can close or re-pause a tripped forward: calls that were already in flight when
+/// it tripped report late and are ignored.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Ticket(u64);
+
+impl Ticket {
+    /// AgentPlus's own test: skips `admit` and counts like a probe.
+    pub const TEST: Ticket = Ticket(u64::MAX);
+
+    fn probe() -> Ticket {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Ticket(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn is_probe_of(self, s: &State) -> bool {
+        self == Ticket::TEST || (self.0 != 0 && s.probing.is_some_and(|(_, t)| t == self.0))
+    }
+}
+
+fn probing(s: &State) -> bool {
+    s.probing.is_some_and(|(at, _)| at.elapsed() < PROBE_TIMEOUT)
 }
 
 /// What happened to one call, as far as the breaker is concerned.
@@ -98,61 +134,68 @@ pub fn is_open(cfg: &Config, id: &str) -> Option<String> {
     if !cfg.enabled {
         return None;
     }
-    let map = states().lock().unwrap();
+    let map = states();
     let s = map.get(id)?;
     let until = s.open_until?;
-    let paused = Instant::now() < until || s.probing.is_some_and(|p| p.elapsed() < PROBE_TIMEOUT);
+    let paused = Instant::now() < until || probing(s);
     paused.then(|| refusal(id, s))
 }
 
 /// Lets a call through, or says why not. Once the pause is over the first caller becomes
 /// the probe and the others keep being refused until it reports.
-pub fn admit(cfg: &Config, id: &str) -> Result<(), String> {
+pub fn admit(cfg: &Config, id: &str) -> Result<Ticket, String> {
     if !cfg.enabled {
-        return Ok(());
+        return Ok(Ticket::default());
     }
-    let mut map = states().lock().unwrap();
-    let Some(s) = map.get_mut(id) else { return Ok(()) };
-    let Some(until) = s.open_until else { return Ok(()) };
-    if Instant::now() < until || s.probing.is_some_and(|p| p.elapsed() < PROBE_TIMEOUT) {
+    let mut map = states();
+    let Some(s) = map.get_mut(id) else { return Ok(Ticket::default()) };
+    let Some(until) = s.open_until else { return Ok(Ticket::default()) };
+    if Instant::now() < until || probing(s) {
         return Err(refusal(id, s));
     }
-    s.probing = Some(Instant::now());
-    Ok(())
+    let t = Ticket::probe();
+    s.probing = Some((Instant::now(), t.0));
+    Ok(t)
 }
 
 /// Records a call's outcome. Returns a note for the request log when this call tripped the breaker.
-pub fn record(cfg: &Config, id: &str, outcome: Outcome) -> Option<String> {
+pub fn record(cfg: &Config, id: &str, outcome: Outcome, ticket: Ticket) -> Option<String> {
     if !cfg.enabled {
         return None;
     }
-    let mut map = states().lock().unwrap();
+    let mut map = states();
+    // Tripped: only the probe's report counts; stragglers that were already in flight do not.
+    let stale = map.get(id).is_some_and(|s| s.open_until.is_some() && !ticket.is_probe_of(s));
     match outcome {
+        _ if stale => None,
         Outcome::Ok => {
             map.remove(id);
             None
         }
         Outcome::Neutral => {
-            if let Some(s) = map.get_mut(id) {
+            if let Some(s) = map.get_mut(id).filter(|s| s.probing.is_some_and(|(_, t)| t == ticket.0)) {
                 s.probing = None;
             }
             None
         }
         Outcome::Fault(why) => {
             let s = map.entry(id.to_string()).or_default();
-            // While paused, stragglers that were already in flight do not extend the pause.
+            // AgentPlus's test while paused does not extend the pause.
             if s.open_until.is_some_and(|u| Instant::now() < u) {
                 return None;
             }
-            let probe_failed = s.probing.take().is_some();
+            let probe_failed = s.open_until.is_some();
+            s.probing = None;
             s.fails += 1;
             s.reason = Some(why);
             if !probe_failed && s.fails < cfg.threshold.max(1) {
                 return None;
             }
             s.trips += 1;
-            let secs = cfg.cooldown_secs.max(5).saturating_mul(1u64 << (s.trips - 1).min(10)).min(MAX_COOLDOWN.max(cfg.cooldown_secs));
-            s.open_until = Some(Instant::now() + Duration::from_secs(secs));
+            let cfg = cfg.clone().clamped();
+            let secs = cfg.cooldown_secs.saturating_mul(1u64 << (s.trips - 1).min(10)).min(MAX_COOLDOWN.max(cfg.cooldown_secs));
+            let now = Instant::now();
+            s.open_until = Some(now.checked_add(Duration::from_secs(secs)).unwrap_or(now));
             s.paused_secs = secs;
             s.at = Some(chrono::Local::now().format("%H:%M:%S").to_string());
             let n = s.fails;
@@ -168,7 +211,7 @@ pub fn record(cfg: &Config, id: &str, outcome: Outcome) -> Option<String> {
 
 /// Clears one forward's breaker, or all of them.
 pub fn reset(id: Option<&str>) {
-    let mut map = states().lock().unwrap();
+    let mut map = states();
     match id {
         Some(id) => {
             map.remove(id);
@@ -197,7 +240,7 @@ pub fn view(cfg: &Config, id: &str) -> Option<View> {
     if !cfg.enabled {
         return None;
     }
-    let map = states().lock().unwrap();
+    let map = states();
     let s = map.get(id)?;
     let now = Instant::now();
     let state = match s.open_until {
@@ -266,12 +309,12 @@ mod tests {
         let cfg = Config { enabled: true, threshold: 2, cooldown_secs: 60 };
         let id = "breaker-unit";
         reset(Some(id));
-        assert!(admit(&cfg, id).is_ok());
-        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 503".into())), None);
+        let t = admit(&cfg, id).unwrap();
+        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 503".into()), t), None);
         // A success in between starts the count over.
-        record(&cfg, id, Outcome::Ok);
-        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 503".into())), None);
-        let note = record(&cfg, id, Outcome::Fault(describe(401, r#"{"error":{"message":"invalid api key"}}"#)));
+        record(&cfg, id, Outcome::Ok, t);
+        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 503".into()), t), None);
+        let note = record(&cfg, id, Outcome::Fault(describe(401, r#"{"error":{"message":"invalid api key"}}"#)), t);
         assert_eq!(note.as_deref(), Some("连续 2 次出错，转发暂停 60 秒"));
         let why = admit(&cfg, id).unwrap_err();
         assert!(why.contains("HTTP 401 密钥无效或未授权：invalid api key"), "{why}");
@@ -279,24 +322,69 @@ mod tests {
         assert_eq!(view(&cfg, id).unwrap().state, "open");
 
         // Pause over: one probe goes through, the rest wait for it.
-        states().lock().unwrap().get_mut(id).unwrap().open_until = Some(Instant::now() - Duration::from_secs(1));
+        states().get_mut(id).unwrap().open_until = Some(Instant::now() - Duration::from_secs(1));
         assert_eq!(view(&cfg, id).unwrap().state, "probe");
-        assert!(admit(&cfg, id).is_ok());
+        let probe = admit(&cfg, id).unwrap();
         assert!(admit(&cfg, id).is_err());
         // Probe fails: paused again, twice as long.
-        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 502".into())).as_deref(), Some("恢复试探失败，转发再暂停 120 秒"));
-        states().lock().unwrap().get_mut(id).unwrap().open_until = Some(Instant::now() - Duration::from_secs(1));
-        assert!(admit(&cfg, id).is_ok());
-        record(&cfg, id, Outcome::Ok);
+        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 502".into()), probe).as_deref(), Some("恢复试探失败，转发再暂停 120 秒"));
+        states().get_mut(id).unwrap().open_until = Some(Instant::now() - Duration::from_secs(1));
+        let probe = admit(&cfg, id).unwrap();
+        record(&cfg, id, Outcome::Ok, probe);
         assert!(view(&cfg, id).is_none());
         assert!(admit(&cfg, id).is_ok());
+    }
+
+    /// Calls admitted before the trip report late: they neither close the breaker, count as
+    /// the probe failing, nor free the probe slot. Only the probe (or the test) decides.
+    #[test]
+    fn stragglers_do_not_decide_the_probe() {
+        let cfg = Config { enabled: true, threshold: 1, cooldown_secs: 60 };
+        let id = "breaker-stragglers";
+        reset(Some(id));
+        let old = admit(&cfg, id).unwrap();
+        assert!(record(&cfg, id, Outcome::Fault("HTTP 503".into()), admit(&cfg, id).unwrap()).is_some());
+        // An older call succeeding right after the trip does not close it.
+        assert_eq!(record(&cfg, id, Outcome::Ok, old), None);
+        assert_eq!(view(&cfg, id).unwrap().state, "open");
+
+        states().get_mut(id).unwrap().open_until = Some(Instant::now() - Duration::from_secs(1));
+        let probe = admit(&cfg, id).unwrap();
+        // A straggler's fault or neutral outcome during the probe window changes nothing.
+        assert_eq!(record(&cfg, id, Outcome::Fault("HTTP 502".into()), old), None);
+        record(&cfg, id, Outcome::Neutral, old);
+        assert!(admit(&cfg, id).is_err(), "probe slot still taken");
+        assert_eq!(view(&cfg, id).unwrap().trips, 1);
+        // The probe's own neutral outcome frees the slot for the next caller.
+        record(&cfg, id, Outcome::Neutral, probe);
+        let probe = admit(&cfg, id).unwrap();
+        record(&cfg, id, Outcome::Ok, probe);
+        assert!(view(&cfg, id).is_none());
+
+        // AgentPlus's test closes a paused forward.
+        assert!(record(&cfg, id, Outcome::Fault("HTTP 503".into()), Ticket::default()).is_some());
+        record(&cfg, id, Outcome::Ok, Ticket::TEST);
+        assert!(view(&cfg, id).is_none());
+    }
+
+    /// A huge cooldown from a hand-edited store.json neither panics nor poisons the lock.
+    #[test]
+    fn huge_cooldown_is_clamped() {
+        let cfg = Config { enabled: true, threshold: 1, cooldown_secs: u64::MAX };
+        let id = "breaker-huge";
+        reset(Some(id));
+        let note = record(&cfg, id, Outcome::Fault("x".into()), Ticket::default()).unwrap();
+        assert!(note.contains("3600"), "{note}");
+        assert_eq!(cfg.clone().clamped().cooldown_secs, 3600);
+        assert!(admit(&cfg, id).is_err());
+        reset(Some(id));
     }
 
     #[test]
     fn disabled_breaker_never_trips() {
         let cfg = Config { enabled: false, threshold: 1, cooldown_secs: 60 };
         for _ in 0..5 {
-            assert_eq!(record(&cfg, "breaker-off", Outcome::Fault("x".into())), None);
+            assert_eq!(record(&cfg, "breaker-off", Outcome::Fault("x".into()), Ticket::default()), None);
         }
         assert!(admit(&cfg, "breaker-off").is_ok());
     }

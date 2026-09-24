@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useEscape } from "../hooks";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ProviderInput, api, isProjectId } from "../api";
 import { type Draft, type ViewProvider, isVisible, keys, viewModels } from "../draft";
-import { API_LABEL, ONLY_API, gatewayCapable, gatewayPoolBase, gatewayPoolIds } from "../services";
+import { API_LABEL, GATEWAY_KEY, ONLY_API, gatewayCapable, gatewayPoolBase, gatewayPoolIds } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t, tn } from "../i18n";
+import { scrub } from "../privacy";
 
 /** What the dialog asks the app to do; every part is optional. */
 export interface ProviderSave {
@@ -38,7 +39,8 @@ interface Props {
   editing: ViewProvider | null;
   /** Gateway state of the edited provider: undefined = direct; null = its route is gone. */
   gatewayRoute: GatewayRouteView | null | undefined;
-  onSave: (s: ProviderSave) => void;
+  /** Resolves when handled (the dialog is closed by then, or stays open after a reported error). */
+  onSave: (s: ProviderSave) => Promise<void>;
   onClose: () => void;
   gateway: GatewayStatus | null;
   /** Turns the gateway on if needed and returns its status. */
@@ -111,7 +113,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const [filter, setFilter] = useState("");
   const rolesOp = editing ? draft[keys.roles(editing.id)] : undefined;
   const rolesOriginal: Record<string, string> = {};
-  for (const m of editing?.models ?? []) for (const r of roleList) if (m.tags.includes(t(r.label))) rolesOriginal[r.role] = m.id;
+  for (const m of editing?.models ?? []) for (const r of roleList) if (m.tags.some((g) => g.id === `role:${r.role}`)) rolesOriginal[r.role] = m.id;
   const [roles, setRoles] = useState<Record<string, string>>(rolesOp && rolesOp.op === "set_model_roles" ? rolesOp.roles : rolesOriginal);
 
   const candidates = useMemo(() => {
@@ -126,7 +128,8 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   const urlOk = /^https?:\/\/\S+$/.test(baseUrl.trim());
   const gw = connect === "gateway";
-  const canSave = name.trim() !== "" && (gw || unifiedNew || urlOk) && (!tpl || unifiedNew || key.trim() !== "");
+  const [saving, setSaving] = useState(false);
+  const canSave = !saving && name.trim() !== "" && (gw || unifiedNew || urlOk) && (!tpl || unifiedNew || key.trim() !== "");
 
   const fetchList = async () => {
     setErr(null);
@@ -180,10 +183,22 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     if (tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind]) setBaseUrl(tpl.endpoints[k]!);
   };
 
+  /** Hands the result to the app; the button stays disabled until it is done (no double save). */
+  const submit = async (out: ProviderSave) => {
+    setSaving(true);
+    try {
+      await onSave(out);
+    } catch (e) {
+      setErr(String(e).replace(/^Error: /, ""));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const save = () => {
     if (!canSave) return;
     if (tplForward) {
-      onSave({ input: null, viaForward: { name: name.trim(), baseUrl: baseUrl.trim(), api: tpl!.api, apiKey: key.trim(), models: codex ? tpl!.models : checked, officialAuth: codex ? officialAuth : undefined } });
+      void submit({ input: null, viaForward: { name: name.trim(), baseUrl: baseUrl.trim(), api: tpl!.api, apiKey: key.trim(), models: codex ? tpl!.models : checked, officialAuth: codex ? officialAuth : undefined } });
       return;
     }
     const url = onUnified ? poolBase : baseUrl.trim();
@@ -193,7 +208,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     const out: ProviderSave = {
       input: changed
         ? unifiedNew
-          ? { id: null, name: name.trim(), baseUrl: poolBase, api: kind, apiKey: "agentplus-gateway", models: checked, ...auth }
+          ? { id: null, name: name.trim(), baseUrl: poolBase, api: kind, apiKey: GATEWAY_KEY, models: checked, ...auth }
           : { id: isNew ? null : editing!.id, name: name.trim(), baseUrl: url, api: kind, apiKey: key.trim() || null, models: isNew ? checked : [], ...auth }
         : null,
       unified: unifiedNew,
@@ -211,7 +226,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       for (const m of perModels) visible[m.id] = checked.includes(m.id);
       out.models = { visible, added: checked.filter((m) => !perModels.some((p) => p.id === m)) };
     }
-    onSave(out);
+    void submit(out);
   };
 
   const keyHint = codex ? t("providerDialog.keyCodex")
@@ -328,7 +343,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
             <>
               <div className="field">
                 <label htmlFor="pd-url">{t("providerDialog.baseUrl")}</label>
-                <input id="pd-url" className="input mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+                <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
                 {baseUrl && !urlOk && <em className="field-err">{t("providerDialog.urlBad")}</em>}
               </div>
               <div className="form2">
@@ -430,13 +445,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
               <em className="muted tiny">{t("providerDialog.roleNote")}</em>
             </div>
           )}
-          {err && <div className="err">{err}</div>}
+          {err && <div className="err">{scrub(err)}</div>}
         </div>
 
         <div className="modal-foot">
           <span className="muted tiny grow">{t("providerDialog.pendingNote")}</span>
           <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!canSave} onClick={save}>{isNew ? t("common.add") : t("common.save")}</button>
+          <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("providerDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
         </div>
       </div>
     </div>
@@ -462,7 +477,7 @@ function ForwardPicker({ routes, value, onChange }: { routes: GatewayRouteView[]
           {usable.map((r) => {
             const b = r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
             return (
-              <label key={r.id} className={`fwd-opt${value.includes(r.id) ? " on" : ""}`} title={b?.reason ?? `${r.upstreamUrl ?? ""}${r.models.length ? tn("providerDialog.fwdModels", r.models.length) : ""}`}>
+              <label key={r.id} className={`fwd-opt${value.includes(r.id) ? " on" : ""}`} title={scrub(b?.reason) ?? `${scrub(r.upstreamUrl) ?? ""}${r.models.length ? tn("providerDialog.fwdModels", r.models.length) : ""}`}>
                 <input type="checkbox" checked={value.includes(r.id)} onChange={() => toggle(r.id)} />
                 <span className={`api-chip api-${r.upstreamApi}`}>{API_LABEL[r.upstreamApi]}</span>
                 <span className="small strong ellipsis">{r.name}</span>

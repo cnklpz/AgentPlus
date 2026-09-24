@@ -24,11 +24,13 @@ interface Props {
 import { ProviderTest } from "./ProviderTest";
 import { API_LABEL } from "../services";
 import { t } from "../i18n";
+import { scrub, scrubHost } from "../privacy";
 
 export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest, onAction, onModels, onCopy, onEdit, onDelete, onUndo, gatewayRoute }: Props) {
   const enabled = p.isNew || isEnabled(p, draft);
   const off = st.mode === "multi" && !enabled;
   const isCurrent = st.mode === "single" && currentProvider(st, draft) === p.id;
+  const switching = st.currentProvider !== p.id;
   const lat = latencyView(p, off, latency);
   const visible = p.isNew ? p.models.length : viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length;
 
@@ -46,7 +48,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
     : p.isNew ? t("providerDetail.statusNew")
     : !p.compatible ? t("providerDetail.statusIncompatible")
     : off ? t("common.disabled")
-    : isCurrent ? t("providerDetail.statusCurrent")
+    : isCurrent ? t(switching ? "providerDetail.statusSwitching" : "providerDetail.statusCurrent")
     : p.builtin ? t("providerDetail.statusBuiltin")
     : st.mode === "multi" ? t("common.enabled")
     : t("providerDetail.statusSwitchable");
@@ -78,6 +80,8 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         const configured = st.current.find((r) => r.k === "model")?.v ?? null;
         return (
           <ProviderTest
+            // A fresh tester per provider: a result still on its way for the last one is dropped.
+            key={`${st.id}\n${p.id}`}
             source={p.isNew ? null : { agent: st.id, provider: p.id }}
             models={list}
             defaultModel={configured}
@@ -90,7 +94,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         <div className="kv-row">
           <span className="muted small">{t("common.baseUrl")}</span>
           <span className="row gap6 minw0">
-            <span className="mono small ellipsis grow minw0" title={p.baseUrl ?? p.host}>{p.baseUrl ?? p.host}</span>
+            <span className="mono small ellipsis grow minw0" title={scrub(p.baseUrl) ?? scrubHost(p.host)}>{scrub(p.baseUrl) ?? scrubHost(p.host)}</span>
             {p.baseUrl && <button className="icon-btn sm" aria-label={t("providerDetail.copyUrl")} title={t("providerDetail.copyUrl")} onClick={() => onCopy(p.baseUrl!)}><Icon.copy size={12} /></button>}
           </span>
         </div>
@@ -100,7 +104,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
             <span className="muted small">{t("providerDetail.connection")}</span>
             <span className="small wrap">
               {gatewayRoute
-                ? <>{t("providerDetail.viaGateway", { from: API_LABEL[p.api as ApiKind], to: API_LABEL[gatewayRoute.upstreamApi] })}<br /><span className="mono tiny muted">{gatewayRoute.upstreamUrl}</span></>
+                ? <>{t("providerDetail.viaGateway", { from: API_LABEL[p.api as ApiKind], to: API_LABEL[gatewayRoute.upstreamApi] })}<br /><span className="mono tiny muted">{scrub(gatewayRoute.upstreamUrl)}</span></>
                 : <span className="warn-text">{t("providerDetail.gatewayMissing")}</span>}
             </span>
           </div>
@@ -109,7 +113,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         {p.details.map((d) => (
           <div key={d.k} className="kv-row">
             <span className="muted small">{d.k}</span>
-            <span className={d.mono ? "mono small wrap" : "small wrap"}>{d.v}</span>
+            <span className={d.mono ? "mono small wrap" : "small wrap"}>{scrub(d.v)}</span>
           </div>
         ))}
         <div className="kv-row">
@@ -139,7 +143,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         <>
           {p.compatible && !(st.mode === "multi" && p.builtin) && (
             st.mode === "single" ? (
-              <button className="btn full" disabled={isCurrent || st.readonly} onClick={onAction}>{isCurrent ? t("providerDetail.inUse") : t("providerDetail.setCurrent")}</button>
+              <button className="btn full" disabled={isCurrent || st.readonly} onClick={onAction}>{!isCurrent ? t("providerDetail.setCurrent") : switching ? t("providerDetail.switchOnApply") : t("providerDetail.inUse")}</button>
             ) : (
               <button className="btn full" disabled={st.readonly} onClick={onAction}>{enabled ? t("providerDetail.disableThis") : t("providerDetail.enableThis")}</button>
             )

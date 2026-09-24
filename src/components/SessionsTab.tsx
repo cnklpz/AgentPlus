@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { type SessionList, type SessionRow, api } from "../api";
-import { type TKey, locale, t, tn, useLang } from "../i18n";
+import { type TKey, t, tn, useLang } from "../i18n";
+import { fmtAgo, fmtSize } from "../format";
 import { Dropdown } from "./Dropdown";
+import { scrub } from "../privacy";
 
 interface Props {
   /** Default target: the fixed id when on, else the configured provider. */
@@ -15,20 +17,6 @@ const KIND_LABEL: Record<SessionRow["kind"], TKey> = {
   user: "sessionsTab.kindUser", automation: "sessionsTab.kindAutomation", subagent: "sessionsTab.kindSubagent",
   review: "sessionsTab.kindReview", exec: "sessionsTab.kindExec", agent: "sessionsTab.kindAgent",
 };
-
-function fmtSize(b: number): string {
-  if (b >= 1_048_576) return `${(b / 1_048_576).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(b / 1024))} KB`;
-}
-
-function fmtTime(ms: number): string {
-  const d = new Date(ms);
-  const diff = (Date.now() - ms) / 1000;
-  if (diff < 3600) return tn("sessionsTab.minutesAgo", Math.max(1, Math.round(diff / 60)));
-  if (diff < 86400) return tn("sessionsTab.hoursAgo", Math.round(diff / 3600));
-  if (diff < 7 * 86400) return tn("sessionsTab.daysAgo", Math.round(diff / 86400));
-  return d.toLocaleDateString(locale(), { month: "short", day: "numeric" });
-}
 
 const Warn = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -107,7 +95,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
     }
   };
 
-  if (error) return <div className="empty">{error}</div>;
+  if (error) return <div className="empty">{scrub(error)}</div>;
   if (!data) return <div className="empty">{t("sessionsTab.loading")}</div>;
 
   const canWrite = data.writable && !data.codexRunning;
@@ -164,7 +152,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
           <button className="link" disabled={!canWrite || busy} onClick={() => run(() => api.codexUndoRepair(last.stamp))}>{t("sessionsTab.undo")}</button>
         </div>
       )}
-      {data.note && <div className="notes"><span>{data.note}</span></div>}
+      {data.note && <div className="notes"><span>{scrub(data.note)}</span></div>}
 
       <div className="toolbar">
         <div className="seg">
@@ -215,16 +203,16 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
               <input type="checkbox" aria-label={t("sessionsTab.selectRow", { title: s.title })} checked={picked.has(s.id)} onChange={() => togglePick(s.id)} />
               <div className="minw0">
                 <div className="row gap6 minw0">
-                  <span className="sess-title ellipsis">{s.title}</span>
+                  <span className="sess-title ellipsis sensitive">{s.title}</span>
                   {s.kind !== "user" && <span className="mtag">{t(KIND_LABEL[s.kind])}</span>}
                   {s.archived && <span className="mtag">{t("sessionsTab.archived")}</span>}
                 </div>
-                <div className="mono tiny muted ellipsis">{s.cwd}</div>
+                <div className="mono tiny muted ellipsis sensitive">{scrub(s.cwd)}</div>
                 {s.hidden.length > 0 && <div className="why2"><Warn />{s.hidden.join(t("sessionsTab.hiddenSep"))}</div>}
               </div>
               <span className={`ptag ${misplaced ? "tag-warn" : "tag-soft"}`}>{s.provider || "—"}</span>
               <span className="meta2">
-                <span className="small">{fmtTime(s.updatedMs)}</span>
+                <span className="small">{fmtAgo(s.updatedMs)}</span>
                 <span className="tiny muted mono">{s.rolloutExists ? fmtSize(s.size) : t("sessionsTab.fileMissing")}</span>
               </span>
               <span className="row gap6 sess-actions">
@@ -242,7 +230,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
                   onClick={() => navigator.clipboard.writeText(`codex resume ${s.id}`).then(() => flash(t("sessionsTab.resumeCopied"))).catch(() => flash(t("sessionsTab.copyFailed"), true))}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
                 </button>
-                <button className="icon-btn sm" title={t("sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => api.revealPath(s.rolloutPath)}>
+                <button className="icon-btn sm" title={t("sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => { api.revealPath(s.rolloutPath).catch((e) => flash(String(e), true)); }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
                 </button>
               </span>

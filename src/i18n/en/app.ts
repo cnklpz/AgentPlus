@@ -18,7 +18,11 @@ const en: typeof zh = {
   restartFailed: "Couldn't restart {name}: {err}",
   starting: "Starting {name}…",
   startFailed: "Couldn't start {name}: {err}",
+  cancelling: "Cancelling…",
+  startCancelled: "Cancelled starting {name}",
+  restartCancelled: "Cancelled restarting {name}",
   wroteFiles: "Wrote {n} file; the original was backed up|Wrote {n} files; originals backed up",
+  undoWhileWriting: "This change is being written; undo it once that's done",
   saved: "Saved",
   listSep: ", ",
   wroteAgents: "Wrote {names}; originals backed up",
@@ -30,6 +34,7 @@ const en: typeof zh = {
   cannotAdd: "Can't add",
   queuedDeletes: "Queued {n} removal|Queued {n} removals",
   queuedDeletesAndLib: "Queued {n} removal and removed it from the provider library|Queued {n} removals and removed them from the provider library",
+  queuedDeletesLibFailed: "Queued {n} removal, but couldn't remove the entry from the provider library: {err}|Queued {n} removals, but couldn't remove the entry from the provider library: {err}",
   removedFromLib: "Removed from the provider library",
   savedForwardFailed: "Saved to the provider library, but couldn't turn on the forward: {err}",
   savedQueued: "Saved to the provider library; queued {n} agent change|Saved to the provider library; queued {n} agent changes",
@@ -85,6 +90,11 @@ const en: typeof zh = {
   discardAllTitle: "Discard all {n} change?|Discard all {n} changes?",
   discardAllMsg: "All changes not yet written to the config files will be lost.",
   beforeSwitch: "Before switching to {env}",
+  restartPendingTitle: "{name} has {n} unapplied change|{name} has {n} unapplied changes",
+  restartPendingMsg: "{name} reads the saved config when it restarts, so unapplied changes won't take effect.",
+  startPendingMsg: "{name} reads the saved config when it starts, so unapplied changes won't take effect.",
+  applyFirst: "Apply changes first",
+  applyFirstHint: "When off, it goes ahead and the changes stay pending",
 
   // Right-click menu
   openAgent: "Open {name}",
@@ -128,8 +138,13 @@ const en: typeof zh = {
   navGateway: "Local gateway",
   navHistory: "History & rollback",
   navSettings: "AgentPlus settings",
+  privacyOnToast: "Privacy mode on",
+  privacyOffToast: "Privacy mode off",
   openDataDir: "Open AgentPlus data folder",
-  gatewayKeysQueued: "Gateway key update for {n} provider added to pending changes|Gateway key update for {n} providers added to pending changes",
+  gatewayKeysTitle: "Update the gateway key of {n} provider|Update the gateway keys of {n} providers",
+  gatewayKeysMsg: "These providers will switch to their agent's own gateway key. Confirming writes the config files right away (originals are backed up):",
+  gatewayKeysItem: "{agent}: {provider}",
+  gatewayKeysConfirm: "Update and write",
 };
 
 export default en;

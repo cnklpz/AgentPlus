@@ -6,6 +6,7 @@
 //! Provider / model editing is shared with OpenClaw (see pimodels).
 
 
+use super::{Plan, Endpoint};
 use super::pimodels::{self, Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
@@ -179,12 +180,12 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
     fmt().endpoint(id, &cfg, &pimodels::load_store())
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, had_comments) = load_models()?;
     let mut auth = f.load_auth();
@@ -367,7 +368,7 @@ mod tests {
         assert_eq!(p.models.len(), 2);
         assert_eq!(p.models[0].context, Some(200000));
         assert_eq!(p.models[0].name.as_deref(), Some("GLM 5"));
-        assert!(p.models[0].tags.contains(&"图片".to_string()));
+        assert!(p.models[0].tags.iter().any(|t| t.id == "cap:image" && t.label == "图片"));
         let b = st.providers.iter().find(|p| p.id == "bedrock-ish").unwrap();
         assert!(!b.compatible);
         assert_eq!(b.api, "bedrock-converse-stream");
@@ -492,7 +493,7 @@ mod tests {
         let _g = setup("toggle", Some(MODELS));
         let before = std::fs::read(models_path()).unwrap();
         let off = Op::SetProviderEnabled { provider: "envy".into(), enabled: false };
-        let (d, w, b) = plan(&[off.clone()], true).unwrap();
+        let (d, w, b) = plan(std::slice::from_ref(&off), true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(std::fs::read(models_path()).unwrap(), before);
         assert!(!pimodels::test_root().unwrap().join("store.json").exists());

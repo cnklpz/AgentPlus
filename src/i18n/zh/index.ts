@@ -18,6 +18,7 @@ import templatePicker from "./templatePicker";
 import envSwitch from "./envSwitch";
 import comboBox from "./comboBox";
 import confirm from "./confirm";
+import closeDialog from "./closeDialog";
 import settingsPage from "./settingsPage";
 import sessionsTab from "./sessionsTab";
 import maintenanceTab from "./maintenanceTab";
@@ -36,6 +37,7 @@ import sidebar from "./sidebar";
 import aside from "./aside";
 import providerTest from "./providerTest";
 import restartDialog from "./restartDialog";
+import format from "./format";
 
 export default {
   common,
@@ -57,6 +59,7 @@ export default {
   envSwitch,
   comboBox,
   confirm,
+  closeDialog,
   settingsPage,
   sessionsTab,
   maintenanceTab,
@@ -75,4 +78,5 @@ export default {
   aside,
   providerTest,
   restartDialog,
+  format,
 };

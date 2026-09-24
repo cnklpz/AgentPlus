@@ -108,7 +108,7 @@ fn reason_text(r: &str) -> String {
         ("项目配置 · ", "", "Project config · ", ""),
     ];
     if let Some((zh, en)) = KNOWN.iter().find(|(zh, en)| r == *zh || r == *en) {
-        return l(*zh, *en).into();
+        return l(zh, en).into();
     }
     for (zp, zs, ep, es) in PREFIX {
         let mid = r.strip_prefix(zp).and_then(|x| x.strip_suffix(zs)).or_else(|| r.strip_prefix(ep).and_then(|x| x.strip_suffix(es)));
@@ -138,14 +138,19 @@ pub fn list() -> Result<Vec<BackupEntry>> {
     Ok(out)
 }
 
+/// "<stamp>/<agent>" → (stamp, agent, folder), refusing anything that would point outside
+/// the backups folder.
+fn backup_dir(id: &str) -> Result<(&str, &str, PathBuf)> {
+    match id.split_once('/') {
+        Some((stamp, agent)) if plain_name(stamp) && plain_name(agent) => Ok((stamp, agent, root().join(stamp).join(agent))),
+        _ => Err(anyhow!(l("无效的备份", "Invalid backup"))),
+    }
+}
+
 /// Copies a backup's files back to their original places. The current files are
 /// backed up first, so a rollback can itself be rolled back.
 pub fn restore(id: &str) -> Result<String> {
-    if id.contains("..") {
-        return Err(anyhow!(l("无效的备份", "Invalid backup")));
-    }
-    let (stamp, agent) = id.split_once('/').ok_or_else(|| anyhow!(l("无效的备份", "Invalid backup")))?;
-    let dir = root().join(stamp).join(agent);
+    let (stamp, agent, dir) = backup_dir(id)?;
     let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("找不到备份 {id}", "Backup not found: {id}")))?;
     if !entry.restorable {
         return Err(anyhow!(tr!("这份备份不能自动回滚：{}", "This backup can't be rolled back automatically: {}", entry.blocked.unwrap_or(entry.reason))));
@@ -158,8 +163,10 @@ pub fn restore(id: &str) -> Result<String> {
             fs::create_dir_all(parent)?;
         }
         let tmp = PathBuf::from(format!("{}.agentplus-tmp", to.display()));
-        fs::copy(dir.join(&f.name), &tmp)?;
-        fs::rename(&tmp, &to)?;
+        if let Err(e) = fs::copy(dir.join(&f.name), &tmp).and_then(|_| fs::rename(&tmp, &to)) {
+            let _ = fs::remove_file(&tmp);
+            return Err(anyhow!(tr!("恢复 {} 失败：{e}（回滚前的文件备份在 {}）", "Failed to restore {}: {e} (the pre-rollback files are backed up in {})", to.display(), display_path(&safety))));
+        }
     }
     Ok(tr!("已回滚 {} 个文件到 {stamp} 的状态（回滚前的文件备份在 {}）", "Rolled back {} file(s) to their state at {stamp} (the pre-rollback files are backed up in {})", entry.files.len(), display_path(&safety)))
 }
@@ -210,13 +217,34 @@ pub struct DiffRow {
 
 const CONTEXT: usize = 3;
 const MAX_ROWS: usize = 1500;
+/// Larger files (session databases, logs) are compared but never loaded for a diff.
+const MAX_DIFF_BYTES: u64 = 2 << 20;
+
+/// Byte-for-byte equal, read in chunks so big files never sit in memory.
+fn same_content(a: &Path, b: &Path) -> bool {
+    use std::io::Read;
+    let (Ok(fa), Ok(fb)) = (fs::File::open(a), fs::File::open(b)) else { return false };
+    if fa.metadata().map(|m| m.len()).ok() != fb.metadata().map(|m| m.len()).ok() {
+        return false;
+    }
+    let (mut ra, mut rb) = (std::io::BufReader::new(fa), std::io::BufReader::new(fb));
+    let (mut ba, mut bb) = (vec![0u8; 64 * 1024], vec![0u8; 64 * 1024]);
+    loop {
+        let n = match ra.read(&mut ba) {
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if n == 0 {
+            return true;
+        }
+        if rb.read_exact(&mut bb[..n]).is_err() || ba[..n] != bb[..n] {
+            return false;
+        }
+    }
+}
 
 pub fn detail(id: &str) -> Result<BackupDetail> {
-    if id.contains("..") {
-        return Err(anyhow!(l("无效的备份", "Invalid backup")));
-    }
-    let (stamp, agent) = id.split_once('/').ok_or_else(|| anyhow!(l("无效的备份", "Invalid backup")))?;
-    let dir = root().join(stamp).join(agent);
+    let (stamp, _, dir) = backup_dir(id)?;
     let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("找不到备份 {id}", "Backup not found: {id}")))?;
     let manifest: Option<Value> = fs::read_to_string(dir.join("manifest.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
     let files = entry.files.into_iter().map(|f| file_detail(&dir, f)).collect();
@@ -229,9 +257,27 @@ pub fn detail(id: &str) -> Result<BackupDetail> {
 }
 
 fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
-    let old = fs::read(dir.join(&f.name)).unwrap_or_default();
+    let old_path = dir.join(&f.name);
+    let old_len = fs::metadata(&old_path).map(|m| m.len()).unwrap_or(0);
     let cur_path = f.path.as_ref().map(PathBuf::from);
     let meta = cur_path.as_ref().and_then(|p| fs::metadata(p).ok()).filter(|m| m.is_file());
+    if old_len > MAX_DIFF_BYTES || meta.as_ref().is_some_and(|m| m.len() > MAX_DIFF_BYTES) {
+        let same = cur_path.as_ref().is_some_and(|c| meta.is_some() && same_content(&old_path, c));
+        return FileDetail {
+            name: f.name,
+            path: f.path,
+            backup_bytes: old_len,
+            current_bytes: meta.as_ref().map(|m| m.len()),
+            current_modified: meta.as_ref().and_then(|m| m.modified().ok()).map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string()),
+            same,
+            binary: true,
+            diff: vec![],
+            added: 0,
+            removed: 0,
+            truncated: false,
+        };
+    }
+    let old = fs::read(&old_path).unwrap_or_default();
     let cur = meta.as_ref().and_then(|_| fs::read(cur_path.as_ref()?).ok());
     let text = |b: &[u8]| std::str::from_utf8(b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(b)).ok().filter(|s| !s.contains('\0')).map(String::from);
     let old_text = text(&old);

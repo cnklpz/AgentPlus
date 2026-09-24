@@ -15,37 +15,45 @@ mod projects;
 mod sessions;
 mod store;
 mod sync;
+mod tray;
 mod util;
 
 use model::*;
+use tauri::Manager;
 
 fn err(e: anyhow::Error) -> String {
     format!("{e:#}")
 }
 
 #[tauri::command]
-fn list_agents() -> Vec<AgentState> {
-    adapters::ALL.iter().filter_map(|a| adapters::state(a).ok()).collect()
+async fn list_agents() -> Result<Vec<AgentState>, String> {
+    blocking(|| Ok(adapters::ALL.iter().filter_map(|a| adapters::state(a).ok()).collect())).await
 }
 
 #[tauri::command]
-fn get_agent(agent: String) -> Result<AgentState, String> {
-    adapters::state(&agent).map_err(err)
+async fn get_agent(agent: String) -> Result<AgentState, String> {
+    blocking(move || adapters::state(&agent)).await
 }
 
 #[tauri::command]
-fn preview(agent: String, ops: Vec<Op>) -> Result<Vec<DiffGroup>, String> {
-    adapters::plan(&agent, &ops, true).map(|(d, ..)| d.groups).map_err(err)
+async fn preview(agent: String, ops: Vec<Op>) -> Result<Vec<DiffGroup>, String> {
+    blocking(move || adapters::plan(&agent, &ops, true).map(|(d, ..)| d.groups)).await
 }
 
 #[tauri::command]
-fn apply(agent: String, ops: Vec<Op>) -> Result<ApplyResult, String> {
-    let (_, files, backup) = adapters::plan(&agent, &ops, false).map_err(err)?;
-    Ok(ApplyResult {
-        state: adapters::state(&agent).map_err(err)?,
-        files: files.iter().map(|f| util::display_path(f)).collect(),
-        backup_dir: backup.map(|b| b.to_string_lossy().to_string()),
+async fn apply(agent: String, ops: Vec<Op>) -> Result<ApplyResult, String> {
+    blocking(move || {
+        // Reading state spawns `--version` probes, WSL and PowerShell, so these commands run
+        // on worker threads; the transaction keeps each write's store load/save atomic.
+        let ops = adapters::resolve(&agent, &ops)?;
+        let (_, files, backup) = store::transaction(|| adapters::plan_resolved(&agent, &ops, false))?;
+        Ok(ApplyResult {
+            state: adapters::state(&agent)?,
+            files: files.iter().map(|f| util::display_path(f)).collect(),
+            backup_dir: backup.map(|b| b.to_string_lossy().to_string()),
+        })
     })
+    .await
 }
 
 #[tauri::command]
@@ -56,10 +64,11 @@ async fn test_latency(url: String) -> Result<u64, String> {
 }
 
 /// Restarts an agent (or starts it when it isn't running). For Codex with UI injection on
-/// (Fast, full model names), starts it with a local DevTools port and patches the UI once
+/// (Fast, full model names, send after quota), starts it with a local DevTools port and patches the UI once
 /// it is up. Each step is reported on `on_progress` while it runs.
 #[tauri::command]
 async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>) -> Result<String, String> {
+    process::reset_cancel();
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let report = |p: process::Progress| {
             let _ = on_progress.send(p);
@@ -72,17 +81,28 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
             steps.extend(["port", "patch"]);
         }
         report(process::Progress::Plan { steps });
-        let was_running = process::restart(&agent, &args, &report).map_err(err)?;
-        if inject {
-            cdp::inject(cdp::PORT, patches, &report).map_err(err)
-        } else if was_running {
-            Ok(i18n::l("已重启", "Restarted").into())
+        let r = process::restart(&agent, &args, &report).map_err(err)?;
+        let mut msg = if inject {
+            cdp::inject(cdp::PORT, patches, &report).map_err(err)?
+        } else if r.was_running {
+            i18n::l("已重启", "Restarted").into()
         } else {
-            Ok(i18n::l("已启动", "Started").into())
+            i18n::l("已启动", "Started").into()
+        };
+        if r.cli_sessions > 0 {
+            let n = r.cli_sessions;
+            msg.push_str(&tr!("；终端里的 {n} 个 CLI 会话要重新打开才会生效", "; reopen the {n} CLI session(s) in terminals for the change to apply"));
         }
+        Ok(msg)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Stops the running `restart_agent` at its next wait; it then fails with "Cancelled".
+#[tauri::command]
+fn cancel_restart() {
+    process::cancel();
 }
 
 /// Whether an agent's app is running right now.
@@ -188,13 +208,13 @@ async fn restore_backup(id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn sync_status() -> sync::SyncStatus {
-    sync::status()
+async fn sync_status() -> Result<sync::SyncStatus, String> {
+    blocking(|| Ok(sync::status())).await
 }
 
 #[tauri::command]
 fn sync_set_folder(path: String) -> Result<(), String> {
-    sync::set_folder(&path).map_err(err)
+    store::transaction(|| sync::set_folder(&path)).map_err(err)
 }
 
 #[tauri::command]
@@ -209,12 +229,22 @@ async fn sync_preview() -> Result<Vec<sync::Suggestion>, String> {
 
 #[tauri::command]
 fn codex_dismiss_fixed_prompt() -> Result<(), String> {
-    adapters::codex::dismiss_fixed_prompt().map_err(err)
+    store::transaction(adapters::codex::dismiss_fixed_prompt).map_err(err)
 }
 
+/// Opens a folder in Explorer. Only folders: handing Explorer a file would run it with its
+/// default program (.exe, .bat…). WSL paths (`~/…`, `/home/…`) are resolved first, which can
+/// wake a stopped distro, so this runs off the UI thread.
 #[tauri::command]
-fn open_path(path: String) -> Result<(), String> {
-    process::open_dir(&path).map_err(err)
+async fn open_path(path: String) -> Result<(), String> {
+    blocking(move || {
+        let p = env::resolve_path(path.trim());
+        if !p.is_dir() {
+            anyhow::bail!("{}", tr!("找不到文件夹：{path}", "Folder not found: {path}"));
+        }
+        process::open_dir(&p.to_string_lossy())
+    })
+    .await
 }
 
 /// Opens a web page (a provider's console) in the default browser.
@@ -248,7 +278,7 @@ async fn detect_agents() -> Vec<adapters::Detect> {
 
 #[tauri::command]
 fn set_agent_dir(agent: String, path: Option<String>) -> Result<(), String> {
-    adapters::set_dir(&agent, path.as_deref()).map_err(err)
+    store::transaction(|| adapters::set_dir(&agent, path.as_deref())).map_err(err)
 }
 
 #[tauri::command]
@@ -297,7 +327,7 @@ async fn gateway_test(route: String, api: String, model: String) -> Result<net::
             return Err(i18n::l("网关没有运行", "The gateway is not running").to_string());
         }
         let base = format!("http://127.0.0.1:{}/{route}/v1", st.port);
-        Ok(net::test_call(&base, Some(gateway::server::TEST_KEY), &api, model.trim()))
+        Ok(net::test_call(&base, Some(gateway::server::test_key()), &api, model.trim()))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -310,17 +340,17 @@ fn codex_official_status() -> official::FetchStatus {
 
 #[tauri::command]
 fn codex_official_start() -> Result<official::FetchStatus, String> {
-    official::start().map_err(err)
+    store::transaction(official::start).map_err(err)
 }
 
 #[tauri::command]
 fn codex_official_finish() -> Result<Vec<official::FetchModel>, String> {
-    official::finish().map_err(err)
+    store::transaction(official::finish).map_err(err)
 }
 
 #[tauri::command]
 fn codex_official_cancel() -> Result<(), String> {
-    official::cancel().map_err(err)
+    store::transaction(official::cancel).map_err(err)
 }
 
 #[tauri::command]
@@ -330,18 +360,25 @@ fn library_list() -> Vec<library::LibEntry> {
 
 #[tauri::command]
 fn library_save(input: library::LibInput) -> Result<library::LibEntry, String> {
-    library::save(input).map_err(err)
+    store::transaction(|| library::save(input)).map_err(err)
 }
 
 #[tauri::command]
 fn library_delete(id: String) -> Result<(), String> {
-    library::delete(&id).map_err(err)
+    store::transaction(|| library::delete(&id)).map_err(err)
 }
 
 /// UI language for backend text ("zh" / "en"); the frontend calls this first.
 #[tauri::command]
-fn set_locale(lang: String) {
+fn set_locale(app: tauri::AppHandle, lang: String) {
     i18n::set(&lang);
+    tray::relabel(&app);
+}
+
+/// Quit from the window's close button (the tray menu quits on its own).
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -352,9 +389,8 @@ fn open_data_dir() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_config_dir(agent: String) -> Result<(), String> {
-    let st = adapters::state(&agent).map_err(err)?;
-    process::open_dir(&st.config_dir).map_err(err)
+async fn open_config_dir(agent: String) -> Result<(), String> {
+    blocking(move || process::open_dir(&adapters::state(&agent)?.config_dir)).await
 }
 
 #[tauri::command]
@@ -364,12 +400,12 @@ fn projects_list() -> Vec<projects::ProjectEntry> {
 
 #[tauri::command]
 fn project_open(path: String) -> Result<projects::ProjectEntry, String> {
-    projects::open(&path).map_err(err)
+    store::transaction(|| projects::open(&path)).map_err(err)
 }
 
 #[tauri::command]
 fn project_forget(path: String) -> Result<(), String> {
-    projects::forget(&path).map_err(err)
+    store::transaction(|| projects::forget(&path)).map_err(err)
 }
 
 /// Native folder picker, owned by the AgentPlus window.
@@ -380,6 +416,89 @@ async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>) -> Res
     #[cfg(not(windows))]
     let owner = { let _ = window; 0 };
     blocking(move || projects::pick_folder(owner, start.as_deref())).await
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        // Registered first: a second launch (e.g. while this one sits in the tray) exits
+        // right away and brings this window forward instead of starting a second gateway.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+        .setup(|app| {
+            tray::setup(app.handle())?;
+            // Off the startup path: binding the port and stopping an old listener can wait.
+            std::thread::spawn(gateway::server::autostart);
+            // The window starts hidden and the page shows it after its first render, so the
+            // WebView's blank white never flashes. Fallback in case the page never gets there.
+            if let Some(w) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if !w.is_visible().unwrap_or(true) {
+                        let _ = w.show();
+                    }
+                });
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            list_agents,
+            get_agent,
+            preview,
+            apply,
+            test_latency,
+            restart_agent,
+            cancel_restart,
+            agent_running,
+            open_config_dir,
+            projects_list,
+            project_open,
+            project_forget,
+            pick_folder,
+            codex_sessions,
+            codex_health,
+            codex_cleanup_preview,
+            codex_cleanup,
+            codex_repair,
+            codex_undo_repair,
+            reveal_path,
+            fetch_models,
+            fetch_models_url,
+            fetch_models_lib,
+            list_backups,
+            backup_detail,
+            restore_backup,
+            sync_status,
+            sync_set_folder,
+            sync_export,
+            sync_preview,
+            open_path,
+            open_url,
+            codex_dismiss_fixed_prompt,
+            list_envs,
+            set_env,
+            library_list,
+            library_save,
+            library_delete,
+            open_data_dir,
+            set_locale,
+            quit_app,
+            detect_agents,
+            test_provider,
+            codex_official_status,
+            codex_official_start,
+            codex_official_finish,
+            codex_official_cancel,
+            gateway_status,
+            gateway_set,
+            gateway_save_route,
+            gateway_delete_route,
+            gateway_set_breaker,
+            gateway_reset_breaker,
+            gateway_test,
+            set_agent_dir
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running AgentPlus");
 }
 
 #[cfg(test)]
@@ -506,70 +625,4 @@ mod tests {
             }
         }
     }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .setup(|_| {
-            gateway::server::autostart();
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            list_agents,
-            get_agent,
-            preview,
-            apply,
-            test_latency,
-            restart_agent,
-            agent_running,
-            open_config_dir,
-            projects_list,
-            project_open,
-            project_forget,
-            pick_folder,
-            codex_sessions,
-            codex_health,
-            codex_cleanup_preview,
-            codex_cleanup,
-            codex_repair,
-            codex_undo_repair,
-            reveal_path,
-            fetch_models,
-            fetch_models_url,
-            fetch_models_lib,
-            list_backups,
-            backup_detail,
-            restore_backup,
-            sync_status,
-            sync_set_folder,
-            sync_export,
-            sync_preview,
-            open_path,
-            open_url,
-            codex_dismiss_fixed_prompt,
-            list_envs,
-            set_env,
-            library_list,
-            library_save,
-            library_delete,
-            open_data_dir,
-            set_locale,
-            detect_agents,
-            test_provider,
-            codex_official_status,
-            codex_official_start,
-            codex_official_finish,
-            codex_official_cancel,
-            gateway_status,
-            gateway_set,
-            gateway_save_route,
-            gateway_delete_route,
-            gateway_set_breaker,
-            gateway_reset_breaker,
-            gateway_test,
-            set_agent_dir
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running AgentPlus");
 }

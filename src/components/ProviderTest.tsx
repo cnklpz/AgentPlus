@@ -3,6 +3,7 @@ import { type TestResult, api } from "../api";
 import { ComboBox } from "./ComboBox";
 import { Icon } from "./icons";
 import { t, tx } from "../i18n";
+import { scrub } from "../privacy";
 
 interface Props {
   /** Where the address and key come from: an agent entry, or "library". */
@@ -53,19 +54,19 @@ export function ProviderTest({ source, models, defaultModel, disabled }: Props) 
         </button>
       </div>
       {why && <span className="tiny muted">{why}</span>}
-      {typeof result === "string" && <div className="ptest-res bad"><strong>{t("providerTest.failed")}</strong><span>{result}</span></div>}
+      {typeof result === "string" && <div className="ptest-res bad"><strong>{t("providerTest.failed")}</strong><span>{scrub(result)}</span></div>}
       {result && typeof result !== "string" && (
         <div className={`ptest-res ${result.ok ? "good" : "bad"}`}>
           <div className="row gap6">
             <strong>{result.ok ? t("providerTest.ok") : t("providerTest.notOk")}</strong>
             <span className="mono tiny">{(result.ms / 1000).toFixed(2)} s</span>
             {result.status != null && <span className="mono tiny">HTTP {result.status}</span>}
-            {result.usage && <span className="mono tiny">{result.usage[0]} → {result.usage[1]} tokens</span>}
+            {result.usage && <span className="mono tiny">{t("providerTest.tokens", { input: result.usage[0], output: result.usage[1] })}</span>}
           </div>
           {result.ok
             ? <span>{result.reply ? tx("providerTest.reply", { reply: <span className="mono">{result.reply}</span> }) : t("providerTest.noText")}</span>
-            : <span>{result.error}</span>}
-          <span className="mono tiny faint ellipsis" title={result.url}>{result.model} · {result.url}</span>
+            : <span>{scrub(result.error)}</span>}
+          <span className="mono tiny faint ellipsis" title={scrub(result.url)}>{result.model} · {scrub(result.url)}</span>
         </div>
       )}
     </div>

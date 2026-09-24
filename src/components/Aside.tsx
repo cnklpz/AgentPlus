@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { type AgentState, type DiffGroup, isProjectId } from "../api";
 import { Icon } from "./icons";
 import { t, tn } from "../i18n";
+import { scrub } from "../privacy";
 
 interface Props {
   st: AgentState;
@@ -15,6 +16,12 @@ interface Props {
   onApply: () => void;
 }
 
+/** Allow line breaks after `_` / `.` so long keys like GOOGLE_GEMINI_BASE_URL wrap at word boundaries. */
+function breakable(k: string): ReactNode {
+  const parts = k.split(/(?<=[_.])/);
+  return parts.length < 2 ? k : parts.map((p, i) => <span key={i}>{p}{i < parts.length - 1 && <wbr />}</span>);
+}
+
 export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApply }: Props) {
   return (
     <aside className="aside" aria-label={t("aside.aria")}>
@@ -26,8 +33,8 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
         <div className="kv">
           {st.current.map((r) => (
             <div key={r.k} className="kv-row">
-              <span className="muted small">{r.k}</span>
-              <span className={r.mono ? "mono small wrap" : "small wrap"}>{r.v}</span>
+              <span className="muted small">{breakable(r.k)}</span>
+              <span className={r.mono ? "mono small wrap" : "small wrap"}>{scrub(r.v)}</span>
             </div>
           ))}
         </div>
@@ -38,11 +45,11 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
           <h2>{t("aside.pendingTitle")}</h2>
           <span className={`count${pending ? " warn" : ""}`}>{pending ? tn("aside.pendingCount", pending) : t("common.none")}</span>
         </div>
-        {error && <div className="err">{error}</div>}
+        {error && <div className="err">{scrub(error)}</div>}
         {diff.map((g) => (
           <div key={g.file} className="dgroup">
-            <div className="dfile mono ellipsis">{g.file}</div>
-            {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{l.text}</div>)}
+            <div className="dfile mono ellipsis">{scrub(g.file)}</div>
+            {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{scrub(l.text)}</div>)}
           </div>
         ))}
         {pending === 0 && !error && (

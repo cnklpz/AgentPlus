@@ -8,6 +8,7 @@
 //! Keys go to the global `auth.json` like everywhere else in OpenCode, never into the
 //! project file (which is usually committed).
 
+use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt, RESERVED};
 use super::ocsettings::{self, Scope};
 use super::opencode;
@@ -217,11 +218,11 @@ pub fn state(agent: &str) -> Result<AgentState> {
 }
 
 /// (base_url, key, api) of a project provider, or of an inherited global one.
-pub fn endpoint(agent: &str, id: &str) -> Result<(String, Option<String>, String)> {
+pub fn endpoint(agent: &str, id: &str) -> Result<Endpoint> {
     let dir = dir_of(agent)?;
     let f = fmt(agent, &dir);
     let (cfg, _, _) = f.load(true)?;
-    if cfg.pointer(&format!("/provider/{id}")).is_some() {
+    if cfg.pointer(&crate::util::jptr(&["provider", id])).is_some() {
         f.endpoint(id)
     } else {
         opencode::provider_endpoint(id)
@@ -244,7 +245,7 @@ impl Drop for Reserve {
     }
 }
 
-pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     let dir = dir_of(agent)?;
     if !dir.is_dir() {
         return Err(anyhow!(tr!("找不到文件夹 {}", "Folder not found: {}", display_path(&dir))));
@@ -266,7 +267,7 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf
     }
     let _guard = Reserve::set(reserved);
 
-    let global_only = |cfg: &Value, id: &str| cfg.pointer(&format!("/provider/{id}")).is_none() && gcfg.pointer(&format!("/provider/{id}")).is_some();
+    let global_only = |cfg: &Value, id: &str| cfg.pointer(&crate::util::jptr(&["provider", id])).is_none() && gcfg.pointer(&crate::util::jptr(&["provider", id])).is_some();
     let inherited_err = |id: &str| anyhow!(tr!("「{id}」来自全局配置，在项目里只能启用或停用；要单独修改，先把它复制到项目", "\"{id}\" comes from the global config and can only be enabled or disabled in a project. To change it, copy it to the project first."));
 
     for op in ops {

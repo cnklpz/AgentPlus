@@ -3,6 +3,8 @@ import { type AgentId, type AgentState, type DiffGroup, api } from "../api";
 import { type Draft, opsToWrite } from "../draft";
 import { t, tn } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
+import { useEscape } from "../hooks";
+import { scrub } from "../privacy";
 
 interface Props {
   title: string;
@@ -26,10 +28,9 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
         .then((d) => setDiffs((m) => ({ ...m, [a.id]: d })))
         .catch((e) => setDiffs((m) => ({ ...m, [a.id]: String(e) })));
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onCancel(); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
   }, []);
+  // Like the backdrop and the close button: nothing to cancel while the changes are being written.
+  useEscape(() => { if (!busy) onCancel(); });
 
   const applying = withOps.filter((a) => keep[a.id]);
   return (
@@ -54,11 +55,11 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
                     <button className={!on ? "on danger" : ""} onClick={() => setKeep((k) => ({ ...k, [a.id]: false }))}>{t("pendingDialog.discard")}</button>
                   </div>
                 </div>
-                {typeof d === "string" && <div className="err">{d}</div>}
+                {typeof d === "string" && <div className="err">{scrub(d)}</div>}
                 {Array.isArray(d) && (
                   <div className="pend-lines">
                     {d.flatMap((g) => g.lines.map((l, i) => (
-                      <div key={`${g.file}-${i}`} className={`dline mono ${l.add ? "add" : "del"}`}>{l.text}</div>
+                      <div key={`${g.file}-${i}`} className={`dline mono ${l.add ? "add" : "del"}`}>{scrub(l.text)}</div>
                     )))}
                   </div>
                 )}

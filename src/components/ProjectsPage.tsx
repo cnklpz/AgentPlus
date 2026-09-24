@@ -2,21 +2,9 @@ import { useState } from "react";
 import type { AgentState, ProjectEntry } from "../api";
 import { Dropdown } from "./Dropdown";
 import { AgentIcon, Icon } from "./icons";
-import { locale, t, tn, tx } from "../i18n";
-
-/** "3 分钟前" / "昨天" / "9月20日" */
-function ago(iso: string | null): string {
-  if (!iso) return "";
-  const ms = new Date(iso).getTime();
-  if (Number.isNaN(ms)) return "";
-  const s = (Date.now() - ms) / 1000;
-  if (s < 60) return t("projectsPage.justNow");
-  if (s < 3600) return tn("projectsPage.minutesAgo", Math.floor(s / 60));
-  if (s < 86400) return tn("projectsPage.hoursAgo", Math.floor(s / 3600));
-  if (s < 2 * 86400) return t("projectsPage.yesterday");
-  if (s < 7 * 86400) return tn("projectsPage.daysAgo", Math.floor(s / 86400));
-  return new Date(ms).toLocaleDateString(locale(), { month: "short", day: "numeric" });
-}
+import { t, tn, tx } from "../i18n";
+import { fmtAgo } from "../format";
+import { scrub } from "../privacy";
 
 interface ListProps {
   projects: ProjectEntry[];
@@ -39,7 +27,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
       <div className="proj-open">
         <button className="btn primary" disabled={busy} onClick={onPick}><Icon.folder />{t("projectsPage.pickFolder")}</button>
         <span className="muted small">{t("projectsPage.or")}</span>
-        <input className="input mono grow" value={path} placeholder={t("projectsPage.pathPlaceholder")} aria-label={t("projectsPage.pathLabel")}
+        <input className="input mono grow sensitive" value={path} placeholder={t("projectsPage.pathPlaceholder")} aria-label={t("projectsPage.pathLabel")}
           onChange={(e) => setPath(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") go(); }} />
         <button className="btn" disabled={busy || !path.trim()} onClick={go}>{t("common.open")}</button>
       </div>
@@ -52,21 +40,21 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
             const n = pending[p.agent] ?? 0;
             return (
               <div key={p.path} className={`proj-row${p.exists ? "" : " gone"}`} role="button" tabIndex={0}
-                onClick={() => p.exists && onOpen(p.path)} onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && p.exists) { e.preventDefault(); onOpen(p.path); } }}>
+                onClick={() => p.exists && onOpen(p.path)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && p.exists) { e.preventDefault(); onOpen(p.path); } }}>
                 <span className="proj-icon"><Icon.folder size={16} /></span>
                 <span className="grow minw0">
                   <span className="row gap6 minw0">
-                    <span className="strong ellipsis">{p.name}</span>
+                    <span className="strong ellipsis sensitive">{p.name}</span>
                     {p.git && <span className="api-chip">git</span>}
                     {n > 0 && <span className="ptag tag-new">{tn("projectsPage.unapplied", n)}</span>}
                   </span>
-                  <span className="block mono tiny muted ellipsis">{p.path}</span>
+                  <span className="block mono tiny muted ellipsis sensitive">{scrub(p.path)}</span>
                 </span>
                 <span className="proj-meta small">
                   {!p.exists ? <span className="warn-text">{t("projectsPage.folderMissing")}</span>
                     : p.config ? <span>opencode.json{p.providers ? ` · ${tn("projectsPage.providerCount", p.providers)}` : ""}</span>
                     : <span className="muted">{t("projectsPage.notConfigured")}</span>}
-                  <span className="tiny muted">{ago(p.lastOpened)}</span>
+                  <span className="tiny muted">{fmtAgo(p.lastOpened)}</span>
                 </span>
                 <span className="row gap6" onClick={(e) => e.stopPropagation()}>
                   {p.exists && <button className="icon-btn sm" title={t("projectsPage.revealTitle")} aria-label={t("projectsPage.revealLabel", { name: p.name })} onClick={() => onReveal(p.path)}><Icon.folder size={12} /></button>}
@@ -107,7 +95,7 @@ export function ProjectHead({ st, project, projects, onBack, onSwitch, onOpenDir
           <h1 className="ellipsis">{st.name}</h1>
           {exists ? <span className="chip-ok nowrap">{t("projectsPage.hasConfig")}</span> : <span className="chip-muted nowrap">{t("projectsPage.notCreated")}</span>}
         </div>
-        <span className="muted small ellipsis">{tx("projectsPage.subtitle", { dir: <span className="mono">{st.configDir}</span> })}</span>
+        <span className="muted small ellipsis">{tx("projectsPage.subtitle", { dir: <span className="mono">{scrub(st.configDir)}</span> })}</span>
       </div>
       {others.length > 1 && (
         <div className="proj-switch">

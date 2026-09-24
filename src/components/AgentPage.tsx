@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelInput, type Setting, type SettingValue, api, isProjectId } from "../api";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
   CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, isEnabled, isVisible, keys, mergeExtra,
   setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, withOp,
@@ -15,6 +15,7 @@ import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { ModelDialog } from "./ModelDialog";
 import { t, tn } from "../i18n";
+import { scrub } from "../privacy";
 
 export type Tab = "prov" | "models" | "sessions" | "maint" | "projects" | "set";
 
@@ -92,7 +93,7 @@ export function AgentPage(props: Props) {
                 <span className="chip-muted">{t("agentPage.notInstalled")}</span>
               )}
             </div>
-            <span className="mono muted small ellipsis">{st.files.join(" · ")}</span>
+            <span className="mono muted small ellipsis">{scrub(st.files.join(" · "))}</span>
           </div>
           <button className="btn" onClick={onOpenDir}><Icon.folder />{t("agentPage.openDir")}</button>
           {st.restartable && (
@@ -105,7 +106,7 @@ export function AgentPage(props: Props) {
           )}
         </div>}
         {st.notes.length > 0 && (
-          <div className="notes">{st.notes.map((n) => <span key={n}>{n}</span>)}</div>
+          <div className="notes">{st.notes.map((n) => <span key={n}>{scrub(n)}</span>)}</div>
         )}
         <TabBar items={tabs.map(([id, label, n]) => ({ id, label, count: n }))} value={tab} onChange={setTab} />
       </div>
@@ -135,6 +136,7 @@ export function AgentPage(props: Props) {
                   p={p}
                   mode={st.mode}
                   isCurrent={st.mode === "single" && cur === p.id}
+                  switching={st.currentProvider !== p.id}
                   selected={props.selectedProvider === p.id}
                   enabled={p.isNew || isEnabled(p, draft)}
                   visible={p.isNew ? p.models.length : viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length}
@@ -175,7 +177,7 @@ export function AgentPage(props: Props) {
             </div>
           ) : st.id === "codex" ? (
             <div className="stack12">
-              <div className="empty">{t("agentPage.noCatalog")}{st.id === "codex" && t("agentPage.noCatalogHint")}</div>
+              <div className="empty">{t("agentPage.noCatalog")}{t("agentPage.noCatalogHint")}</div>
               {official}
             </div>
           ) : (
@@ -198,6 +200,9 @@ export function AgentPage(props: Props) {
                     ))}
                   </div>
                   <ModelTable
+                    // One table per provider: a model list still being fetched for the last
+                    // one must not land here (and be added under this provider).
+                    key={sel.id}
                     st={st}
                     title={sel.name}
                     note={sel.builtin ? t("agentPage.builtinNote", { name: st.name }) : inherited ? t("agentPage.inheritedNote") : enabled ? t("agentPage.enabledNote") : t("agentPage.disabledNote")}
@@ -257,13 +262,8 @@ interface ModelTableProps {
   flash: (text: string, error?: boolean) => void;
 }
 
-/** Backend tags that the capability tags below replace (they would lag behind pending edits).
- * The backend renders them in the UI language, so both languages are listed. */
-const CAP_WORDS = new Set([
-  "图片", "推理", "PDF", "视频",
-  "Image", "Images", "Reasoning", "Video", "Videos",
-  "image_in", "video_in", "thinking", "always_thinking",
-]);
+/** Backend capability tags (`cap:*`), replaced by the ones below (they would lag behind pending edits). */
+const isCapTag = (g: ModelTag) => g.id.startsWith("cap:");
 
 /** "读取图片" / "Read images" → "图片" / "Images". */
 const capName = (s: string) => {
@@ -303,13 +303,18 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
   const [filter, setFilter] = useState("");
 
   useEffect(() => { setEditing(null); setFetched(null); setFilter(""); }, [pid]);
+  // Where a fetch was started from vs. where the table is now (the provider can change meanwhile).
+  const source = useRef({ pid, fetchFrom });
+  source.current = { pid, fetchFrom };
 
   const existing = new Set(models.map((m) => m.id));
   const doFetch = async () => {
     if (!fetchFrom) return;
+    const from = { pid, fetchFrom };
     setFetching(true);
     try {
       const list = await api.fetchModels(st.id, fetchFrom);
+      if (source.current.pid !== from.pid || source.current.fetchFrom !== from.fetchFrom) return;
       const fresh = list.filter((m) => !existing.has(m));
       setFetched(fresh);
       setPick(new Set());
@@ -402,7 +407,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
         const dirty = m.isNew || m.isEdited || m.isDeleted || on !== m.visible;
         const editable = !readonly && !m.readonly && !m.isDeleted;
         const caps = capTags(fields, m.extra);
-        const tags = fields.length ? m.tags.filter((g) => !CAP_WORDS.has(g)) : m.tags;
+        const tags = fields.length ? m.tags.filter((g) => !isCapTag(g)) : m.tags;
         return (
           <div key={m.id} className={`mrow${m.isDeleted ? " deleted" : ""}`} data-ctx="model" data-pid={pid} data-mid={m.id}
             title={editable ? t("agentPage.dblClickEdit") : undefined}
@@ -413,7 +418,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                 <span className={`mono ellipsis${on ? "" : " faint"}${dirty ? " dirty" : ""}`}>{m.id}</span>
                 {m.isNew && <span className="mtag new">{t("agentPage.tagNew")}</span>}
                 {m.isDeleted && <span className="mtag">{t("agentPage.tagDeleting")}</span>}
-                {tags.map((g) => <span key={g} className={`mtag${g === "Fast" ? " fast" : ""}`}>{g}</span>)}
+                {tags.map((g) => <span key={g.id} className={`mtag${g.id === "fast" ? " fast" : ""}`}>{g.label}</span>)}
               </span>
               {((hasNames && m.name && m.name !== m.id) || caps.length > 0) && (
                 <span className="row gap6 minw0 msub">

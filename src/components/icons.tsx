@@ -128,6 +128,7 @@ export const Icon = {
   arrow: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <path d="M5 12h14M13 6l6 6-6 6" />),
   sun: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>),
   moon: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M20.5 14.1A8.5 8.5 0 1 1 9.9 3.5a6.6 6.6 0 0 0 10.6 10.6Z" />),
+  power: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M12 3v8" /><path d="M6.4 6.6a8 8 0 1 0 11.2 0" /></>),
   terminal: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>),
   grip: ({ size = 14 }: P) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="#B8BFC9" aria-hidden="true">

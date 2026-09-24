@@ -15,5 +15,6 @@ export default {
   elapsed: "已用 {s} 秒",
   took: "用时 {s} 秒",
   background: "后台运行",
-  settingsHint: "可在「设置 › 界面」改为简略提示",
+  cancelStart: "取消启动",
+  cancelRestart: "取消重启",
 };

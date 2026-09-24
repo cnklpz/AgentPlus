@@ -26,6 +26,7 @@ export default {
   heroActive: "{n} 个进行中",
   idleHint: "开启后只监听 127.0.0.1，本机以外和网页都访问不到。每个 Agent 用自己的网关密钥访问（写入时自动填好），网关再用供应商库里的密钥请求上游。",
   port: "端口",
+  portInvalid: "端口要在 1024–65535 之间",
   switchPort: "换到新端口",
   stop: "关闭网关",
   start: "开启网关",

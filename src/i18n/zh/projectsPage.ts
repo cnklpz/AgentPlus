@@ -1,10 +1,5 @@
 // src/components/ProjectsPage.tsx
 export default {
-  justNow: "刚刚",
-  minutesAgo: "{n} 分钟前",
-  hoursAgo: "{n} 小时前",
-  yesterday: "昨天",
-  daysAgo: "{n} 天前",
   intro: "给单个项目文件夹单独配置 OpenCode：项目里的 opencode.json 会和全局配置合并，同名的键以项目为准。",
   pickFolder: "选择文件夹…",
   or: "或",

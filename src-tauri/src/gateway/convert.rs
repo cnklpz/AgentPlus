@@ -3,6 +3,7 @@
 //! lists and SSE streams. Pure functions / state machines, no I/O.
 #![allow(dead_code)]
 
+use crate::i18n::l;
 use anyhow::{bail, Result};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -297,7 +298,7 @@ fn usage_to_chat(u: Usage) -> Value {
     let mut v = json!({
         "prompt_tokens": u.input,
         "completion_tokens": u.output,
-        "total_tokens": u.input + u.output,
+        "total_tokens": u.input.saturating_add(u.output),
     });
     if u.cached > 0 {
         v["prompt_tokens_details"] = json!({"cached_tokens": u.cached});
@@ -323,7 +324,7 @@ fn usage_to_responses(u: Usage) -> Value {
         "input_tokens_details": {"cached_tokens": u.cached},
         "output_tokens": u.output,
         "output_tokens_details": {"reasoning_tokens": u.reasoning},
-        "total_tokens": u.input + u.output,
+        "total_tokens": u.input.saturating_add(u.output),
     })
 }
 
@@ -331,7 +332,7 @@ fn usage_to_responses(u: Usage) -> Value {
 fn usage_from_anthropic(u: &Value) -> Usage {
     let cache_read = uget(u, "cache_read_input_tokens");
     Usage {
-        input: uget(u, "input_tokens") + cache_read + uget(u, "cache_creation_input_tokens"),
+        input: uget(u, "input_tokens").saturating_add(cache_read).saturating_add(uget(u, "cache_creation_input_tokens")),
         output: uget(u, "output_tokens"),
         cached: cache_read,
         reasoning: 0,
@@ -368,7 +369,7 @@ fn usage_to_anthropic(u: Usage) -> Value {
 
 pub fn request_to_chat(from: Proto, body: &Value) -> Result<Value> {
     if !body.is_object() {
-        bail!("request body must be a JSON object");
+        bail!("{}", l("请求体必须是 JSON 对象", "The request body must be a JSON object"));
     }
     match from {
         Proto::Chat => Ok(body.clone()),
@@ -379,7 +380,7 @@ pub fn request_to_chat(from: Proto, body: &Value) -> Result<Value> {
 
 pub fn request_from_chat(to: Proto, chat: &Value) -> Result<Value> {
     if !chat.is_object() {
-        bail!("request body must be a JSON object");
+        bail!("{}", l("请求体必须是 JSON 对象", "The request body must be a JSON object"));
     }
     match to {
         Proto::Chat => Ok(chat.clone()),
@@ -986,14 +987,20 @@ struct ChatTurn {
     usage: Usage,
 }
 
-fn parse_chat_response(chat: &Value) -> ChatTurn {
-    let ch = chat.get("choices").and_then(|c| c.get(0)).unwrap_or(&Value::Null);
-    let msg = ch.get("message").unwrap_or(&Value::Null);
+/// (text, reasoning) of a chat.completion message, whatever shape its content has.
+pub fn message_text(msg: &Value) -> (String, String) {
     let reasoning = [sget(msg, "reasoning_content"), sget(msg, "reasoning")]
         .into_iter()
         .find(|s| !s.is_empty())
         .unwrap_or("")
         .to_string();
+    (parts_text(&chat_parts(msg.get("content").unwrap_or(&Value::Null))), reasoning)
+}
+
+fn parse_chat_response(chat: &Value) -> ChatTurn {
+    let ch = chat.get("choices").and_then(|c| c.get(0)).unwrap_or(&Value::Null);
+    let msg = ch.get("message").unwrap_or(&Value::Null);
+    let (text, reasoning) = message_text(msg);
     let tools = arr(msg.get("tool_calls"))
         .iter()
         .map(|tc| {
@@ -1013,7 +1020,7 @@ fn parse_chat_response(chat: &Value) -> ChatTurn {
     ChatTurn {
         id: sget(chat, "id").to_string(),
         model: sget(chat, "model").to_string(),
-        text: parts_text(&chat_parts(msg.get("content").unwrap_or(&Value::Null))),
+        text,
         reasoning,
         tools,
         finish: sget(ch, "finish_reason").to_string(),
@@ -1057,7 +1064,7 @@ fn chat_completion(
 
 pub fn response_to_chat(from: Proto, body: &Value) -> Result<Value> {
     if !body.is_object() {
-        bail!("response body must be a JSON object");
+        bail!("{}", l("响应体不是 JSON 对象", "The response body is not a JSON object"));
     }
     match from {
         Proto::Chat => Ok(body.clone()),
@@ -1241,7 +1248,7 @@ fn anthropic_message(
 
 pub fn response_from_chat(to: Proto, chat: &Value, ctx: &ReqCtx) -> Result<Value> {
     if !chat.is_object() {
-        bail!("response body must be a JSON object");
+        bail!("{}", l("响应体不是 JSON 对象", "The response body is not a JSON object"));
     }
     let t = parse_chat_response(chat);
     let model = if ctx.model.is_empty() { t.model.clone() } else { ctx.model.clone() };
@@ -1330,7 +1337,7 @@ fn error_type(status: u16) -> &'static str {
 pub fn error_body(to: Proto, status: u16, upstream_text: &str) -> Value {
     let mut msg = extract_error_message(upstream_text);
     if msg.is_empty() {
-        msg = format!("upstream error (HTTP {status})");
+        msg = tr!("上游出错（HTTP {status}）", "Upstream error (HTTP {status})");
     }
     match to {
         Proto::Anthropic => json!({"type": "error", "error": {"type": error_type(status), "message": msg}}),
@@ -1413,6 +1420,8 @@ pub struct UpstreamStream {
     started: bool,
     role_sent: bool,
     done: bool,
+    /// Ended without its closing event (message_stop / response.completed / an error).
+    early: bool,
     tool_count: usize,
     finish: Option<String>,
     usage: Option<Usage>,
@@ -1435,6 +1444,7 @@ impl UpstreamStream {
             started: false,
             role_sent: false,
             done: false,
+            early: false,
             tool_count: 0,
             finish: None,
             usage: None,
@@ -1466,10 +1476,19 @@ impl UpstreamStream {
         if !rest.trim().is_empty() {
             self.handle_block(&rest, &mut out);
         }
-        if self.from != Proto::Chat && self.started {
-            self.emit_final(&mut out);
+        // Anthropic and Responses streams always close with an event of their own; without
+        // it the stream was cut off, which must not look like a complete answer.
+        if self.from != Proto::Chat && !self.done {
+            self.early = true;
+            let c = self.error_chunk(l("上游的流没有正常结束就断开了", "The upstream stream ended before it finished"));
+            out.push(c);
         }
         out
+    }
+
+    /// `finish` found the stream cut off.
+    pub fn ended_early(&self) -> bool {
+        self.early
     }
 
     fn handle_block(&mut self, block: &str, out: &mut Vec<Value>) {
@@ -1535,7 +1554,7 @@ impl UpstreamStream {
             "created": self.created,
             "model": self.model,
             "choices": [],
-            "error": {"message": if msg.is_empty() { "upstream stream error" } else { msg }, "type": "upstream_error"},
+            "error": {"message": if msg.is_empty() { l("上游流出错", "Upstream stream error") } else { msg }, "type": "upstream_error"},
         })
     }
 
@@ -1831,7 +1850,7 @@ impl UpstreamStream {
             "response.failed" => {
                 let r = v.get("response").unwrap_or(&Value::Null);
                 let msg = r.get("error").map(|e| sget(e, "message")).unwrap_or("").to_string();
-                let msg = if msg.is_empty() { "response failed".to_string() } else { msg };
+                let msg = if msg.is_empty() { l("上游响应失败", "The upstream response failed").to_string() } else { msg };
                 let c = self.error_chunk(&msg);
                 out.push(c);
             }
@@ -1865,6 +1884,8 @@ struct DTool {
     name: String,
     args: String,
     custom: bool,
+    /// Not sent yet: it started while another call was streaming (see `on_tool`).
+    held: bool,
 }
 
 /// Turns chat chunks into the client's SSE frames. Each returned String is a complete SSE frame.
@@ -2023,7 +2044,7 @@ impl DownstreamStream {
         if self.finished {
             return Vec::new();
         }
-        let msg = if msg.is_empty() { "upstream error" } else { msg };
+        let msg = if msg.is_empty() { l("上游出错", "Upstream error") } else { msg };
         let mut out = Vec::new();
         match self.to {
             Proto::Chat => {
@@ -2163,28 +2184,78 @@ impl DownstreamStream {
                 self.output.push(item);
             }
             Cur::Tool(idx) => {
-                let Some(t) = self.tools.get(&idx) else { return };
-                let (item_id, oi, call_id, name, args, custom) =
-                    (t.item_id.clone(), t.oi, t.call_id.clone(), t.name.clone(), t.args.clone(), t.custom);
-                if self.to == Proto::Anthropic {
-                    out.push(self.aev("content_block_stop", json!({"index": oi})));
-                    return;
+                self.tool_end(idx, out);
+                // Calls held back while this one streamed go out now, each in one piece.
+                let held: Vec<u64> = self.tools.iter().filter(|(_, t)| t.held).map(|(i, _)| *i).collect();
+                for i in held {
+                    let t = self.tools.get_mut(&i).unwrap();
+                    t.held = false;
+                    let args = t.args.clone();
+                    self.tool_begin(i, out);
+                    self.tool_delta(i, &args, out);
+                    self.tool_end(i, out);
                 }
-                if custom {
-                    let input = custom_input(&args);
-                    out.push(self.rev("response.custom_tool_call_input.delta",
-                        json!({"item_id": item_id, "output_index": oi, "delta": input})));
-                    out.push(self.rev("response.custom_tool_call_input.done",
-                        json!({"item_id": item_id, "output_index": oi, "input": input})));
-                } else {
-                    out.push(self.rev("response.function_call_arguments.done",
-                        json!({"item_id": item_id, "output_index": oi, "arguments": args})));
-                }
-                let item = responses_tool_item(&self.ctx, &item_id, &call_id, &name, &args, "completed");
-                out.push(self.rev("response.output_item.done", json!({"output_index": oi, "item": item.clone()})));
-                self.output.push(item);
             }
         }
+    }
+
+    /// Opens a tool call's block / item on the wire.
+    fn tool_begin(&mut self, idx: u64, out: &mut Vec<String>) {
+        let oi = self.next_idx();
+        let t = self.tools.get_mut(&idx).unwrap();
+        t.oi = oi;
+        let (item_id, call_id, name, custom) = (t.item_id.clone(), t.call_id.clone(), t.name.clone(), t.custom);
+        match self.to {
+            Proto::Anthropic => out.push(self.aev("content_block_start", json!({"index": oi,
+                "content_block": {"type": "tool_use", "id": call_id, "name": name, "input": {}}}))),
+            _ => {
+                let mut item = responses_tool_item(&self.ctx, &item_id, &call_id, &name, "", "in_progress");
+                if custom {
+                    item["input"] = json!("");
+                }
+                out.push(self.rev("response.output_item.added", json!({"output_index": oi, "item": item})));
+            }
+        }
+    }
+
+    /// Streams a piece of a tool call's arguments (already added to `args`).
+    fn tool_delta(&mut self, idx: u64, args: &str, out: &mut Vec<String>) {
+        let t = &self.tools[&idx];
+        if args.is_empty() {
+            return;
+        }
+        let (item_id, oi, custom) = (t.item_id.clone(), t.oi, t.custom);
+        match self.to {
+            Proto::Anthropic => out.push(self.aev("content_block_delta",
+                json!({"index": oi, "delta": {"type": "input_json_delta", "partial_json": args}}))),
+            _ if custom => {} // custom tool input is emitted on close
+            _ => out.push(self.rev("response.function_call_arguments.delta",
+                json!({"item_id": item_id, "output_index": oi, "delta": args}))),
+        }
+    }
+
+    /// Closes a tool call's block / item on the wire.
+    fn tool_end(&mut self, idx: u64, out: &mut Vec<String>) {
+        let Some(t) = self.tools.get(&idx) else { return };
+        let (item_id, oi, call_id, name, args, custom) =
+            (t.item_id.clone(), t.oi, t.call_id.clone(), t.name.clone(), t.args.clone(), t.custom);
+        if self.to == Proto::Anthropic {
+            out.push(self.aev("content_block_stop", json!({"index": oi})));
+            return;
+        }
+        if custom {
+            let input = custom_input(&args);
+            out.push(self.rev("response.custom_tool_call_input.delta",
+                json!({"item_id": item_id, "output_index": oi, "delta": input})));
+            out.push(self.rev("response.custom_tool_call_input.done",
+                json!({"item_id": item_id, "output_index": oi, "input": input})));
+        } else {
+            out.push(self.rev("response.function_call_arguments.done",
+                json!({"item_id": item_id, "output_index": oi, "arguments": args})));
+        }
+        let item = responses_tool_item(&self.ctx, &item_id, &call_id, &name, &args, "completed");
+        out.push(self.rev("response.output_item.done", json!({"output_index": oi, "item": item.clone()})));
+        self.output.push(item);
     }
 
     fn on_text(&mut self, s: &str, out: &mut Vec<String>) {
@@ -2258,8 +2329,14 @@ impl DownstreamStream {
         let is_cur = matches!(self.cur, Cur::Tool(i) if i == idx);
         if !is_cur {
             if let Some(t) = self.tools.get_mut(&idx) {
-                // Late delta for an already-closed call: patch the stored item only.
                 t.args.push_str(args);
+                if t.name.is_empty() && !name.is_empty() {
+                    t.name = name.to_string();
+                }
+                if t.held {
+                    return;
+                }
+                // Late delta for an already-closed call: patch the stored item only.
                 let (item_id, full) = (t.item_id.clone(), t.args.clone());
                 if let Some(item) = self.output.iter_mut().find(|i| sget(i, "id") == item_id) {
                     if item.get("input").is_some() {
@@ -2270,48 +2347,28 @@ impl DownstreamStream {
                 }
                 return;
             }
-            self.close_current(out);
-            let oi = self.next_idx();
             let custom = is_custom(&self.ctx, name);
             let call_id = if id.is_empty() { gen_id("call_") } else { id.to_string() };
             let item_id = gen_id(if custom { "ctc_" } else { "fc_" });
-            match self.to {
-                Proto::Anthropic => out.push(self.aev("content_block_start", json!({"index": oi,
-                    "content_block": {"type": "tool_use", "id": call_id, "name": name, "input": {}}}))),
-                _ => {
-                    let mut item = responses_tool_item(&self.ctx, &item_id, &call_id, name, "", "in_progress");
-                    if custom {
-                        item["input"] = json!("");
-                    }
-                    out.push(self.rev("response.output_item.added", json!({"output_index": oi, "item": item})));
-                }
+            // Upstreams may interleave the argument pieces of parallel calls. A block can't
+            // take more deltas once closed, so while one call streams, later ones are held
+            // back and sent whole when it closes.
+            let held = matches!(self.cur, Cur::Tool(_));
+            self.tools.insert(idx, DTool { item_id, oi: 0, call_id, name: name.to_string(), args: String::new(), custom, held });
+            if held {
+                self.tools.get_mut(&idx).unwrap().args.push_str(args);
+                return;
             }
-            self.tools.insert(idx, DTool {
-                item_id,
-                oi,
-                call_id,
-                name: name.to_string(),
-                args: String::new(),
-                custom,
-            });
+            self.close_current(out);
+            self.tool_begin(idx, out);
             self.cur = Cur::Tool(idx);
         }
         let t = self.tools.get_mut(&idx).unwrap();
         if t.name.is_empty() && !name.is_empty() {
             t.name = name.to_string();
         }
-        if args.is_empty() {
-            return;
-        }
         t.args.push_str(args);
-        let (item_id, oi, custom) = (t.item_id.clone(), t.oi, t.custom);
-        match self.to {
-            Proto::Anthropic => out.push(self.aev("content_block_delta",
-                json!({"index": oi, "delta": {"type": "input_json_delta", "partial_json": args}}))),
-            _ if custom => {} // custom tool input is emitted on close
-            _ => out.push(self.rev("response.function_call_arguments.delta",
-                json!({"item_id": item_id, "output_index": oi, "delta": args}))),
-        }
+        self.tool_delta(idx, args, out);
     }
 }
 
@@ -3097,14 +3154,89 @@ mod tests {
                 }
             }
         }
-        // upstream without final event: finish() synthesizes finish + usage
+        // Upstream cut off before its final event: an error, not a made-up "stop".
         let mut up = UpstreamStream::new(Proto::Responses);
         let mut chunks = up.feed(&sse("response.output_text.delta", json!({"type": "response.output_text.delta", "item_id": "m", "delta": "partial"})));
         chunks.extend(up.finish());
-        assert_eq!(chunks.last().unwrap()["choices"][0]["finish_reason"], "stop");
+        assert!(up.ended_early());
+        assert!(chunks.iter().all(|c| c["choices"][0]["finish_reason"].is_null()));
+        assert_eq!(chunks.last().unwrap()["error"]["message"], "上游的流没有正常结束就断开了");
         assert!(up.finish().is_empty());
+        let mut down = DownstreamStream::new(Proto::Anthropic, ReqCtx::default());
+        let mut out: Vec<String> = chunks.iter().flat_map(|c| down.push(c)).collect();
+        out.extend(down.finish());
+        let fr = frames(&out);
+        assert_eq!(fr.last().unwrap().0, "error");
+        assert!(!fr.iter().any(|(e, _)| e == "message_stop"));
+        // Nothing at all (an empty 200) is no answer either.
         let mut up = UpstreamStream::new(Proto::Anthropic);
-        assert!(up.finish().is_empty());
+        assert_eq!(up.finish().len(), 1);
+        assert!(up.ended_early());
+        // A complete stream is not flagged; Chat streams have no closing event to miss.
+        let mut up = UpstreamStream::new(Proto::Anthropic);
+        feed_in_pieces(&mut up, &anthropic_transcript(), 50);
+        assert!(!up.ended_early());
+        let mut up = UpstreamStream::new(Proto::Chat);
+        assert!(up.finish().is_empty() && !up.ended_early());
+    }
+
+    /// Parallel tool calls whose argument pieces arrive interleaved reach an Anthropic (or
+    /// Responses) client whole: the second call is held until the first one closes.
+    #[test]
+    fn interleaved_tool_calls_keep_all_arguments() {
+        let mk = |tc: Value| json!({"id": "x", "object": "chat.completion.chunk", "model": "m",
+            "choices": [{"index": 0, "delta": {"tool_calls": [tc]}, "finish_reason": null}]});
+        let chunks = [
+            mk(json!({"index": 0, "id": "call_a", "type": "function", "function": {"name": "read", "arguments": "{\"pa"}})),
+            mk(json!({"index": 1, "id": "call_b", "type": "function", "function": {"name": "ls", "arguments": "{\"di"}})),
+            mk(json!({"index": 0, "function": {"arguments": "th\":\"a\"}"}})),
+            mk(json!({"index": 1, "function": {"arguments": "r\":\"b\"}"}})),
+        ];
+        let mut down = DownstreamStream::new(Proto::Anthropic, ReqCtx::default());
+        let mut out = Vec::new();
+        for c in &chunks {
+            out.extend(down.push(c));
+        }
+        out.extend(down.finish());
+        let fr = frames(&out);
+        let json_for = |idx: u64| -> String {
+            fr.iter().filter(|(e, d)| e == "content_block_delta" && d["index"] == idx)
+                .map(|(_, d)| d["delta"]["partial_json"].as_str().unwrap().to_string()).collect()
+        };
+        assert_eq!(json_for(0), r#"{"path":"a"}"#);
+        assert_eq!(json_for(1), r#"{"dir":"b"}"#);
+        // Blocks stay sequential: start/stop pairs never overlap.
+        let seq: Vec<(String, u64)> = fr.iter().filter(|(e, _)| e.starts_with("content_block_s"))
+            .map(|(e, d)| (e.clone(), d["index"].as_u64().unwrap())).collect();
+        assert_eq!(seq, vec![("content_block_start".into(), 0), ("content_block_stop".into(), 0),
+            ("content_block_start".into(), 1), ("content_block_stop".into(), 1)]);
+        let starts: Vec<&Value> = fr.iter().filter(|(e, _)| e == "content_block_start").map(|(_, d)| d).collect();
+        assert_eq!(starts[1]["content_block"]["id"], "call_b");
+        assert_eq!(starts[1]["content_block"]["name"], "ls");
+
+        let mut down = DownstreamStream::new(Proto::Responses, ReqCtx::default());
+        let mut out: Vec<String> = chunks.iter().flat_map(|c| down.push(c)).collect();
+        out.extend(down.finish());
+        let fr = frames(&out);
+        let done: Vec<&Value> = fr.iter().filter(|(e, _)| e == "response.output_item.done").map(|(_, d)| &d["item"]).collect();
+        assert_eq!(done[0]["arguments"], r#"{"path":"a"}"#);
+        assert_eq!(done[1]["arguments"], r#"{"dir":"b"}"#);
+    }
+
+    #[test]
+    fn huge_usage_does_not_overflow() {
+        let v = json!({"usage": {"input_tokens": u64::MAX, "cache_read_input_tokens": 5, "output_tokens": u64::MAX}});
+        assert_eq!(usage_tokens(&v), Some((u64::MAX, u64::MAX)));
+        let u = Usage { input: u64::MAX, output: 1, ..Default::default() };
+        assert_eq!(usage_to_chat(u)["total_tokens"], u64::MAX);
+        assert_eq!(usage_to_responses(u)["total_tokens"], u64::MAX);
+    }
+
+    #[test]
+    fn message_text_reads_parts() {
+        let (t, r) = message_text(&json!({"content": [{"type": "text", "text": "x"}, "y"], "reasoning_content": "", "reasoning": "z"}));
+        assert_eq!((t.as_str(), r.as_str()), ("x\ny", "z"));
+        assert_eq!(request_to_chat(Proto::Chat, &json!([1])).unwrap_err().to_string(), "请求体必须是 JSON 对象");
     }
 
     #[test]
@@ -3127,8 +3259,9 @@ mod tests {
         // upstream stream with odd events
         for p in [Proto::Responses, Proto::Anthropic, Proto::Chat] {
             let mut up = UpstreamStream::new(p);
-            let mut chunks = up.feed("event: weird\ndata: {\"type\":\"x.y\"}\n\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"nope\"}\n\ndata: {\"type\":\"content_block_delta\",\"index\":9,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"x\"}}\n\nretry: 5\nid: 1\n\n");
-            chunks.extend(up.finish());
+            let chunks = up.feed("event: weird\ndata: {\"type\":\"x.y\"}\n\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"nope\"}\n\ndata: {\"type\":\"content_block_delta\",\"index\":9,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"x\"}}\n\nretry: 5\nid: 1\n\n");
+            // (finish() would end these unterminated streams with an error.)
+            assert_eq!(up.finish().len(), usize::from(p != Proto::Chat));
             let mut d = DownstreamStream::new(Proto::Responses, ReqCtx::default());
             for c in &chunks {
                 d.push(c);
@@ -3160,7 +3293,7 @@ mod tests {
         let long = "é".repeat(800);
         let m = error_body(Proto::Chat, 500, &long)["error"]["message"].as_str().unwrap().to_string();
         assert_eq!(m.chars().count(), 503);
-        assert_eq!(error_body(Proto::Chat, 502, "")["error"]["message"], "upstream error (HTTP 502)");
+        assert_eq!(error_body(Proto::Chat, 502, "")["error"]["message"], "上游出错（HTTP 502）");
         // anthropic-shaped upstream error
         let e = error_body(Proto::Chat, 529, r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#);
         assert_eq!(e["error"]["message"], "Overloaded");

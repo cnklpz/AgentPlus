@@ -2,8 +2,8 @@
 // several *groups* — different protocols, paths or keys. Each group is edited and added
 // to agents on its own. Built from AgentPlus's library plus every agent's entries (as
 // they will be after the pending drafts).
-import type { AgentId, AgentState, ApiKind, LibEntry, Op } from "./api";
-import { CATALOG, type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, viewModels, viewProviders } from "./draft";
+import type { AgentId, AgentState, ApiKind, GatewayRoute, GatewayRouteView, LibEntry, Op, SyncSuggestion } from "./api";
+import { API_LABEL, CATALOG, type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, viewModels, viewProviders } from "./draft";
 import { type TKey, t } from "./i18n";
 
 export type UseState = "current" | "on" | "off" | "adding" | "removing" | "new";
@@ -217,12 +217,12 @@ export function importSource(g: Group): { fromAgent: string; provider: string } 
 /** Agents that accept only one protocol; everything else takes all three. */
 export const ONLY_API: Partial<Record<AgentId, ApiKind>> = { codex: "responses", claude: "anthropic", codebuddy: "chat", gemini: "gemini" };
 
-/** Protocol an agent should use to reach a provider speaking `api` (directly or via the gateway). */
 /** Can the local gateway serve this agent? (It speaks Chat / Responses / Anthropic, not Gemini.) */
 export function gatewayCapable(agent: AgentId): boolean {
   return ONLY_API[agent] !== "gemini";
 }
 
+/** Protocol an agent should use to reach a provider speaking `api` (directly or via the gateway). */
 export function apiFor(agent: AgentId, api: ApiKind): ApiKind {
   return ONLY_API[agent] ?? api;
 }
@@ -254,11 +254,30 @@ export function importKey(g: Group): string {
   return `pi:${src?.fromAgent}:${src?.provider}`;
 }
 
-// Some agents keep protocols AgentPlus doesn't model (e.g. pi's "bedrock-converse"); show those as-is.
-export const API_LABEL: Record<ApiKind, string> = new Proxy(
-  { responses: "Responses", chat: "Chat", anthropic: "Anthropic", gemini: "Gemini" } as Record<string, string>,
-  { get: (t, k) => (typeof k === "string" ? t[k] ?? k : undefined) },
-);
+export { API_LABEL };
+
+/** A gateway route as saved: the view-only fields the backend adds are left out. */
+export function plainRoute(r: GatewayRouteView): GatewayRoute {
+  const { localBase: _a, upstreamName: _b, upstreamUrl: _c, upstreamMissing: _d, models: _e, breaker: _f, ...route } = r;
+  return route;
+}
+
+/** Stable id of a sync suggestion (its agent and draft keys; its text changes with the language). */
+export function syncSuggestionId(s: SyncSuggestion): string {
+  return `${s.agent}\n${s.ops.map(([k]) => k).join("\n")}`;
+}
+
+/** `syncSuggestionId` for a whole list, unique within it: two suggestions can touch the same
+ * draft keys (two remote entries for one relay), so repeats get "#2", "#3"… in list order. */
+export function syncSuggestionIds(list: SyncSuggestion[]): string[] {
+  const seen = new Map<string, number>();
+  return list.map((s) => {
+    const id = syncSuggestionId(s);
+    const n = (seen.get(id) ?? 0) + 1;
+    seen.set(id, n);
+    return n === 1 ? id : `${id}#${n}`;
+  });
+}
 
 const USE_KEY: Record<UseState, TKey> = {
   current: "services.useCurrent",

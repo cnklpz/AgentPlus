@@ -18,6 +18,7 @@ import templatePicker from "./templatePicker";
 import envSwitch from "./envSwitch";
 import comboBox from "./comboBox";
 import confirm from "./confirm";
+import closeDialog from "./closeDialog";
 import settingsPage from "./settingsPage";
 import sessionsTab from "./sessionsTab";
 import maintenanceTab from "./maintenanceTab";
@@ -36,6 +37,7 @@ import sidebar from "./sidebar";
 import aside from "./aside";
 import providerTest from "./providerTest";
 import restartDialog from "./restartDialog";
+import format from "./format";
 
 const en: typeof zh = {
   common,
@@ -57,6 +59,7 @@ const en: typeof zh = {
   envSwitch,
   comboBox,
   confirm,
+  closeDialog,
   settingsPage,
   sessionsTab,
   maintenanceTab,
@@ -75,6 +78,7 @@ const en: typeof zh = {
   aside,
   providerTest,
   restartDialog,
+  format,
 };
 
 export default en;

@@ -3,6 +3,7 @@
 //! each entry's `visibility` ("list" | "hide") decides whether it shows up.
 //! Provider keys live in `~/.codex/.env` under the provider's `env_key`.
 
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -91,9 +92,77 @@ fn provider_str(doc: &DocumentMut, id: &str, key: &str) -> Option<String> {
     provider_item(doc, id).and_then(|t| t.get(key)).and_then(|v| v.as_str()).map(String::from)
 }
 
+/// Sets `model_providers.<id>`, in the style the file already uses: a `[model_providers.x]`
+/// table, or an entry of an inline `model_providers = { … }` (where a table item would be
+/// silently dropped by toml_edit).
+fn put_provider(doc: &mut DocumentMut, id: &str, item: Item) -> Result<()> {
+    if doc.get("model_providers").is_none() {
+        let mut t = Table::new();
+        t.set_implicit(true);
+        doc["model_providers"] = Item::Table(t);
+    }
+    match doc.get_mut("model_providers") {
+        Some(Item::Table(t)) => {
+            t.insert(id, match item {
+                Item::Value(toml_edit::Value::InlineTable(it)) => Item::Table(it.into_table()),
+                other => other,
+            });
+        }
+        Some(Item::Value(toml_edit::Value::InlineTable(it))) => {
+            let v = match item {
+                Item::Table(t) => toml_edit::Value::InlineTable(t.into_inline_table()),
+                Item::Value(v) => v,
+                _ => return Err(anyhow!(tr!("供应商 {id} 的配置无效", "The config of provider {id} is invalid"))),
+            };
+            it.insert(id, v);
+        }
+        _ => return Err(anyhow!(l("config.toml 里的 model_providers 不是表", "model_providers in config.toml is not a table"))),
+    }
+    Ok(())
+}
+
+/// A provider field's value as it reads in config.toml, for diff lines.
+fn field_text(item: &Item) -> String {
+    let mut v = match item {
+        Item::Value(v) => v.clone(),
+        Item::Table(t) => {
+            let mut it = t.clone().into_inline_table();
+            it.fmt();
+            toml_edit::Value::InlineTable(it)
+        }
+        other => return other.to_string().trim().to_string(),
+    };
+    v.decor_mut().clear();
+    v.to_string()
+}
+
+fn provider_fields(item: Option<&Item>) -> Vec<(String, String)> {
+    item.and_then(|i| i.as_table_like())
+        .map(|t| t.iter().map(|(k, v)| (k.to_string(), field_text(v))).collect())
+        .unwrap_or_default()
+}
+
+/// Diff lines for rewriting a provider table from `old` to `new` fields; true when anything differs.
+fn push_field_diff(diff: &mut Diff, file: &str, id: &str, old: &[(String, String)], new: &[(String, String)]) -> bool {
+    let mut changed = false;
+    for (k, v) in new {
+        match old.iter().find(|(ok, _)| ok == k) {
+            Some((_, ov)) if ov == v => continue,
+            Some((_, ov)) => diff.push(file, format!("[model_providers.{id}] {k} = {ov} → {v}"), true),
+            None => diff.push(file, format!("[model_providers.{id}] + {k} = {v}"), true),
+        }
+        changed = true;
+    }
+    for (k, _) in old.iter().filter(|(k, _)| !new.iter().any(|(nk, _)| nk == k)) {
+        diff.push(file, format!("[model_providers.{id}] - {k}"), false);
+        changed = true;
+    }
+    changed
+}
+
 /// Copies `provider`'s table into `[model_providers.agentplus]` and points
-/// `model_provider` at it.
-fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut Diff, cfg_file: &str) -> Result<()> {
+/// `model_provider` at it. Returns whether config.toml changed.
+fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut Diff, cfg_file: &str) -> Result<bool> {
     if provider == "openai" {
         return Err(anyhow!(l("OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商", "The OpenAI official account can't use the fixed ID; switch to a custom provider first")));
     }
@@ -101,15 +170,26 @@ fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut D
     if let Some(t) = table.as_table_like_mut() {
         t.insert("name", value(format!("AgentPlus（{provider}）")));
     }
-    doc["model_providers"][FIXED_ID] = table;
+    let old = provider_item(doc, FIXED_ID);
+    let fresh = old.is_none();
+    let old = provider_fields(old);
+    let new = provider_fields(Some(&table));
+    let mut changed = false;
     let raw = configured_provider(doc);
     if raw != FIXED_ID {
         doc["model_provider"] = value(FIXED_ID);
         diff.push(cfg_file, format!("model_provider = \"{raw}\" → \"{FIXED_ID}\""), true);
+        changed = true;
     }
-    diff.push(cfg_file, tr!("[model_providers.{FIXED_ID}] ← 复制「{provider}」的整段配置（地址、密钥变量、接口、认证方式）", "[model_providers.{FIXED_ID}] ← copy the whole \"{provider}\" section (base URL, key variable, API, auth)"), true);
+    if fresh {
+        diff.push(cfg_file, tr!("+ [model_providers.{FIXED_ID}]（复制自「{provider}」）", "+ [model_providers.{FIXED_ID}] (copied from \"{provider}\")"), true);
+    }
+    if push_field_diff(diff, cfg_file, FIXED_ID, &old, &new) {
+        put_provider(doc, FIXED_ID, table)?;
+        changed = true;
+    }
     store::set_str(store, ID, "fixedSource", provider);
-    Ok(())
+    Ok(changed)
 }
 
 /// Which user-defined provider is effectively active (resolves the fixed-id mirror).
@@ -135,11 +215,13 @@ fn current_provider(doc: &DocumentMut, store: &Value) -> String {
 
 // ---------------------------------------------------------------- ~/.codex/.env
 
+/// For writing: fails when the file exists but can't be read.
+fn read_env_checked() -> Result<(Vec<String>, TextMeta)> {
+    read_text_or_new(&env_path()).map(|(t, m)| (t.lines().map(String::from).collect(), m))
+}
+
 fn read_env() -> (Vec<String>, TextMeta) {
-    match read_text(&env_path()) {
-        Ok((t, m)) => (t.lines().map(String::from).collect(), m),
-        Err(_) => (vec![], TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }),
-    }
+    read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
 fn env_line_key(l: &str) -> Option<&str> {
@@ -408,10 +490,10 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
             let is_custom = custom.contains(&id);
             let mut tags = vec![];
             if fast {
-                tags.push("Fast".to_string());
+                tags.push(Tag::new("fast", "Fast"));
             }
             if is_custom {
-                tags.push(l("自定义", "Custom").to_string());
+                tags.push(Tag::new("custom", l("自定义", "Custom")));
             }
             let context = m.get("context_window").and_then(|x| x.as_u64());
             Some(Model {
@@ -490,6 +572,7 @@ pub fn state(inst: &Install) -> AgentState {
 
     let inject = store::get_flag(&store, ID, "fastInject");
     let full_names = store::get_flag(&store, ID, "fullModelNames");
+    let quota = store::get_flag(&store, ID, "quotaUnlock");
     let tier = service_tier(&doc);
     let sl = status_line(&doc);
     let effs = efforts(&doc);
@@ -520,6 +603,9 @@ pub fn state(inst: &Install) -> AgentState {
         bool_setting("full_names", l("界面", "Interface"), l("显示完整模型名", "Show full model names"),
             l("Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。",
               "Codex shows full model names only when signed in with a ChatGPT account; with custom providers it drops the \"GPT-\" prefix (GPT-6 Sol shows as 6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and turns this shortening off when the UI loads."), full_names),
+        bool_setting("quota_unlock", l("官方登录混用", "Official sign-in mix"), l("ChatGPT 额度用完后仍可发送", "Keep sending after the ChatGPT quota runs out"),
+            l("用 ChatGPT 账号登录时，账号额度用完后 Codex 会禁用发送按钮，即使开启了官方登录混用、请求其实发往中转站。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制（额度提示横幅仍会显示）。",
+              "Signed in with a ChatGPT account, Codex disables the send button once the account's quota runs out, even with the official sign-in mix on and requests actually going to the relay. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads (the usage banner still shows)."), quota),
         bool_setting("ctx_usage", l("界面", "Interface"), l("显示上下文用量", "Show context usage"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
         bool_setting("plain", l("界面", "Interface"), l("纯文本输入框", "Plain text composer"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
     ];
@@ -569,7 +655,7 @@ pub fn state(inst: &Install) -> AgentState {
 }
 
 /// Base URL + key of a provider, for fetching its model list.
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load_doc()?;
     let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
     let key = provider_str(&doc, id, "env_key").and_then(|k| env_value(&k));
@@ -614,7 +700,7 @@ fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> 
 }
 
 /// Applies `ops` in memory, records the diff, and writes files unless `dry_run`.
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if crate::official::active() {
         return Err(anyhow!(l("正在获取官方模型列表，config.toml 是临时状态；先在「模型列表」里完成或取消获取", "Fetching the official model list; config.toml is in a temporary state. Finish or cancel the fetch in \"Model list\" first")));
     }
@@ -624,7 +710,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
     let mut catalog = load_catalog(&doc);
     let cat_file = catalog.as_ref().map(|(p, _, _)| display_path(p)).unwrap_or_default();
     let mut store = store::load();
-    let (mut env_lines, env_meta) = read_env();
+    // Only a key change writes .env: an unreadable one (UTF-16, GBK…) blocks just that.
+    let env_read = read_env_checked();
+    let (mut env_lines, env_meta) = env_read.as_ref().map(|(l, m)| (l.clone(), *m)).unwrap_or((vec![], TextMeta::NEW));
     let mut diff = Diff::default();
     let (mut cfg_dirty, mut cat_dirty, mut store_dirty, mut env_dirty) = (false, false, false, false);
     // A pending toggle of the fixed id applies to this batch; otherwise follow config.
@@ -672,7 +760,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     t.insert("base_url", value(p.base_url.trim()));
                     t.insert("wire_api", value("responses"));
                     t.insert("env_key", value(env_key.as_str()));
-                    doc["model_providers"][id.as_str()] = Item::Table(t);
+                    put_provider(&mut doc, &id, Item::Table(t))?;
                     diff.push(&cfg_file, format!("+ [model_providers.{id}] name = \"{}\", base_url = \"{}\"", p.name.trim(), p.base_url.trim()), true);
                 } else {
                     for (k, v) in [("name", p.name.trim()), ("base_url", p.base_url.trim())] {
@@ -704,7 +792,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 }
                 // Keep the fixed-id mirror in sync with the provider it copies.
                 if configured_provider(&doc) == FIXED_ID && store::get_str(&store, ID, "fixedSource").as_deref() == Some(id.as_str()) {
-                    mirror(&mut doc, &id, &mut store, &mut diff, &cfg_file)?;
+                    cfg_dirty |= mirror(&mut doc, &id, &mut store, &mut diff, &cfg_file)?;
                     store_dirty = true;
                 }
             }
@@ -739,6 +827,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         }
                     }
                 }
+                if provider != "openai" && provider_item(&doc, provider).is_none() {
+                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                }
                 switched = Some(provider.clone());
                 let raw = configured_provider(&doc);
                 if provider == "openai" || !fixed {
@@ -748,8 +839,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                         cfg_dirty = true;
                     }
                 } else {
-                    mirror(&mut doc, provider, &mut store, &mut diff, &cfg_file)?;
-                    cfg_dirty = true;
+                    cfg_dirty |= mirror(&mut doc, provider, &mut store, &mut diff, &cfg_file)?;
                     store_dirty = true;
                 }
             }
@@ -822,8 +912,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     let raw = configured_provider(&doc);
                     let cur = current_provider(&doc, &store);
                     if on && raw != FIXED_ID {
-                        mirror(&mut doc, &cur, &mut store, &mut diff, &cfg_file)?;
-                        cfg_dirty = true;
+                        cfg_dirty |= mirror(&mut doc, &cur, &mut store, &mut diff, &cfg_file)?;
                         store_dirty = true;
                     } else if !on && raw == FIXED_ID {
                         doc["model_provider"] = value(cur.as_str());
@@ -844,6 +933,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                     if store::get_flag(&store, ID, "fullModelNames") != on {
                         store::set_flag(&mut store, ID, "fullModelNames", on);
                         diff.push(inject_file(), if on { l("+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用完整模型名注入", "- Disable full model name injection") }, on);
+                        store_dirty = true;
+                    }
+                }
+                "quota_unlock" => {
+                    let on = v.as_bool().unwrap_or(false);
+                    if store::get_flag(&store, ID, "quotaUnlock") != on {
+                        store::set_flag(&mut store, ID, "quotaUnlock", on);
+                        diff.push(inject_file(), if on { l("+ 启用额度用完仍可发送注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable send-after-quota injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用额度用完仍可发送注入", "- Disable send-after-quota injection") }, on);
                         store_dirty = true;
                     }
                 }
@@ -925,6 +1022,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
         }
     }
 
+    if env_dirty {
+        env_read?;
+    }
+
     let mut written = vec![];
     let mut backup_dir = None;
     if !dry_run {
@@ -977,7 +1078,11 @@ pub fn dismiss_fixed_prompt() -> Result<()> {
 /// UI patches to apply when AgentPlus restarts Codex.
 pub fn ui_patches() -> crate::cdp::Patches {
     let s = store::load();
-    crate::cdp::Patches { fast: store::get_flag(&s, ID, "fastInject"), full_names: store::get_flag(&s, ID, "fullModelNames") }
+    crate::cdp::Patches {
+        fast: store::get_flag(&s, ID, "fastInject"),
+        full_names: store::get_flag(&s, ID, "fullModelNames"),
+        quota: store::get_flag(&s, ID, "quotaUnlock"),
+    }
 }
 
 #[cfg(test)]
@@ -1002,6 +1107,97 @@ env_key = \"RELAY_API_KEY\"
         assert!(set_official_auth(&mut doc, "relay", false).unwrap());
         assert!(!doc.to_string().contains("requires_openai_auth"));
         assert!(set_official_auth(&mut doc, "missing", true).is_err());
+    }
+
+    #[test]
+    fn mirror_diff_lists_only_the_fields_that_change() {
+        let src = "model_provider = \"agentplus\"
+[model_providers.klpz]
+name = \"klpz\"
+base_url = \"http://a:8080\"
+wire_api = \"responses\"
+env_key = \"KEY\"
+requires_openai_auth = true
+
+[model_providers.agentplus]
+name = \"AgentPlus（klpz）\"
+base_url = \"http://a:8080\"
+wire_api = \"responses\"
+env_key = \"KEY\"
+requires_openai_auth = true
+stale = 1
+
+[model_providers.work]
+name = \"work\"
+base_url = \"http://b:8080\"
+wire_api = \"responses\"
+env_key = \"KEY\"
+requires_openai_auth = true
+http_headers = { X = \"1\" }
+";
+        let mut doc = src.parse::<DocumentMut>().unwrap();
+        let mut store = json!({});
+        let mut diff = Diff::default();
+        assert!(mirror(&mut doc, "work", &mut store, &mut diff, "c").unwrap());
+        let lines: Vec<_> = diff.groups[0].lines.iter().map(|l| (l.text.as_str(), l.add)).collect();
+        assert_eq!(lines, [
+            ("[model_providers.agentplus] name = \"AgentPlus（klpz）\" → \"AgentPlus（work）\"", true),
+            ("[model_providers.agentplus] base_url = \"http://a:8080\" → \"http://b:8080\"", true),
+            ("[model_providers.agentplus] + http_headers = { X = \"1\" }", true),
+            ("[model_providers.agentplus] - stale", false),
+        ]);
+        assert_eq!(provider_str(&doc, FIXED_ID, "base_url").as_deref(), Some("http://b:8080"));
+        assert_eq!(store::get_str(&store, ID, "fixedSource").as_deref(), Some("work"));
+        // Mirroring the same provider again changes nothing and says nothing.
+        let text = doc.to_string();
+        let mut diff = Diff::default();
+        assert!(!mirror(&mut doc, "work", &mut store, &mut diff, "c").unwrap());
+        assert!(diff.groups.is_empty());
+        assert_eq!(doc.to_string(), text);
+        // First mirror: points model_provider at it and lists every copied field.
+        let mut doc = "model_provider = \"work\"\n[model_providers.work]\nname = \"work\"\nbase_url = \"http://b\"\n".parse::<DocumentMut>().unwrap();
+        let mut diff = Diff::default();
+        assert!(mirror(&mut doc, "work", &mut store, &mut diff, "c").unwrap());
+        let lines: Vec<_> = diff.groups[0].lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(lines, [
+            "model_provider = \"work\" → \"agentplus\"",
+            "+ [model_providers.agentplus]（复制自「work」）",
+            "[model_providers.agentplus] + name = \"AgentPlus（work）\"",
+            "[model_providers.agentplus] + base_url = \"http://b\"",
+        ]);
+    }
+
+    #[test]
+    fn put_provider_keeps_the_file_style() {
+        let table = || {
+            let mut t = Table::new();
+            t.insert("name", value("N"));
+            t.insert("base_url", value("https://n/v1"));
+            Item::Table(t)
+        };
+        // Inline `model_providers = { … }`: toml_edit would drop a table item here.
+        let mut doc = "model_provider = \"a\"\nmodel_providers = { a = { name = \"A\", base_url = \"https://a/v1\" } }\n".parse::<DocumentMut>().unwrap();
+        put_provider(&mut doc, "new.one", table()).unwrap();
+        let text = doc.to_string();
+        assert!(text.contains("\"new.one\" = { name = \"N\", base_url = \"https://n/v1\" }"), "{text}");
+        assert_eq!(provider_str(&doc.to_string().parse().unwrap(), "new.one", "base_url").as_deref(), Some("https://n/v1"));
+        // Regular tables, and a missing section, get a [model_providers.x] table.
+        for src in ["[model_providers.a]\nname = \"A\"\n", "model = \"m\"\n"] {
+            let mut doc = src.parse::<DocumentMut>().unwrap();
+            put_provider(&mut doc, "n", table()).unwrap();
+            let text = doc.to_string();
+            assert!(text.contains("[model_providers.n]\nname = \"N\""), "{text}");
+            assert!(!text.contains("[model_providers]\n"), "no empty parent header: {text}");
+        }
+        // Copying an inline entry into a table section turns it into a table.
+        let mut doc = "[model_providers.a]\nname = \"A\"\n".parse::<DocumentMut>().unwrap();
+        let inline = "x = { name = \"I\" }".parse::<DocumentMut>().unwrap()["x"].clone();
+        put_provider(&mut doc, "b", inline).unwrap();
+        assert!(doc.to_string().contains("[model_providers.b]\nname = \"I\""));
+        // Anything else is refused.
+        let mut doc = "model_providers = 3\n".parse::<DocumentMut>().unwrap();
+        assert!(put_provider(&mut doc, "n", table()).is_err());
+        assert_eq!(doc.to_string(), "model_providers = 3\n");
     }
 
     #[test]

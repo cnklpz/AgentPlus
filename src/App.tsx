@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
-import { CATALOG, type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, keys, opsToWrite, upsertModel, upsertProvider, viewModels, viewProviders, withOp } from "./draft";
+import { type AgentId, type AgentState, type ApiKind, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
+import { CATALOG, type Draft, type ViewProvider, currentProvider, draftAfterWrite, isEnabled, isVisible, keys, opsToWrite, upsertModel, upsertProvider, viewModels, viewProviders, withOp } from "./draft";
 import { AgentPage, type Tab } from "./components/AgentPage";
 import { Aside } from "./components/Aside";
 import { CommandPalette, type Target } from "./components/CommandPalette";
@@ -17,11 +17,13 @@ import { type ServiceSave, ServiceDialog } from "./components/ServiceDialog";
 import { EnvSwitch } from "./components/EnvSwitch";
 import { type SettingsTab, SettingsPage } from "./components/SettingsPage";
 import { PendingDialog } from "./components/PendingDialog";
+import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
 import { type Prefs, applyMotion, applyTheme, loadPrefs, savePrefs } from "./prefs";
 import { setLang, t, tn, useLang } from "./i18n";
-import { API_LABEL, GATEWAY_KEY, type Group, type Use, apiFor, buildStations, cannotAdd, gatewayPoolIds, gatewayRouteId, hostKey, importKey, importOp, movedGatewayUrl } from "./services";
+import { API_LABEL, GATEWAY_KEY, type Group, type Use, apiFor, buildStations, cannotAdd, gatewayPoolIds, gatewayRouteId, hostKey, importKey, importOp, movedGatewayUrl, plainRoute } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { SyncPage } from "./components/SyncPage";
+import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
 import { GatewayAside } from "./components/GatewayAside";
 import { ConfirmHost, ask, askCheck } from "./components/Confirm";
@@ -29,10 +31,13 @@ import { ContextMenu, type MenuItem, editableOf, insertText, selectedIn } from "
 import { ProjectHead, ProjectList } from "./components/ProjectsPage";
 import { type CopyPick, CopyProviderDialog } from "./components/CopyProviderDialog";
 import { type RestartRun, RestartDialog, applyProgress, finishRun, newRun } from "./components/RestartDialog";
+import { escapeLayerOpen } from "./hooks";
+import { inTauri } from "./tauri";
+import { scrub, setPrivacy, usePrivacy } from "./privacy";
 
 /** Windows-style caption buttons; the system title bar is turned off. */
 function WindowControls() {
-  if (!("__TAURI_INTERNALS__" in window)) return null;
+  if (!inTauri) return null;
   const win = getCurrentWindow();
   const glyph = (d: string) => (
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden="true"><path d={d} /></svg>
@@ -64,6 +69,8 @@ export default function App() {
   const [run, setRun] = useState<RestartRun | null>(null);
   /** The running restart isn't shown in the dialog: report its result as a notice. */
   const runHidden = useRef(false);
+  /** The restart in progress was cancelled from its dialog. */
+  const runCancelled = useRef(false);
   const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -72,7 +79,12 @@ export default function App() {
   const [lib, setLib] = useState<LibEntry[]>([]);
   const [envs, setEnvs] = useState<EnvInfo[]>([]);
   const [switching, setSwitching] = useState(false);
-  const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
+  const [prefs, setPrefsState] = useState<Prefs>(() => {
+    const p = loadPrefs();
+    // Before the first render, so nothing sensitive is ever painted.
+    setPrivacy(p.privacy);
+    return p;
+  });
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   // Settings is a full-window page; remember where to go back to.
   const [beforeSettings, setBeforeSettings] = useState<Page | null>(null);
@@ -94,8 +106,43 @@ export default function App() {
   useEffect(() => applyMotion(prefs.motion), [prefs.motion]);
   useEffect(() => applyTheme(prefs.theme), [prefs.theme]);
   useEffect(() => { setLang(prefs.lang); }, [prefs.lang]);
+  useEffect(() => { setPrivacy(prefs.privacy); }, [prefs.privacy]);
+  // The window starts hidden (tauri.conf.json) so the WebView's blank white never shows;
+  // reveal it once the first frame is committed with theme and styles in place.
+  useEffect(() => { if (inTauri) getCurrentWindow().show().catch(() => {}); }, []);
+  // Closing the window (× or Alt+F4) hides it in the tray or quits, per 设置 › 界面 › 关闭窗口时.
+  const [closeAsk, setCloseAsk] = useState<((c: CloseChoice | null) => void) | null>(null);
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  useEffect(() => {
+    if (!inTauri) return;
+    const win = getCurrentWindow();
+    let asking = false;
+    const unlisten = win.onCloseRequested(async (e) => {
+      e.preventDefault();
+      let action = prefsRef.current.closeAction;
+      if (action === "ask") {
+        if (asking) return;
+        asking = true;
+        // Closed from the taskbar while minimized: bring the window up so the question is seen.
+        if (await win.isMinimized()) await win.unminimize();
+        await win.setFocus();
+        const choice = await new Promise<CloseChoice | null>((resolve) => setCloseAsk(() => resolve));
+        asking = false;
+        setCloseAsk(null);
+        if (!choice) return;
+        action = choice.action;
+        if (choice.remember) setPrefs({ ...prefsRef.current, closeAction: action });
+      }
+      if (action === "tray") await win.hide();
+      else await api.quitApp();
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, []);
   // Re-render on a language switch, and reload what the backend rendered in the old one.
   const lang = useLang();
+  // Re-render everything that masks text when 隐私模式 is switched.
+  usePrivacy();
 
   // Per-agent page state, kept here so the detail panel and search can drive it.
   const [tabs, setTabs] = useState<Record<string, Tab>>({});
@@ -216,12 +263,20 @@ export default function App() {
   const pendingTotal = Object.values(drafts).reduce((n, d) => n + Object.keys(d).length, 0);
   const curEnv = envs.find((e) => e.current);
 
-  // Ctrl+K opens search from anywhere.
+  // Ctrl+K opens search from anywhere; Ctrl+Shift+H switches 隐私模式.
+  const togglePrivacy = () => {
+    const next = { ...prefsRef.current, privacy: !prefsRef.current.privacy };
+    setPrefs(next);
+    flash(t(next.privacy ? "app.privacyOnToast" : "app.privacyOffToast"));
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette(true);
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        togglePrivacy();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -269,14 +324,31 @@ export default function App() {
   }, [stations, latency]);
   useEffect(() => { if (prefs.autoLatency && page === "providers") testHub(false); }, [page, stations.length]);
 
-  const setDraftFor = (agent: string, d: Draft) => setDrafts((all) => ({ ...all, [agent]: d }));
+  /** Drafts being written right now, per agent. */
+  const inFlight = useRef<Record<string, Draft>>({});
+  const setDraftFor = (agent: string, d: Draft) => {
+    // Undoing a change that is being written would be lost: the file gets it anyway, and
+    // afterwards no pending op would be left to show or revert it.
+    const sending = inFlight.current[agent];
+    const cur = drafts[agent] ?? {};
+    if (sending && Object.keys(sending).some((k) => k in cur && cur[k] === sending[k] && !(k in d))) {
+      flash(t("app.undoWhileWriting"), true);
+      return;
+    }
+    setDrafts((all) => ({ ...all, [agent]: d }));
+  };
   const setDraft = (d: Draft) => setDraftFor(sid, d);
 
   // Codex's fixed id is on by default but never a pending change of its own
   // (see opsToWrite). Declining it is remembered by the backend.
   const declineFixed = async () => {
-    await api.dismissFixedPrompt().catch((e) => flash(String(e), true));
-    replaceAgent(await api.getAgent("codex"));
+    try {
+      await api.dismissFixedPrompt();
+      replaceAgent(await api.getAgent("codex"));
+    } catch (e) {
+      flash(String(e), true, 7000);
+      return;
+    }
     flash(t("app.fixedDeclined"));
   };
 
@@ -301,7 +373,7 @@ export default function App() {
       const t = e.target as Element | null;
       if (!t?.closest(".pcard, .pdetail, .toast, .modal-bg")) closeDetail();
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeDetail(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !escapeLayerOpen()) closeDetail(); };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -326,6 +398,7 @@ export default function App() {
     const dialog = prefs.restartProgress === "dialog";
     setRestarting(a.id);
     runHidden.current = !dialog;
+    runCancelled.current = false;
     if (dialog) setRun(newRun(a.id, a.name, starting));
     else setToast({ text: t(starting ? "app.starting" : "app.restarting", { name: a.name }) });
     const mine = (f: (r: RestartRun) => RestartRun) => setRun((r) => (r && r.agent === a.id && !r.result ? f(r) : r));
@@ -336,12 +409,29 @@ export default function App() {
       replaceAgent(await api.getAgent(a.id));
     } catch (e) {
       mine((r) => finishRun(r, false, String(e)));
-      if (runHidden.current) flash(t(starting ? "app.startFailed" : "app.restartFailed", { name: a.name, err: String(e) }), true, 8000);
+      if (runCancelled.current) flash(t(starting ? "app.startCancelled" : "app.restartCancelled", { name: a.name }));
+      else if (runHidden.current) flash(t(starting ? "app.startFailed" : "app.restartFailed", { name: a.name, err: String(e) }), true, 8000);
     } finally {
       setRestarting(null);
     }
   };
-  const restart = () => { if (st) restartAgent(st); };
+  /** Restart / Start clicked: unapplied changes won't be read, so offer to apply them first. */
+  const restartAsked = async (a: AgentState) => {
+    const n = Object.keys(drafts[a.id] ?? {}).length;
+    if (n) {
+      const starting = !a.running;
+      const applyFirst = await askCheck({
+        title: tn("app.restartPendingTitle", n, { name: a.name }),
+        message: t(starting ? "app.startPendingMsg" : "app.restartPendingMsg", { name: a.name }),
+        confirmText: t(starting ? "app.startAgent" : "app.restartAgent", { name: a.name }),
+        check: { label: t("app.applyFirst"), hint: t("app.applyFirstHint"), value: true },
+      });
+      if (applyFirst === null) return;
+      if (applyFirst && !(await applyAgents([a.id], false))) return;
+    }
+    await restartAgent(a);
+  };
+  const restart = () => { if (st) restartAsked(st); };
   /** Closes the dialog; while the restart still runs it carries on with a notice instead. */
   const closeRun = () => {
     if (run && !run.result) {
@@ -349,6 +439,15 @@ export default function App() {
       setToast({ text: t(run.starting ? "app.starting" : "app.restarting", { name: run.name }) });
     }
     setRun(null);
+  };
+  /** Cancels the running restart: the dialog closes and a notice follows once it has stopped. */
+  const cancelRun = () => {
+    if (!run || run.result) return;
+    runCancelled.current = true;
+    runHidden.current = true;
+    setToast({ text: t("app.cancelling") });
+    setRun(null);
+    api.cancelRestart().catch(() => undefined);
   };
 
   // Keep the Start / Restart button honest: the app can be closed or opened outside AgentPlus.
@@ -358,7 +457,10 @@ export default function App() {
     const check = () => {
       if (document.hidden) return;
       api.agentRunning(pollRunning)
-        .then((running) => setAgents((list) => list.map((a) => (a.id === pollRunning && a.running !== running ? { ...a, running } : a))))
+        // Same list when nothing changed, so everything that depends on `agents` stays put.
+        .then((running) => setAgents((list) => (list.some((a) => a.id === pollRunning && a.running !== running)
+          ? list.map((a) => (a.id === pollRunning ? { ...a, running } : a))
+          : list)))
         .catch(() => undefined);
     };
     check();
@@ -373,37 +475,46 @@ export default function App() {
   const apply = async () => {
     if (!st) return;
     setBusy(true);
+    const sent = draft;
+    const sentOps = opsToWrite(st, sent);
+    inFlight.current[st.id] = sent;
     try {
-      const r = await api.apply(st.id, opsToWrite(st, draft));
+      const r = await api.apply(st.id, sentOps);
       replaceAgent(r.state);
-      setDraft({});
+      // Edits made while writing stay pending.
+      setDrafts((all) => ({ ...all, [st.id]: draftAfterWrite(all[st.id] ?? {}, sent) }));
       setPicked((m) => ({ ...m, [st.id]: null }));
       flash(r.files.length ? tn("app.wroteFiles", r.files.length) : t("app.saved"));
       if (isProjectId(st.id)) reloadProjects();
       // Optional auto-restart (off by default); only when something the agent reads changed.
       const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
-      const touchedAgent = ops.some((o) => !(o.op === "set_setting" && o.key === "auto_restart"));
+      const touchedAgent = sentOps.some((o) => !(o.op === "set_setting" && o.key === "auto_restart"));
       if (auto && touchedAgent && r.state.running) await restartAgent(r.state);
     } catch (e) {
       flash(String(e), true, 7000);
     } finally {
+      delete inFlight.current[st.id];
       setBusy(false);
     }
   };
 
   /** Applies the given agents' pending changes one by one; true when all succeeded. */
-  const applyAgents = async (ids: AgentId[]): Promise<boolean> => {
+  const applyAgents = async (ids: AgentId[], autoRestart = true): Promise<boolean> => {
     setBusy(true);
     const done: string[] = [];
     try {
       for (const a of [...agents, ...Object.values(projStates)]) {
         if (!ids.includes(a.id) || !Object.keys(drafts[a.id] ?? {}).length) continue;
-        const r = await api.apply(a.id, opsToWrite(a, drafts[a.id])).catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: String(e) })); });
+        const sent = drafts[a.id];
+        inFlight.current[a.id] = sent;
+        const r = await api.apply(a.id, opsToWrite(a, sent))
+          .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: String(e) })); })
+          .finally(() => { delete inFlight.current[a.id]; });
         replaceAgent(r.state);
-        setDraftFor(a.id, {});
+        setDrafts((all) => ({ ...all, [a.id]: draftAfterWrite(all[a.id] ?? {}, sent) }));
         done.push(a.name);
         const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
-        if (auto && r.state.running) await restartAgent(r.state);
+        if (autoRestart && auto && r.state.running) await restartAgent(r.state);
       }
       if (done.length) flash(t("app.wroteAgents", { names: done.join(t("app.listSep")) }));
       return true;
@@ -477,7 +588,13 @@ export default function App() {
   const forgetProject = async (p: ProjectEntry) => {
     const n = Object.keys(drafts[p.agent] ?? {}).length;
     if (n && !(await ask({ title: t("app.forgetTitle", { name: p.name }), message: tn("app.forgetMsg", n), danger: true, confirmText: t("common.remove") }))) return;
-    await api.projectForget(p.path).catch((e) => flash(String(e), true));
+    try {
+      await api.projectForget(p.path);
+    } catch (e) {
+      // Still in the list: keep its pending changes too.
+      flash(String(e), true, 7000);
+      return;
+    }
     setDraftFor(p.agent, {});
     if (p.path === projPath) setProjPath(null);
     reloadProjects();
@@ -526,22 +643,35 @@ export default function App() {
       return next;
     });
     if (fromLib && s.lib) {
-      await api.libraryDelete(s.lib.id).catch((e) => flash(String(e), true));
+      try {
+        await api.libraryDelete(s.lib.id);
+      } catch (e) {
+        // The agent deletes are queued; only the library entry is still there.
+        flash(uses.length ? tn("app.queuedDeletesLibFailed", uses.length, { err: String(e) }) : String(e), true, 7000);
+        return;
+      }
       await reloadLib();
     }
     flash(uses.length ? tn(fromLib ? "app.queuedDeletesAndLib" : "app.queuedDeletes", uses.length) : t("app.removedFromLib"));
   };
+  /** Library entries the open hub dialog has already created (a failed save can be retried). */
+  const hubSaved = useRef<{ main: string | null; alt: Partial<Record<ApiKind, string>> }>({ main: null, alt: {} });
+  useEffect(() => { hubSaved.current = { main: null, alt: {} }; }, [hubDialog]);
   const hubSave = async (v: ServiceSave) => {
     const s = hubDialog?.group ?? null;
     const src = s?.uses.find((u) => u.p && u.p.editable && !u.p.isNew);
+    // Entries saved by an earlier attempt of this dialog are updated, not added again.
+    const saved = hubSaved.current;
     const entry = await api.librarySave({
-      id: s?.lib?.id ?? null, name: v.name, baseUrl: v.baseUrl, api: v.api, apiKey: v.apiKey, models: v.models,
+      id: s?.lib?.id ?? saved.main, name: v.name, baseUrl: v.baseUrl, api: v.api, apiKey: v.apiKey, models: v.models,
       adoptFrom: src ? [src.agent.id, src.p!.id] : null,
     });
+    saved.main = entry.id;
     // Template: agents that need another protocol get the same key at that protocol's address.
     const alts: { e: LibEntry; addTo: AgentId[] }[] = [];
     for (const a of v.alt) {
-      const e = await api.librarySave({ id: null, name: t("app.libAltName", { name: v.name, api: API_LABEL[a.api] }), baseUrl: a.baseUrl, api: a.api, apiKey: v.apiKey, models: v.models, adoptFrom: null });
+      const e = await api.librarySave({ id: saved.alt[a.api] ?? null, name: t("app.libAltName", { name: v.name, api: API_LABEL[a.api] }), baseUrl: a.baseUrl, api: a.api, apiKey: v.apiKey, models: v.models, adoptFrom: null });
+      saved.alt[a.api] = e.id;
       alts.push({ e, addTo: a.addTo });
     }
     // Through the gateway: one forward for the new entry, and every picked agent points at it.
@@ -615,8 +745,7 @@ export default function App() {
       st = await api.gatewaySaveRoute({ id, name, library: libId, upstreamApi, modelMap: [], enabled: true, weight: 100 }, null);
       r = st.routes.find((x) => x.id === id)!;
     } else if (!r.enabled) {
-      const { localBase: _a, upstreamName: _b, upstreamUrl: _c, upstreamMissing: _d, ...plain } = r;
-      st = await api.gatewaySaveRoute({ ...plain, enabled: true }, r.id);
+      st = await api.gatewaySaveRoute({ ...plainRoute(r), enabled: true }, r.id);
     }
     if (!st.running) st = await api.gatewaySet(true, null);
     setGateway(st);
@@ -656,8 +785,7 @@ export default function App() {
 ${p}`));
     const replaced = [...(r.replaced ?? []), ...targets.map((u) => [u.agent.id, u.p!.id] as [string, string]).filter(([a, p]) => !seen.has(`${a}
 ${p}`))];
-    const { localBase: _a, upstreamName: _b, upstreamUrl: _c, upstreamMissing: _d, models: _m, ...plain } = r;
-    const st = await api.gatewaySaveRoute({ ...plain, replaced }, r.id);
+    const st = await api.gatewaySaveRoute({ ...plainRoute(r), replaced }, r.id);
     setGateway(st);
     return st.routes.find((x) => x.id === r.id) ?? r;
   };
@@ -745,18 +873,62 @@ ${p}`))];
     return out;
   }, [gateway, shown, drafts, gatewayHosts]);
 
-  /** Queues those entries with the gateway key placeholder; writing fills in each agent's key. */
-  const updateGatewayKeys = () => {
+  /**
+   * Lists those entries, then writes each with the gateway key placeholder (the backend fills in
+   * that agent's key) right away. Other pending edits of the same agents stay pending; a pending
+   * edit of the same provider is written along with the key.
+   */
+  const updateGatewayKeys = async () => {
     const stale = staleGatewayKeys;
     if (!stale.length) return;
-    setDrafts((all) => {
-      const next = { ...all };
-      for (const { agent, p } of stale) {
-        next[agent.id] = upsertProvider(next[agent.id] ?? {}, { id: p.id, name: p.name, baseUrl: p.baseUrl!, api: p.api, apiKey: GATEWAY_KEY, models: [] });
-      }
-      return next;
+    const ok = await ask({
+      title: tn("app.gatewayKeysTitle", stale.length),
+      message: (
+        <>
+          {t("app.gatewayKeysMsg")}
+          <ul className="confirm-list">
+            {stale.map(({ agent, p }) => <li key={`${agent.id}|${p.id}`}>{t("app.gatewayKeysItem", { agent: agent.name, provider: p.name })}</li>)}
+          </ul>
+        </>
+      ),
+      confirmText: t("app.gatewayKeysConfirm"),
     });
-    flash(tn("app.gatewayKeysQueued", stale.length));
+    if (!ok) return;
+    const byAgent = new Map<AgentId, { agent: AgentState; ops: Op[]; keys: string[] }>();
+    for (const { agent, p } of stale) {
+      const key = keys.upsertProvider(p.id);
+      const pending = drafts[agent.id]?.[key];
+      const input: ProviderInput = pending?.op === "upsert_provider"
+        ? { ...pending.provider, apiKey: GATEWAY_KEY }
+        : { id: p.id, name: p.name, baseUrl: p.baseUrl!, api: p.api, apiKey: GATEWAY_KEY, models: [] };
+      const e = byAgent.get(agent.id) ?? { agent, ops: [], keys: [] };
+      e.ops.push({ op: "upsert_provider", provider: input });
+      e.keys.push(key);
+      byAgent.set(agent.id, e);
+    }
+    setBusy(true);
+    const done: string[] = [];
+    try {
+      for (const { agent, ops, keys: written } of byAgent.values()) {
+        const r = await api.apply(agent.id, ops)
+          .catch((e) => { throw new Error(t("app.nameMsg", { name: agent.name, msg: String(e) })); });
+        replaceAgent(r.state);
+        setDrafts((all) => {
+          const d = { ...(all[agent.id] ?? {}) };
+          for (const k of written) delete d[k];
+          return { ...all, [agent.id]: d };
+        });
+        done.push(agent.name);
+        const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
+        if (auto && r.state.running) await restartAgent(r.state);
+      }
+      flash(t("app.wroteAgents", { names: done.join(t("app.listSep")) }));
+    } catch (e) {
+      const err = String(e).replace(/^Error: /, "");
+      flash(done.length ? t("app.wrotePartial", { names: done.join(t("app.listSep")), err }) : err, true, 8000);
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Hub details close on outside click / Esc, like the agent page.
@@ -766,7 +938,7 @@ ${p}`))];
       const t = e.target as Element | null;
       if (!t?.closest(".hcard, .acct, .sdetail, .toast, .modal-bg, .aside-diff, .aside-foot")) setHubSel(null);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setHubSel(null); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !escapeLayerOpen()) setHubSel(null); };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -804,16 +976,24 @@ ${p}`))];
     }
   };
 
+  /** Library entry the open provider dialog has already created (template through a forward). */
+  const dialogSaved = useRef<{ id: string | null }>({ id: null });
+  useEffect(() => { dialogSaved.current = { id: null }; }, [dialog]);
   /** Provider dialog on an agent page: edits, connection (direct / gateway) and this agent's model list. */
   const saveProvider = async (sv: ProviderSave) => {
     if (!st) return;
     const editing = dialog?.editing ?? null;
+    // This open of the dialog: a save that finishes after it was closed (or reopened) is dropped.
+    const slot = dialogSaved.current;
+    const stale = () => slot !== dialogSaved.current;
     let input: ProviderInput | null = sv.input;
     try {
       if (sv.viaForward) {
         // Template the agent can't reach directly: library entry + gateway forward.
         const f = sv.viaForward;
-        const e = await api.librarySave({ id: null, name: f.name, baseUrl: f.baseUrl, api: f.api, apiKey: f.apiKey, models: f.models, adoptFrom: null });
+        // A retry after the forward failed updates the entry saved the first time.
+        const e = await api.librarySave({ id: slot.id, name: f.name, baseUrl: f.baseUrl, api: f.api, apiKey: f.apiKey, models: f.models, adoptFrom: null });
+        slot.id = e.id;
         await reloadLib();
         const r = await routeForLib(e.id, e.api, e.name);
         input = { id: null, name: f.name, baseUrl: r.localBase, api: apiFor(st.id, e.api), apiKey: GATEWAY_KEY, models: st.id === "codex" ? [] : f.models, officialAuth: f.officialAuth };
@@ -829,7 +1009,7 @@ ${p}`))];
           const r = routeOfProvider(editing);
           const e = r ? lib.find((x) => x.id === r.library) : undefined;
           if (!e) throw new Error(t("app.noUpstream"));
-          if (apiFor(st.id, e.api) !== e.api) throw new Error(t("app.upstreamGatewayOnly", { api: e.api === "chat" ? "Chat" : e.api === "responses" ? "Responses" : "Anthropic", agent: st.name }));
+          if (apiFor(st.id, e.api) !== e.api) throw new Error(t("app.upstreamGatewayOnly", { api: API_LABEL[e.api], agent: st.name }));
           input = { ...base, baseUrl: e.baseUrl, api: e.api, apiKey: null, keyFromLibrary: e.id };
         }
       }
@@ -845,23 +1025,29 @@ ${p}`))];
         return;
       }
     }
-    let d = drafts[st.id] ?? {};
-    if (input) d = upsertProvider(d, input, sv.draftKey);
-    if (editing && sv.roles !== undefined) {
-      d = withOp(d, keys.roles(editing.id), sv.roles ? { op: "set_model_roles", provider: editing.id, roles: sv.roles } : null);
-    }
-    if (editing && sv.codexModels !== undefined) {
-      d = withOp(d, keys.providerModels(editing.id), sv.codexModels ? { op: "set_provider_models", provider: editing.id, models: sv.codexModels } : null);
-    }
-    if (editing && sv.models) {
-      for (const m of editing.models) {
-        const want = sv.models.visible[m.id];
-        if (want === undefined) continue;
-        d = withOp(d, keys.visible(editing.id, m.id), want === m.visible ? null : { op: "set_model_visible", provider: editing.id, model: m.id, visible: want });
+    if (stale()) return;
+    const agentId = st.id;
+    const build = (d0: Draft): Draft => {
+      let d = d0;
+      if (input) d = upsertProvider(d, input, sv.draftKey);
+      if (editing && sv.roles !== undefined) {
+        d = withOp(d, keys.roles(editing.id), sv.roles ? { op: "set_model_roles", provider: editing.id, roles: sv.roles } : null);
       }
-      for (const id of sv.models.added) d = upsertModel(d, editing.id, { id, name: null, context: null });
-    }
-    setDraftFor(st.id, d);
+      if (editing && sv.codexModels !== undefined) {
+        d = withOp(d, keys.providerModels(editing.id), sv.codexModels ? { op: "set_provider_models", provider: editing.id, models: sv.codexModels } : null);
+      }
+      if (editing && sv.models) {
+        for (const m of editing.models) {
+          const want = sv.models.visible[m.id];
+          if (want === undefined) continue;
+          d = withOp(d, keys.visible(editing.id, m.id), want === m.visible ? null : { op: "set_model_visible", provider: editing.id, model: m.id, visible: want });
+        }
+        for (const id of sv.models.added) d = upsertModel(d, editing.id, { id, name: null, context: null });
+      }
+      return d;
+    };
+    // From the latest drafts: other edits may have landed while this save was waiting.
+    setDrafts((all) => ({ ...all, [agentId]: build(all[agentId] ?? {}) }));
     setDialog(null);
     flash(t(sv.connect === "gateway" || sv.viaForward ? "app.queuedViaGateway" : sv.connect === "direct" ? "app.queuedDirect" : "app.queuedApply"));
   };
@@ -910,7 +1096,7 @@ ${p}`))];
         const n = Object.keys(drafts[a.id] ?? {}).length;
         return [
           { label: t("app.openAgent", { name: a.name }), icon: <AgentIcon id={a.id} size={14} />, action: () => openAgent(a.id) },
-          ...(a.restartable ? [{ label: t(a.running ? "app.restartAgent" : "app.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAgent(a); } }] : []),
+          ...(a.restartable ? [{ label: t(a.running ? "app.restartAgent" : "app.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAsked(a); } }] : []),
           { label: t("app.openConfigDir"), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(a.id).catch((e) => flash(String(e), true)); } },
           ...(n ? [
             "sep" as const,
@@ -971,9 +1157,8 @@ ${p}`))];
       case "route": {
         const r = gateway?.routes.find((x) => x.id === d("route"));
         if (!r) return [];
-        const { localBase: _a, upstreamName: _b, upstreamUrl: _c, upstreamMissing: _e, models: _m, ...plain } = r;
         return [
-          { label: t(r.enabled ? "app.pauseForward" : "app.resumeForward"), action: () => { api.gatewaySaveRoute({ ...plain, enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(String(e), true)); } },
+          { label: t(r.enabled ? "app.pauseForward" : "app.resumeForward"), action: () => { api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(String(e), true)); } },
           { label: t("app.deleteForwardMenu"), icon: <Icon.trash size={12} />, danger: true, action: () => { deleteRoute(r); } },
           "sep",
         ];
@@ -1143,7 +1328,7 @@ ${p}`))];
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
         {page === "history" &&<HistoryPage flash={flash} onChanged={reload} />}
-        {page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} />}
+        {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} />}
         {page === "settings" && (
           <SettingsPage
             tab={settingsTab}
@@ -1205,7 +1390,7 @@ ${p}`))];
             } : undefined}
           />
         ) : (
-          <main className="page"><div className="empty">{loadError ?? t("app.loadingConfig")}</div></main>
+          <main className="page"><div className="empty">{scrub(loadError) ?? t("app.loadingConfig")}</div></main>
         ))}
 
         {!page && st && (
@@ -1263,8 +1448,9 @@ ${p}`))];
           onCancel={() => setEnvAsk(null)}
         />
       )}
-      {run && <RestartDialog run={run} onClose={closeRun} />}
-      {toast && <div className={`toast${toast.error ? " error" : ""}`} role="status">{toast.text}</div>}
+      {run && <RestartDialog run={run} onClose={closeRun} onCancel={cancelRun} />}
+      {closeAsk && <CloseDialog onDone={closeAsk} />}
+      {toast && <div className={`toast${toast.error ? " error" : ""}`} role="status">{scrub(toast.text)}</div>}
     </div>
   );
 }

@@ -80,13 +80,25 @@ fn open_ro(p: &Path) -> Result<Connection> {
 /// SQLite cannot lock over the WSL file share, so WSL databases are read from a
 /// fresh copy (db + wal) on the Windows side.
 fn open_snapshot(p: &Path) -> Result<Connection> {
-    let dir = agentplus_dir().join("tmp").join("wsl-snapshot");
+    // One folder per call: the session list and the health check run at the same time, and
+    // copying over a database another connection has open corrupts what it reads.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let base = agentplus_dir().join("tmp").join("wsl-snapshot");
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = base.join(format!("{}-{n}", std::process::id()));
+    // Clear out old snapshots: ones from an earlier run, or long finished. Never a recent one
+    // of this run — another thread may have copied it and not opened it yet.
+    let mine = format!("{}-", std::process::id());
+    let old = |e: &fs::DirEntry| e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|a| a > std::time::Duration::from_secs(600));
+    if let Ok(rd) = fs::read_dir(&base) {
+        for e in rd.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with(&mine) || old(e)) {
+            let _ = fs::remove_dir_all(e.path());
+        }
+    }
     fs::create_dir_all(&dir)?;
     let name = p.file_name().ok_or_else(|| anyhow!(l("路径无效", "Invalid path")))?;
     let dst = dir.join(name);
     let dst_wal = wal_of(&dst);
-    let _ = fs::remove_file(&dst_wal);
-    let _ = fs::remove_file(dir.join(format!("{}-shm", name.to_string_lossy())));
     fs::copy(p, &dst).with_context(|| tr!("复制 {} 失败", "Failed to copy {}", p.display()))?;
     if wal_of(p).exists() {
         fs::copy(wal_of(p), &dst_wal)?;
@@ -108,6 +120,16 @@ fn migration_version(conn: &Connection) -> Option<i64> {
 
 fn norm_path(p: &str) -> String {
     p.strip_prefix(r"\\?\").unwrap_or(p).to_string()
+}
+
+/// A rollout path as this side can open it: the WSL database stores Linux paths
+/// (`/home/me/.codex/...`), reached over `\\wsl.localhost\<distro>\...`.
+fn local_path(p: &str) -> String {
+    let p = norm_path(p);
+    if crate::env::is_wsl() && p.starts_with('/') {
+        return crate::env::resolve_path(&p).to_string_lossy().into_owned();
+    }
+    p
 }
 
 fn kind_of(source: &str, thread_source: &str) -> &'static str {
@@ -191,7 +213,7 @@ pub fn list() -> Result<SessionList> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for row in rows {
         let (id, name, title, preview, cwd, provider, model, source, tsrc, archived, updated, rollout) = row?;
-        let rp = norm_path(&rollout);
+        let rp = local_path(&rollout);
         let meta = fs::metadata(&rp).ok();
         let kind = kind_of(&source, &tsrc);
         let mut hidden = vec![];
@@ -227,7 +249,7 @@ pub fn list() -> Result<SessionList> {
         });
     }
     let mut providers: Vec<(String, usize)> = counts.into_iter().collect();
-    providers.sort_by(|a, b| b.1.cmp(&a.1));
+    providers.sort_by_key(|p| std::cmp::Reverse(p.1));
     let writable = version == Some(STATE_VERSION) && !crate::env::is_wsl();
     Ok(SessionList {
         sessions,
@@ -313,13 +335,8 @@ pub fn health() -> Result<Vec<HealthItem>> {
     });
 
     // Providers used by sessions but missing from config
-    let cfg = fs::read_to_string(home.join("config.toml")).unwrap_or_default();
-    let undefined: Vec<String> = list
-        .providers
-        .iter()
-        .map(|(p, _)| p.clone())
-        .filter(|p| !p.is_empty() && p != "openai" && !cfg.contains(&format!("[model_providers.{p}]")))
-        .collect();
+    let defined = defined_providers();
+    let undefined: Vec<String> = list.providers.iter().map(|(p, _)| p.clone()).filter(|p| !p.is_empty() && !defined.contains(p)).collect();
     if !undefined.is_empty() {
         out.push(item("undefined", l("缺少供应商配置", "Missing provider config"), "warn", tr!("会话用到的 {} 在 config.toml 里没有定义，恢复这些会话会失败", "{} used by sessions is not defined in config.toml; resuming those sessions will fail", undefined.join(l("、", ", ")))));
     }
@@ -430,9 +447,7 @@ pub fn cleanup_preview(days: u32) -> Result<CleanupPreview> {
 }
 
 fn backup_dir(tag: &str) -> Result<PathBuf> {
-    let d = agentplus_dir().join("backups").join(chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()).join(tag);
-    fs::create_dir_all(&d)?;
-    Ok(d)
+    new_backup_dir(tag)
 }
 
 fn copy_db(p: &Path, dir: &Path) -> Result<()> {
@@ -459,7 +474,7 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
         }
         done.push(tr!("移走 {} 个临时文件", "moved {} temp file(s)", tmps.len()));
     }
-    if let Some(days) = logs_days {
+    if let Some(days) = logs_days.filter(|_| codex_home().join(LOGS_DB).is_file()) {
         let logs = codex_home().join(LOGS_DB);
         copy_db(&logs, &dir)?;
         let c = Connection::open(&logs)?;
@@ -505,12 +520,18 @@ fn last_repair() -> Option<RepairSummary> {
 /// All rollout files (all segments) per thread id, from sessions/ and archived_sessions/.
 fn rollout_index() -> HashMap<String, Vec<PathBuf>> {
     let mut map: HashMap<String, Vec<PathBuf>> = HashMap::new();
-    fn walk(d: &Path, map: &mut HashMap<String, Vec<PathBuf>>) {
+    // Codex nests sessions/YYYY/MM/DD; the depth cap and not following links keep a
+    // junction loop from recursing forever.
+    fn walk(d: &Path, map: &mut HashMap<String, Vec<PathBuf>>, depth: usize) {
+        if depth > 8 {
+            return;
+        }
         if let Ok(rd) = fs::read_dir(d) {
             for e in rd.flatten() {
                 let p = e.path();
-                if p.is_dir() {
-                    walk(&p, map);
+                let Ok(ft) = e.file_type() else { continue };
+                if ft.is_dir() {
+                    walk(&p, map, depth + 1);
                 } else if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
                     if n.starts_with("rollout-") && n.ends_with(".jsonl") {
                         // rollout-<time>-<uuid>[_<segment>].jsonl ; uuid = last 5 dash groups
@@ -527,8 +548,8 @@ fn rollout_index() -> HashMap<String, Vec<PathBuf>> {
         }
     }
     let h = codex_home();
-    walk(&h.join("sessions"), &mut map);
-    walk(&h.join("archived_sessions"), &mut map);
+    walk(&h.join("sessions"), &mut map, 0);
+    walk(&h.join("archived_sessions"), &mut map, 0);
     map
 }
 
@@ -546,7 +567,7 @@ fn rewrite_first_line(path: &Path, edit: impl Fn(&str) -> Option<String>) -> Res
     };
     let Some(new) = edit(&body) else { return Ok(None) };
     let tmp = PathBuf::from(format!("{}.agentplus-tmp", path.display()));
-    {
+    let written = (|| -> std::io::Result<()> {
         let mut w = BufWriter::new(File::create(&tmp)?);
         w.write_all(new.as_bytes())?;
         w.write_all(eol.as_bytes())?;
@@ -559,13 +580,19 @@ fn rewrite_first_line(path: &Path, edit: impl Fn(&str) -> Option<String>) -> Res
             w.write_all(&buf[..n])?;
         }
         w.flush()?;
+        drop(w);
+        drop(r);
+        fs::rename(&tmp, path)
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| tr!("改写 {} 失败", "Failed to rewrite {}", path.display()));
     }
-    drop(r);
-    fs::rename(&tmp, path)?;
     Ok(Some(body))
 }
 
-/// Swaps `"model_provider":"<old>"` in a session_meta line, byte-preserving the rest.
+/// Swaps `"model_provider":"<old>"` in a session_meta line, byte-preserving the rest
+/// (including any spacing around the colon).
 fn swap_provider(line: &str, target: &str) -> Option<String> {
     let v: Value = serde_json::from_str(line).ok()?;
     if v.get("type").and_then(|t| t.as_str()) != Some("session_meta") {
@@ -575,9 +602,41 @@ fn swap_provider(line: &str, target: &str) -> Option<String> {
     if old == target {
         return None;
     }
-    let needle = format!("\"model_provider\":{}", serde_json::to_string(old).ok()?);
-    let repl = format!("\"model_provider\":{}", serde_json::to_string(target).ok()?);
-    line.contains(&needle).then(|| line.replacen(&needle, &repl, 1))
+    let re = regex::Regex::new(&format!(r#"("model_provider"\s*:\s*){}"#, regex::escape(&serde_json::to_string(old).ok()?))).ok()?;
+    let repl = serde_json::to_string(target).ok()?;
+    re.is_match(line).then(|| re.replacen(line, 1, |c: &regex::Captures| format!("{}{repl}", &c[1])).into_owned())
+}
+
+/// Puts back the first lines of files already rewritten by a repair that then failed.
+fn restore_lines(done: &[(PathBuf, String)]) {
+    for (path, line) in done.iter().rev() {
+        let _ = rewrite_first_line(path, |_| Some(line.clone()));
+    }
+}
+
+/// Writes a repair log under a name no earlier repair uses (milliseconds, so they sort in
+/// order). A log that can't be written completely is removed: an empty one would hide the
+/// undo button of every repair (`last_repair` reads the newest).
+fn write_repair_log(content: &str) -> Result<PathBuf> {
+    use std::io::Write;
+    fs::create_dir_all(repairs_dir())?;
+    for _ in 0..50 {
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%3f").to_string();
+        let p = repairs_dir().join(format!("{stamp}.json"));
+        match fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(content.as_bytes()).and_then(|_| f.sync_all()) {
+                    drop(f);
+                    let _ = fs::remove_file(&p);
+                    return Err(e.into());
+                }
+                return Ok(p);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => std::thread::sleep(std::time::Duration::from_millis(2)),
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Err(anyhow!(l("无法创建修复记录", "Couldn't create the repair log")))
 }
 
 /// Moves sessions to `target` provider (DB row + every rollout segment's session_meta).
@@ -595,38 +654,45 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
     copy_db(&db, &dir)?;
     let index = rollout_index();
     let mut entries = vec![];
+    // Files rewritten so far: put back if anything fails before the commit.
+    let mut done: Vec<(PathBuf, String)> = vec![];
     let tx = conn.unchecked_transaction()?;
-    for id in ids {
-        let old: Option<String> = tx.query_row("SELECT model_provider FROM threads WHERE id = ?1", params![id], |r| r.get(0)).ok();
-        let Some(old) = old else { continue };
-        if old == target {
-            continue;
-        }
-        let mut files = vec![];
-        for f in index.get(id).cloned().unwrap_or_default() {
-            if let Some(old_line) = rewrite_first_line(&f, |l| swap_provider(l, target))? {
-                files.push(json!({ "path": f.to_string_lossy(), "line": old_line }));
+    let result = (|| -> Result<()> {
+        for id in ids {
+            let old: Option<String> = tx.query_row("SELECT model_provider FROM threads WHERE id = ?1", params![id], |r| r.get(0)).ok();
+            let Some(old) = old else { continue };
+            if old == target {
+                continue;
             }
+            let mut files = vec![];
+            for f in index.get(id).cloned().unwrap_or_default() {
+                if let Some(old_line) = rewrite_first_line(&f, |l| swap_provider(l, target))? {
+                    files.push(json!({ "path": f.to_string_lossy(), "line": old_line }));
+                    done.push((f, old_line));
+                }
+            }
+            tx.execute("UPDATE threads SET model_provider = ?1 WHERE id = ?2", params![target, id])?;
+            entries.push(json!({ "id": id, "old": old, "files": files }));
         }
-        tx.execute("UPDATE threads SET model_provider = ?1 WHERE id = ?2", params![target, id])?;
-        entries.push(json!({ "id": id, "old": old, "files": files }));
+        Ok(())
+    })();
+    if let Err(e) = result.and_then(|_| tx.commit().map_err(Into::into)) {
+        restore_lines(&done);
+        return Err(e);
     }
-    tx.commit()?;
     let n = entries.len();
     if n == 0 {
         return Ok(tr!("选中的会话已经属于「{target}」，没有需要迁移的", "The selected sessions already belong to \"{target}\"; nothing to migrate"));
     }
-    fs::create_dir_all(repairs_dir())?;
-    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-    fs::write(
-        repairs_dir().join(format!("{stamp}.json")),
-        serde_json::to_string(&json!({ "target": target, "backup": dir.to_string_lossy(), "entries": entries, "undone": false }))?,
-    )?;
+    write_repair_log(&serde_json::to_string(&json!({ "target": target, "backup": dir.to_string_lossy(), "entries": entries, "undone": false }))?)?;
     Ok(tr!("已把 {n} 个会话迁移到「{target}」，重启 Codex 后生效（可撤销）", "Migrated {n} session(s) to \"{target}\". Takes effect after restarting Codex (can be undone)"))
 }
 
 pub fn undo_repair(stamp: &str) -> Result<String> {
     deny_wsl()?;
+    if !plain_name(stamp) {
+        return Err(anyhow!(l("无效的修复记录", "Invalid repair record")));
+    }
     if codex_busy() {
         return Err(anyhow!(l("Codex 正在运行，请先退出 Codex 再撤销", "Codex is running. Quit Codex before undoing")));
     }
@@ -638,18 +704,28 @@ pub fn undo_repair(stamp: &str) -> Result<String> {
     let conn = Connection::open(state_path())?;
     let tx = conn.unchecked_transaction()?;
     let mut n = 0;
-    for e in log["entries"].as_array().cloned().unwrap_or_default() {
-        for f in e["files"].as_array().cloned().unwrap_or_default() {
-            let path = PathBuf::from(f["path"].as_str().unwrap_or_default());
-            let line = f["line"].as_str().unwrap_or_default().to_string();
-            if path.exists() {
-                rewrite_first_line(&path, |_| Some(line.clone()))?;
+    // (path, the line it had before this undo), to put back on failure.
+    let mut done: Vec<(PathBuf, String)> = vec![];
+    let result = (|| -> Result<()> {
+        for e in log["entries"].as_array().cloned().unwrap_or_default() {
+            for f in e["files"].as_array().cloned().unwrap_or_default() {
+                let path = PathBuf::from(f["path"].as_str().unwrap_or_default());
+                let line = f["line"].as_str().unwrap_or_default().to_string();
+                if path.is_file() {
+                    if let Some(before) = rewrite_first_line(&path, |_| Some(line.clone()))? {
+                        done.push((path, before));
+                    }
+                }
             }
+            tx.execute("UPDATE threads SET model_provider = ?1 WHERE id = ?2", params![e["old"].as_str().unwrap_or_default(), e["id"].as_str().unwrap_or_default()])?;
+            n += 1;
         }
-        tx.execute("UPDATE threads SET model_provider = ?1 WHERE id = ?2", params![e["old"].as_str().unwrap_or_default(), e["id"].as_str().unwrap_or_default()])?;
-        n += 1;
+        Ok(())
+    })();
+    if let Err(e) = result.and_then(|_| tx.commit().map_err(Into::into)) {
+        restore_lines(&done);
+        return Err(e);
     }
-    tx.commit()?;
     log["undone"] = json!(true);
     fs::write(&p, serde_json::to_string(&log)?)?;
     Ok(tr!("已撤销，{n} 个会话恢复到原来的供应商", "Undone: {n} session(s) restored to their original provider"))

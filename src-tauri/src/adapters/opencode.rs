@@ -3,6 +3,7 @@
 //! `options.apiKey`). Disabling uses OpenCode's own `disabled_providers` list. Providers
 //! logged in through `opencode auth` without a config entry show up read-only.
 
+use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt};
 use super::ocsettings::{self, Scope};
 use crate::model::*;
@@ -144,11 +145,11 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     fmt().endpoint(id)
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, cfg_meta, had_comments) = f.load(true)?;
     let mut auth = f.load_auth();

@@ -121,7 +121,7 @@ pub fn pick_folder(owner: isize, start: Option<&str>) -> Result<Option<String>> 
         let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
         dlg.SetOptions(dlg.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
         dlg.SetTitle(&HSTRING::from(crate::i18n::l("选择项目文件夹", "Choose project folder")))?;
-        if let Some(s) = start.map(|s| crate::env::resolve_path(s)).filter(|p| p.is_dir()) {
+        if let Some(s) = start.map(crate::env::resolve_path).filter(|p| p.is_dir()) {
             if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(s.as_os_str()), None) {
                 let _ = dlg.SetFolder(&item);
             }

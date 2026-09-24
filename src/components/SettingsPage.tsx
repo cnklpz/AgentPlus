@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { type AgentDetect, type AgentId, type EnvInfo, api } from "../api";
-import type { Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
+import { inTauri } from "../tauri";
+import type { CloseAction, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
 import { LANGS, type TKey, t, useLang } from "../i18n";
 import { useEscape } from "../hooks";
 import { AGENT_NAME } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { TabBar, useSlideDir } from "./TabBar";
+import { scrub } from "../privacy";
 
 export type SettingsTab = "general" | "agents";
 
@@ -43,6 +46,12 @@ const RESTART_PROGRESS: { v: RestartProgressPref; label: TKey; hint: TKey }[] = 
   { v: "toast", label: "settingsPage.restartToast", hint: "settingsPage.restartToastHint" },
 ];
 
+const CLOSE_ACTIONS: { v: CloseAction; label: TKey; hint: TKey }[] = [
+  { v: "ask", label: "settingsPage.closeAsk", hint: "settingsPage.closeAskHint" },
+  { v: "tray", label: "common.minimizeToTray", hint: "settingsPage.closeTrayHint" },
+  { v: "quit", label: "common.quitApp", hint: "settingsPage.closeQuitHint" },
+];
+
 /** AgentPlus's own settings (top-right gear): general options and agent detection. */
 export function SettingsPage(props: Props) {
   const { tab, setTab } = props;
@@ -77,6 +86,14 @@ export function SettingsPage(props: Props) {
 }
 
 function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: Props) {
+  // The app's own version (tauri.conf.json); not available in the plain-browser preview.
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!inTauri) return;
+    let alive = true;
+    getVersion().then((v) => { if (alive) setVersion(v); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
   return (
     <div className="settings">
       <section className="sgroup">
@@ -88,7 +105,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
                 <span className="env-ico">{e.id.startsWith("wsl:") ? <Icon.terminal /> : <Icon.monitor />}</span>
                 <span className="grow minw0">
                   <span className="block small strong">{e.label}</span>
-                  <span className="block tiny muted ellipsis">{e.detail}</span>
+                  <span className="block tiny muted ellipsis">{scrub(e.detail)}</span>
                 </span>
                 {e.current && <Icon.check size={14} color="var(--accent)" />}
               </button>
@@ -153,6 +170,25 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
             ))}
           </div>
         </div>
+        <div className="srow">
+          <div className="grow minw0">
+            <div className="slabel">{t("settingsPage.privacy")}</div>
+            <div className="muted small">{t("settingsPage.privacyHint")}</div>
+          </div>
+          <button className={`switch${prefs.privacy ? " on" : ""}`} role="switch" aria-checked={prefs.privacy} aria-label={t("settingsPage.privacy")}
+            onClick={() => setPrefs({ ...prefs, privacy: !prefs.privacy })}><span /></button>
+        </div>
+        <div className="srow">
+          <div className="grow minw0">
+            <div className="slabel">{t("settingsPage.closeAction")}</div>
+            <div className="muted small">{t("settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}</div>
+          </div>
+          <div className="seg">
+            {CLOSE_ACTIONS.map((m) => (
+              <button key={m.v} className={prefs.closeAction === m.v ? "on" : ""} onClick={() => setPrefs({ ...prefs, closeAction: m.v })}>{t(m.label)}</button>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="sgroup">
@@ -171,7 +207,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         <h2>{t("settingsPage.aboutTitle")}</h2>
         <div className="srow">
           <div className="grow minw0">
-            <div className="slabel">AgentPlus 0.1.0</div>
+            <div className="slabel">{version ? t("settingsPage.aboutVersion", { version }) : "AgentPlus"}</div>
             <div className="muted small">{t("settingsPage.aboutHint")}</div>
           </div>
         </div>
@@ -255,7 +291,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
                   onClick={() => toggleShown(d.id)}><span /></button>
               </label>
             )}
-            {d.note && <div className="detect-note tiny">{d.note}</div>}
+            {d.note && <div className="detect-note tiny">{scrub(d.note)}</div>}
             {!d.manual && <div className="srow stacked">
               <div className="row gap6">
                 <span className="small strong">{t("settingsPage.configDir")}</span>
@@ -265,13 +301,13 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
               </div>
               {draft === undefined ? (
                 <div className="row gap6">
-                  <span className="mono small grow ellipsis dir-line" title={d.configDir}>{d.configDir}</span>
+                  <span className="mono small grow ellipsis dir-line" title={scrub(d.configDir)}>{scrub(d.configDir)}</span>
                   <button className="btn small" onClick={() => setEdit((m) => ({ ...m, [d.id]: d.customDir ?? d.configDir }))}><Icon.edit size={12} />{t("settingsPage.change")}</button>
                   {d.customDir && <button className="btn small" disabled={saving === d.id} onClick={() => save(d.id, null)}>{t("settingsPage.restoreDefault")}</button>}
                 </div>
               ) : (
                 <div className="row gap6">
-                  <input className="input mono grow" autoFocus value={draft} placeholder={d.defaultDir}
+                  <input className="input mono grow sensitive" autoFocus value={draft} placeholder={scrub(d.defaultDir)}
                     onChange={(e) => setEdit((m) => ({ ...m, [d.id]: e.target.value }))}
                     onKeyDown={(e) => { if (e.key === "Enter") save(d.id, draft); if (e.key === "Escape") setEdit((m) => { const n = { ...m }; delete n[d.id]; return n; }); }} />
                   <button className="btn small" onClick={() => setEdit((m) => { const n = { ...m }; delete n[d.id]; return n; })}>{t("common.cancel")}</button>

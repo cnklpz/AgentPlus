@@ -39,6 +39,14 @@ const en: typeof zh = {
   restartDialogHint: "a dialog shows each step (close, start, patch) as it happens",
   restartToast: "Brief notice",
   restartToastHint: "a notice at the bottom when it starts and finishes",
+  privacy: "Privacy mode",
+  privacyHint: "Hides API keys, provider addresses and the user name in paths, and blurs conversation titles and project names, for screenshots and screen sharing. Display only. Shortcut: Ctrl+Shift+H",
+  closeAction: "When closing the window",
+  closeActionHint: "The × button and Alt+F4: {hint}",
+  closeAsk: "Ask every time",
+  closeAskHint: "ask whether to minimize to tray or quit",
+  closeTrayHint: "hide in the tray and keep running; click the tray icon to reopen",
+  closeQuitHint: "quit right away; the local gateway stops too",
 
   dataTitle: "Data & backups",
   dataDir: "AgentPlus data folder",
@@ -46,6 +54,7 @@ const en: typeof zh = {
   backups: "Backups & rollback",
 
   aboutTitle: "About",
+  aboutVersion: "AgentPlus {version}",
   aboutHint: "Manages providers and model lists for Codex, Claude Code, OpenCode, ZCode, MiMo Desktop and other agents",
 
   dirUsed: "Now using this folder",

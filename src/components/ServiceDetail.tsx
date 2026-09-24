@@ -6,6 +6,7 @@ import { Bars, type Latency, initials } from "./ProviderCard";
 import { latencyText, stationColor } from "./ProvidersHub";
 import { ProviderTest } from "./ProviderTest";
 import { t, tn } from "../i18n";
+import { scrub, scrubHost } from "../privacy";
 
 interface Props {
   s: Station;
@@ -47,7 +48,7 @@ export function ServiceDetail(props: Props) {
       <div className="pdetail-head">
         <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
         <span className="pcard-title">
-          <span className="pcard-name"><span className="ellipsis">{s.name}</span></span>
+          <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
           <span className="pcard-host mono ellipsis">{s.builtin ? t("serviceDetail.accountLogin") : tn("serviceDetail.hostGroups", s.groups.length, { host: s.host })}</span>
         </span>
         <button className="icon-btn" aria-label={t("serviceDetail.closeDetails")} onClick={props.onClose}><Icon.close /></button>
@@ -106,13 +107,13 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
               <div className="kv-row">
                 <span className="muted small">{t("common.baseUrl")}</span>
                 <span className="row gap6 minw0">
-                  <span className="mono small ellipsis grow" title={g.baseUrl}>{g.baseUrl}</span>
+                  <span className="mono small ellipsis grow" title={scrub(g.baseUrl)}>{scrub(g.baseUrl)}</span>
                   <button className="icon-btn sm" aria-label={t("serviceDetail.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
                 </span>
               </div>
               <div className="kv-row">
                 <span className="muted small">{t("common.apiKey")}</span>
-                <span className="small">{g.keyHint ? <span className="mono">{g.keyHint}</span> : t("serviceDetail.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
+                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("serviceDetail.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
               </div>
             </div>
           )}

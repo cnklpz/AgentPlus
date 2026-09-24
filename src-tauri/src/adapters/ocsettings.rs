@@ -10,6 +10,7 @@ use crate::i18n::l;
 use crate::model::{Diff, Setting};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
+use crate::util::obj_at;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Scope {
@@ -163,7 +164,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 }
                 for (val, zh, en) in opts.iter() {
                     row.options.push(val.to_string());
-                    row.hints.push(l(*zh, *en).to_string());
+                    row.hints.push(l(zh, en).to_string());
                 }
                 if v.as_deref() == Some("custom") {
                     row.options.push("custom".into());
@@ -249,31 +250,24 @@ fn to_stored(kind: &Kind, key: &str, v: &Value) -> Result<Option<Value>> {
     })
 }
 
-fn obj_mut<'a>(v: &'a mut Value) -> &'a mut Map<String, Value> {
-    if !v.is_object() {
-        *v = json!({});
-    }
-    v.as_object_mut().unwrap()
-}
-
-/// Sets or removes a dotted key; parents left empty by a removal go too.
-fn write(cfg: &mut Value, key: &str, v: Option<Value>) {
+/// Sets or removes a dotted key; parents left empty by a removal go too. A parent that
+/// holds something other than an object is an error, not overwritten.
+fn write(cfg: &mut Value, key: &str, v: Option<Value>) -> Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
     if parts.len() == 1 {
         match v {
-            Some(v) => { obj_mut(cfg).insert(key.into(), v); }
-            None => { obj_mut(cfg).remove(key); }
+            Some(v) => { obj_at(cfg, &[])?.insert(key.into(), v); }
+            None => { obj_at(cfg, &[])?.remove(key); }
         }
-        return;
+        return Ok(());
     }
     let (head, leaf) = (parts[0], parts[1]);
     match v {
         Some(v) => {
-            let parent = obj_mut(cfg).entry(head).or_insert_with(|| json!({}));
-            obj_mut(parent).insert(leaf.into(), v);
+            obj_at(cfg, &[head])?.insert(leaf.into(), v);
         }
         None => {
-            let root = obj_mut(cfg);
+            let root = obj_at(cfg, &[])?;
             if let Some(p) = root.get_mut(head).and_then(|p| p.as_object_mut()) {
                 p.remove(leaf);
                 if p.is_empty() {
@@ -282,6 +276,7 @@ fn write(cfg: &mut Value, key: &str, v: Option<Value>) {
             }
         }
     }
+    Ok(())
 }
 
 /// Applies one setting to `cfg`. Returns whether the file changed.
@@ -308,7 +303,7 @@ pub fn apply(cfg: &mut Value, key: &str, value: &Value, diff: &mut Diff, file: &
         None => format!("- {key}"),
     };
     let add = want.is_some();
-    write(cfg, key, want);
+    write(cfg, key, want)?;
     diff.push(file, text, add);
     Ok(true)
 }
