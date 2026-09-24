@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { GatewayRouteView, SyncSuggestion } from "./api";
-import { API_LABEL, apiFor, gatewayCapable, gatewayPoolBase, gatewayPoolIds, gatewayRouteId, groupKey, hostKey, movedGatewayUrl, plainRoute, syncSuggestionId, syncSuggestionIds } from "./services";
+import type { AgentState, GatewayRouteView, SyncSuggestion } from "./api";
+import {
+  API_LABEL, GATEWAY_KEY, type Group, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayPoolBase, gatewayPoolIds,
+  gatewayRouteId, groupKey, hostKey, importKey, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute, splitStations, syncSuggestionId,
+  syncSuggestionIds, tripped, useKey,
+} from "./services";
 
 describe("hostKey", () => {
   it.each([
@@ -90,6 +94,85 @@ describe("protocols", () => {
     expect(apiFor("opencode", "anthropic")).toBe("anthropic");
     expect(gatewayCapable("gemini")).toBe(false);
     expect(gatewayCapable("codex")).toBe(true);
+  });
+});
+
+describe("gatewayEntry", () => {
+  it("points a new entry at the gateway with the gateway key", () => {
+    expect(gatewayEntry("http://127.0.0.1:18650/r/v1", "opencode", "chat", "Relay (gateway)", ["m1"])).toEqual({
+      id: null, name: "Relay (gateway)", baseUrl: "http://127.0.0.1:18650/r/v1", api: "chat", apiKey: GATEWAY_KEY, models: ["m1"],
+    });
+  });
+  it("gives Codex no model list (it shares one catalog)", () => {
+    expect(gatewayEntry("http://127.0.0.1:18650/r/v1", "codex", "responses", "R", ["m1"]).models).toEqual([]);
+  });
+});
+
+describe("gateway routes", () => {
+  const r = (id: string, library: string, upstreamApi: "chat" | "responses", breaker: GatewayRouteView["breaker"] = null) =>
+    ({ id, library, upstreamApi, breaker }) as GatewayRouteView;
+  it("findRoute matches library and protocol", () => {
+    const routes = [r("a", "l1", "chat"), r("b", "l1", "responses"), r("c", "l2", "chat")];
+    expect(findRoute(routes, "l1", "responses")?.id).toBe("b");
+    expect(findRoute(routes, "l2", "responses")).toBeUndefined();
+    expect(findRoute(routes, undefined, "chat")).toBeUndefined();
+    expect(findRoute(routes, null, "chat")).toBeUndefined();
+  });
+  it.each([
+    ["OpenCode Zen", [], "opencode-zen"],
+    ["  Relay!! A ", [], "relay-a"],
+    ["智谱", [], "route"],
+    ["", [], "route"],
+    ["Relay", ["relay"], "relay-2"],
+    ["Relay", ["relay", "relay-2", "relay-3"], "relay-4"],
+    ["智谱", ["route"], "route-2"],
+  ])("newRouteId(%j, taken %j) = %j", (name, taken, id) => expect(newRouteId(name, taken.map((x) => ({ id: x })))).toBe(id));
+  it("mergeReplaced appends new pairs once", () => {
+    expect(mergeReplaced(undefined, [["codex", "a"]])).toEqual([["codex", "a"]]);
+    expect(mergeReplaced([["codex", "a"]], [["codex", "a"], ["claude", "a"], ["codex", "b"]])).toEqual([["codex", "a"], ["claude", "a"], ["codex", "b"]]);
+    expect(mergeReplaced(null, [])).toEqual([]);
+  });
+  it("tripped: open or probing breakers only", () => {
+    const b = (state: "closed" | "open" | "probe") => ({ state }) as NonNullable<GatewayRouteView["breaker"]>;
+    expect(tripped(r("a", "l", "chat"))).toBeNull();
+    expect(tripped(r("a", "l", "chat", b("closed")))).toBeNull();
+    expect(tripped(r("a", "l", "chat", b("open")))?.state).toBe("open");
+    expect(tripped(r("a", "l", "chat", b("probe")))?.state).toBe("probe");
+  });
+  it("isGatewayHost: localhost counts, other ports don't", () => {
+    expect(isGatewayHost("localhost:18650", ["127.0.0.1:18650"])).toBe(true);
+    expect(isGatewayHost("127.0.0.1:18651", ["127.0.0.1:18650", "127.0.0.1:18651"])).toBe(true);
+    expect(isGatewayHost("127.0.0.1:1", "127.0.0.1:18650")).toBe(false);
+    expect(isGatewayHost("127.0.0.1:18650", null)).toBe(false);
+  });
+});
+
+describe("groups and uses", () => {
+  const agent = (id: string, over: Partial<AgentState> = {}) => ({ id, name: id, installed: true, readonly: false, ...over }) as AgentState;
+  const use = (a: AgentState, state: Use["state"], pid = "p"): Use => ({ agent: a, p: { id: pid } as Use["p"], state, models: 0 });
+  const [x, y, z, ro, gone] = [agent("opencode"), agent("claude"), agent("qwen"), agent("zcode", { readonly: true }), agent("kimi", { installed: false })];
+  const g = { uses: [use(x, "on"), use(y, "removing")] } as Group;
+  it("liveUses leaves out removals", () => expect(liveUses(g).map((u) => u.agent.id)).toEqual(["opencode"]));
+  it("freeAgents: writable agents not using the group (a removal frees it)", () => {
+    expect(freeAgents([x, y, z, ro, gone], g).map((a) => a.id)).toEqual(["claude", "qwen"]);
+    expect(freeAgents([x, ro], null).map((a) => a.id)).toEqual(["opencode"]);
+  });
+  it("useKey is agent and provider", () => expect(useKey(use(x, "on", "relay"))).toBe("opencode:relay"));
+  it("importKey: the draft key of the copy importOp queues", () => {
+    expect(importKey({ lib: { id: "e1" }, uses: [] } as unknown as Group)).toBe("pi:library:e1");
+    const src = { agent: x, p: { id: "relay", isNew: false, editable: true, baseUrl: "https://r/v1" }, state: "on", models: 0 } as unknown as Use;
+    expect(importKey({ lib: null, uses: [src] } as unknown as Group)).toBe("pi:opencode:relay");
+  });
+  it("splitStations keeps order", () => {
+    const s = (key: string, builtin: boolean) => ({ key, builtin }) as never;
+    const { relays, accounts } = splitStations([s("a", false), s("b", true), s("c", false)]);
+    expect(relays.map((v: { key: string }) => v.key)).toEqual(["a", "c"]);
+    expect(accounts.map((v: { key: string }) => v.key)).toEqual(["b"]);
+  });
+  it("agentLabel: product names, other ids as is", () => {
+    expect(agentLabel("claude")).toBe("Claude Code");
+    expect(agentLabel("codex@wsl")).toBe("codex@wsl");
+    expect(agentLabel("codex-cleanup")).toBe("codex-cleanup");
   });
 });
 
