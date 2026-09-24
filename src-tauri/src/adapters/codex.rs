@@ -24,10 +24,10 @@ fn inject_file() -> &'static str {
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
 const FAST_TIER: &str = "priority";
 
+/// The folder picked in AgentPlus, else `$CODEX_HOME`, else `~/.codex`.
 pub fn codex_home() -> PathBuf {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| super::dir_override(ID))
+    super::dir_override(ID)
+        .or_else(|| crate::env::agent_var("CODEX_HOME").map(PathBuf::from))
         .unwrap_or_else(|| home().join(".codex"))
 }
 
@@ -232,7 +232,7 @@ pub fn env_value(name: &str) -> Option<String> {
     let (lines, _) = read_env();
     match dotenv::get_first(&lines.join("\n"), name) {
         Some(v) => Some(v),
-        None => std::env::var(name).ok(),
+        None => crate::env::agent_var(name),
     }
     .filter(|v| !v.is_empty())
 }
@@ -249,7 +249,7 @@ fn key_status(name: &str) -> &'static str {
     let (lines, _) = read_env();
     if lines.iter().any(|l| dotenv::line_key(l) == Some(name)) {
         l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
-    } else if std::env::var_os(name).is_some() {
+    } else if crate::env::agent_var(name).is_some() {
         l("已在系统环境变量配置", "set in system environment variables")
     } else {
         l("未找到，请求会失败", "not found; requests will fail")

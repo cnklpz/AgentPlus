@@ -111,9 +111,7 @@ fn env_ref(k: &str) -> Option<&str> {
 /// The key a request would use: a literal, or the value of the referenced env variable.
 fn resolve_key(k: &str) -> Option<String> {
     match env_ref(k) {
-        // The variable lives in the WSL shell, not in this Windows process.
-        Some(_) if test_home().is_none() && crate::env::is_wsl() => None,
-        Some(var) => std::env::var(var).ok().filter(|v| !v.trim().is_empty()),
+        Some(var) => crate::env::agent_var(var).filter(|v| !v.trim().is_empty()),
         None => Some(k.trim().to_string()).filter(|v| !v.is_empty()),
     }
 }
@@ -816,8 +814,8 @@ mod tests {
     type Home = TestHome;
 
     fn setup(name: &str, settings: Option<&str>) -> Home {
-        std::env::set_var("AGENTPLUS_DROID_TEST_KEY", "sk-env-3333");
         let home = TestHome::new(&format!("droid-{name}"));
+        crate::env::set_test_vars(&[("AGENTPLUS_DROID_TEST_KEY", "sk-env-3333")]);
         let h = home.0.clone();
         std::fs::create_dir_all(h.join(".factory")).unwrap();
         if let Some(c) = settings {

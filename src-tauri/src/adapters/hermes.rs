@@ -59,7 +59,7 @@ pub fn default_dir() -> PathBuf {
 
 #[cfg(windows)]
 fn native_home() -> Option<PathBuf> {
-    let from_env = std::env::var("HERMES_HOME").ok().filter(|s| !s.trim().is_empty());
+    let from_env = crate::env::agent_var("HERMES_HOME").filter(|s| !s.trim().is_empty());
     let from_reg = || -> Option<String> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
@@ -73,7 +73,7 @@ fn native_home() -> Option<PathBuf> {
 
 #[cfg(not(windows))]
 fn native_home() -> Option<PathBuf> {
-    std::env::var("HERMES_HOME").ok().filter(|s| !s.trim().is_empty()).map(PathBuf::from)
+    crate::env::agent_var("HERMES_HOME").filter(|s| !s.trim().is_empty()).map(PathBuf::from)
 }
 
 /// `%LOCALAPPDATA%\x` → the value of the variable (REG_EXPAND_SZ values come back raw).
@@ -401,7 +401,7 @@ fn emit_top(key: &str, v: &Y) -> Result<Vec<String>> {
 // ---------------------------------------------------------------- .env
 
 fn env_key(env: &str, var: &str) -> Option<String> {
-    dotenv::get(env, var).or_else(|| std::env::var(var).ok().filter(|v| !v.trim().is_empty()))
+    dotenv::get(env, var).or_else(|| crate::env::agent_var(var).filter(|v| !v.trim().is_empty()))
 }
 
 // ---------------------------------------------------------------- providers

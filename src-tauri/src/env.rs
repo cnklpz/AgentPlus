@@ -99,6 +99,20 @@ pub fn resolve_path(s: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// An environment variable of the agent's environment, for its config (a config folder, a
+/// key variable). That is this process's environment on Windows; in WSL mode the agent runs
+/// in the distro's shell, whose variables AgentPlus can't see, so it is None. Empty is None.
+pub fn agent_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if crate::util::test_home().is_some() {
+        return test_var(name).filter(|v| !v.is_empty());
+    }
+    if is_wsl() {
+        return None;
+    }
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 /// Runs a command inside the current WSL distro; None on failure or outside WSL.
 pub fn wsl_sh(script: &str) -> Option<String> {
     let Target::Wsl { distro, .. } = current() else { return None };

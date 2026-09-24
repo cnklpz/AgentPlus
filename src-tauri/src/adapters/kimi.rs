@@ -52,10 +52,8 @@ fn pick_dir(h: &Path) -> PathBuf {
 
 /// `$KIMI_CODE_HOME` (Windows side only), else `~/.kimi-code` / `~/.kimi`.
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() && test_home().is_none() {
-        if let Some(h) = std::env::var_os("KIMI_CODE_HOME").filter(|v| !v.is_empty()) {
-            return PathBuf::from(h);
-        }
+    if let Some(h) = crate::env::agent_var("KIMI_CODE_HOME") {
+        return PathBuf::from(h);
     }
     pick_dir(&home())
 }
@@ -160,10 +158,6 @@ fn check_api(api: &str) -> Result<&str> {
 
 fn store_obj(root: &Value, k: &str) -> Map<String, Value> {
     store::get_obj(root, ID, k)
-}
-
-fn env_set(var: &str) -> bool {
-    !crate::env::is_wsl() && std::env::var(var).map(|v| !v.is_empty()).unwrap_or(false)
 }
 
 /// Copies an item with every table's document position cleared, so a table moved
@@ -273,7 +267,7 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
     let api = api_of(&ty);
     let inline = get_str(item, "api_key").filter(|k| !k.is_empty());
     let var = get_str(item, "api_key_env").filter(|k| !k.is_empty());
-    let from_env = var.as_deref().map(env_set).unwrap_or(false);
+    let from_env = var.as_deref().and_then(crate::env::agent_var).is_some();
     let key_note = match (&var, &inline) {
         (Some(v), _) => tr!(
             "环境变量 {v}（api_key_env）· {}",
@@ -400,7 +394,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let base = get_str(&item, "base_url").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
     let key = get_str(&item, "api_key")
         .filter(|k| !k.is_empty())
-        .or_else(|| get_str(&item, "api_key_env").filter(|v| env_set(v)).and_then(|v| std::env::var(v).ok()));
+        .or_else(|| get_str(&item, "api_key_env").and_then(|v| crate::env::agent_var(&v)));
     Ok((base, key, api_of(&get_str(&item, "type").unwrap_or_default()).into()))
 }
 

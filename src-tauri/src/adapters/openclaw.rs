@@ -12,7 +12,7 @@
 
 
 use super::{Plan, Endpoint};
-use super::pimodels::{self, Dirty, Flavor, Fmt};
+use super::pimodels::{Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
 use crate::store;
@@ -36,7 +36,7 @@ pub fn default_dir() -> PathBuf {
     if let Some(d) = super::dir_override(ID) {
         return d;
     }
-    if let Some(d) = pimodels::env_var("OPENCLAW_STATE_DIR") {
+    if let Some(d) = crate::env::agent_var("OPENCLAW_STATE_DIR") {
         return crate::env::resolve_path(&d);
     }
     home().join(".openclaw")
@@ -44,7 +44,7 @@ pub fn default_dir() -> PathBuf {
 
 fn config_path() -> PathBuf {
     if super::dir_override(ID).is_none() {
-        if let Some(p) = pimodels::env_var("OPENCLAW_CONFIG_PATH") {
+        if let Some(p) = crate::env::agent_var("OPENCLAW_CONFIG_PATH") {
             return crate::env::resolve_path(&p);
         }
     }

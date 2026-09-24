@@ -38,10 +38,8 @@ const STORE_LABEL: &str = "AgentPlus · CodeBuddy";
 /// `CODEBUDDY_CONFIG_DIR` (Windows side only), else `~/.codebuddy`.
 #[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() && test_home().is_none() {
-        if let Some(d) = std::env::var_os("CODEBUDDY_CONFIG_DIR").filter(|d| !d.is_empty()) {
-            return PathBuf::from(d);
-        }
+    if let Some(d) = crate::env::agent_var("CODEBUDDY_CONFIG_DIR") {
+        return PathBuf::from(d);
     }
     home().join(".codebuddy")
 }
@@ -135,9 +133,7 @@ fn env_ref(k: &str) -> Option<&str> {
 
 fn resolve_key(k: &str) -> Option<String> {
     match env_ref(k) {
-        // The variable lives in the WSL shell, not in this Windows process.
-        Some(_) if test_home().is_none() && crate::env::is_wsl() => None,
-        Some(var) => std::env::var(var).ok().filter(|v| !v.trim().is_empty()),
+        Some(var) => crate::env::agent_var(var).filter(|v| !v.trim().is_empty()),
         None => Some(k.trim().to_string()).filter(|v| !v.is_empty()),
     }
 }
@@ -754,8 +750,8 @@ mod tests {
     type Home = TestHome;
 
     fn setup(name: &str, models: Option<&str>) -> Home {
-        std::env::set_var("AGENTPLUS_CB_TEST_KEY", "sk-env-3333");
         let home = TestHome::new(&format!("codebuddy-{name}"));
+        crate::env::set_test_vars(&[("AGENTPLUS_CB_TEST_KEY", "sk-env-3333")]);
         let h = home.0.clone();
         std::fs::create_dir_all(h.join(".codebuddy")).unwrap();
         std::fs::write(h.join(".codebuddy/settings.json"), r#"{"enabledPlugins":{"pdf@x":true},"model":"deepseek-chat"}"#).unwrap();

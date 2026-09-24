@@ -45,10 +45,8 @@ const OAUTH: &str = "qwen-oauth";
 
 /// `$QWEN_HOME` (Windows side only), else `~/.qwen`.
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() && test_home().is_none() {
-        if let Some(h) = std::env::var_os("QWEN_HOME").filter(|v| !v.is_empty()) {
-            return PathBuf::from(h);
-        }
+    if let Some(h) = crate::env::agent_var("QWEN_HOME") {
+        return PathBuf::from(h);
     }
     home().join(".qwen")
 }
@@ -127,10 +125,8 @@ fn lookup(cfg: &Value, name: &str) -> Option<(String, &'static str)> {
     if let Some(v) = crate::dotenv::get(&crate::dotenv::load(&dotenv_path()).0, name) {
         return Some((v, "~/.qwen/.env"));
     }
-    if !crate::env::is_wsl() {
-        if let Some(v) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
-            return Some((v, l("系统环境变量", "system environment variables")));
-        }
+    if let Some(v) = crate::env::agent_var(name) {
+        return Some((v, l("系统环境变量", "system environment variables")));
     }
     None
 }
