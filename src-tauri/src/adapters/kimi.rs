@@ -216,27 +216,18 @@ fn set_val(t: &mut dyn TableLike, k: &str, v: toml_edit::Value) {
 fn model_of(key: &str, item: &Item, visible: bool, def: Option<&str>) -> Model {
     let upstream = get_str(item, "model");
     let context = item.get("max_context_size").and_then(|v| v.as_integer()).filter(|n| *n > 0).map(|n| n as u64);
-    let mut tags = vec![];
-    if def == Some(key) {
-        tags.push(Tag::default_model());
-    }
-    if let Some(caps) = item.get("capabilities").and_then(|v| v.as_array()) {
-        tags.extend(caps.iter().filter_map(|c| c.as_str()).map(|c| Tag::new(format!("cap:{c}"), c)));
-    }
+    // Capabilities travel in `extra`; the UI shows them through the model fields (mfields::KIMI).
+    let caps: Option<Vec<&str>> = item.get("capabilities").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|c| c.as_str()).collect());
     Model {
         id: key.into(),
         visible,
         readonly: false,
-        tags,
+        tags: if def == Some(key) { vec![Tag::default_model()] } else { vec![] },
         ctx: context.map(fmt_ctx),
         name: upstream.filter(|m| m != key),
         context,
         deletable: true,
-        extra: item
-            .get("capabilities")
-            .and_then(|v| v.as_array())
-            .map(|a| [("capabilities".to_string(), json!(a.iter().filter_map(|c| c.as_str()).collect::<Vec<_>>()))].into_iter().collect())
-            .unwrap_or_default(),
+        extra: caps.map(|c| [("capabilities".to_string(), json!(c))].into_iter().collect()).unwrap_or_default(),
     }
 }
 
@@ -501,14 +492,9 @@ impl Ctx {
         out
     }
 
-    fn check_default(&self, keys: &[String], what: &str) -> Result<()> {
-        match default_model(&self.doc) {
-            Some(d) if keys.contains(&d) => Err(anyhow!(tr!(
-                "「{d}」是 default_model，{what}前先在 Kimi 里用 /model 换一个默认模型",
-                "\"{d}\" is the default_model; switch to another default model with /model in Kimi before {what}"
-            ))),
-            _ => Ok(()),
-        }
+    /// The default_model, when it is one of `keys`.
+    fn default_in(&self, keys: &[String]) -> Option<String> {
+        default_model(&self.doc).filter(|d| keys.contains(d))
     }
 
     fn parent(&mut self, name: &str) -> Result<&mut Table> {
@@ -524,8 +510,8 @@ impl Ctx {
         self.doc.get_mut(parent).and_then(|t| t.as_table_like_mut()).and_then(|t| t.remove(key))
     }
 
-    fn set_store(&mut self, k: &str, v: Map<String, Value>) {
-        store::set_value(&mut self.root, ID, k, Value::Object(v));
+    fn set_store(&mut self, k: &str, v: impl Into<Value>) {
+        store::set_value(&mut self.root, ID, k, v.into());
         self.store_dirty = true;
     }
 
@@ -608,7 +594,12 @@ impl Ctx {
     fn delete_provider(&mut self, id: &str) -> Result<()> {
         if self.has_provider(id) {
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
-            self.check_default(&keys, l("删除这个供应商", "deleting this provider"))?;
+            if let Some(d) = self.default_in(&keys) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，删除这个供应商前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting this provider"
+                )));
+            }
             self.remove("providers", id);
             for k in &keys {
                 self.remove("models", k);
@@ -644,7 +635,12 @@ impl Ctx {
                 return if d.contains_key(id) { Ok(()) } else { Err(msg::no_provider(id)) };
             }
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
-            self.check_default(&keys, l("停用这个供应商", "disabling this provider"))?;
+            if let Some(d) = self.default_in(&keys) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，停用这个供应商前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before disabling this provider"
+                )));
+            }
             let prov = self.remove("providers", id).unwrap();
             let models: Vec<(String, Item)> = keys.iter().filter_map(|k| self.remove("models", k).map(|m| (k.clone(), m))).collect();
             let mut parts: Vec<(&str, &str, &Item)> = vec![("providers", id, &prov)];
@@ -657,6 +653,13 @@ impl Ctx {
             let Some(rec) = d.remove(id) else {
                 return if self.has_provider(id) { Ok(()) } else { Err(msg::no_provider(id)) };
             };
+            // A [providers.<id>] written meanwhile (by hand, /login) would be replaced, api_key and all.
+            if self.has_provider(id) {
+                return Err(anyhow!(tr!(
+                    "config.toml 里已经有 [providers.{id}]，无法恢复停用的「{id}」",
+                    "config.toml already has [providers.{id}]; can't restore the disabled \"{id}\""
+                )));
+            }
             let sd = from_text(stash_text(&rec))?;
             let prov = sd.get("providers").and_then(|t| t.get(id)).ok_or_else(|| anyhow!(tr!("暂存的供应商 {id} 不完整", "Stashed provider {id} is incomplete")))?;
             let models = table_items(&sd, "models");
@@ -682,7 +685,20 @@ impl Ctx {
             if !self.is_live_model(pid, key) {
                 return if hidden.contains_key(key) { Ok(()) } else { Err(anyhow!(tr!("找不到模型 {key}", "Model not found: {key}"))) };
             }
-            self.check_default(&[key.to_string()], l("隐藏它", "hiding it"))?;
+            if let Some(d) = self.default_in(&[key.to_string()]) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，隐藏它前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before hiding it"
+                )));
+            }
+            // The stash is keyed by models key: never overwrite another model stashed under it
+            // (config.toml can bring a key back behind AgentPlus's back: /login, /model, by hand).
+            if hidden.contains_key(key) {
+                return Err(anyhow!(tr!(
+                    "模型键 {key} 在 AgentPlus 里已暂存了一个隐藏模型，先在 config.toml 里给这个模型换个键",
+                    "Model key {key} already has a hidden model stashed in AgentPlus; give this model a different key in config.toml first"
+                )));
+            }
             let item = self.remove("models", key).unwrap();
             hidden.insert(key.into(), json!({ "provider": pid, "toml": to_text(&[("models", key, &item)]) }));
             self.set_store("hiddenModels", hidden);
@@ -746,7 +762,12 @@ impl Ctx {
     fn delete_model(&mut self, pid: &str, key: &str) -> Result<()> {
         self.live_provider(pid)?;
         if self.is_live_model(pid, key) {
-            self.check_default(&[key.to_string()], l("删除它", "deleting it"))?;
+            if let Some(d) = self.default_in(&[key.to_string()]) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，删除它前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting it"
+                )));
+            }
             self.remove("models", key);
             self.diff.push(&self.file, tr!("- [models.\"{key}\"]（删除）", "- [models.\"{key}\"] (deleted)"), false);
             self.cfg_dirty = true;
@@ -946,7 +967,10 @@ max_steps_per_run = 100 # keep
         assert!(m.models[0].tags.contains(&Tag::default_model()));
         assert_eq!(m.models[0].name.as_deref(), Some("kimi-k2-0905-preview"));
         assert_eq!(m.models[0].ctx.as_deref(), Some("262K"));
+        assert_eq!(m.models[0].extra.get("capabilities"), Some(&json!(["thinking"])));
+        assert_eq!(m.models[0].tags, [Tag::default_model()]);
         let r = prov(&s, "relay");
+        assert!(r.models[0].extra.is_empty());
         assert!(!r.builtin && r.has_key);
         assert_eq!(r.models.iter().map(|m| (m.id.as_str(), m.name.as_deref())).collect::<Vec<_>>(), [("gpt-4.1", None), ("relay-mini", Some("gpt-4.1-mini"))]);
         let e = prov(&s, "envy");
@@ -1082,6 +1106,26 @@ max_steps_per_run = 100 # keep
         assert!(!t.contains("relay"), "{t}");
         assert!(store_obj(&store::load(), "hiddenModels").is_empty());
         assert!(st().providers.iter().all(|p| p.id != "relay"));
+    }
+
+    #[test]
+    fn stash_never_overwrites_a_hand_written_key() {
+        let _home = setup("clash", false, Some(SAMPLE));
+        apply(vec![Op::SetModelVisible { provider: "relay".into(), model: "relay-mini".into(), visible: false }]);
+        // The same key comes back by hand, now for another provider: hiding it must not
+        // replace relay's stashed model.
+        fs::write(config_path(), format!("{}\n[models.relay-mini]\nprovider = \"moonshot\"\nmodel = \"moon-mini\"\nmax_context_size = 8000\n", text())).unwrap();
+        assert!(plan(&[Op::SetModelVisible { provider: "moonshot".into(), model: "relay-mini".into(), visible: false }], false).is_err());
+        let hidden = store_obj(&store::load(), "hiddenModels");
+        assert_eq!(hidden["relay-mini"]["provider"], "relay");
+        assert!(stash_text(&hidden["relay-mini"]).contains("gpt-4.1-mini"));
+        // A disabled provider whose [providers.<id>] was written again by hand stays disabled.
+        apply(vec![Op::SetProviderEnabled { provider: "envy".into(), enabled: false }]);
+        let by_hand = format!("{}\n[providers.envy]\ntype = \"openai\"\nbase_url = \"https://hand.example/v1\"\napi_key = \"sk-hand\"\n", text());
+        fs::write(config_path(), &by_hand).unwrap();
+        assert!(plan(&[Op::SetProviderEnabled { provider: "envy".into(), enabled: true }], false).is_err());
+        assert_eq!(text(), by_hand);
+        assert!(store_obj(&store::load(), "disabledProviders").contains_key("envy"));
     }
 
     #[test]
