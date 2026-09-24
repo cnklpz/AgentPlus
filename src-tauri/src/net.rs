@@ -1,6 +1,6 @@
 //! Provider network calls: latency and model listing.
 
-use crate::gateway::clip;
+use crate::util::clip;
 use std::time::{Duration, Instant};
 
 /// Anthropic API version AgentPlus speaks.
@@ -274,11 +274,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     r.status = Some(status.as_u16());
     let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
     if !status.is_success() {
-        let msg = v
-            .as_ref()
-            .and_then(|v| v.pointer("/error/message").or_else(|| v.get("message")).or_else(|| v.get("error")).or_else(|| v.get("detail")))
-            .map(|m| m.as_str().map(String::from).unwrap_or_else(|| m.to_string()))
-            .unwrap_or_else(|| clip(text.trim(), 160));
+        let msg = v.as_ref().and_then(crate::gateway::convert::error_message).unwrap_or_else(|| clip(text.trim(), 160));
         let hint = match status.as_u16() {
             401 | 403 => crate::i18n::l("密钥无效或没有权限", "Invalid API key or no permission"),
             404 => crate::i18n::l("地址或接口类型不对，或者没有这个模型", "Wrong base URL or API type, or no such model"),
@@ -395,6 +391,22 @@ mod tests {
                 return text;
             }
         }
+    }
+
+    /// The error message the provider test shows, picked like the gateway picks it.
+    #[test]
+    fn test_call_error_messages() {
+        let error_of = |status: &'static str, body: &'static str| {
+            let (port, _seen) = serve_with(3, move |_| http(status, "", body));
+            test_call(&format!("http://127.0.0.1:{port}/v1"), Some("k"), "chat", "m").error.unwrap_or_default()
+        };
+        assert_eq!(error_of("400 Bad Request", r#"{"message":"","detail":"bad model"}"#), "请求被拒绝，可能是模型名不对或接口类型不匹配（HTTP 400）：bad model");
+        assert_eq!(error_of("429 Too Many", r#"{"error":"quota exceeded"}"#), "请求太频繁或额度用完（HTTP 429）：quota exceeded");
+        assert_eq!(error_of("500 Oops", r#"{"error":{"message":"boom"}}"#), "服务端出错（HTTP 500）：boom");
+        assert_eq!(error_of("503 Busy", r#"{"message":42}"#), "服务端出错（HTTP 503）：42");
+        // No message field: the (shortened) body itself.
+        assert_eq!(error_of("503 Busy", r#"{"error":{"code":1}}"#), r#"服务端出错（HTTP 503）：{"error":{"code":1}}"#);
+        assert_eq!(error_of("502 Bad", "  "), "服务端出错（HTTP 502 Bad Gateway）");
     }
 
     #[test]
