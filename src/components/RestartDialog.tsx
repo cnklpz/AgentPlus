@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentId, RestartProgress, RestartStatus, RestartStep } from "../api";
 import { type TKey, locale, t } from "../i18n";
-import { useEscape } from "../hooks";
 import { AgentIcon, Icon } from "./icons";
+import { Modal } from "./Modal";
 import { scrub } from "../privacy";
 
 export interface RunStep {
@@ -88,7 +88,6 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
     const timer = window.setTimeout(onClose, 1600);
     return () => window.clearTimeout(timer);
   }, [clean]);
-  useEscape(onClose);
   const btnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { btnRef.current?.focus(); }, [!!result]);
 
@@ -103,41 +102,42 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
   // Codex's injection summary says what was patched; a plain restart has nothing to add.
   const showMsg = !!result && (!result.ok || run.steps.some((s) => s.id === "patch"));
 
+  const foot = (
+    <>
+      {!result && <button className="btn" onClick={onCancel}>{t(run.starting ? "restartDialog.cancelStart" : "restartDialog.cancelRestart")}</button>}
+      <span className="grow" />
+      <button ref={btnRef} className={`btn${result ? " primary" : ""}`} onClick={onClose}>{t(result ? "common.close" : "restartDialog.background")}</button>
+    </>
+  );
+
   return (
-    <div className="modal-bg rs-bg">
-      <div className="modal rs" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="rs-head">
-          <AgentIcon id={run.agent} size={36} />
-          <div className="grow minw0">
-            <div className="confirm-title">{title}</div>
-            <div className="tiny muted" aria-live="off">{t(result ? "restartDialog.took" : "restartDialog.elapsed", { s: secs(total) })}</div>
-          </div>
-        </div>
-        <ol className="rs-steps" aria-live="polite">
-          {!run.steps.length && !result && (
-            <li className="rs-step active"><span className="rs-icon"><StepIcon status="active" /></span><span className="small">{t("restartDialog.preparing")}</span></li>
-          )}
-          {run.steps.map((s) => {
-            const detail = s.detail ?? (s.status === "skip" ? t("restartDialog.skipped") : null);
-            return (
-              <li key={s.id} className={`rs-step ${s.status}`}>
-                <span className="rs-icon"><StepIcon status={s.status} /></span>
-                <div className="grow minw0">
-                  <div className="small strong">{t(LABEL[s.id], vars)}</div>
-                  {detail && <div className="tiny muted rs-detail">{scrub(detail)}</div>}
-                </div>
-                {s.start !== null && s.status !== "skip" && <span className="tiny muted mono noshrink">{secs((s.end ?? now) - s.start)}s</span>}
-              </li>
-            );
-          })}
-        </ol>
-        {showMsg && <div className={`rs-result${result!.ok ? "" : " error"}`}>{scrub(result!.msg)}</div>}
-        <div className="modal-foot">
-          {!result && <button className="btn" onClick={onCancel}>{t(run.starting ? "restartDialog.cancelStart" : "restartDialog.cancelRestart")}</button>}
-          <span className="grow" />
-          <button ref={btnRef} className={`btn${result ? " primary" : ""}`} onClick={onClose}>{t(result ? "common.close" : "restartDialog.background")}</button>
+    <Modal label={title} className="rs" bgClassName="rs-bg" backdropClose={false} bare onClose={onClose} foot={foot}>
+      <div className="rs-head">
+        <AgentIcon id={run.agent} size={36} />
+        <div className="grow minw0">
+          <div className="confirm-title">{title}</div>
+          <div className="tiny muted" aria-live="off">{t(result ? "restartDialog.took" : "restartDialog.elapsed", { s: secs(total) })}</div>
         </div>
       </div>
-    </div>
+      <ol className="rs-steps" aria-live="polite">
+        {!run.steps.length && !result && (
+          <li className="rs-step active"><span className="rs-icon"><StepIcon status="active" /></span><span className="small">{t("restartDialog.preparing")}</span></li>
+        )}
+        {run.steps.map((s) => {
+          const detail = s.detail ?? (s.status === "skip" ? t("restartDialog.skipped") : null);
+          return (
+            <li key={s.id} className={`rs-step ${s.status}`}>
+              <span className="rs-icon"><StepIcon status={s.status} /></span>
+              <div className="grow minw0">
+                <div className="small strong">{t(LABEL[s.id], vars)}</div>
+                {detail && <div className="tiny muted rs-detail">{scrub(detail)}</div>}
+              </div>
+              {s.start !== null && s.status !== "skip" && <span className="tiny muted mono noshrink">{secs((s.end ?? now) - s.start)}s</span>}
+            </li>
+          );
+        })}
+      </ol>
+      {showMsg && <div className={`rs-result${result!.ok ? "" : " error"}`}>{scrub(result!.msg)}</div>}
+    </Modal>
   );
 }

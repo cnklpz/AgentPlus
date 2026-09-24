@@ -49,7 +49,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   const [kind, setKind] = useState<ApiKind>(group?.api ?? "responses");
   const [key, setKey] = useState("");
   const [models, setModels] = useState<string[]>(group?.lib?.models ?? []);
-  const [pool, addToPool] = useModelPool(() => group?.lib?.models ?? []);
+  const [pool, addToPool, resetPool] = useModelPool(() => group?.lib?.models ?? []);
   const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -63,12 +63,13 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   const [tpl, setTpl] = useState<Template | null>(null);
   const pickTpl = (tp: Template | null) => {
     setTpl(tp);
+    // Another template: the list starts over from the models ticked now.
+    resetPool(tp ? tp.models : models);
     if (!tp) return;
     setName(tp.name);
     setKind(tp.api);
     setBaseUrl(tp.endpoints[tp.api]!);
     setModels(tp.models);
-    addToPool(tp.models);
   };
   const setProto = (k: ApiKind) => {
     setKind(k);

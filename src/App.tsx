@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
 import {
-  CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, isEnabled, isVisible, keys, opCount, opsToWrite,
-  pendingTotal, setModelVisible, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders, withOp,
+  CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, importProvider, isEnabled, isVisible, keys, opCount,
+  opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  withOp,
 } from "./draft";
 import { AgentPage, type Tab } from "./components/AgentPage";
 import { Aside } from "./components/Aside";
@@ -384,7 +385,7 @@ export default function App() {
       setDraft(withOp(draft, keys.cur(), p.id === st.currentProvider ? null : { op: "set_current_provider", provider: p.id }));
     } else {
       const next = !isEnabled(p, draft);
-      setDraft(withOp(draft, keys.enabled(p.id), next === p.enabled ? null : { op: "set_provider_enabled", provider: p.id, enabled: next }));
+      setDraft(setProviderEnabled(draft, p, next));
     }
   };
 
@@ -534,7 +535,8 @@ export default function App() {
     setBusy(true);
     const done: string[] = [];
     try {
-      for (const a of allStates) {
+      // Every agent with a draft, also one that no longer reads as installed: the pending count includes it.
+      for (const a of [...agents, ...Object.values(projStates)]) {
         if (!ids.includes(a.id) || !opCount(drafts[a.id])) continue;
         await writeAgent(a, drafts[a.id], undefined, autoRestart)
           .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: errText(e) })); });
@@ -549,7 +551,7 @@ export default function App() {
       setBusy(false);
     }
   };
-  const applyAll = () => applyAgents(allStates.map((a) => a.id));
+  const applyAll = () => applyAgents([...agents.map((a) => a.id), ...(Object.keys(projStates) as AgentId[])]);
 
   /** Env switch with pending changes: ask which to apply, discard the rest, then switch. */
   const [envAsk, setEnvAsk] = useState<string | null>(null);
@@ -627,8 +629,9 @@ export default function App() {
     if (!st) return;
     let d = drafts[st.id] ?? {};
     for (const x of picks) {
-      d = withOp(d, keys.importProvider(x.fromAgent, x.provider), { op: "import_provider", fromAgent: x.fromAgent, provider: x.provider, api: x.api, name: x.name, label: x.label });
-      if (x.disableInherited) d = withOp(d, keys.enabled(x.provider), { op: "set_provider_enabled", provider: x.provider, enabled: false });
+      d = importProvider(d, { fromAgent: x.fromAgent, provider: x.provider, api: x.api, name: x.name, label: x.label });
+      // An inherited original that is already off needs no pending change.
+      if (x.disableInherited) d = setProviderEnabled(d, st.providers.find((p) => p.id === x.provider) ?? { id: x.provider, enabled: true }, false);
     }
     setDraftFor(st.id, d);
     setCopyOpen(false);
@@ -646,7 +649,7 @@ export default function App() {
   const hubRemove = async (u: Use) => {
     if (!u.p) return;
     if (!(await ask({ title: t("app.hubRemoveTitle", { agent: u.agent.name, name: u.p.name }), message: t("app.hubRemoveMsg"), danger: true, confirmText: t("common.remove") }))) return;
-    setDraftFor(u.agent.id, deleteProvider(drafts[u.agent.id] ?? {}, u.p.id));
+    setDraftFor(u.agent.id, removeProvider(drafts[u.agent.id] ?? {}, u.p));
   };
   const hubUndo = (u: Use) => {
     const k = u.importKey ?? (u.state === "new" ? u.p?.draftKey : u.p ? keys.deleteProvider(u.p.id) : undefined);
@@ -661,7 +664,8 @@ export default function App() {
     setDrafts((all) => {
       const next = { ...all };
       for (const u of uses) {
-        if (u.p) next[u.agent.id] = deleteProvider(next[u.agent.id] ?? {}, u.p.id);
+        // A pending new entry (id = its draft key) is dropped; the agent has nothing to delete yet.
+        if (u.p) next[u.agent.id] = removeProvider(next[u.agent.id] ?? {}, u.p);
       }
       return next;
     });
@@ -718,10 +722,10 @@ export default function App() {
       for (const a of v.addTo) {
         next[a] = route
           ? upsertProvider(next[a] ?? {}, gatewayEntry(route.localBase, a, apiFor(a, v.api), t("app.gatewayName", { name: v.name }), v.models), keys.gatewayProvider(route.id))
-          : withOp(next[a] ?? {}, keys.importProvider("library", entry.id), { op: "import_provider", fromAgent: "library", provider: entry.id, api: v.api, name: v.name });
+          : importProvider(next[a] ?? {}, { fromAgent: "library", provider: entry.id, api: v.api, name: v.name });
       }
       for (const { e, addTo } of alts) {
-        for (const a of addTo) next[a] = withOp(next[a] ?? {}, keys.importProvider("library", e.id), { op: "import_provider", fromAgent: "library", provider: e.id, api: e.api, name: v.name });
+        for (const a of addTo) next[a] = importProvider(next[a] ?? {}, { fromAgent: "library", provider: e.id, api: e.api, name: v.name });
       }
       return next;
     });

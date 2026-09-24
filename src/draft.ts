@@ -222,6 +222,24 @@ export function deleteProvider(d: Draft, pid: string): Draft {
   return withOp(d, keys.deleteProvider(pid), { op: "delete_provider", provider: pid });
 }
 
+/**
+ * Removes a provider card: a pending new one (not written yet, its id is a draft key) is just
+ * dropped from the draft; an existing one gets a pending delete.
+ */
+export function removeProvider(d: Draft, p: ViewProvider): Draft {
+  return p.isNew && p.draftKey ? withOp(d, p.draftKey, null) : deleteProvider(d, p.id);
+}
+
+/** A pending copy of provider `src.provider` from `src.fromAgent` (another agent, or "library"). */
+export function importProvider(d: Draft, src: { fromAgent: string; provider: string; api: ApiKind; name: string; label?: string }): Draft {
+  return withOp(d, keys.importProvider(src.fromAgent, src.provider), { op: "import_provider", ...src });
+}
+
+/** Turns a provider on / off; back to how it is applied = no pending change. */
+export function setProviderEnabled(d: Draft, p: Pick<Provider, "id" | "enabled">, enabled: boolean): Draft {
+  return withOp(d, keys.enabled(p.id), enabled === p.enabled ? null : { op: "set_provider_enabled", provider: p.id, enabled });
+}
+
 export function deleteModel(d: Draft, pid: string, mid: string): Draft {
   return withOp(d, keys.deleteModel(pid, mid), { op: "delete_model", provider: pid, model: mid });
 }
