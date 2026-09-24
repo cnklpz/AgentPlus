@@ -26,25 +26,27 @@ pub const WSL_MARKER: &str = ".pi/agent/settings.json";
 /// npm package names, new and old.
 const PACKAGES: [&str; 2] = ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"];
 
-/// `~/.pi/agent`, or `$PI_CODING_AGENT_DIR`, or the folder picked in AgentPlus.
+/// `$PI_CODING_AGENT_DIR` (Windows side only), else `~/.pi/agent`.
 pub fn default_dir() -> PathBuf {
-    if let Some(d) = super::dir_override(ID) {
-        return d;
-    }
     if let Some(d) = crate::env::agent_var("PI_CODING_AGENT_DIR") {
         return crate::env::resolve_path(&d);
     }
     home().join(".pi").join("agent")
 }
 
+/// The folder picked in AgentPlus, else the default.
+fn dir() -> PathBuf {
+    super::dir_override(ID).unwrap_or_else(default_dir)
+}
+
 fn models_path() -> PathBuf {
-    default_dir().join("models.json")
+    dir().join("models.json")
 }
 fn auth_path() -> PathBuf {
-    default_dir().join("auth.json")
+    dir().join("auth.json")
 }
 fn settings_path() -> PathBuf {
-    default_dir().join("settings.json")
+    dir().join("settings.json")
 }
 
 fn fmt() -> Fmt {
@@ -77,7 +79,7 @@ fn defaults() -> (Option<String>, Option<String>) {
 
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
-    let mut st = super::new_state(ID, NAME, inst, "multi", &default_dir(), vec![f.file(), display_path(&auth_path()), display_path(&settings_path())]);
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![f.file(), display_path(&auth_path()), display_path(&settings_path())]);
     st.notes.push(l("改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。", "Changes take effect in new pi sessions (running sessions can pick again with /model).").into());
     let root = store::load();
     let cfg = match load_models() {
@@ -190,7 +192,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if dirty.auth { targets.push(auth_path()) }
         if settings.is_some() { targets.push(settings_path()) }
         backup_dir = Some(backup(ID, &targets)?);
-        std::fs::create_dir_all(default_dir())?;
+        std::fs::create_dir_all(dir())?;
         if dirty.cfg {
             write_json(&models_path(), &cfg, meta)?;
             written.push(models_path());
