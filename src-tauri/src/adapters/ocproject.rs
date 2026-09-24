@@ -10,7 +10,7 @@
 
 use super::msg;
 use super::{Plan, Endpoint};
-use super::ocfmt::{cfg_key, Dirty, Fmt};
+use super::ocfmt::{cfg_key, is_plain_key, Dirty, Fmt};
 use super::ocsettings::{self, Scope};
 use super::opencode;
 use crate::model::*;
@@ -41,7 +41,7 @@ fn dir_of(agent: &str) -> Result<PathBuf> {
 
 /// The project file AgentPlus edits: an existing opencode.jsonc / opencode.json, else a new opencode.json.
 pub fn config_path(dir: &Path) -> PathBuf {
-    PROJECT_NAMES.iter().map(|n| dir.join(n)).find(|p| p.exists()).unwrap_or_else(|| dir.join("opencode.json"))
+    PROJECT_NAMES.iter().map(|n| dir.join(n)).find(|p| p.exists()).unwrap_or_else(|| dir.join(PROJECT_NAMES[1]))
 }
 
 /// Each project keeps its own AgentPlus store section (stashed models), named by its agent id.
@@ -60,7 +60,8 @@ fn other_files(dir: &Path, edited: &Path) -> Vec<PathBuf> {
     let mut out = vec![];
     let top = git_root(dir);
     for d in dir.ancestors() {
-        for f in PROJECT_NAMES {
+        // Listed .json first, then .jsonc.
+        for f in PROJECT_NAMES.iter().rev() {
             for p in [d.join(f), d.join(".opencode").join(f)] {
                 if p.exists() && p != edited {
                     out.push(p);
@@ -159,8 +160,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let inline: Vec<String> = cfg
         .get("provider")
         .and_then(|p| p.as_object())
-        // `{env:…}` / `{file:…}` references are not plain text.
-        .map(|o| o.iter().filter(|(_, d)| cfg_key(d).is_some_and(|k| !k.starts_with('{'))).map(|(id, _)| id.clone()).collect())
+        .map(|o| o.iter().filter(|(_, d)| cfg_key(d).is_some_and(is_plain_key)).map(|(id, _)| id.clone()).collect())
         .unwrap_or_default();
     if !inline.is_empty() && git_root(&dir).is_some() {
         st.notes.push(tr!("项目文件里有明文 apiKey（{}），提交到 git 前记得处理。", "The project file contains a plain-text apiKey ({}). Remember to deal with it before committing to git.", crate::i18n::join(&inline)));
@@ -182,9 +182,7 @@ pub fn endpoint(agent: &str, id: &str) -> Result<Endpoint> {
 
 pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     let dir = dir_of(agent)?;
-    if !dir.is_dir() {
-        return Err(anyhow!(tr!("找不到文件夹 {}", "Folder not found: {}", display_path(&dir))));
-    }
+    require_dir(&dir)?;
     // Checks below need the global ids: never write a project against an unknown global config.
     let gcfg = global_cfg()?;
     let mut f = fmt(agent, &dir);
@@ -336,6 +334,32 @@ mod tests {
         assert!(st.notes.iter().any(|n| n.starts_with("全局配置读取失败")), "{:?}", st.notes);
         let op: Op = serde_json::from_value(json!({"op": "upsert_provider", "provider": {"name": "Relay", "baseUrl": "https://r.example.com/v1", "api": "chat", "models": ["m1"]}})).unwrap();
         assert!(plan(&agent, &[op], true).is_err());
+    }
+
+    #[test]
+    fn notes_name_other_files_and_plain_keys() {
+        let key = |k: &str| format!(r#"{{ "options": {{ "baseURL": "https://r.example.com/v1", "apiKey": "{k}" }} }}"#);
+        let project = format!(r#"{{ "provider": {{ "a": {}, "b": {}, "c": {}, "d": {} }} }}"#, key("sk-plain"), key("{env:B_KEY}"), key(" {file:~/k}"), key("{literal}"));
+        let (h, agent) = setup("ocp-notes", "{}", Some(&project));
+        let dir = h.0.join("proj");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".opencode")).unwrap();
+        std::fs::write(dir.join(".opencode").join("opencode.jsonc"), "{}").unwrap();
+        std::fs::write(dir.join(".opencode").join("opencode.json"), "{}").unwrap();
+        let st = state(&agent).unwrap();
+        let others = crate::i18n::join(&[display_path(&dir.join(".opencode").join("opencode.json")), display_path(&dir.join(".opencode").join("opencode.jsonc"))]);
+        assert!(st.notes.iter().any(|n| n.starts_with(&format!("OpenCode 还会读取：{others}（"))), "{:?}", st.notes);
+        // Only keys that are not {env:}/{file:} references count as plain text.
+        assert!(st.notes.iter().any(|n| n.starts_with("项目文件里有明文 apiKey（a、d）")), "{:?}", st.notes);
+    }
+
+    #[test]
+    fn missing_project_folder_is_an_error() {
+        let (h, agent) = setup("ocp-missing", "{}", None);
+        std::fs::remove_dir_all(h.0.join("proj")).unwrap();
+        let op: Op = serde_json::from_value(json!({"op": "set_setting", "key": "share", "value": "disabled"})).unwrap();
+        let e = plan(&agent, &[op], true).err().unwrap().to_string();
+        assert!(e.starts_with("找不到文件夹："), "{e}");
     }
 
     #[test]

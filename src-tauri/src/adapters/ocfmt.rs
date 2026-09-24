@@ -101,6 +101,11 @@ fn key_ref(raw: &str) -> Option<(&str, &str)> {
     Some((c.get(1)?.as_str(), c.get(2)?.as_str()))
 }
 
+/// A config apiKey that is not an `{env:}` / `{file:}` reference.
+pub(super) fn is_plain_key(k: &str) -> bool {
+    key_ref(k).is_none()
+}
+
 fn npm_for(api: &str) -> &'static str {
     match api {
         "anthropic" => "@ai-sdk/anthropic",
@@ -519,7 +524,10 @@ impl Fmt {
                     }
                 }
                 // The auth.json entry stays (it may be a login OpenCode uses without a config entry).
-                let line = if Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some() {
+                let entry = auth.as_ref().and_then(|(a, _)| a.get(provider));
+                let line = if entry.and_then(|e| e.get("type")).and_then(|t| t.as_str()) == Some("oauth") {
+                    tr!("- provider.{provider}（含它的模型；auth.json 里的登录保留）", "- provider.{provider} (with its models; the sign-in in auth.json is kept)")
+                } else if Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some() {
                     tr!("- provider.{provider}（含它的模型；auth.json 里的密钥保留）", "- provider.{provider} (with its models; the API key in auth.json is kept)")
                 } else {
                     tr!("- provider.{provider}（含它的模型和密钥）", "- provider.{provider} (with its models and API key)")
@@ -697,17 +705,17 @@ mod tests {
     #[test]
     fn delete_says_where_the_key_was() {
         let h = TestHome::new("ocfmt-delete");
-        std::fs::write(h.0.join("auth.json"), r#"{"a":{"type":"api","key":"sk-a"}}"#).unwrap();
+        std::fs::write(h.0.join("auth.json"), r#"{"a":{"type":"api","key":"sk-a"},"c":{"type":"oauth"}}"#).unwrap();
         let prov = json!({ "options": { "baseURL": "https://r.example.com/v1" } });
-        let f = write_cfg(&h, json!({ "provider": { "a": prov, "b": prov } }));
+        let f = write_cfg(&h, json!({ "provider": { "a": prov, "b": prov, "c": prov } }));
         let (mut cfg, _, _) = f.load(true).unwrap();
         let mut auth = f.load_auth();
         let mut diff = Diff::default();
-        for id in ["a", "b"] {
+        for id in ["a", "b", "c"] {
             f.apply(&Op::DeleteProvider { provider: id.into() }, &mut cfg, &mut json!({}), &mut auth, &mut diff, &mut Dirty::default()).unwrap();
         }
         let lines: Vec<&str> = diff.groups.iter().flat_map(|g| g.lines.iter().map(|l| l.text.as_str())).collect();
-        assert_eq!(lines, ["- provider.a（含它的模型；auth.json 里的密钥保留）", "- provider.b（含它的模型和密钥）"]);
+        assert_eq!(lines, ["- provider.a（含它的模型；auth.json 里的密钥保留）", "- provider.b（含它的模型和密钥）", "- provider.c（含它的模型；auth.json 里的登录保留）"]);
     }
 
     #[test]
