@@ -294,7 +294,8 @@ fn set_context(pc: &mut Value, pid: &str, mid: &str, ctx: Option<u64>) -> Result
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut pc, pc_meta) = read_json_object(&provider_path())?;
-    let (mut st, st_meta) = read_json_object(&setting_path())?;
+    // setting.json is optional (state() shows defaults without it).
+    let (mut st, st_meta) = read_json_object_or_new(&setting_path())?;
     let (pf, sf) = (display_path(&provider_path()), display_path(&setting_path()));
     let mut diff = Diff::default();
     let (mut pc_dirty, mut st_dirty) = (false, false);
@@ -504,6 +505,21 @@ mod tests {
         // Clearing on "m" keeps its context window.
         set_fields(&mut pc, "p", "m", &off).unwrap();
         assert_eq!(rule_config(&pc, "p", "m").unwrap(), &json!({ "properties": { "contextWindow": 1000 } }));
+    }
+
+    #[test]
+    fn apply_without_setting_json() {
+        let _home = TestHome::new("zcode-nosetting");
+        std::fs::create_dir_all(dir()).unwrap();
+        let pc = json!({ "config": { "providerConfigRules": { "providerRules": [
+            { "providerId": "p", "providerName": "P", "enabled": true, "config": { "api": { "type": "openai-chat-completions", "baseUrl": "https://p/v1" }, "personalModelIds": ["a"], "modelOrder": ["a"] } }
+        ] } } });
+        std::fs::write(provider_path(), serde_json::to_string_pretty(&pc).unwrap()).unwrap();
+        // setting.json is optional: provider edits work without it, and a setting creates it.
+        plan(&[Op::UpsertModel { provider: "p".into(), model: ModelInput { id: "b".into(), ..Default::default() } }], false).unwrap();
+        assert!(!setting_path().exists());
+        plan(&[Op::SetSetting { key: "memoryEnabled".into(), value: json!(true) }], false).unwrap();
+        assert_eq!(read_json(&setting_path()).unwrap().0, json!({ "memoryEnabled": true }));
     }
 
     #[test]

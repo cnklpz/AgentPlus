@@ -52,7 +52,7 @@ fn fmt() -> Fmt {
 }
 
 fn load_models() -> Result<(Value, TextMeta, bool)> {
-    Fmt::load_jsonc(&models_path(), json!({ "providers": {} }))
+    read_jsonc_object_or(&models_path(), json!({ "providers": {} }))
 }
 
 pub fn detect() -> Install {
@@ -497,6 +497,15 @@ mod tests {
         let _g = setup("comments", Some("{\n  // my relay\n  \"providers\": {}\n}\n"));
         assert!(state(&Install::default()).readonly);
         assert!(plan(&[prov("X", "chat", None, &[])], true).is_err());
+    }
+
+    #[test]
+    fn non_object_models_json_is_refused() {
+        let _g = setup("array", Some("[]"));
+        let st = state(&Install::default());
+        assert!(st.readonly && st.notes.iter().any(|n| n.contains("models.json 顶层不是对象")), "{:?}", st.notes);
+        assert!(plan(&[prov("X", "chat", None, &["m"])], false).is_err());
+        assert_eq!(std::fs::read_to_string(default_dir().join("models.json")).unwrap(), "[]");
     }
 
     /// Read-only look at the real machine: `cargo test --lib dump_pi -- --ignored --nocapture`.

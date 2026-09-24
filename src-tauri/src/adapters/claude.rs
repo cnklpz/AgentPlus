@@ -48,10 +48,7 @@ fn settings_path() -> PathBuf {
 }
 
 fn load() -> Result<(Value, TextMeta)> {
-    if !settings_path().exists() {
-        return Ok((json!({}), TextMeta::NEW));
-    }
-    read_json_object(&settings_path())
+    read_json_object_or_new(&settings_path())
 }
 
 fn env_of(cfg: &Value) -> Map<String, Value> {

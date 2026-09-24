@@ -100,19 +100,11 @@ pub fn detect() -> Install {
 
 /// (settings, meta, has_comments). A missing or empty file reads as fresh v4 settings.
 fn load() -> Result<(Value, TextMeta, bool)> {
-    let p = settings_path();
-    if !p.exists() {
-        return Ok((json!({ "$version": 4 }), TextMeta::NEW, false));
-    }
-    let (text, meta) = read_text(&p)?;
+    let (text, meta) = read_text_or_new(&settings_path())?;
     if text.trim().is_empty() {
         return Ok((json!({ "$version": 4 }), meta, false));
     }
-    let (clean, had) = strip_jsonc(&text);
-    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("settings.json 解析失败：{e}", "Failed to parse settings.json: {e}")))?;
-    if !v.is_object() {
-        return Err(anyhow!(l("settings.json 顶层不是对象", "settings.json is not a JSON object at the top level")));
-    }
+    let (v, had) = parse_jsonc_object(&text, "settings.json")?;
     Ok((v, meta, had))
 }
 

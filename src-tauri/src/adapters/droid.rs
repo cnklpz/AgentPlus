@@ -184,17 +184,7 @@ fn parked_why(p: &Value) -> &str {
 
 /// (settings, meta, had_comments); a missing file reads as `{}`.
 fn load_settings() -> Result<(Value, TextMeta, bool)> {
-    let p = settings_path();
-    if !p.exists() {
-        return Ok((json!({}), TextMeta::NEW, false));
-    }
-    let (text, meta) = read_text(&p)?;
-    let (clean, had) = strip_jsonc(&text);
-    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("settings.json 解析失败：{e}", "Couldn't parse settings.json: {e}")))?;
-    if !v.is_object() {
-        return Err(anyhow!(l("settings.json 顶层不是对象", "settings.json: top level is not an object")));
-    }
-    Ok((v, meta, had))
+    read_jsonc_object_or(&settings_path(), json!({}))
 }
 
 fn custom_models(cfg: &Value) -> Vec<Value> {

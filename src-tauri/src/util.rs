@@ -364,6 +364,37 @@ pub fn read_json_object(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
     Ok((v, meta))
 }
 
+/// `read_json_object` for a file that may not exist yet: `{}` then.
+pub fn read_json_object_or_new(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
+    if !path.exists() {
+        return Ok((serde_json::json!({}), TextMeta::NEW));
+    }
+    read_json_object(path)
+}
+
+/// Parses a JSONC config that gets edited by key, so its top level must be an object.
+/// Returns (value, had_comments); `name` is how errors refer to the file.
+pub fn parse_jsonc_object(text: &str, name: &str) -> Result<(serde_json::Value, bool)> {
+    let (clean, had) = strip_jsonc(text);
+    let v: serde_json::Value = serde_json::from_str(&clean).map_err(|e| anyhow::anyhow!(tr!("{name} 解析失败：{e}", "Failed to parse {name}: {e}")))?;
+    if !v.is_object() {
+        anyhow::bail!("{}", tr!("{name} 顶层不是对象", "The top level of {name} is not an object"));
+    }
+    Ok((v, had))
+}
+
+/// A JSONC config that may not exist yet: `blank` when it is missing, else the parsed object
+/// (an empty file is an error, like any other unparsable one). Returns (value, meta, had_comments).
+pub fn read_jsonc_object_or(path: &Path, blank: serde_json::Value) -> Result<(serde_json::Value, TextMeta, bool)> {
+    if !path.exists() {
+        return Ok((blank, TextMeta::NEW, false));
+    }
+    let (text, meta) = read_text(path)?;
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| display_path(path));
+    let (v, had) = parse_jsonc_object(&text, &name)?;
+    Ok((v, meta, had))
+}
+
 /// The object at `path` inside `v`, creating missing (or null) levels. Anything else in the
 /// way is an error rather than being overwritten.
 pub fn obj_at<'a>(v: &'a mut serde_json::Value, path: &[&str]) -> Result<&'a mut serde_json::Map<String, serde_json::Value>> {
@@ -434,6 +465,26 @@ mod tests {
             fs::write(d.join(name), body).unwrap();
             assert_eq!(read_json_object(&d.join(name)).is_ok(), ok, "{name}");
         }
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn optional_config_files() {
+        let d = tmp("optional");
+        let missing = d.join("missing.json");
+        let (v, meta) = read_json_object_or_new(&missing).unwrap();
+        assert_eq!((v, meta.indent_width, meta.trailing_newline), (serde_json::json!({}), 2, true));
+        assert_eq!(read_jsonc_object_or(&missing, serde_json::json!({ "a": 1 })).unwrap().0, serde_json::json!({ "a": 1 }));
+        fs::write(d.join("c.json"), "{\n  // note\n  \"a\": [1,],\n}\n").unwrap();
+        let (v, _, had) = read_jsonc_object_or(&d.join("c.json"), serde_json::json!({})).unwrap();
+        assert_eq!((v, had), (serde_json::json!({ "a": [1] }), true));
+        for (name, body) in [("arr.json", "[1]"), ("bad.json", "{"), ("empty.json", "")] {
+            fs::write(d.join(name), body).unwrap();
+            let e = read_jsonc_object_or(&d.join(name), serde_json::json!({})).unwrap_err().to_string();
+            assert!(e.starts_with(name), "{e}");
+            assert!(read_json_object_or_new(&d.join(name)).is_err());
+        }
+        assert!(parse_jsonc_object("[]", "x.json").unwrap_err().to_string().contains("x.json 顶层不是对象"));
         let _ = fs::remove_dir_all(&d);
     }
 

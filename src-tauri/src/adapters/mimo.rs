@@ -140,7 +140,8 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, cfg_meta, had_comments) = f.load(false)?;
-    let (mut prefs, prefs_meta) = read_json_object(&prefs_path())?;
+    // preferences.json is optional (state() shows defaults without it).
+    let (mut prefs, prefs_meta) = read_json_object_or_new(&prefs_path())?;
     let mut root = store::load();
     let pf = display_path(&prefs_path());
     let mut diff = Diff::default();

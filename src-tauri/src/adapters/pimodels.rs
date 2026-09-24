@@ -16,7 +16,7 @@ use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Flavor {
@@ -176,17 +176,6 @@ impl Fmt {
             (false, Some(c)) => c,
             (false, None) => l("未填写", "Not set").into(),
         }
-    }
-
-    /// Returns (config, meta, had_comments) of a JSON / JSONC file; missing = empty object.
-    pub fn load_jsonc(path: &Path, blank: Value) -> Result<(Value, TextMeta, bool)> {
-        if !path.exists() {
-            return Ok((blank, TextMeta::NEW, false));
-        }
-        let (text, meta) = read_text(path)?;
-        let (clean, had) = strip_jsonc(&text);
-        let v = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", display_path(path))))?;
-        Ok((v, meta, had))
     }
 
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
