@@ -421,7 +421,7 @@ impl Work {
                             self.check_free(&g, m)?;
                         }
                         let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        self.diff.push(&file, tr!("+ 「{vendor}」{} 个模型（{}{}）", "+ \"{vendor}\" {} model(s) ({}{})", models.len(), url_of(&base), key_part), true);
+                        self.diff.push(&file, trn!(models.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), key_part), true);
                         for m in &models {
                             if self.owner_of(m).is_none() {
                                 self.entries.push(Self::new_entry(&key, m, None, None));
@@ -473,7 +473,7 @@ impl Work {
                 let n = self.parked.len();
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
                 let label = if gone.is_empty() && n != self.parked.len() { STORE_LABEL.to_string() } else { file.clone() };
-                self.diff.push(&label, tr!("- 「{}」（{} 个模型，含地址和密钥）", "- \"{}\" ({} model(s), with base URL and API key)", g.name, gone.len().max(n - self.parked.len())), false);
+                self.diff.push(&label, trn!(gone.len().max(n - self.parked.len()), "- 「{}」（{n} 个模型，含地址和密钥）", "- \"{}\" ({n} model, with base URL and API key)", "- \"{}\" ({n} models, with base URL and API key)", g.name), false);
                 self.groups.retain(|x| x.id != g.id);
             }
             Op::SetProviderEnabled { provider, enabled } => {
@@ -482,7 +482,7 @@ impl Work {
                     let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false));
                     self.parked = keep;
                     if !back.is_empty() {
-                        self.diff.push(&file, tr!("+ 「{}」{} 个模型（从 AgentPlus 恢复）", "+ \"{}\" {} model(s) (restored from AgentPlus)", g.name, back.len()), true);
+                        self.diff.push(&file, trn!(back.len(), "+ 「{}」{n} 个模型（从 AgentPlus 恢复）", "+ \"{}\" {n} model (restored from AgentPlus)", "+ \"{}\" {n} models (restored from AgentPlus)", g.name), true);
                     }
                     for p in back {
                         let Some(e) = p.get("entry").cloned() else { continue };
@@ -499,7 +499,7 @@ impl Work {
                     let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key);
                     self.entries = keep;
                     if !out.is_empty() {
-                        self.diff.push(&file, tr!("- 「{}」{} 个模型（暂存在 AgentPlus，可恢复）", "- \"{}\" {} model(s) (parked in AgentPlus, restorable)", g.name, out.len()), false);
+                        self.diff.push(&file, trn!(out.len(), "- 「{}」{n} 个模型（暂存在 AgentPlus，可恢复）", "- \"{}\" {n} model (parked in AgentPlus, restorable)", "- \"{}\" {n} models (parked in AgentPlus, restorable)", g.name), false);
                     }
                     for e in out {
                         let mid = str_field(&e, "id");

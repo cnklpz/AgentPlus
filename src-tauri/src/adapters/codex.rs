@@ -448,7 +448,7 @@ fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff
     if shown + hidden + added.len() == 0 {
         return Ok(false);
     }
-    diff.push(cat_file, tr!("模型列表换成「{who}」的 {} 个模型（显示 {shown} 个，隐藏 {hidden} 个）", "Model list replaced with \"{who}\"'s {} model(s) ({shown} shown, {hidden} hidden)", list.len()), true);
+    diff.push(cat_file, trn!(list.len(), "模型列表换成「{who}」的 {n} 个模型（显示 {shown} 个，隐藏 {hidden} 个）", "Model list replaced with \"{who}\"'s {n} model ({shown} shown, {hidden} hidden)", "Model list replaced with \"{who}\"'s {n} models ({shown} shown, {hidden} hidden)"), true);
     for a in added {
         diff.push(cat_file, a, true);
     }

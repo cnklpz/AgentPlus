@@ -181,7 +181,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     st.notes.push(l("项目配置和全局配置合并生效，同名的键以项目为准。API Key 统一存进 ~/.local/share/opencode/auth.json，不写进项目文件。", "The project config is merged with the global config; for keys in both, the project wins. API keys are stored in ~/.local/share/opencode/auth.json, never in the project file.").into());
     let others = other_files(&dir, &f.path);
     if !others.is_empty() {
-        st.notes.push(tr!("OpenCode 还会读取：{}（AgentPlus 只编辑 {}）", "OpenCode also reads: {} (AgentPlus only edits {})", others.iter().map(|p| display_path(p)).collect::<Vec<_>>().join(l("、", ", ")), f.file()));
+        st.notes.push(tr!("OpenCode 还会读取：{}（AgentPlus 只编辑 {}）", "OpenCode also reads: {} (AgentPlus only edits {})", crate::i18n::join(&others.iter().map(|p| display_path(p)).collect::<Vec<_>>()), f.file()));
     }
     let inline: Vec<String> = cfg
         .get("provider")
@@ -189,7 +189,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
         .map(|o| o.iter().filter(|(_, d)| d.pointer("/options/apiKey").and_then(|k| k.as_str()).map(|k| !k.is_empty() && !k.starts_with('{')).unwrap_or(false)).map(|(id, _)| id.clone()).collect())
         .unwrap_or_default();
     if !inline.is_empty() && git_root(&dir).is_some() {
-        st.notes.push(tr!("项目文件里有明文 apiKey（{}），提交到 git 前记得处理。", "The project file contains a plain-text apiKey ({}). Remember to deal with it before committing to git.", inline.join(l("、", ", "))));
+        st.notes.push(tr!("项目文件里有明文 apiKey（{}），提交到 git 前记得处理。", "The project file contains a plain-text apiKey ({}). Remember to deal with it before committing to git.", crate::i18n::join(&inline)));
     }
     Ok(st)
 }

@@ -218,8 +218,8 @@ pub fn state(inst: &Install) -> AgentState {
         Kv::text(l("启用供应商", "Enabled providers"), tr!("{} 个", "{}", on.len())),
         Kv::text(l("停用供应商", "Disabled providers"), lbl::names_or_none(&off)),
         Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
-        Kv::text(l("记忆", "Memory"), if get_b("memoryEnabled") { l("开", "On") } else { l("关", "Off") }),
-        Kv::text(l("最小化到托盘", "Minimize to tray"), if get_b("closeToTrayOnWindows") { l("开", "On") } else { l("关", "Off") }),
+        Kv::text(l("记忆", "Memory"), crate::i18n::on_off(get_b("memoryEnabled"))),
+        Kv::text(l("最小化到托盘", "Minimize to tray"), crate::i18n::on_off(get_b("closeToTrayOnWindows"))),
     ];
     st
 }
@@ -326,7 +326,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if let Some(order) = pc.pointer_mut("/config/providerOrder").and_then(|x| x.as_array_mut()) {
                             order.push(json!(pid));
                         }
-                        diff.push(&pf, tr!("+ 供应商「{}」{} · {}（{} 个模型）", "+ Provider \"{}\" {} · {} ({} models)", p.name.trim(), p.base_url.trim(), api_label(api_short(api_type(&p.api))), models.len()), true);
+                        diff.push(&pf, trn!(models.len(), "+ 供应商「{}」{} · {}（{n} 个模型）", "+ Provider \"{}\" {} · {} ({n} model)", "+ Provider \"{}\" {} · {} ({n} models)", p.name.trim(), p.base_url.trim(), api_label(api_short(api_type(&p.api)))), true);
                         if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
                             diff.push(&pf, tr!("「{}」.apiKey = {}", "\"{}\".apiKey = {}", p.name.trim(), mask_key(k.trim())), true);
                         }

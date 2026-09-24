@@ -127,7 +127,7 @@ pub fn state(inst: &Install) -> AgentState {
         Kv::mono(lbl::default_model(), prefs.get("model").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
         Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
         Kv::mono(l("技能兼容", "Skill compatibility"), if skills.is_empty() { l("无", "None").into() } else { skills.join(" ") }),
-        Kv::text(l("托盘图标", "Tray icon"), if get_b("trayEnabled") { l("开", "On") } else { l("关", "Off") }),
+        Kv::text(l("托盘图标", "Tray icon"), crate::i18n::on_off(get_b("trayEnabled"))),
     ];
     st
 }

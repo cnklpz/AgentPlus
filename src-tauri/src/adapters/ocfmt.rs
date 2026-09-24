@@ -295,11 +295,7 @@ impl Fmt {
                         }));
                         diff.push(
                             &ef,
-                            if crate::i18n::is_en() && n == 1 {
-                                format!("+ provider.{id} ({} · {label} · 1 model)", p.base_url.trim())
-                            } else {
-                                tr!("+ provider.{id}（{} · {label} · {n} 个模型）", "+ provider.{id} ({} · {label} · {n} models)", p.base_url.trim())
-                            },
+                            trn!(n, "+ provider.{id}（{} · {label} · {n} 个模型）", "+ provider.{id} ({} · {label} · {n} model)", "+ provider.{id} ({} · {label} · {n} models)", p.base_url.trim()),
                             true,
                         );
                         dirty.cfg = true;

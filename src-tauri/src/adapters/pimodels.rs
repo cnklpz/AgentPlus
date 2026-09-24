@@ -424,7 +424,7 @@ impl Fmt {
                         def.insert("api".into(), json!(raw));
                         def.insert("models".into(), Value::Array(models));
                         providers.insert(id.clone(), Value::Object(def));
-                        diff.push(&ef, tr!("+ {pre}.{id}（{base_url} · {raw} · {} 个模型）", "+ {pre}.{id} ({base_url} · {raw} · {} models)", ids.len()), true);
+                        diff.push(&ef, trn!(ids.len(), "+ {pre}.{id}（{base_url} · {raw} · {n} 个模型）", "+ {pre}.{id} ({base_url} · {raw} · {n} model)", "+ {pre}.{id} ({base_url} · {raw} · {n} models)"), true);
                         dirty.cfg = true;
                         if self.flavor == Flavor::OpenClaw && name != id {
                             store::section(root, agent, "names").insert(id.clone(), json!(name));
