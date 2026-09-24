@@ -4,7 +4,7 @@
 //! is over one request is let through as a probe; success closes the breaker, another
 //! failure pauses it again for twice as long (up to ten minutes).
 
-use super::lock;
+use super::{clip, convert, lock};
 use crate::i18n::l;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -270,24 +270,12 @@ pub fn describe(status: u16, body: &str) -> String {
     if msg.is_empty() { format!("HTTP {status}{label}") } else { tr!("HTTP {status}{label}：{msg}", "HTTP {status}{label}: {msg}") }
 }
 
-/// The message out of an error body (JSON `error.message`, `message`, …), shortened.
+/// The message out of an error body (see `convert::error_message`), on one line and
+/// shortened. Its own output comes back unchanged.
 pub fn brief(body: &str) -> String {
     let body = body.trim();
-    let msg = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|v| {
-            [v.pointer("/error/message"), v.get("message"), v.get("error"), v.get("detail")]
-                .into_iter()
-                .flatten()
-                .find_map(|m| m.as_str().map(String::from))
-        })
-        .unwrap_or_else(|| body.to_string());
-    let msg = msg.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut out: String = msg.chars().take(160).collect();
-    if msg.chars().count() > 160 {
-        out.push('…');
-    }
-    out
+    let msg = serde_json::from_str::<Value>(body).ok().and_then(|v| convert::error_message(&v)).unwrap_or_else(|| body.to_string());
+    clip(&msg.split_whitespace().collect::<Vec<_>>().join(" "), 160)
 }
 
 #[cfg(test)]
@@ -386,6 +374,13 @@ mod tests {
         assert_eq!(describe(429, "rate limited"), "HTTP 429 请求过多（被限流）：rate limited");
         assert_eq!(describe(500, ""), "HTTP 500 上游服务出错");
         assert_eq!(brief(r#"{"message":"quota\n exceeded"}"#), "quota exceeded");
+        // The message of a long JSON body, never a fragment of the JSON itself.
+        let long = format!(r#"{{"error":{{"message":"{}","type":"x"}}}}"#, "too long ".repeat(50));
+        let b = brief(&long);
+        assert!(b.starts_with("too long") && b.ends_with('…') && b.chars().count() == 161, "{b}");
+        assert_eq!(brief(&b), b);
+        assert_eq!(describe(402, &b), format!("HTTP 402 余额不足：{b}"));
+        assert_eq!(brief(r#"{"error":{"message":""},"detail":"d"}"#), "d");
     }
 
     /// Missing config fields take the defaults.

@@ -20,7 +20,8 @@
 
 use super::breaker::{self, Outcome};
 use super::convert::{self, DownstreamStream, Proto, UpstreamStream};
-use super::keys;
+use super::{clip, keys, lock};
+use crate::i18n::l;
 use crate::{library, store};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -143,7 +144,7 @@ fn encode(c: &Config, bad: Vec<Value>) -> Result<Value> {
 fn update_config<T>(f: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
     store::update(|s| {
         if s.get("gateway").is_some_and(|g| !g.is_object() && !g.is_null()) {
-            return Err(anyhow!(crate::i18n::l("store.json 里的 gateway 设置无法读取，没有保存", "The gateway section of store.json can't be read; nothing was saved")));
+            return Err(anyhow!(l("store.json 里的 gateway 设置无法读取，没有保存", "The gateway section of store.json can't be read; nothing was saved")));
         }
         let (mut c, bad) = decode(s);
         let out = f(&mut c)?;
@@ -154,7 +155,7 @@ fn update_config<T>(f: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
 
 // ---------------------------------------------------------------- runtime state
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LogEntry {
     pub at: String,
@@ -179,7 +180,7 @@ pub struct LogEntry {
     pub agent: Option<String>,
 }
 
-/// One agent's share of a minute.
+/// One agent's share of a minute (or the whole minute's traffic).
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentUse {
@@ -189,18 +190,27 @@ pub struct AgentUse {
     pub output_tokens: u64,
 }
 
+impl AgentUse {
+    /// Counts one request with the (input, output) tokens it used.
+    fn add(&mut self, failed: bool, (input, output): (u64, u64)) {
+        self.requests += 1;
+        self.failures += u32::from(failed);
+        self.input_tokens = self.input_tokens.saturating_add(input);
+        self.output_tokens = self.output_tokens.saturating_add(output);
+    }
+}
+
 /// One minute of traffic, for the charts.
 #[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Minute {
     /// Unix seconds at the start of the minute.
     pub t: i64,
-    pub requests: u32,
-    pub failures: u32,
+    /// All requests of the minute: `requests`, `failures`, `inputTokens`, `outputTokens`.
+    #[serde(flatten)]
+    pub total: AgentUse,
     pub ms_total: u64,
     pub ms_max: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
     /// Most requests in flight at once during the minute.
     pub peak_active: u32,
     /// Requests by calling agent.
@@ -217,7 +227,7 @@ struct Runtime {
 static RUNTIME: Mutex<Option<Runtime>> = Mutex::new(None);
 /// Serializes start / stop / port changes (UI commands and the store watcher).
 static CONTROL: Mutex<()> = Mutex::new(());
-static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+static LAST_ERROR: Mutex<Option<BindError>> = Mutex::new(None);
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
 static FAILURES: AtomicU64 = AtomicU64::new(0);
 static ACTIVE: AtomicU64 = AtomicU64::new(0);
@@ -229,7 +239,7 @@ const SERIES_MINUTES: i64 = 60;
 fn with_minute(f: impl FnOnce(&mut Minute)) {
     let now = chrono::Local::now().timestamp();
     let t = now - now.rem_euclid(60);
-    let mut q = SERIES.lock().unwrap();
+    let mut q = lock(&SERIES);
     if q.back().map(|m| m.t) != Some(t) {
         q.push_back(Minute { t, ..Default::default() });
     }
@@ -240,11 +250,11 @@ fn with_minute(f: impl FnOnce(&mut Minute)) {
 }
 
 fn push_log(e: LogEntry) {
-    let mut l = LOG.lock().unwrap();
-    if l.len() >= 200 {
-        l.pop_back();
+    let mut log = lock(&LOG);
+    if log.len() >= 200 {
+        log.pop_back();
     }
-    l.push_front(e);
+    log.push_front(e);
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -291,7 +301,7 @@ pub struct Status {
 }
 
 pub fn running_port() -> Option<u16> {
-    RUNTIME.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|r| r.port)
+    lock(&RUNTIME).as_ref().map(|r| r.port)
 }
 
 pub fn status() -> Status {
@@ -304,7 +314,7 @@ pub fn status() -> Status {
         enabled: c.enabled,
         running: running_port.is_some(),
         port,
-        error: LAST_ERROR.lock().unwrap().clone(),
+        error: lock(&LAST_ERROR).as_ref().map(BindError::message),
         requests: REQUESTS.load(Ordering::Relaxed),
         failures: FAILURES.load(Ordering::Relaxed),
         active: ACTIVE.load(Ordering::Relaxed),
@@ -324,8 +334,8 @@ pub fn status() -> Status {
                 }
             })
             .collect(),
-        log: LOG.lock().unwrap().iter().take(60).cloned().collect(),
-        series: SERIES.lock().unwrap().iter().cloned().collect(),
+        log: lock(&LOG).iter().take(60).cloned().collect(),
+        series: lock(&SERIES).iter().cloned().collect(),
         now: chrono::Local::now().timestamp(),
         unified_base: format!("http://127.0.0.1:{port}/v1"),
         breaker: c.breaker.clone(),
@@ -338,31 +348,39 @@ pub fn status() -> Status {
 // ---------------------------------------------------------------- start / stop
 
 pub fn set_enabled(enabled: bool, port: Option<u16>) -> Result<()> {
-    let _g = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = lock(&CONTROL);
     if port.is_some_and(|p| p < 1024) {
-        return Err(anyhow!(tr!("端口需要在 1024–65535 之间", "The port must be between 1024 and 65535")));
+        return Err(anyhow!(l("端口需要在 1024–65535 之间", "The port must be between 1024 and 65535")));
     }
     let port = port.unwrap_or_else(|| load_config().port);
     if enabled {
-        if running_port() != Some(port) {
-            // Open the new port first: when it is taken, the gateway stays where it was
-            // and the saved config is left alone.
-            let l = bind(port)?;
-            stop();
-            // A fresh start forgets paused forwards.
-            breaker::reset(None);
-            run(l, port)?;
-        }
+        run_on(port)?;
     } else {
         stop();
         breaker::reset(None);
-        *LAST_ERROR.lock().unwrap() = None;
+        *lock(&LAST_ERROR) = None;
     }
     update_config(|c| {
         move_port(c, port);
         c.enabled = enabled;
         Ok(())
     })
+}
+
+/// Runs the gateway on `port`, moving it there when it runs elsewhere.
+fn run_on(port: u16) -> Result<()> {
+    if running_port() == Some(port) {
+        // Already there: an earlier failure to move elsewhere is no longer news.
+        *lock(&LAST_ERROR) = None;
+        return Ok(());
+    }
+    // Open the new port first: when it is taken, the gateway stays where it was
+    // and the saved config is left alone.
+    let listener = bind(port)?;
+    stop();
+    // A fresh start forgets paused forwards.
+    breaker::reset(None);
+    run(listener, port)
 }
 
 /// Sets the port, remembering the one it replaces.
@@ -402,7 +420,7 @@ pub fn autostart() {
 
 /// Brings the running gateway in line with the saved switch and port.
 fn reconcile() {
-    let _g = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+    let _g = lock(&CONTROL);
     let c = load_config();
     let running = running_port();
     if !c.enabled {
@@ -412,12 +430,13 @@ fn reconcile() {
         return;
     }
     if running == Some(c.port) {
+        *lock(&LAST_ERROR) = None;
         return;
     }
     // A failed bind is reported through LAST_ERROR and tried again on the next change.
-    let Ok(l) = bind(c.port) else { return };
+    let Ok(listener) = bind(c.port) else { return };
     stop();
-    if run(l, c.port).is_ok() {
+    if run(listener, c.port).is_ok() {
         if let Some(old) = running {
             let _ = update_config(|c| {
                 remember_port(c, old);
@@ -427,22 +446,31 @@ fn reconcile() {
     }
 }
 
-fn bind(port: u16) -> Result<TcpListener> {
-    match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => {
-            *LAST_ERROR.lock().unwrap() = None;
-            Ok(l)
-        }
-        Err(e) => {
-            let msg = if e.kind() == std::io::ErrorKind::AddrInUse {
-                tr!("端口 {port} 已被占用", "Port {port} is already in use")
-            } else {
-                tr!("监听 127.0.0.1:{port} 失败：{e}", "Could not listen on 127.0.0.1:{port}: {e}")
-            };
-            *LAST_ERROR.lock().unwrap() = Some(msg.clone());
-            Err(anyhow!(msg))
+/// Why the gateway couldn't open a port; put in words (in the current language) when shown.
+#[derive(Clone, Debug)]
+enum BindError {
+    InUse(u16),
+    Other(u16, String),
+}
+
+impl BindError {
+    fn message(&self) -> String {
+        match self {
+            BindError::InUse(port) => tr!("端口 {port} 已被占用", "Port {port} is already in use"),
+            BindError::Other(port, e) => tr!("监听 127.0.0.1:{port} 失败：{e}", "Could not listen on 127.0.0.1:{port}: {e}"),
         }
     }
+}
+
+fn bind(port: u16) -> Result<TcpListener> {
+    let r = TcpListener::bind(("127.0.0.1", port));
+    let err = r.as_ref().err().map(|e| match e.kind() {
+        std::io::ErrorKind::AddrInUse => BindError::InUse(port),
+        _ => BindError::Other(port, e.to_string()),
+    });
+    let msg = err.as_ref().map(BindError::message);
+    *lock(&LAST_ERROR) = err;
+    r.map_err(|_| anyhow!(msg.unwrap_or_default()))
 }
 
 fn run(listener: TcpListener, port: u16) -> Result<()> {
@@ -464,7 +492,7 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
             };
             let Some(slot) = ConnSlot::take() else {
                 let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
-                let msg = crate::i18n::l("网关同时处理的连接太多，请稍后再试", "Too many connections to the gateway; try again shortly");
+                let msg = l("网关同时处理的连接太多，请稍后再试", "Too many connections to the gateway; try again shortly");
                 write_json(&mut s, 503, &json!({ "error": { "message": msg, "type": "overloaded" } }));
                 continue;
             };
@@ -480,7 +508,7 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
         drop(listener);
         drop(done_tx);
     })?;
-    *RUNTIME.lock().unwrap() = Some(Runtime { port, stop, done });
+    *lock(&RUNTIME) = Some(Runtime { port, stop, done });
     Ok(())
 }
 
@@ -508,7 +536,7 @@ impl Drop for ConnSlot {
 /// Stops accepting and waits (briefly) until the listener is closed, so the same port
 /// can be opened again right away. Requests already being served run to completion.
 fn stop() {
-    let r = RUNTIME.lock().unwrap().take();
+    let r = lock(&RUNTIME).take();
     if let Some(r) = r {
         r.stop.store(true, Ordering::SeqCst);
         // Wake the accept loop so it sees the flag.
@@ -522,7 +550,7 @@ fn stop() {
 pub fn save_route(mut r: Route, old_id: Option<String>) -> Result<()> {
     r.id = crate::model::slug(r.id.trim());
     if r.id.is_empty() || r.id == "v1" {
-        return Err(anyhow!(crate::i18n::l("路由名只能用字母、数字和连字符", "Route names may only use letters, digits and hyphens")));
+        return Err(anyhow!(l("路由名只能用字母、数字和连字符", "Route names may only use letters, digits and hyphens")));
     }
     if Proto::from_api(&r.upstream_api).is_none() {
         return Err(anyhow!(tr!("未知协议 {}", "Unknown protocol {}", r.upstream_api)));
@@ -637,7 +665,7 @@ fn bad(status: u16, msg: &str) -> anyhow::Error {
 }
 
 fn too_large() -> anyhow::Error {
-    bad(413, crate::i18n::l("请求体太大", "Request body too large"))
+    bad(413, l("请求体太大", "Request body too large"))
 }
 
 /// Reads from the client, giving up once the whole request has taken longer than `until`.
@@ -649,7 +677,7 @@ struct Deadline<'a> {
 impl Read for Deadline<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if Instant::now() > self.until {
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, crate::i18n::l("读取请求超时", "Timed out reading the request")));
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, l("读取请求超时", "Timed out reading the request")));
         }
         (&mut &*self.s).read(buf)
     }
@@ -660,7 +688,7 @@ fn read_line(r: &mut impl BufRead) -> Result<String> {
     let mut line = String::new();
     r.take(MAX_LINE as u64 + 1).read_line(&mut line)?;
     if line.len() > MAX_LINE {
-        return Err(bad(431, crate::i18n::l("请求行或请求头太长", "Request line or header too long")));
+        return Err(bad(431, l("请求行或请求头太长", "Request line or header too long")));
     }
     Ok(line)
 }
@@ -681,8 +709,8 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
     let mut r = BufReader::new(Deadline { s: stream, until: Instant::now() + Duration::from_secs(120) });
     let line = read_line(&mut r)?;
     let mut parts = line.split_whitespace();
-    let method = parts.next().ok_or_else(|| anyhow!(crate::i18n::l("空请求", "Empty request")))?.to_string();
-    let path = parts.next().ok_or_else(|| anyhow!(crate::i18n::l("缺少路径", "Missing path")))?.to_string();
+    let method = parts.next().ok_or_else(|| anyhow!(l("空请求", "Empty request")))?.to_string();
+    let path = parts.next().ok_or_else(|| anyhow!(l("缺少路径", "Missing path")))?.to_string();
     let mut headers = vec![];
     loop {
         let h = read_line(&mut r)?;
@@ -694,7 +722,7 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
             break;
         }
         if headers.len() >= MAX_HEADERS {
-            return Err(bad(431, crate::i18n::l("请求头太多", "Too many request headers")));
+            return Err(bad(431, l("请求头太多", "Too many request headers")));
         }
         if let Some((k, v)) = h.split_once(':') {
             headers.push((k.trim().to_string(), v.trim().to_string()));
@@ -705,7 +733,7 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
     if find("transfer-encoding").map(|v| v.to_ascii_lowercase().contains("chunked")).unwrap_or(false) {
         loop {
             let size = read_line(&mut r)?;
-            let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).map_err(|_| anyhow!(crate::i18n::l("分块长度无效", "Invalid chunk size")))?;
+            let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).map_err(|_| anyhow!(l("分块长度无效", "Invalid chunk size")))?;
             if n == 0 {
                 let _ = read_line(&mut r);
                 break;
@@ -726,24 +754,9 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
     Ok(Request { method, path, headers, body })
 }
 
+/// Reason phrase for a status line (any status an upstream may answer with).
 fn reason(status: u16) -> &'static str {
-    match status {
-        200 => "OK",
-        204 => "No Content",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        405 => "Method Not Allowed",
-        413 => "Payload Too Large",
-        429 => "Too Many Requests",
-        431 => "Request Header Fields Too Large",
-        500 => "Internal Server Error",
-        502 => "Bad Gateway",
-        503 => "Service Unavailable",
-        504 => "Gateway Timeout",
-        _ => "Status",
-    }
+    reqwest::StatusCode::from_u16(status).ok().and_then(|c| c.canonical_reason()).unwrap_or("Status")
 }
 
 thread_local! {
@@ -808,7 +821,7 @@ fn inbound_key(req: &Request) -> Option<&str> {
 /// Agent the request comes from (per the store snapshot `root`), or why it is refused.
 fn authenticate(root: &Value, req: &Request) -> std::result::Result<String, String> {
     let Some(key) = inbound_key(req) else {
-        return Err(crate::i18n::l(
+        return Err(l(
             "缺少网关密钥：在 AgentPlus 里把这个供应商重新写入 Agent，或在请求头带上 Authorization: Bearer <网关密钥>",
             "Missing gateway key: write this provider to the agent again from AgentPlus, or send Authorization: Bearer <gateway key>",
         )
@@ -818,7 +831,7 @@ fn authenticate(root: &Value, req: &Request) -> std::result::Result<String, Stri
         return Ok("agentplus".into());
     }
     keys::caller_in(root, key).ok_or_else(|| {
-        crate::i18n::l(
+        l(
             "网关密钥不对：在 AgentPlus 里把这个供应商重新写入 Agent（每个 Agent 有自己的网关密钥）",
             "Wrong gateway key: write this provider to the agent again from AgentPlus (each agent has its own gateway key)",
         )
@@ -826,14 +839,13 @@ fn authenticate(root: &Value, req: &Request) -> std::result::Result<String, Stri
     })
 }
 
+/// Response head; `framing` holds the length or transfer-encoding header lines.
+fn head(status: u16, content_type: &str, framing: &str) -> String {
+    format!("HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\n{framing}{}Connection: close\r\n\r\n", reason(status), cors())
+}
+
 fn write_full(s: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
-    let head = format!(
-        "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n",
-        reason(status),
-        body.len(),
-        cors()
-    );
-    let _ = s.write_all(head.as_bytes());
+    let _ = s.write_all(head(status, content_type, &format!("Content-Length: {}\r\n", body.len())).as_bytes());
     let _ = s.write_all(body);
     let _ = s.flush();
 }
@@ -842,18 +854,16 @@ fn write_json(s: &mut TcpStream, status: u16, v: &Value) {
     write_full(s, status, "application/json", v.to_string().as_bytes());
 }
 
-/// Chunked streaming response.
+/// Chunked streaming response. A failed write means the client went away: that ends the
+/// response, but it is no failure of the request (the answer was on its way).
 struct Chunked<'a>(&'a mut TcpStream);
 
-impl Chunked<'_> {
-    fn start(s: &mut TcpStream, status: u16, content_type: &str) -> std::io::Result<()> {
-        let head = format!(
-            "HTTP/1.1 {status} {}\r\nContent-Type: {content_type}\r\nCache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n{}Connection: close\r\n\r\n",
-            reason(status),
-            cors()
-        );
-        s.write_all(head.as_bytes())?;
-        s.flush()
+impl<'a> Chunked<'a> {
+    /// Sends the head; Err when the client is already gone.
+    fn start(s: &'a mut TcpStream, status: u16, content_type: &str) -> std::io::Result<Chunked<'a>> {
+        s.write_all(head(status, content_type, "Cache-Control: no-cache\r\nTransfer-Encoding: chunked\r\n").as_bytes())?;
+        s.flush()?;
+        Ok(Chunked(s))
     }
     fn send(&mut self, data: &[u8]) -> std::io::Result<()> {
         if data.is_empty() {
@@ -863,6 +873,10 @@ impl Chunked<'_> {
         self.0.write_all(data)?;
         self.0.write_all(b"\r\n")?;
         self.0.flush()
+    }
+    /// Sends the pieces in order, stopping at the first that fails; false when the client is gone.
+    fn send_all<T: AsRef<[u8]>>(&mut self, pieces: impl IntoIterator<Item = T>) -> bool {
+        pieces.into_iter().all(|p| self.send(p.as_ref()).is_ok())
     }
     fn end(&mut self) {
         let _ = self.0.write_all(b"0\r\n\r\n");
@@ -911,12 +925,27 @@ fn inbound_of(rest: &str) -> Option<Proto> {
     }
 }
 
-fn api_name(p: Proto) -> &'static str {
-    match p {
-        Proto::Chat => "chat",
-        Proto::Responses => "responses",
-        Proto::Anthropic => "anthropic",
+/// Model lists (and errors elsewhere) go out Anthropic-shaped to clients that look like
+/// Anthropic's, OpenAI-shaped to the rest.
+fn models_proto(req: &Request) -> Proto {
+    if req.header("anthropic-version").is_some() || req.header("x-api-key").is_some() {
+        Proto::Anthropic
+    } else {
+        Proto::Chat
     }
+}
+
+/// The protocol the client speaks, for answers given before its request is parsed.
+fn client_proto(req: &Request, rest: &str) -> Proto {
+    inbound_of(rest).unwrap_or_else(|| models_proto(req))
+}
+
+/// Answers with an error in the client's protocol and notes it in the log; returns the status.
+fn reply_error(s: &mut TcpStream, log: &mut LogEntry, p: Proto, status: u16, msg: &str) -> u16 {
+    let body = convert::error_body(p, status, msg);
+    write_json(s, status, &body);
+    log.error = body.pointer("/error/message").and_then(Value::as_str).map(String::from);
+    status
 }
 
 /// Counts a request in flight until dropped (also when the handler panics).
@@ -948,12 +977,12 @@ fn handle(mut s: TcpStream) {
         }
     };
     if !host_allowed(&req) {
-        let msg = crate::i18n::l("Host 不是本机地址，请求被拒绝", "Refused: the Host header isn't this machine");
+        let msg = l("Host 不是本机地址，请求被拒绝", "Refused: the Host header isn't this machine");
         write_json(&mut s, 403, &json!({ "error": { "message": msg, "type": "permission_error" } }));
         return;
     }
     if req.header("origin").is_some_and(|o| !origin_allowed(o)) {
-        let msg = crate::i18n::l("网页不能访问本地网关", "Web pages can't use the local gateway");
+        let msg = l("网页不能访问本地网关", "Web pages can't use the local gateway");
         write_json(&mut s, 403, &json!({ "error": { "message": msg, "type": "permission_error" } }));
         return;
     }
@@ -977,20 +1006,9 @@ fn handle(mut s: TcpStream) {
     with_minute(|m| m.peak_active = m.peak_active.max(active as u32));
     let mut log = LogEntry {
         at: chrono::Local::now().format("%H:%M:%S").to_string(),
-        route: String::new(),
         method: req.method.clone(),
         path: req.path.split('?').next().unwrap_or("").to_string(),
-        inbound: String::new(),
-        upstream: String::new(),
-        model: String::new(),
-        status: 0,
-        ms: 0,
-        stream: false,
-        converted: false,
-        error: None,
-        usage: None,
-        upstream_broken: false,
-        agent: None,
+        ..Default::default()
     };
     let status = match serve(&mut s, &req, &mut log) {
         Ok(st) => st,
@@ -1011,19 +1029,12 @@ fn handle(mut s: TcpStream) {
         FAILURES.fetch_add(1, Ordering::Relaxed);
     }
     with_minute(|m| {
-        m.requests += 1;
-        m.failures += (status >= 400) as u32;
+        let (failed, usage) = (status >= 400, log.usage.unwrap_or((0, 0)));
+        m.total.add(failed, usage);
         m.ms_total += log.ms;
         m.ms_max = m.ms_max.max(log.ms);
-        let (i, o) = log.usage.unwrap_or((0, 0));
-        m.input_tokens = m.input_tokens.saturating_add(i);
-        m.output_tokens = m.output_tokens.saturating_add(o);
         if let Some(a) = &log.agent {
-            let u = m.agents.entry(a.clone()).or_default();
-            u.requests += 1;
-            u.failures += (status >= 400) as u32;
-            u.input_tokens = u.input_tokens.saturating_add(i);
-            u.output_tokens = u.output_tokens.saturating_add(o);
+            m.agents.entry(a.clone()).or_default().add(failed, usage);
         }
     });
     push_log(log);
@@ -1040,10 +1051,17 @@ struct Target {
     fp: u64,
 }
 
+impl Target {
+    /// A request to `path` on the upstream, carrying its key.
+    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::blocking::RequestBuilder {
+        crate::net::with_key(client().request(method, format!("{}{path}", self.base)), self.proto == Proto::Anthropic, self.key.as_deref())
+    }
+}
+
 fn fingerprint(proto: Proto, base: &str, key: Option<&str>) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (api_name(proto), base, key).hash(&mut h);
+    (proto.api(), base, key).hash(&mut h);
     h.finish()
 }
 
@@ -1051,7 +1069,7 @@ fn fingerprint(proto: Proto, base: &str, key: Option<&str>) -> u64 {
 fn target(root: &Value, route: &Route) -> Result<Target> {
     let proto = Proto::from_api(&route.upstream_api).ok_or_else(|| anyhow!(tr!("转发「{}」的协议无效", "Forward \"{}\" has an invalid protocol", route.id)))?;
     #[cfg(test)]
-    if let Some(t) = TEST_ROUTES.lock().unwrap().iter().find(|t| t.0.id == route.id) {
+    if let Some(t) = lock(&TEST_ROUTES).iter().find(|t| t.0.id == route.id) {
         let base: String = t.1.trim_end_matches('/').into();
         let fp = fingerprint(proto, &base, t.2.as_deref());
         return Ok(Target { route: route.clone(), proto, base, key: t.2.clone(), fp });
@@ -1065,7 +1083,7 @@ fn target(root: &Value, route: &Route) -> Result<Target> {
 fn routes(root: &Value) -> Vec<Route> {
     #[cfg(test)]
     {
-        let t = TEST_ROUTES.lock().unwrap();
+        let t = lock(&TEST_ROUTES);
         if !t.is_empty() {
             return t.iter().map(|x| x.0.clone()).collect();
         }
@@ -1082,32 +1100,34 @@ static MODEL_CACHE: Mutex<Vec<(String, u64, Instant, Vec<String>)>> = Mutex::new
 
 /// Drops the cached upstream model lists of these forwards.
 fn forget_models(ids: &[&str]) {
-    MODEL_CACHE.lock().unwrap().retain(|(id, ..)| !ids.contains(&id.as_str()));
+    lock(&MODEL_CACHE).retain(|(id, ..)| !ids.contains(&id.as_str()));
+}
+
+/// Appends the items `out` doesn't hold yet.
+fn extend_unique(out: &mut Vec<String>, items: impl IntoIterator<Item = String>) {
+    for m in items {
+        if !out.contains(&m) {
+            out.push(m);
+        }
+    }
 }
 
 /// What a forward is known to serve, without any network call.
 fn known_models(root: &Value, r: &Route) -> Vec<String> {
     let mut out: Vec<String> = library::list_in(root).into_iter().find(|e| e.id == r.library).map(|e| e.models).unwrap_or_default();
-    for (from, _) in &r.model_map {
-        if from != "*" && !out.contains(from) {
-            out.push(from.clone());
-        }
-    }
+    extend_unique(&mut out, r.model_map.iter().map(|(from, _)| from).filter(|f| *f != "*").cloned());
     let fp = target(root, r).ok().map(|t| t.fp);
-    if let Some((.., cached)) = MODEL_CACHE.lock().unwrap().iter().find(|(id, f, ..)| id == &r.id && Some(*f) == fp) {
-        for m in cached {
-            if !out.contains(m) {
-                out.push(m.clone());
-            }
-        }
+    if let Some((.., cached)) = lock(&MODEL_CACHE).iter().find(|(id, f, ..)| id == &r.id && Some(*f) == fp) {
+        extend_unique(&mut out, cached.iter().cloned());
     }
     out
 }
 
 /// The upstream's own /models list, cached for five minutes (one minute after a failure).
+/// Ids as the gateway lists them (see `convert::model_ids`), so every listed model routes.
 fn upstream_models(t: &Target) -> Vec<String> {
     {
-        let cache = MODEL_CACHE.lock().unwrap();
+        let cache = lock(&MODEL_CACHE);
         if let Some((.., at, list)) = cache.iter().find(|(id, fp, ..)| id == &t.route.id && *fp == t.fp) {
             let ttl = if list.is_empty() { 60 } else { 300 };
             if at.elapsed() < Duration::from_secs(ttl) {
@@ -1115,21 +1135,17 @@ fn upstream_models(t: &Target) -> Vec<String> {
             }
         }
     }
-    let list: Vec<String> = auth(client().get(format!("{}/models", t.base)).timeout(Duration::from_secs(10)), t.proto, t.key.as_deref())
+    let list: Vec<String> = t
+        .request(reqwest::Method::GET, "/models")
+        .timeout(Duration::from_secs(10))
         .send()
         .ok()
         .filter(|r| r.status().is_success())
         .and_then(|r| r.text().ok())
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .map(|v| {
-            v.get("data")
-                .or_else(|| v.get("models"))
-                .and_then(|d| d.as_array())
-                .map(|a| a.iter().filter_map(|m| m.get("id").or_else(|| m.get("name")).and_then(|x| x.as_str()).map(String::from)).collect())
-                .unwrap_or_default()
-        })
+        .map(|v| convert::model_ids(&v))
         .unwrap_or_default();
-    let mut cache = MODEL_CACHE.lock().unwrap();
+    let mut cache = lock(&MODEL_CACHE);
     cache.retain(|(id, ..)| id != &t.route.id);
     cache.push((t.route.id.clone(), t.fp, Instant::now(), list.clone()));
     list
@@ -1137,11 +1153,7 @@ fn upstream_models(t: &Target) -> Vec<String> {
 
 fn all_models(root: &Value, t: &Target) -> Vec<String> {
     let mut out = known_models(root, &t.route);
-    for m in upstream_models(t) {
-        if !out.contains(&m) {
-            out.push(m);
-        }
-    }
+    extend_unique(&mut out, upstream_models(t));
     out
 }
 
@@ -1172,20 +1184,16 @@ fn weighted_order(mut items: Vec<Target>) -> Vec<Target> {
 
 fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     let Some((route_id, rest)) = split_path(&req.path) else {
-        write_json(s, 404, &json!({ "error": { "message": crate::i18n::l("路径应为 /v1/...（统一入口）或 /<转发>/v1/...", "Path should be /v1/... (unified entry) or /<forward>/v1/...") } }));
-        return Ok(404);
+        let msg = l("路径应为 /v1/...（统一入口）或 /<转发>/v1/...", "Path should be /v1/... (unified entry) or /<forward>/v1/...");
+        return Ok(reply_error(s, log, models_proto(req), 404, msg));
     };
+    let p = client_proto(req, &rest);
     // One read of the store for the whole request, so it sees one consistent config even
     // while the UI (or anything else) is saving.
     let root = store::load();
     match authenticate(&root, req) {
         Ok(agent) => log.agent = Some(agent),
-        Err(msg) => {
-            let inbound = inbound_of(&rest).unwrap_or(Proto::Chat);
-            write_json(s, 401, &convert::error_body(inbound, 401, &msg));
-            log.error = Some(msg);
-            return Ok(401);
-        }
+        Err(msg) => return Ok(reply_error(s, log, p, 401, &msg)),
     }
     if route_id == "v1" {
         return serve_unified(s, req, &rest, log, None, &root);
@@ -1196,11 +1204,10 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     }
     log.route = route_id.clone();
     let Some(route) = routes(&root).into_iter().find(|r| r.id == route_id && r.enabled) else {
-        write_json(s, 404, &json!({ "error": { "message": tr!("没有启用的转发「{route_id}」", "No enabled forward \"{route_id}\""), "type": "not_found" } }));
-        return Ok(404);
+        return Ok(reply_error(s, log, p, 404, &tr!("没有启用的转发「{route_id}」", "No enabled forward \"{route_id}\"")));
     };
     let t = target(&root, &route)?;
-    log.upstream = api_name(t.proto).into();
+    log.upstream = t.proto.api().into();
 
     if rest == "/models" && req.method == "GET" {
         return models(s, &t, req, log);
@@ -1208,18 +1215,17 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     if rest == "/messages/count_tokens" && req.method == "POST" {
         return count_tokens(s, Some(&t), req, log);
     }
-    let Some((inbound, body)) = parse_call(s, req, &rest, log)? else { return Ok(log.status) };
+    let (inbound, body) = match parse_call(s, req, &rest, log) {
+        Ok(call) => call,
+        Err(status) => return Ok(status),
+    };
     let cfg = breaker_cfg(&root);
     let ticket = if is_test(req) {
         breaker::Ticket::TEST
     } else {
         match breaker::admit(&cfg, &route.id) {
             Ok(t) => t,
-            Err(why) => {
-                write_json(s, 503, &convert::error_body(inbound, 503, &why));
-                log.error = Some(why);
-                return Ok(503);
-            }
+            Err(why) => return Ok(reply_error(s, log, inbound, 503, &why)),
         }
     };
     match tracked(s, req, &t, inbound, &body, log, false, &cfg, ticket)? {
@@ -1233,7 +1239,7 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
 /// Forwards paused by the breaker are skipped. With `only`, just those forwards take part.
 fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry, only: Option<Vec<String>>, root: &Value) -> Result<u16> {
     let entry = match &only {
-        None => crate::i18n::l("统一入口", "Unified entry").to_string(),
+        None => l("统一入口", "Unified entry").to_string(),
         Some(ids) => tr!("组合 {}", "Combined {}", ids.join("+")),
     };
     log.route = entry.clone();
@@ -1244,15 +1250,14 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         .collect();
     if targets.is_empty() {
         let msg = match &only {
-            None => crate::i18n::l("本地网关还没有启用的转发", "The local gateway has no enabled forwards").to_string(),
-            Some(ids) => tr!("转发 {} 都不存在或已暂停", "Forwards {} don't exist or are paused", ids.join(crate::i18n::l("、", ", "))),
+            None => l("本地网关还没有启用的转发", "The local gateway has no enabled forwards").to_string(),
+            Some(ids) => tr!("转发 {} 都不存在或已暂停", "Forwards {} don't exist or are paused", ids.join(l("、", ", "))),
         };
-        write_json(s, 503, &json!({ "error": { "message": msg, "type": "no_upstream" } }));
-        return Ok(503);
+        return Ok(reply_error(s, log, client_proto(req, rest), 503, &msg));
     }
     if rest == "/models" && req.method == "GET" {
-        let want = if req.header("anthropic-version").is_some() || req.header("x-api-key").is_some() { Proto::Anthropic } else { Proto::Chat };
-        log.inbound = api_name(want).into();
+        let want = models_proto(req);
+        log.inbound = want.api().into();
         let mut data: Vec<Value> = vec![];
         for t in &targets {
             for m in all_models(root, t) {
@@ -1267,7 +1272,10 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     if rest == "/messages/count_tokens" && req.method == "POST" {
         return count_tokens(s, None, req, log);
     }
-    let Some((inbound, body)) = parse_call(s, req, rest, log)? else { return Ok(log.status) };
+    let (inbound, body) = match parse_call(s, req, rest, log) {
+        Ok(call) => call,
+        Err(status) => return Ok(status),
+    };
     let model = body.get("model").and_then(|m| m.as_str()).unwrap_or_default().to_string();
 
     // Forwards that list the model; unknown lists count as "maybe" and come after.
@@ -1284,8 +1292,7 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     let mut order = weighted_order(sure);
     order.extend(weighted_order(maybe));
     if order.is_empty() {
-        write_json(s, 404, &convert::error_body(inbound, 404, &tr!("没有哪个转发提供模型「{model}」", "No forward serves model \"{model}\"")));
-        return Ok(404);
+        return Ok(reply_error(s, log, inbound, 404, &tr!("没有哪个转发提供模型「{model}」", "No forward serves model \"{model}\"")));
     }
     let cfg = breaker_cfg(root);
     let mut paused = vec![];
@@ -1298,15 +1305,13 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     });
     if order.is_empty() {
         let msg = tr!("提供模型「{model}」的转发都因连续出错暂停了。{}", "Every forward serving model \"{model}\" is paused after repeated errors. {}", paused.join(" "));
-        write_json(s, 503, &convert::error_body(inbound, 503, &msg));
-        log.error = Some(msg);
-        return Ok(503);
+        return Ok(reply_error(s, log, inbound, 503, &msg));
     }
     let n = order.len();
     let mut tried = vec![];
     for (i, t) in order.iter().enumerate() {
         log.route = format!("{entry} → {}", t.route.id);
-        log.upstream = api_name(t.proto).into();
+        log.upstream = t.proto.api().into();
         // Another request may have paused it meanwhile, or be probing it.
         let Ok(ticket) = breaker::admit(&cfg, &t.route.id) else {
             tried.push(tr!("{} 已熔断", "{} paused (circuit breaker)", t.route.id));
@@ -1315,7 +1320,7 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         match tracked(s, req, t, inbound, &body, log, i + 1 < n, &cfg, ticket)? {
             Attempt::Done(st) => {
                 if !tried.is_empty() {
-                    log.error = Some(tr!("已切换：{}", "Failed over: {}", tried.join(crate::i18n::l("；", "; "))));
+                    log.error = Some(tr!("已切换：{}", "Failed over: {}", tried.join(l("；", "; "))));
                 }
                 return Ok(st);
             }
@@ -1326,42 +1331,37 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         }
     }
     // Nothing answered: every forward failed, or was paused while we were trying.
-    let msg = tr!("所有转发都失败了：{}", "Every forward failed: {}", tried.join(crate::i18n::l("；", "; ")));
-    write_json(s, 502, &convert::error_body(inbound, 502, &msg));
-    log.error = Some(msg);
-    Ok(502)
+    let msg = tr!("所有转发都失败了：{}", "Every forward failed: {}", tried.join(l("；", "; ")));
+    Ok(reply_error(s, log, inbound, 502, &msg))
 }
 
-/// Inbound protocol + JSON body of a model call; writes the error itself when invalid.
-fn parse_call(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry) -> Result<Option<(Proto, Value)>> {
+/// Inbound protocol + JSON body of a model call, or the status of the error it already
+/// answered the client with.
+fn parse_call(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry) -> std::result::Result<(Proto, Value), u16> {
     let Some(inbound) = inbound_of(rest) else {
-        write_json(s, 404, &json!({ "error": { "message": tr!("不支持的接口 {rest}，可用：/chat/completions、/responses、/messages、/models", "Unsupported endpoint {rest}; available: /chat/completions, /responses, /messages, /models") } }));
-        log.status = 404;
-        return Ok(None);
+        let msg = tr!("不支持的接口 {rest}，可用：/chat/completions、/responses、/messages、/models", "Unsupported endpoint {rest}; available: /chat/completions, /responses, /messages, /models");
+        return Err(reply_error(s, log, models_proto(req), 404, &msg));
     };
-    log.inbound = api_name(inbound).into();
+    log.inbound = inbound.api().into();
     if req.method != "POST" {
-        write_json(s, 405, &convert::error_body(inbound, 405, crate::i18n::l("只支持 POST", "Only POST is supported")));
-        log.status = 405;
-        return Ok(None);
+        return Err(reply_error(s, log, inbound, 405, l("只支持 POST", "Only POST is supported")));
     }
     // The client's mistake: a 400 that says why, not an upstream failure.
-    let err = match serde_json::from_slice::<Value>(&req.body) {
-        Ok(body) if body.is_object() => return Ok(Some((inbound, body))),
-        Ok(_) => crate::i18n::l("请求体必须是 JSON 对象", "The request body must be a JSON object").to_string(),
-        Err(e) => tr!("请求体不是 JSON：{e}", "Request body is not JSON: {e}"),
-    };
-    write_json(s, 400, &convert::error_body(inbound, 400, &err));
-    log.status = 400;
-    log.error = Some(err);
-    Ok(None)
+    match serde_json::from_slice::<Value>(&req.body) {
+        Ok(body) if body.is_object() => Ok((inbound, body)),
+        Ok(_) => Err(reply_error(s, log, inbound, 400, convert::not_object(true))),
+        Err(e) => Err(reply_error(s, log, inbound, 400, &tr!("请求体不是 JSON：{e}", "Request body is not JSON: {e}"))),
+    }
 }
 
 /// Claude Code asks for token counts; only Anthropic upstreams have that endpoint.
 fn count_tokens(s: &mut TcpStream, t: Option<&Target>, req: &Request, log: &mut LogEntry) -> Result<u16> {
-    log.inbound = "anthropic".into();
+    log.inbound = Proto::Anthropic.api().into();
     if let Some(t) = t.filter(|t| t.proto == Proto::Anthropic) {
-        let resp = auth(client().post(format!("{}/messages/count_tokens", t.base)).header("content-type", "application/json").body(req.body.clone()), t.proto, t.key.as_deref())
+        let resp = t
+            .request(reqwest::Method::POST, "/messages/count_tokens")
+            .header("content-type", "application/json")
+            .body(req.body.clone())
             .timeout(Duration::from_secs(30))
             .send()?;
         let status = resp.status().as_u16();
@@ -1398,6 +1398,7 @@ fn tracked(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     log.upstream_broken = false;
     let r = attempt(s, req, t, inbound, body, log, can_retry);
     let outcome = match &r {
+        // `attempt` put the message of the upstream's error body in the log.
         Ok(Attempt::Done(st)) if breaker::is_fault_status(*st) => Outcome::Fault(breaker::describe(*st, log.error.as_deref().unwrap_or(""))),
         Ok(Attempt::Done(_)) if log.upstream_broken => Outcome::Fault(log.error.clone().unwrap_or_default()),
         Ok(Attempt::Done(_)) => Outcome::Ok,
@@ -1440,9 +1441,7 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         let chat = convert::request_to_chat(inbound, &body)?;
         convert::request_from_chat(upstream, &chat)?
     };
-    let url = format!("{}{}", t.base, upstream.path());
-    let mut up = client().post(&url).header("content-type", "application/json").body(upstream_body.to_string());
-    up = auth(up, upstream, t.key.as_deref());
+    let mut up = t.request(reqwest::Method::POST, upstream.path()).header("content-type", "application/json").body(upstream_body.to_string());
     if upstream == Proto::Anthropic {
         if let Some(b) = req.header("anthropic-beta").filter(|_| inbound == Proto::Anthropic) {
             up = up.header("anthropic-beta", b);
@@ -1463,7 +1462,8 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         if can_retry && (status >= 500 || status == 429) {
             return Ok(Attempt::Retry(breaker::describe(status, &text)));
         }
-        log.error = Some(text.chars().take(300).collect());
+        // The message, not the raw body: the breaker's reason is made from it.
+        log.error = Some(breaker::brief(&text));
         if inbound == upstream {
             write_full(s, status, "application/json", text.as_bytes());
         } else {
@@ -1472,29 +1472,21 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         return Ok(Attempt::Done(status));
     }
 
-    let is_sse = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).map(|v| v.contains("event-stream")).unwrap_or(false);
     let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/json").to_string();
-    if inbound == upstream && ctx.stream {
-        // Passthrough, streamed as it arrives.
-        let mut sniff = UsageSniff::new(true);
-        let r = pipe(s, resp, status, &ct, &mut sniff, log);
-        log.usage = sniff.finish();
-        return r.map(Attempt::Done);
-    }
     let read_err = |e: std::io::Error| fault(tr!("读取上游响应失败：{e}", "Failed to read the upstream response: {e}"));
     // Some upstreams stream SSE under another Content-Type, or even when asked not to
     // stream: look at the body too.
-    let (is_sse, head) = if is_sse { (true, vec![]) } else { sniff_sse(&mut resp).map_err(read_err)? };
+    let (is_sse, head) = if ct.contains("event-stream") { (true, vec![]) } else { sniff_sse(&mut resp).map_err(read_err)? };
     let mut body = std::io::Cursor::new(head).chain(resp);
-    if inbound == upstream && !is_sse {
-        // Passthrough of a one-piece answer.
-        let mut sniff = UsageSniff::new(false);
-        let r = pipe(s, body, status, &ct, &mut sniff, log);
+    if inbound == upstream && (ctx.stream || !is_sse) {
+        // Passthrough, streamed as it arrives (an unasked-for stream is collected below).
+        let mut sniff = UsageSniff::new(is_sse);
+        let st = pipe(s, body, status, &ct, &mut sniff, log);
         log.usage = sniff.finish();
-        return r.map(Attempt::Done);
+        return Ok(Attempt::Done(st));
     }
     if ctx.stream && is_sse {
-        stream_convert(s, &mut body, inbound, upstream, ctx, log)?;
+        stream_convert(s, &mut body, inbound, upstream, ctx, log);
         return Ok(Attempt::Done(status));
     }
     // The client gets one piece: the upstream's JSON (also when it ignored stream=true), or
@@ -1503,42 +1495,26 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     body.read_to_end(&mut raw).map_err(read_err)?;
     let text = String::from_utf8_lossy(&raw);
     let chat = if is_sse {
-        let mut up = UpstreamStream::new(upstream);
-        let mut chunks = up.feed(&text);
-        chunks.extend(up.finish());
-        chat_from_chunks(&chunks).map_err(|e| fault(tr!("上游的流式响应出错：{e}", "The upstream stream returned an error: {e}")))?
+        convert::collect_stream(upstream, &text).map_err(|e| fault(tr!("上游的流式响应出错：{e}", "The upstream stream returned an error: {e}")))?
     } else {
-        let v: Value = serde_json::from_str(&text).map_err(|_| fault(tr!("上游返回的不是 JSON：{}", "Upstream response is not JSON: {}", text.chars().take(200).collect::<String>())))?;
+        let v: Value = serde_json::from_str(&text).map_err(|_| fault(tr!("上游返回的不是 JSON：{}", "Upstream response is not JSON: {}", clip(&text, 200))))?;
         convert::response_to_chat(upstream, &v).map_err(|e| fault(tr!("上游响应无法解析：{e:#}", "Can't parse the upstream response: {e:#}")))?
     };
     log.usage = convert::usage_tokens(&chat);
     if ctx.stream {
         // Client wanted a stream: replay the whole answer as one.
-        Chunked::start(s, 200, "text/event-stream")?;
-        let mut out = Chunked(s);
-        let mut down = DownstreamStream::new(inbound, ctx);
-        for c in chat_as_chunks(&chat) {
-            for f in down.push(&c) {
-                out.send(f.as_bytes())?;
+        if let Ok(mut out) = Chunked::start(s, 200, "text/event-stream") {
+            let mut down = DownstreamStream::new(inbound, ctx);
+            let mut frames: Vec<String> = convert::chat_as_chunks(&chat).iter().flat_map(|c| down.push(c)).collect();
+            frames.extend(down.finish());
+            if out.send_all(frames) {
+                out.end();
             }
         }
-        for f in down.finish() {
-            out.send(f.as_bytes())?;
-        }
-        out.end();
     } else {
         write_json(s, 200, &convert::response_from_chat(inbound, &chat, &ctx)?);
     }
     Ok(Attempt::Done(200))
-}
-
-fn auth(req: reqwest::blocking::RequestBuilder, p: Proto, key: Option<&str>) -> reqwest::blocking::RequestBuilder {
-    match (p, key) {
-        (Proto::Anthropic, Some(k)) => req.header("x-api-key", k).header("anthropic-version", "2023-06-01"),
-        (Proto::Anthropic, None) => req.header("anthropic-version", "2023-06-01"),
-        (_, Some(k)) => req.bearer_auth(k),
-        _ => req,
-    }
 }
 
 fn apply_model_map(body: &mut Value, map: &[(String, String)]) {
@@ -1552,14 +1528,13 @@ fn apply_model_map(body: &mut Value, map: &[(String, String)]) {
 }
 
 fn models(s: &mut TcpStream, t: &Target, req: &Request, log: &mut LogEntry) -> Result<u16> {
-    let want = if req.header("anthropic-version").is_some() || req.header("x-api-key").is_some() { Proto::Anthropic } else { Proto::Chat };
-    log.inbound = api_name(want).into();
-    let resp = auth(client().get(format!("{}/models", t.base)).timeout(Duration::from_secs(20)), t.proto, t.key.as_deref()).send()?;
+    let want = models_proto(req);
+    log.inbound = want.api().into();
+    let resp = t.request(reqwest::Method::GET, "/models").timeout(Duration::from_secs(20)).send()?;
     let status = resp.status().as_u16();
     let text = resp.text().unwrap_or_default();
     if status >= 400 {
-        write_json(s, status, &convert::error_body(want, status, &text));
-        return Ok(status);
+        return Ok(reply_error(s, log, want, status, &text));
     }
     let v: Value = serde_json::from_str(&text).unwrap_or(json!({ "data": [] }));
     write_json(s, 200, &convert::models_body(want, &v));
@@ -1641,9 +1616,9 @@ fn sniff_sse(r: &mut impl Read) -> std::io::Result<(bool, Vec<u8>)> {
     Ok((t.starts_with(b"data:") || t.starts_with(b"event:"), head))
 }
 
-fn pipe(s: &mut TcpStream, mut resp: impl Read, status: u16, ct: &str, sniff: &mut UsageSniff, log: &mut LogEntry) -> Result<u16> {
-    Chunked::start(s, status, ct)?;
-    let mut out = Chunked(s);
+/// Passes the upstream's answer through as it arrives; returns its status.
+fn pipe(s: &mut TcpStream, mut resp: impl Read, status: u16, ct: &str, sniff: &mut UsageSniff, log: &mut LogEntry) -> u16 {
+    let Ok(mut out) = Chunked::start(s, status, ct) else { return status };
     let mut buf = [0u8; 16 * 1024];
     loop {
         let n = match resp.read(&mut buf) {
@@ -1653,16 +1628,16 @@ fn pipe(s: &mut TcpStream, mut resp: impl Read, status: u16, ct: &str, sniff: &m
                 // No closing chunk: the client sees a cut-off body, not a complete answer.
                 log.error = Some(tr!("上游中断：{e}", "Upstream interrupted: {e}"));
                 log.upstream_broken = true;
-                return Ok(status);
+                return status;
             }
         };
         sniff.feed(&buf[..n]);
-        if out.send(&buf[..n]).is_err() {
-            return Ok(status); // client went away
+        if !out.send_all([&buf[..n]]) {
+            return status;
         }
     }
     out.end();
-    Ok(status)
+    status
 }
 
 /// Decodes as much of `pending` as is valid UTF-8, turning invalid bytes into U+FFFD and
@@ -1694,14 +1669,13 @@ fn take_utf8(pending: &mut Vec<u8>) -> String {
     }
 }
 
-fn stream_convert(s: &mut TcpStream, resp: &mut impl Read, inbound: Proto, upstream: Proto, ctx: convert::ReqCtx, log: &mut LogEntry) -> Result<()> {
-    Chunked::start(s, 200, "text/event-stream")?;
-    let mut out = Chunked(s);
+/// Converts the upstream's stream into the client's as it arrives.
+fn stream_convert(s: &mut TcpStream, resp: &mut impl Read, inbound: Proto, upstream: Proto, ctx: convert::ReqCtx, log: &mut LogEntry) {
+    let Ok(mut out) = Chunked::start(s, 200, "text/event-stream") else { return };
     let mut up = UpstreamStream::new(upstream);
     let mut down = DownstreamStream::new(inbound, ctx);
     let mut buf = [0u8; 16 * 1024];
     let mut pending: Vec<u8> = vec![]; // bytes of a UTF-8 char split across reads
-    let mut client_gone = false;
     loop {
         let n = match resp.read(&mut buf) {
             Ok(0) => break,
@@ -1709,133 +1683,44 @@ fn stream_convert(s: &mut TcpStream, resp: &mut impl Read, inbound: Proto, upstr
             Err(e) => {
                 log.error = Some(tr!("上游中断：{e}", "Upstream interrupted: {e}"));
                 log.upstream_broken = true;
-                for f in down.error(502, &tr!("上游连接中断：{e}", "Upstream connection broken: {e}")) {
-                    let _ = out.send(f.as_bytes());
+                if out.send_all(down.error(502, &tr!("上游连接中断：{e}", "Upstream connection broken: {e}"))) {
+                    out.end();
                 }
-                out.end();
-                return Ok(());
+                return;
             }
         };
         pending.extend_from_slice(&buf[..n]);
         let text = take_utf8(&mut pending);
-        for chunk in up.feed(&text) {
-            if let Some(u) = convert::usage_tokens(&chunk) {
-                log.usage = Some(u);
-            }
-            for f in down.push(&chunk) {
-                if out.send(f.as_bytes()).is_err() {
-                    client_gone = true;
-                }
-            }
-        }
-        if client_gone {
-            return Ok(());
+        if !relay(&mut out, &mut down, up.feed(&text), log) {
+            return;
         }
     }
     // A character cut off at the very end.
     let mut tail = if pending.is_empty() { vec![] } else { up.feed(&String::from_utf8_lossy(&pending)) };
     tail.extend(up.finish());
-    for chunk in tail {
+    let client_there = relay(&mut out, &mut down, tail, log);
+    if up.ended_early() {
+        // The client got an error event; the log and the breaker hear about it too.
+        log.error = Some(convert::stream_cut_off().into());
+        log.upstream_broken = true;
+    }
+    if client_there && out.send_all(down.finish()) {
+        out.end();
+    }
+}
+
+/// Sends chat chunks to the client in its protocol, noting the usage they report; false
+/// once the client is gone.
+fn relay(out: &mut Chunked, down: &mut DownstreamStream, chunks: Vec<Value>, log: &mut LogEntry) -> bool {
+    for chunk in chunks {
         if let Some(u) = convert::usage_tokens(&chunk) {
             log.usage = Some(u);
         }
-        for f in down.push(&chunk) {
-            let _ = out.send(f.as_bytes());
+        if !out.send_all(down.push(&chunk)) {
+            return false;
         }
     }
-    if up.ended_early() {
-        // The client got an error event; the log and the breaker hear about it too.
-        log.error = Some(crate::i18n::l("上游的流没有正常结束就断开了", "The upstream stream ended before it finished").into());
-        log.upstream_broken = true;
-    }
-    for f in down.finish() {
-        let _ = out.send(f.as_bytes());
-    }
-    out.end();
-    Ok(())
-}
-
-/// A complete chat.completion as stream chunks (for clients that asked for a stream
-/// when the upstream answered in one piece).
-fn chat_as_chunks(chat: &Value) -> Vec<Value> {
-    let id = chat.get("id").cloned().unwrap_or(json!("chatcmpl-agentplus"));
-    let model = chat.get("model").cloned().unwrap_or(json!(""));
-    let created = chat.get("created").cloned().unwrap_or(json!(chrono::Utc::now().timestamp()));
-    let msg = chat.pointer("/choices/0/message").cloned().unwrap_or(json!({}));
-    let finish = chat.pointer("/choices/0/finish_reason").cloned().unwrap_or(json!("stop"));
-    let chunk = |delta: Value, finish: Value| json!({ "id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] });
-    let mut out = vec![chunk(json!({ "role": "assistant" }), Value::Null)];
-    let (text, reasoning) = convert::message_text(&msg);
-    if !reasoning.is_empty() {
-        out.push(chunk(json!({ "reasoning_content": reasoning }), Value::Null));
-    }
-    if !text.is_empty() {
-        out.push(chunk(json!({ "content": text }), Value::Null));
-    }
-    if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
-        for (i, c) in calls.iter().enumerate() {
-            out.push(chunk(json!({ "tool_calls": [{ "index": i, "id": c.get("id"), "type": "function", "function": { "name": c.pointer("/function/name"), "arguments": c.pointer("/function/arguments") } }] }), Value::Null));
-        }
-    }
-    out.push(chunk(json!({}), finish));
-    if let Some(u) = chat.get("usage") {
-        out.push(json!({ "id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [], "usage": u }));
-    }
-    out
-}
-
-/// The reverse of `chat_as_chunks`: stream chunks folded into one chat.completion, for
-/// clients that asked for one piece when the upstream streamed anyway. An error chunk
-/// (from the upstream, or a stream cut off) is returned as the error.
-fn chat_from_chunks(chunks: &[Value]) -> std::result::Result<Value, String> {
-    let (mut text, mut reasoning) = (String::new(), String::new());
-    let mut tools: Vec<Value> = vec![];
-    let mut finish = Value::Null;
-    let mut usage = Value::Null;
-    let str_at = |v: &Value, p: &str| v.pointer(p).and_then(|x| x.as_str()).unwrap_or("").to_string();
-    for c in chunks {
-        if let Some(e) = c.get("error").filter(|e| !e.is_null()) {
-            return Err(str_at(e, "/message"));
-        }
-        if let Some(u) = c.get("usage").filter(|u| u.is_object()) {
-            usage = u.clone();
-        }
-        let Some(ch) = c.pointer("/choices/0") else { continue };
-        if let Some(f) = ch.get("finish_reason").filter(|f| !f.is_null()) {
-            finish = f.clone();
-        }
-        let d = ch.get("delta").cloned().unwrap_or(Value::Null);
-        text += &str_at(&d, "/content");
-        reasoning += &str_at(&d, "/reasoning_content");
-        for tc in d.get("tool_calls").and_then(|t| t.as_array()).into_iter().flatten() {
-            let i = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(tools.len() as u64) as usize;
-            while tools.len() <= i {
-                tools.push(json!({ "id": "", "type": "function", "function": { "name": "", "arguments": "" } }));
-            }
-            let t = &mut tools[i];
-            for (key, ptr) in [("id", "/id"), ("name", "/function/name"), ("arguments", "/function/arguments")] {
-                let add = str_at(tc, ptr);
-                let slot = if key == "id" { &mut t["id"] } else { &mut t["function"][key] };
-                let joined = format!("{}{add}", slot.as_str().unwrap_or(""));
-                *slot = json!(joined);
-            }
-        }
-    }
-    let mut msg = json!({ "role": "assistant", "content": text });
-    if !reasoning.is_empty() {
-        msg["reasoning_content"] = json!(reasoning);
-    }
-    if !tools.is_empty() {
-        msg["tool_calls"] = json!(tools);
-    }
-    let first = chunks.iter().find(|c| c.get("id").is_some());
-    let field = |k: &str| first.and_then(|c| c.get(k)).cloned().unwrap_or(Value::Null);
-    let finish = if finish.is_null() { json!(if tools.is_empty() { "stop" } else { "tool_calls" }) } else { finish };
-    Ok(json!({
-        "id": field("id"), "object": "chat.completion", "created": field("created"), "model": field("model"),
-        "choices": [{ "index": 0, "message": msg, "finish_reason": finish }],
-        "usage": usage,
-    }))
+    true
 }
 
 /// Tests bypass the store: (route, upstream base, key).
@@ -1848,6 +1733,25 @@ static TEST_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A forward to a test upstream; `map` is its model map.
+    fn test_route(id: &str, api: &str, map: &[(&str, &str)]) -> Route {
+        Route {
+            id: id.into(),
+            name: id.into(),
+            library: id.into(),
+            upstream_api: api.into(),
+            model_map: map.iter().map(|(f, t)| (f.to_string(), t.to_string())).collect(),
+            enabled: true,
+            weight: 100,
+            replaced: vec![],
+        }
+    }
+
+    /// A whole HTTP response with a body of known length.
+    fn http_resp(status_line: &str, content_type: &str, body: &str) -> String {
+        format!("HTTP/1.1 {status_line}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    }
 
     /// Mock upstream that only speaks Chat Completions (streaming), recording the request.
     fn chat_upstream(seen: Arc<Mutex<Option<Value>>>) -> String {
@@ -1866,24 +1770,10 @@ mod tests {
                 r#"{"id":"c1","object":"chat.completion.chunk","created":1,"model":"glm-5","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ls\"}"}}]},"finish_reason":"tool_calls"}]}"#,
                 r#"{"id":"c1","object":"chat.completion.chunk","created":1,"model":"glm-5","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":7,"total_tokens":27}}"#,
             ];
-            let mut body = String::new();
-            for f in frames {
-                body.push_str(&format!("data: {f}
-
-"));
-            }
-            body.push_str("data: [DONE]
-
-");
-            let head = format!("HTTP/1.1 200 OK
-Content-Type: text/event-stream
-Content-Length: {}
-Connection: close
-
-", body.len());
-            s.write_all(head.as_bytes()).unwrap();
-            // Dribble the body out in small pieces to exercise re-assembly (incl. split UTF-8).
-            for c in body.as_bytes().chunks(5) {
+            let mut body: String = frames.iter().map(|f| format!("data: {f}\n\n")).collect();
+            body.push_str("data: [DONE]\n\n");
+            // Dribble it out in small pieces to exercise re-assembly (incl. split UTF-8).
+            for c in http_resp("200 OK", "text/event-stream", &body).as_bytes().chunks(5) {
                 s.write_all(c).unwrap();
                 s.flush().unwrap();
             }
@@ -1896,9 +1786,8 @@ Connection: close
     fn end_to_end_responses_over_chat_upstream() {
         let seen = Arc::new(Mutex::new(None));
         let up = chat_upstream(seen.clone());
-        let route = Route { id: "relay".into(), name: "relay".into(), library: "x".into(), upstream_api: "chat".into(), model_map: vec![("gpt-5.5".into(), "glm-5".into())], enabled: true, weight: 100, replaced: vec![] };
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        *TEST_ROUTES.lock().unwrap() = vec![(route, up, Some("up-key".into()))];
+        let _guard = lock(&TEST_LOCK);
+        *lock(&TEST_ROUTES) = vec![(test_route("relay", "chat", &[("gpt-5.5", "glm-5")]), up, Some("up-key".into()))];
 
         let gw = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = gw.local_addr().unwrap().port();
@@ -1927,9 +1816,7 @@ Connection: close
         assert_eq!(sent["tools"][0]["function"]["name"], "shell");
 
         let events: Vec<Value> = text
-            .split("
-
-")
+            .split("\n\n")
             .filter_map(|f| f.lines().find_map(|l| l.strip_prefix("data: ")))
             .filter_map(|d| serde_json::from_str(d).ok())
             .collect();
@@ -1946,26 +1833,31 @@ Connection: close
         assert_eq!(call["call_id"], "call_1");
         assert_eq!(call["arguments"], r#"{"cmd":"ls"}"#);
         assert_eq!(done["response"]["usage"]["output_tokens"], 7);
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
     }
 
-    /// Mock upstream that answers every request with a fixed status and body (repeatable).
-    fn fixed_upstream(status: u16, body: &'static str, hits: Arc<AtomicU64>) -> String {
+    /// Mock upstream answering every request with `reply(request)` (repeatable). Model calls
+    /// (POSTs) are counted in `hits`; the gateway also asks for /models.
+    fn mock_upstream(hits: Arc<AtomicU64>, reply: impl Fn(&Request) -> String + Send + 'static) -> String {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {
             for c in l.incoming() {
                 let Ok(mut s) = c else { continue };
-                // Count model calls only (the gateway also asks for /models).
-                if read_request(&s).map(|r| r.method == "POST").unwrap_or(false) {
+                let Ok(req) = read_request(&s) else { continue };
+                if req.method == "POST" {
                     hits.fetch_add(1, Ordering::SeqCst);
                 }
-                let head = format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
-                let _ = s.write_all(head.as_bytes());
-                let _ = s.write_all(body.as_bytes());
+                let _ = s.write_all(reply(&req).as_bytes());
             }
         });
         format!("http://{addr}/v1")
+    }
+
+    /// Mock upstream that answers every request with a fixed status and JSON body.
+    fn fixed_upstream(status: u16, body: impl Into<String>, hits: Arc<AtomicU64>) -> String {
+        let resp = http_resp(&format!("{status} X"), "application/json", &body.into());
+        mock_upstream(hits, move |_| resp.clone())
     }
 
     fn gateway_once() -> u16 {
@@ -1984,22 +1876,32 @@ Connection: close
         port
     }
 
+    /// The log entry of the latest request through `route`, once its handler is done.
+    fn logged(route: &str) -> LogEntry {
+        for _ in 0..100 {
+            if let Some(e) = lock(&LOG).iter().find(|l| l.route == route) {
+                return e.clone();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("no log entry for {route}");
+    }
+
     /// Unified entry: model routing, failover from a 503 forward, and the merged model list.
     #[test]
     fn unified_entry_routes_and_fails_over() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let (bad_hits, good_hits, other_hits) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let bad = fixed_upstream(503, r#"{"error":{"message":"overloaded"}}"#, bad_hits.clone());
         let good = fixed_upstream(200, r#"{"id":"c","object":"chat.completion","model":"glm-5","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}"#, good_hits.clone());
         let other = fixed_upstream(200, r#"{"data":[{"id":"kimi-k3"}]}"#, other_hits.clone());
-        let route = |id: &str, weight: u32, map: Vec<(String, String)>| Route { id: id.into(), name: id.into(), library: id.into(), upstream_api: "chat".into(), model_map: map, enabled: true, weight, replaced: vec![] };
         // Both "bad" and "good" serve glm-5 (via their model maps); "other" only kimi-k3.
-        *TEST_ROUTES.lock().unwrap() = vec![
-            (route("bad", 1000, vec![("glm-5".into(), "glm-5".into())]), bad, None),
-            (route("good", 1, vec![("glm-5".into(), "glm-5".into())]), good, None),
-            (route("other", 100, vec![("kimi-k3".into(), "kimi-k3".into())]), other, None),
+        *lock(&TEST_ROUTES) = vec![
+            (Route { weight: 1000, ..test_route("bad", "chat", &[("glm-5", "glm-5")]) }, bad, None),
+            (Route { weight: 1, ..test_route("good", "chat", &[("glm-5", "glm-5")]) }, good, None),
+            (test_route("other", "chat", &[("kimi-k3", "kimi-k3")]), other, None),
         ];
-        MODEL_CACHE.lock().unwrap().clear();
+        lock(&MODEL_CACHE).clear();
         breaker::reset(Some("bad"));
         let port = gateway_once();
         let client = reqwest::blocking::Client::new();
@@ -2032,18 +1934,41 @@ Connection: close
         let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
         let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
         assert!(ids.contains(&"glm-5") && ids.contains(&"kimi-k3"), "{ids:?}");
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// A model the upstream lists as "models/x" (Gemini style) is listed as "x" and a
+    /// request for "x" goes to that forward.
+    #[test]
+    fn unified_entry_routes_the_models_it_lists() {
+        let _guard = lock(&TEST_LOCK);
+        let hits = Arc::new(AtomicU64::new(0));
+        let ok = r#"{"id":"c","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}"#;
+        let up = mock_upstream(hits.clone(), move |req| {
+            let body = if req.method == "GET" { r#"{"models":[{"name":"models/gem-x"}]}"# } else { ok };
+            http_resp("200 OK", "application/json", body)
+        });
+        *lock(&TEST_ROUTES) = vec![(test_route("gem", "chat", &[]), up, None)];
+        lock(&MODEL_CACHE).clear();
+        breaker::reset(Some("gem"));
+        let port = gateway_n(2);
+        let client = reqwest::blocking::Client::new();
+        let v: Value = serde_json::from_str(&client.get(format!("http://127.0.0.1:{port}/v1/models")).bearer_auth(test_key()).send().unwrap().text().unwrap()).unwrap();
+        assert_eq!(v["data"][0]["id"], "gem-x", "{v}");
+        let r = client.post(format!("http://127.0.0.1:{port}/v1/chat/completions")).bearer_auth(test_key()).body(r#"{"model":"gem-x","messages":[]}"#).send().unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        lock(&TEST_ROUTES).clear();
     }
 
     /// A forward whose upstream keeps rejecting the key is paused after three failures; the
     /// client then gets a 503 naming the error, without the upstream being called again.
     #[test]
     fn breaker_pauses_failing_forward() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let hits = Arc::new(AtomicU64::new(0));
         let up = fixed_upstream(401, r#"{"error":{"message":"invalid api key"}}"#, hits.clone());
-        let route = Route { id: "flaky".into(), name: "flaky".into(), library: "x".into(), upstream_api: "chat".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
-        *TEST_ROUTES.lock().unwrap() = vec![(route, up, None)];
+        *lock(&TEST_ROUTES) = vec![(test_route("flaky", "chat", &[]), up, None)];
         breaker::reset(Some("flaky"));
         let port = gateway_n(6);
         let client = reqwest::blocking::Client::new();
@@ -2063,26 +1988,51 @@ Connection: close
         assert_eq!(st, 503);
         assert!(text.contains("熔断") && text.contains("HTTP 401 密钥无效或未授权：invalid api key"), "{text}");
         assert_eq!(hits.load(Ordering::SeqCst), 3, "paused forward is not called");
-        assert!(LOG.lock().unwrap().iter().any(|l| l.error.as_deref().is_some_and(|e| e.contains("连续 3 次出错，转发暂停 60 秒"))));
+        assert!(lock(&LOG).iter().any(|l| l.error.as_deref().is_some_and(|e| e.contains("连续 3 次出错，转发暂停 60 秒"))));
         // AgentPlus's own test still goes through while paused.
         assert_eq!(call(test_key()).0, 401);
         assert_eq!(hits.load(Ordering::SeqCst), 4);
         breaker::reset(Some("flaky"));
         assert_eq!(call(keys::PLACEHOLDER).0, 401, "reset lets requests through again");
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// A long JSON error body: the pause names its message, not a cut-off piece of JSON.
+    #[test]
+    fn breaker_reason_from_a_long_error_body() {
+        let _guard = lock(&TEST_LOCK);
+        let hits = Arc::new(AtomicU64::new(0));
+        let body = json!({"error": {"type": "insufficient_quota", "param": "x".repeat(400), "message": "out of credit"}}).to_string();
+        let up = fixed_upstream(402, body, hits.clone());
+        *lock(&TEST_ROUTES) = vec![(test_route("broke", "chat", &[]), up, None)];
+        breaker::reset(Some("broke"));
+        let port = gateway_n(4);
+        let client = reqwest::blocking::Client::new();
+        let call = || {
+            let r = client.post(format!("http://127.0.0.1:{port}/broke/v1/chat/completions")).bearer_auth(keys::PLACEHOLDER).body(r#"{"model":"m","messages":[]}"#).send().unwrap();
+            (r.status().as_u16(), r.text().unwrap())
+        };
+        for _ in 0..3 {
+            assert_eq!(call().0, 402);
+        }
+        let (st, text) = call();
+        assert_eq!(st, 503);
+        assert!(text.contains("HTTP 402 余额不足：out of credit") && !text.contains("insufficient_quota"), "{text}");
+        breaker::reset(Some("broke"));
+        lock(&TEST_ROUTES).clear();
     }
 
     /// "/a+b/v1" only uses forwards a and b.
     #[test]
     fn combined_forwards_address() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let (a_hits, b_hits) = (Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0)));
         let ok = r#"{"id":"c","object":"chat.completion","model":"glm-5","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}"#;
         let a = fixed_upstream(200, ok, a_hits.clone());
         let b = fixed_upstream(200, ok, b_hits.clone());
-        let route = |id: &str| Route { id: id.into(), name: id.into(), library: id.into(), upstream_api: "chat".into(), model_map: vec![("glm-5".into(), "glm-5".into())], enabled: true, weight: 100, replaced: vec![] };
-        *TEST_ROUTES.lock().unwrap() = vec![(route("pa"), a, None), (route("pb"), b, None)];
-        MODEL_CACHE.lock().unwrap().clear();
+        let route = |id: &str| test_route(id, "chat", &[("glm-5", "glm-5")]);
+        *lock(&TEST_ROUTES) = vec![(route("pa"), a, None), (route("pb"), b, None)];
+        lock(&MODEL_CACHE).clear();
         let port = gateway_n(4);
         let client = reqwest::blocking::Client::new();
         for _ in 0..3 {
@@ -2092,42 +2042,43 @@ Connection: close
         assert_eq!((a_hits.load(Ordering::SeqCst), b_hits.load(Ordering::SeqCst)), (0, 3));
         let r = client.post(format!("http://127.0.0.1:{port}/x+y/v1/chat/completions")).bearer_auth(test_key()).body(r#"{"model":"glm-5","messages":[]}"#).send().unwrap();
         assert_eq!(r.status().as_u16(), 503);
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
     }
 
     /// A forward pointed at another upstream (library address or key edited) stops using
     /// the model list cached from the old one.
     #[test]
     fn model_cache_follows_upstream_changes() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let hits = Arc::new(AtomicU64::new(0));
         let old = fixed_upstream(200, r#"{"data":[{"id":"old-model"}]}"#, hits.clone());
         let new = fixed_upstream(200, r#"{"data":[{"id":"new-model"}]}"#, hits.clone());
-        let route = Route { id: "moved".into(), name: "moved".into(), library: "x".into(), upstream_api: "chat".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
+        let route = test_route("moved", "chat", &[]);
         let root = json!({});
-        MODEL_CACHE.lock().unwrap().clear();
-        *TEST_ROUTES.lock().unwrap() = vec![(route.clone(), old, None)];
+        lock(&MODEL_CACHE).clear();
+        *lock(&TEST_ROUTES) = vec![(route.clone(), old, None)];
         let t = target(&root, &route).unwrap();
         assert_eq!(all_models(&root, &t), vec!["old-model"]);
         assert_eq!(known_models(&root, &route), vec!["old-model"], "cached list shows while the upstream is the same");
 
-        *TEST_ROUTES.lock().unwrap() = vec![(route.clone(), new, None)];
+        *lock(&TEST_ROUTES) = vec![(route.clone(), new, None)];
         assert!(known_models(&root, &route).is_empty(), "old upstream's list is not shown for the new one");
         let t = target(&root, &route).unwrap();
         assert_eq!(all_models(&root, &t), vec!["new-model"]);
 
         // Saving or deleting a forward drops its cache outright.
         forget_models(&["moved"]);
-        assert!(MODEL_CACHE.lock().unwrap().iter().all(|(id, ..)| id != "moved"));
-        TEST_ROUTES.lock().unwrap().clear();
+        assert!(lock(&MODEL_CACHE).iter().all(|(id, ..)| id != "moved"));
+        lock(&TEST_ROUTES).clear();
     }
 
     /// Stopping waits for the listener to close, so the same port opens again at once;
-    /// a port that is taken is reported without disturbing the running gateway.
+    /// a port that is taken is reported without disturbing the running gateway, and the
+    /// report goes away once the gateway is where it was asked to be.
     #[test]
     fn restart_reuses_port_and_busy_port_keeps_old() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _c = CONTROL.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
+        let _c = lock(&CONTROL);
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         for _ in 0..5 {
             let l = bind(port).expect("port reopens right after stop");
@@ -2137,16 +2088,18 @@ Connection: close
             assert_eq!(running_port(), None);
         }
 
-        run(bind(port).unwrap(), port).unwrap();
+        run_on(port).unwrap();
         let taken = TcpListener::bind("127.0.0.1:0").unwrap();
         let busy = taken.local_addr().unwrap().port();
-        let e = bind(busy).unwrap_err().to_string();
+        let e = run_on(busy).unwrap_err().to_string();
         assert!(e.contains(&busy.to_string()), "{e}");
+        assert_eq!(lock(&LAST_ERROR).as_ref().map(BindError::message), Some(e));
         assert_eq!(running_port(), Some(port), "a failed bind leaves the gateway where it was");
         let r = reqwest::blocking::get(format!("http://127.0.0.1:{port}/health")).unwrap();
         assert_eq!(r.status().as_u16(), 200);
+        run_on(port).unwrap();
+        assert!(lock(&LAST_ERROR).is_none(), "the stale error is cleared");
         stop();
-        *LAST_ERROR.lock().unwrap() = None;
     }
 
     #[test]
@@ -2163,12 +2116,11 @@ Connection: close
     /// Host: 403. An agent's own key is accepted and the request counts for that agent.
     #[test]
     fn inbound_auth_and_origin() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let hits = Arc::new(AtomicU64::new(0));
         let ok = r#"{"id":"c","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
         let up = fixed_upstream(200, ok, hits.clone());
-        let route = Route { id: "authr".into(), name: "authr".into(), library: "x".into(), upstream_api: "chat".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
-        *TEST_ROUTES.lock().unwrap() = vec![(route, up, None)];
+        *lock(&TEST_ROUTES) = vec![(test_route("authr", "chat", &[]), up, None)];
         *keys::TEST_KEYS.lock().unwrap() = vec![("codex".into(), "agp-codex-test".into())];
         let port = gateway_n(6);
         let client = reqwest::blocking::Client::new();
@@ -2191,12 +2143,16 @@ Connection: close
         assert_eq!(hits.load(Ordering::SeqCst), 2);
 
         // Counted after the response went out: give the handler a moment to finish.
-        let codex = || SERIES.lock().unwrap().iter().filter_map(|m| m.agents.get("codex").cloned()).fold(AgentUse::default(), |a, u| AgentUse {
-            requests: a.requests + u.requests,
-            failures: a.failures + u.failures,
-            input_tokens: a.input_tokens + u.input_tokens,
-            output_tokens: a.output_tokens + u.output_tokens,
-        });
+        let codex = || {
+            let mut total = AgentUse::default();
+            for u in lock(&SERIES).iter().filter_map(|m| m.agents.get("codex")) {
+                total.requests += u.requests;
+                total.failures += u.failures;
+                total.input_tokens += u.input_tokens;
+                total.output_tokens += u.output_tokens;
+            }
+            total
+        };
         for _ in 0..50 {
             if codex().requests >= 2 {
                 break;
@@ -2205,9 +2161,38 @@ Connection: close
         }
         let u = codex();
         assert!(u.requests >= 2 && u.input_tokens >= 10 && u.output_tokens >= 4, "{u:?}");
-        assert!(LOG.lock().unwrap().iter().take(6).any(|l| l.status == 401 && l.agent.is_none()));
+        assert!(lock(&LOG).iter().take(6).any(|l| l.status == 401 && l.agent.is_none()));
         keys::TEST_KEYS.lock().unwrap().clear();
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// Errors the gateway gives before (or instead of) calling an upstream come in the
+    /// client's protocol, and say why in the log.
+    #[test]
+    fn early_errors_answer_in_the_clients_protocol() {
+        let _guard = lock(&TEST_LOCK);
+        *lock(&TEST_ROUTES) = vec![(test_route("early", "chat", &[]), "http://127.0.0.1:9/v1".into(), None)];
+        let port = gateway_n(4);
+        let client = reqwest::blocking::Client::new();
+        let anthropic = |r: reqwest::blocking::Response| {
+            let st = r.status().as_u16();
+            let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
+            assert_eq!(v["type"], "error", "{v}");
+            (st, v["error"]["type"].as_str().unwrap_or("").to_string())
+        };
+        let r = client.post(format!("http://127.0.0.1:{port}/early/v1/messages")).header("x-api-key", "wrong").body("{}").send().unwrap();
+        assert_eq!(anthropic(r), (401, "authentication_error".into()));
+        let r = client.post(format!("http://127.0.0.1:{port}/missing/v1/messages")).header("x-api-key", test_key()).body("{}").send().unwrap();
+        assert_eq!(anthropic(r), (404, "not_found_error".into()));
+        let r = client.get(format!("http://127.0.0.1:{port}/early/v1/messages")).header("x-api-key", test_key()).send().unwrap();
+        assert_eq!(anthropic(r), (405, "api_error".into()));
+        assert!(logged("early").error.is_some_and(|e| e.contains("POST")));
+        // OpenAI-shaped for everyone else.
+        let r = client.post(format!("http://127.0.0.1:{port}/early/v1/embeddings")).bearer_auth(test_key()).body("{}").send().unwrap();
+        assert_eq!(r.status().as_u16(), 404);
+        let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
+        assert_eq!((v["error"]["type"].as_str(), v["error"]["code"].as_u64()), (Some("not_found_error"), Some(404)), "{v}");
+        lock(&TEST_ROUTES).clear();
     }
 
     #[test]
@@ -2230,6 +2215,16 @@ Connection: close
         assert_eq!(split_path("/relay/v1/messages/"), Some(("relay".into(), "/messages".into())));
         assert_eq!(split_path("/relay/v1"), Some(("relay".into(), "".into())));
         assert_eq!(inbound_of("/messages"), Some(Proto::Anthropic));
+    }
+
+    /// Status lines carry the right phrase for whatever status an upstream passes back.
+    #[test]
+    fn reason_phrases() {
+        for (st, phrase) in [(200, "OK"), (307, "Temporary Redirect"), (402, "Payment Required"), (408, "Request Timeout"), (413, "Payload Too Large"), (422, "Unprocessable Entity"), (431, "Request Header Fields Too Large"), (503, "Service Unavailable")] {
+            assert_eq!(reason(st), phrase);
+        }
+        assert_eq!(reason(529), "Status");
+        assert_eq!(reason(0), "Status");
     }
 
     #[test]
@@ -2310,7 +2305,7 @@ Connection: close
 
     #[test]
     fn connection_slots_are_capped() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let before = CONNS.load(Ordering::SeqCst);
         let slots: Vec<ConnSlot> = std::iter::from_fn(ConnSlot::take).take(MAX_CONNS + 5).collect();
         assert_eq!(slots.len(), MAX_CONNS - before);
@@ -2322,7 +2317,7 @@ Connection: close
 
     #[test]
     fn active_count_survives_panic() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let before = ACTIVE.load(Ordering::Relaxed);
         let r = std::thread::spawn(|| {
             let (_a, n) = Active::start();
@@ -2358,8 +2353,23 @@ Connection: close
         assert!(!config_in(&json!({ "gateway": 5 })).enabled);
     }
 
+    /// The charts read these field names.
+    #[test]
+    fn minute_keeps_its_fields() {
+        let mut m = Minute { t: 60, ..Default::default() };
+        m.total.add(true, (3, 4));
+        m.agents.entry("codex".into()).or_default().add(false, (1, 2));
+        let v = serde_json::to_value(&m).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, ["agents", "failures", "inputTokens", "msMax", "msTotal", "outputTokens", "peakActive", "requests", "t"]);
+        assert_eq!((v["requests"].as_u64(), v["failures"].as_u64(), v["inputTokens"].as_u64(), v["outputTokens"].as_u64()), (Some(1), Some(1), Some(3), Some(4)));
+        assert_eq!(v["agents"]["codex"], json!({ "requests": 1, "failures": 0, "inputTokens": 1, "outputTokens": 2 }));
+    }
+
     /// Mock upstream that answers once with a raw response (head and body as given).
-    fn raw_upstream(resp: &'static str) -> String {
+    fn raw_upstream(resp: String) -> String {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -2374,16 +2384,16 @@ Connection: close
     }
 
     fn one_route(id: &str, api: &str, up: String) {
-        let route = Route { id: id.into(), name: id.into(), library: "x".into(), upstream_api: api.into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
-        *TEST_ROUTES.lock().unwrap() = vec![(route, up, None)];
+        *lock(&TEST_ROUTES) = vec![(test_route(id, api, &[]), up, None)];
         breaker::reset(Some(id));
     }
 
     /// An upstream that breaks off mid-body: the client must not get a clean end of stream.
     #[test]
     fn broken_passthrough_is_not_a_clean_end() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        one_route("cut", "chat", raw_upstream("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\nConnection: close\r\n\r\ndata: {\"choices\":[]}\n\n"));
+        let _guard = lock(&TEST_LOCK);
+        // Announces more than it sends.
+        one_route("cut", "chat", raw_upstream("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\nConnection: close\r\n\r\ndata: {\"choices\":[]}\n\n".into()));
         let port = gateway_n(1);
         let r = reqwest::blocking::Client::new()
             .post(format!("http://127.0.0.1:{port}/cut/v1/chat/completions"))
@@ -2393,23 +2403,17 @@ Connection: close
             .unwrap();
         assert_eq!(r.status().as_u16(), 200);
         assert!(r.text().is_err(), "the body is cut off, not terminated");
-        for _ in 0..50 {
-            if LOG.lock().unwrap().iter().any(|l| l.route == "cut") {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        assert!(LOG.lock().unwrap().iter().any(|l| l.route == "cut" && l.upstream_broken && l.error.as_deref().is_some_and(|e| e.contains("上游中断"))));
-        TEST_ROUTES.lock().unwrap().clear();
+        let e = logged("cut");
+        assert!(e.upstream_broken && e.error.as_deref().is_some_and(|e| e.contains("上游中断")), "{e:?}");
+        lock(&TEST_ROUTES).clear();
     }
 
     /// An Anthropic stream that ends without message_stop becomes an error for the client.
     #[test]
     fn truncated_converted_stream_reports_error() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"c\",\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hal\"}}\n\n";
-        let resp: &'static str = Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_boxed_str());
-        one_route("trunc", "anthropic", raw_upstream(resp));
+        one_route("trunc", "anthropic", raw_upstream(http_resp("200 OK", "text/event-stream", body)));
         let port = gateway_n(1);
         let text = reqwest::blocking::Client::new()
             .post(format!("http://127.0.0.1:{port}/trunc/v1/chat/completions"))
@@ -2422,16 +2426,15 @@ Connection: close
         assert!(text.contains("\"hal\""), "{text}");
         assert!(text.contains("上游的流没有正常结束就断开了"), "{text}");
         assert!(!text.contains("\"finish_reason\":\"stop\""), "{text}");
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
     }
 
     /// SSE served as application/json is still recognised and converted.
     #[test]
     fn sniffs_sse_without_content_type() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let body = "\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi there\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        let resp: &'static str = Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_boxed_str());
-        one_route("sniff", "chat", raw_upstream(resp));
+        one_route("sniff", "chat", raw_upstream(http_resp("200 OK", "application/json", body)));
         let port = gateway_n(1);
         let text = reqwest::blocking::Client::new()
             .post(format!("http://127.0.0.1:{port}/sniff/v1/messages"))
@@ -2448,114 +2451,104 @@ Connection: close
         assert!(sse && head == b"  \n\nevent: x\n");
         let mut r: &[u8] = b"{\"data\":1}";
         assert!(!sniff_sse(&mut r).unwrap().0);
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// A same-protocol streaming request the upstream answered with one JSON document:
+    /// passed through as is, and its tokens are still counted.
+    #[test]
+    fn one_piece_answer_to_a_passthrough_stream_counts_tokens() {
+        let _guard = lock(&TEST_LOCK);
+        let ok = r#"{"id":"c","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":6,"completion_tokens":2}}"#;
+        one_route("whole", "chat", raw_upstream(http_resp("200 OK", "application/json", ok)));
+        let port = gateway_n(1);
+        let text = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/whole/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","stream":true,"messages":[]}"#)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert_eq!(text, ok);
+        assert_eq!(logged("whole").usage, Some((6, 2)));
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// A client that leaves while its answer is replayed as a stream: that is no failure,
+    /// and no second (error) response is written after the first one's head.
+    #[test]
+    fn client_gone_during_replay_is_not_a_failure() {
+        let _guard = lock(&TEST_LOCK);
+        let ok = r#"{"id":"c","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}"#;
+        let resp = http_resp("200 OK", "application/json", ok);
+        // Answers only once the client is gone.
+        let up = mock_upstream(Arc::new(AtomicU64::new(0)), move |_| {
+            std::thread::sleep(Duration::from_millis(200));
+            resp.clone()
+        });
+        one_route("gone", "chat", up);
+        let port = gateway_n(1);
+        let body = r#"{"model":"m","stream":true,"input":"hi"}"#;
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let req = format!("POST /gone/v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n{body}", test_key(), body.len());
+        c.write_all(req.as_bytes()).unwrap();
+        drop(c);
+        let e = logged("gone");
+        assert_eq!((e.status, e.error), (200, None));
+        lock(&TEST_ROUTES).clear();
     }
 
     /// An upstream that streams although the client asked for one piece (stream=false): the
     /// stream is collected into the JSON answer, converted or passed through.
     #[test]
     fn stream_to_a_non_stream_request_is_collected() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let body = concat!(
-            "event: response.created
-data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-x\",\"output\":[]}}
-
-",
-            "event: response.output_item.added
-data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"content\":[]}}
-
-",
-            "event: response.output_text.delta
-data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"po\"}
-
-",
-            "event: response.output_text.delta
-data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"ng\"}
-
-",
-            "event: response.completed
-data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-x\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":2,\"total_tokens\":14}}}
-
-",
+            "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-x\",\"output\":[]}}\n\n",
+            "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+            "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"po\"}\n\n",
+            "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"ng\"}\n\n",
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-x\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":2,\"total_tokens\":14}}}\n\n",
         );
-        // Labelled application/json, like some relays do.
-        let resp = |ct: &str| -> &'static str { Box::leak(format!("HTTP/1.1 200 OK
-Content-Type: {ct}
-Content-Length: {}
-Connection: close
-
-{body}", body.len()).into_boxed_str()) };
         let call = |path: &str, req: &str| {
             let port = gateway_n(1);
             let r = reqwest::blocking::Client::new().post(format!("http://127.0.0.1:{port}/{path}")).bearer_auth(test_key()).body(req.to_string()).send().unwrap();
-            { let st = r.status().as_u16(); let text = r.text().unwrap(); (st, serde_json::from_str::<Value>(&text).unwrap_or_else(|_| panic!("{text}"))) }
+            let st = r.status().as_u16();
+            let text = r.text().unwrap();
+            (st, serde_json::from_str::<Value>(&text).unwrap_or_else(|_| panic!("{text}")))
         };
 
-        one_route("sse1", "responses", raw_upstream(resp("application/json")));
+        // Labelled application/json, like some relays do.
+        one_route("sse1", "responses", raw_upstream(http_resp("200 OK", "application/json", body)));
         let (st, v) = call("sse1/v1/chat/completions", r#"{"model":"m","stream":false,"messages":[{"role":"user","content":"hi"}]}"#);
         assert_eq!(st, 200, "{v}");
         assert_eq!(v["object"], "chat.completion", "{v}");
         assert_eq!(v["choices"][0]["message"]["content"], "pong", "{v}");
         assert_eq!(convert::usage_tokens(&v), Some((12, 2)), "{v}");
 
-        one_route("sse2", "responses", raw_upstream(resp("text/event-stream")));
+        one_route("sse2", "responses", raw_upstream(http_resp("200 OK", "text/event-stream", body)));
         let (st, v) = call("sse2/v1/responses", r#"{"model":"m","stream":false,"input":"hi"}"#);
         assert_eq!(st, 200, "{v}");
         let text: String = v["output"].as_array().unwrap().iter().flat_map(|i| i["content"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["text"].as_str().map(String::from)).collect();
         assert_eq!(text, "pong", "{v}");
 
         // An error in the stream is an error for the client, not an empty answer.
-        let failed = "event: response.failed
-data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"model overloaded\"}}}
-
-";
-        let resp: &'static str = Box::leak(format!("HTTP/1.1 200 OK
-Content-Type: text/event-stream
-Content-Length: {}
-Connection: close
-
-{failed}", failed.len()).into_boxed_str());
-        one_route("sse3", "responses", raw_upstream(resp));
+        let failed = "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"model overloaded\"}}}\n\n";
+        one_route("sse3", "responses", raw_upstream(http_resp("200 OK", "text/event-stream", failed)));
         let (st, v) = call("sse3/v1/chat/completions", r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#);
         assert!(st >= 500 && v.to_string().contains("model overloaded"), "{st} {v}");
-        TEST_ROUTES.lock().unwrap().clear();
-    }
-
-    #[test]
-    fn chunks_fold_into_one_answer() {
-        let c = |delta: Value, finish: Value| json!({ "id": "c1", "created": 5, "model": "m", "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] });
-        let chunks = vec![
-            c(json!({ "role": "assistant" }), Value::Null),
-            c(json!({ "reasoning_content": "think" }), Value::Null),
-            c(json!({ "content": "a" }), Value::Null),
-            c(json!({ "tool_calls": [{ "index": 0, "id": "t1", "type": "function", "function": { "name": "run", "arguments": "{\"x\"" } }] }), Value::Null),
-            c(json!({ "tool_calls": [{ "index": 0, "function": { "arguments": ":1}" } }] }), Value::Null),
-            c(json!({}), json!("tool_calls")),
-            json!({ "id": "c1", "choices": [], "usage": { "prompt_tokens": 3, "completion_tokens": 4 } }),
-        ];
-        let v = chat_from_chunks(&chunks).unwrap();
-        // Round trip with chat_as_chunks.
-        assert_eq!(chat_from_chunks(&chat_as_chunks(&v)).unwrap()["choices"], v["choices"]);
-        let m = &v["choices"][0]["message"];
-        assert_eq!((m["content"].as_str(), m["reasoning_content"].as_str()), (Some("a"), Some("think")));
-        assert_eq!(m["tool_calls"][0]["id"], "t1");
-        assert_eq!(m["tool_calls"][0]["function"]["arguments"], "{\"x\":1}");
-        assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
-        assert_eq!((v["id"].as_str(), v["model"].as_str()), (Some("c1"), Some("m")));
-        assert_eq!(convert::usage_tokens(&v), Some((3, 4)));
-        let err = chat_from_chunks(&[json!({ "choices": [], "error": { "message": "boom" } })]).unwrap_err();
-        assert_eq!(err, "boom");
+        lock(&TEST_ROUTES).clear();
     }
 
     /// A redirect from the upstream is passed back, never followed with the upstream key.
     #[test]
     fn upstream_redirects_are_not_followed() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let hits = Arc::new(AtomicU64::new(0));
         let elsewhere = fixed_upstream(200, "{}", hits.clone());
-        let resp: &'static str = Box::leak(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/chat/completions\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_boxed_str());
-        let route = Route { id: "redir".into(), name: "redir".into(), library: "x".into(), upstream_api: "chat".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
-        *TEST_ROUTES.lock().unwrap() = vec![(route, raw_upstream(resp), Some("up-secret".into()))];
+        let resp = format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/chat/completions\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        *lock(&TEST_ROUTES) = vec![(test_route("redir", "chat", &[]), raw_upstream(resp), Some("up-secret".into()))];
         let port = gateway_n(1);
         let r = reqwest::blocking::Client::new()
             .post(format!("http://127.0.0.1:{port}/redir/v1/chat/completions"))
@@ -2565,17 +2558,16 @@ Connection: close
             .unwrap();
         assert_eq!(r.status().as_u16(), 307);
         assert_eq!(hits.load(Ordering::SeqCst), 0);
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
     }
 
     /// Bad JSON from the client: 400, no upstream call, nothing counted against the forward.
     #[test]
     fn client_mistakes_are_400() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         let hits = Arc::new(AtomicU64::new(0));
         let up = fixed_upstream(200, "{}", hits.clone());
-        let route = Route { id: "c400".into(), name: "c400".into(), library: "x".into(), upstream_api: "anthropic".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
-        *TEST_ROUTES.lock().unwrap() = vec![(route, up, None)];
+        *lock(&TEST_ROUTES) = vec![(test_route("c400", "anthropic", &[]), up, None)];
         breaker::reset(Some("c400"));
         let port = gateway_n(2);
         let client = reqwest::blocking::Client::new();
@@ -2585,13 +2577,13 @@ Connection: close
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0);
         assert!(breaker::view(&breaker::Config::default(), "c400").is_none());
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
     }
 
     /// /health says the gateway is up to anyone, but lists forwards only to key holders.
     #[test]
     fn health_lists_routes_only_with_key() {
-        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = lock(&TEST_LOCK);
         one_route("hidden", "chat", "http://127.0.0.1:9/v1".into());
         let port = gateway_n(2);
         let client = reqwest::blocking::Client::new();
@@ -2600,7 +2592,7 @@ Connection: close
         assert!(v.get("routes").is_none(), "{v}");
         let v: Value = client.get(format!("http://127.0.0.1:{port}/health")).bearer_auth(test_key()).send().unwrap().json_body();
         assert_eq!(v["routes"], json!(["hidden"]));
-        TEST_ROUTES.lock().unwrap().clear();
+        lock(&TEST_ROUTES).clear();
     }
 
     trait JsonBody {
@@ -2611,15 +2603,5 @@ Connection: close
         fn json_body(self) -> Value {
             serde_json::from_str(&self.text().unwrap()).unwrap()
         }
-    }
-
-    #[test]
-    fn replays_array_content_and_reasoning() {
-        let chat = json!({ "id": "c", "model": "m", "choices": [{ "message": { "role": "assistant",
-            "content": [{ "type": "text", "text": "a" }, { "type": "text", "text": "b" }], "reasoning": "hmm" }, "finish_reason": "stop" }] });
-        let chunks = chat_as_chunks(&chat);
-        let text: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["content"].as_str()).collect();
-        let reasoning: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["reasoning_content"].as_str()).collect();
-        assert_eq!((text.as_str(), reasoning.as_str()), ("a\nb", "hmm"));
     }
 }
