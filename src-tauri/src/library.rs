@@ -2,6 +2,7 @@
 //! models kept by AgentPlus itself, independent of any agent and of the Windows/WSL
 //! target. Lives in `~/.agentplus/store.json` under "library". Keys never leave the backend.
 
+use crate::adapters::msg;
 use crate::model::{mask_key, slug, unique_id};
 use crate::store;
 use crate::util::{str_field, str_list};
@@ -72,7 +73,7 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
     let name = input.name.trim();
     let url = input.base_url.trim().trim_end_matches('/');
     if name.is_empty() {
-        return Err(anyhow!(crate::i18n::l("名称不能为空", "Name can't be empty")));
+        return Err(msg::name_required());
     }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(anyhow!(crate::i18n::l("地址需要以 http:// 或 https:// 开头", "Base URL must start with http:// or https://")));

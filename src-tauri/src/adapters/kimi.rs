@@ -11,6 +11,7 @@
 
 // Unused until the integrator wires the adapter into adapters::mod.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -390,7 +391,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
         .and_then(|t| t.get(id))
         .cloned()
         .or_else(|| stashed.as_ref().and_then(|d| d.get("providers").and_then(|t| t.get(id)).cloned()))
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        .ok_or_else(|| msg::no_provider(id))?;
     let base = get_str(&item, "base_url").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
     let key = get_str(&item, "api_key")
         .filter(|k| !k.is_empty())
@@ -415,7 +416,7 @@ fn edit_provider_in(doc: &mut DocumentMut, pid: &str, p: &ProviderInput, legacy:
         .get_mut("providers")
         .and_then(|x| x.get_mut(pid))
         .and_then(|x| x.as_table_like_mut())
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {pid}", "Provider not found: {pid}")))?;
+        .ok_or_else(|| msg::no_provider(pid))?;
     let mut lines = vec![];
     let base = p.base_url.trim();
     if t.get("base_url").and_then(|v| v.as_str()) != Some(base) {
@@ -488,7 +489,7 @@ impl Ctx {
         } else if store_obj(&self.root, "disabledProviders").contains_key(pid) {
             Err(anyhow!(tr!("供应商 {pid} 已停用，先启用再调整模型", "Provider {pid} is disabled; enable it before changing its models")))
         } else {
-            Err(anyhow!(tr!("找不到供应商 {pid}", "Provider not found: {pid}")))
+            Err(msg::no_provider(pid))
         }
     }
 
@@ -613,7 +614,7 @@ impl Ctx {
             }
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
-            let rec = d.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+            let rec = d.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
             let mut sd = from_text(stash_text(rec))?;
             let lines = edit_provider_in(&mut sd, id, p, legacy)?;
             if !lines.is_empty() {
@@ -643,7 +644,7 @@ impl Ctx {
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
             if d.remove(id).is_none() {
-                return Err(anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")));
+                return Err(msg::no_provider(id));
             }
             self.set_store("disabledProviders", d);
             self.diff.push(store_label(), tr!("- 「{id}」（已停用，暂存的定义一并删除）", "- \"{id}\" (disabled; its stashed definition is deleted too)"), false);
@@ -666,7 +667,7 @@ impl Ctx {
         let mut d = store_obj(&self.root, "disabledProviders");
         if !on {
             if !self.has_provider(id) {
-                return if d.contains_key(id) { Ok(()) } else { Err(anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}"))) };
+                return if d.contains_key(id) { Ok(()) } else { Err(msg::no_provider(id)) };
             }
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
             self.check_default(&keys, l("停用这个供应商", "disabling this provider"))?;
@@ -680,7 +681,7 @@ impl Ctx {
             self.cfg_dirty = true;
         } else {
             let Some(rec) = d.remove(id) else {
-                return if self.has_provider(id) { Ok(()) } else { Err(anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}"))) };
+                return if self.has_provider(id) { Ok(()) } else { Err(msg::no_provider(id)) };
             };
             let sd = from_text(stash_text(&rec))?;
             let prov = sd.get("providers").and_then(|t| t.get(id)).ok_or_else(|| anyhow!(tr!("暂存的供应商 {id} 不完整", "Stashed provider {id} is incomplete")))?;
@@ -735,7 +736,7 @@ impl Ctx {
         self.live_provider(pid)?;
         let mid = m.id.trim();
         if mid.is_empty() {
-            return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+            return Err(msg::model_id_required());
         }
         let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
         for (k, v) in &m.extra {
@@ -827,7 +828,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match p.id.as_deref() {
                     None => cx.create_provider(p)?,
@@ -840,9 +841,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::UpsertModel { provider, model } => cx.upsert_model(provider, model)?,
             Op::DeleteModel { provider, model } => cx.delete_model(provider, model)?,
             Op::SetProviderModels { provider, models } => cx.set_models(provider, models)?,
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Kimi Code 可以同时配置多个供应商，默认模型在 Kimi 里用 /model 切换", "Kimi Code can have several providers at once; switch the default model with /model in Kimi"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }

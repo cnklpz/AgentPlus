@@ -6,6 +6,7 @@
 //! Claude Code speaks the Anthropic Messages protocol only; relays with other protocols
 //! go through the local gateway.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -303,7 +304,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let p = if id == UNMANAGED {
         json!({ "baseUrl": env_str(&env, BASE).unwrap_or_default(), "apiKey": env_str(&env, TOKEN).or_else(|| env_str(&env, API_KEY)).unwrap_or_default() })
     } else {
-        profiles(&store::load()).get(id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+        profiles(&store::load()).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
     };
     let base = str_field(&p, "baseUrl");
     if base.is_empty() {
@@ -334,7 +335,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if id == UNMANAGED {
             return Err(anyhow!(l("先编辑并保存一次「settings.json 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in settings.json\" once so AgentPlus takes it over, then change its models")));
         }
-        profs.get(id).map(|_| ()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        profs.get(id).map(|_| ()).ok_or_else(|| msg::no_provider(id))
     };
 
     for op in ops {
@@ -344,7 +345,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("Claude Code 只支持 Anthropic 协议；其他协议的中转请经本地网关接入", "Claude Code only supports the Anthropic protocol; connect relays using other protocols through the local gateway")));
                 }
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
                 match p.id.as_deref() {
@@ -380,7 +381,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     Some(OFFICIAL) => return Err(anyhow!(l("官方账号不能编辑", "The official account can't be edited"))),
                     Some(id) => {
-                        let e = profs.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+                        let e = profs.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
                         let base = claude_base(&p.base_url);
                         for (k, v) in [("name", p.name.trim()), ("baseUrl", base.as_str())] {
                             if str_field(e, k) != v {
@@ -402,7 +403,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(anyhow!(l("这一项不能删除", "This entry can't be deleted")));
                 }
                 if provider == &cur {
-                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商", "\"{provider}\" is in use; switch to another provider first")));
+                    return Err(msg::in_use(provider));
                 }
                 if profs.remove(provider).is_some() {
                     diff.push(store_label, tr!("- 「{provider}」", "- \"{provider}\""), false);
@@ -411,7 +412,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetCurrentProvider { provider } => {
                 if provider != OFFICIAL && provider != UNMANAGED && !profs.contains_key(provider) {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 cur = provider.clone();
             }
@@ -497,7 +498,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             cfg_dirty = true;
                         }
                     }
-                    other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                    other => return Err(msg::unknown_setting(other)),
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Claude Code 同时只用一个供应商，请用「设为当前」", "Claude Code uses one provider at a time; use \"Set as current\""))),

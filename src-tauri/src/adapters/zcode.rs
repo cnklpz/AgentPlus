@@ -3,6 +3,7 @@
 //! when its id is in `personalModelIds`; `modelOrder` keeps the full known list.
 //! Per-model context windows live in `config.modelConfigRules.providerModelRules`.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::mfields;
 use crate::model::*;
@@ -262,7 +263,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let r = rules(&pc)
         .into_iter()
         .find(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(id))
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        .ok_or_else(|| msg::no_provider(id))?;
     let base = r.pointer("/config/api/baseUrl").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有地址", "Provider {id} has no base URL")))?.to_string();
     let key = r.pointer("/config/access/apiKey").and_then(|x| x.as_str()).filter(|k| !k.is_empty()).map(String::from);
     let api = api_short(r.pointer("/config/api/type").and_then(|x| x.as_str()).unwrap_or("")).to_string();
@@ -279,7 +280,7 @@ fn rule_mut<'a>(pc: &'a mut Value, pid: &str) -> Result<&'a mut Value> {
     rules_mut(pc)?
         .iter_mut()
         .find(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(pid))
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {pid}", "Provider not found: {pid}")))
+        .ok_or_else(|| msg::no_provider(pid))
 }
 
 fn rule_name(r: &Value, pid: &str) -> String {
@@ -335,7 +336,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match &p.id {
                     None => {
@@ -390,7 +391,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::DeleteProvider { provider } => {
                 let list = rules_mut(&mut pc)?;
                 let Some(i) = list.iter().position(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(provider)) else {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 };
                 let name = rule_name(&list[i], provider);
                 list.remove(i);
@@ -434,7 +435,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 for (k, v) in &m.extra {
                     mfields::check(mfields::ZCODE, k, v)?;
@@ -480,7 +481,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetSetting { key, value } => {
                 if !SETTINGS.iter().any(|(k, ..)| k == key) {
-                    return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}")));
+                    return Err(msg::unknown_setting(key));
                 }
                 let on = value.as_bool().unwrap_or(false);
                 if st.get(key).and_then(|x| x.as_bool()).unwrap_or(false) != on {
@@ -491,8 +492,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("ZCode 按启用/停用管理供应商", "ZCode manages providers by enabling/disabling them"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models. Edit the models directly."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
         }
     }
 

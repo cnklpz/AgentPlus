@@ -8,6 +8,7 @@
 //! untouched. Unknown fields are always kept; only documented fields are ever added.
 
 
+use super::msg;
 use super::Endpoint;
 use crate::model::*;
 use crate::store;
@@ -337,7 +338,7 @@ impl Fmt {
 
     /// Base URL, key and api of a provider (auth.json wins over the config, as in pi).
     pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<Endpoint> {
-        let def = self.providers_of(cfg).and_then(|p| p.get(id)).cloned().or_else(|| self.parked(root).get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        let def = self.providers_of(cfg).and_then(|p| p.get(id)).cloned().or_else(|| self.parked(root).get(id).cloned()).ok_or_else(|| msg::no_provider(id))?;
         let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl（沿用内置地址）", "Provider {id} has no baseUrl (uses the built-in URL)")))?.to_string();
         let auth = self.load_auth().map(|a| a.0);
         let key = Self::auth_key(auth.as_ref(), id).and_then(|k| self.resolve(k)).or_else(|| def.get("apiKey").and_then(|k| self.resolve(k)));
@@ -368,7 +369,7 @@ impl Fmt {
             dirty.auth = true;
         } else {
             let prefix = self.cfg_prefix();
-            let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+            let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
             def["apiKey"] = json!(key);
             diff.push(&self.file(), format!("{prefix}.{id}.apiKey = {}", mask_key(key)), true);
             dirty.cfg = true;
@@ -416,7 +417,7 @@ impl Fmt {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let name = p.name.trim();
                 let base_url = p.base_url.trim();
@@ -462,7 +463,7 @@ impl Fmt {
                         let def = if in_cfg {
                             self.providers_mut(cfg)?.get_mut(id).unwrap()
                         } else {
-                            store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+                            store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?
                         };
                         if !def.is_object() {
                             return Err(anyhow!(tr!("{pre}.{id} 不是对象", "{pre}.{id} is not an object")));
@@ -510,7 +511,7 @@ impl Fmt {
                 let removed_cfg = self.providers_mut(cfg)?.remove(provider).is_some();
                 let removed_stash = store::section(root, agent, "disabledProviders").remove(provider).is_some();
                 if !removed_cfg && !removed_stash {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 let prefix = format!("{provider}|");
                 store::section(root, agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
@@ -567,7 +568,7 @@ impl Fmt {
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
                 let key = format!("{provider}|{mid}");

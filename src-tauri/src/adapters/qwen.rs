@@ -15,6 +15,7 @@
 
 // Unused until the integrator wires the adapter into adapters::mod.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::model::*;
 use crate::process::Install;
@@ -441,7 +442,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had)) => {
             if had {
                 st.readonly = true;
-                st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments, which would be lost on write. Switched to read-only.").into());
+                st.notes.push(msg::comments_readonly("settings.json"));
             }
             cfg
         }
@@ -520,7 +521,7 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    let g = groups(&cfg, &store::load()).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let g = groups(&cfg, &store::load()).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
     let base = g.base.clone().filter(|b| !b.trim().is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")))?;
     let key = g.key_var().and_then(|v| lookup(&cfg, &v)).map(|x| x.0);
     Ok((base, key, g.api().into()))
@@ -543,7 +544,7 @@ impl Ctx {
     }
 
     fn group(&self, id: &str) -> Result<Group> {
-        self.groups().into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        self.groups().into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))
     }
 
     fn enabled_group(&self, id: &str) -> Result<Group> {
@@ -677,7 +678,7 @@ impl Ctx {
     fn transform(&mut self, g: &Group, new_key: &str, f: &dyn Fn(&mut Value)) -> Result<()> {
         if !g.enabled {
             let mut d = store_obj(&self.root, "disabledProviders");
-            let rec = d.get_mut(&g.id).ok_or_else(|| anyhow!(tr!("找不到供应商 {}", "Provider not found: {}", g.id)))?;
+            let rec = d.get_mut(&g.id).ok_or_else(|| msg::no_provider(&g.id))?;
             for k in ["entries", "hidden"] {
                 if let Some(a) = rec.get_mut(k).and_then(|x| x.as_array_mut()) {
                     a.iter_mut().filter(|e| e.is_object()).for_each(f);
@@ -928,7 +929,7 @@ impl Ctx {
         let g = self.enabled_group(provider)?;
         let mid = m.id.trim().to_string();
         if mid.is_empty() {
-            return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+            return Err(msg::model_id_required());
         }
         let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(String::from);
         let ctx = m.context;
@@ -1046,7 +1047,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match p.id.as_deref() {
                     None => cx.create_provider(p)?,
@@ -1077,16 +1078,16 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         cx.cfg_dirty = true;
                     }
                 }
-                other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                other => return Err(msg::unknown_setting(other)),
             },
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Qwen Code 可以同时配置多个供应商，在 Qwen Code 里用 /model 选择模型", "Qwen Code can have several providers configured at once; pick models with /model in Qwen Code."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
 
     if cx.cfg_dirty && had_comments {
-        return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing to avoid losing them")));
+        return Err(msg::comments_not_written("settings.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;

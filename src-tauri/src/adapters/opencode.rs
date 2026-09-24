@@ -3,6 +3,7 @@
 //! `options.apiKey`). Disabling uses OpenCode's own `disabled_providers` list. Providers
 //! logged in through `opencode auth` without a config entry show up read-only.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt};
 use super::ocsettings::{self, Scope};
@@ -114,7 +115,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(tr!("{} 含注释，写回会丢失注释，已切换为只读。", "{} contains comments, which would be lost on write. Switched to read-only.", config_path().file_name().unwrap().to_string_lossy()));
+                st.notes.push(msg::comments_readonly(&config_path().file_name().unwrap().to_string_lossy()));
             }
             cfg
         }
@@ -167,15 +168,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 dirty.cfg |= ocsettings::apply(&mut cfg, key, value, &mut diff, &ef)?;
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenCode 按启用/停用管理供应商，在 OpenCode 里用 /models 选择模型", "OpenCode manages providers by enabling/disabling them. Pick models with /models in OpenCode."))),
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models. Edit the models directly."))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles."))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by ocfmt"),
         }
     }
 
     if dirty.cfg && had_comments {
-        return Err(anyhow!(l("配置文件含注释，为避免丢失注释不写入", "The config file contains comments; not writing to avoid losing them")));
+        return Err(msg::comments_not_written(&config_path().file_name().unwrap().to_string_lossy()));
     }
     let mut written = vec![];
     let mut backup_dir = None;

@@ -4,6 +4,7 @@
 //! Disabling uses the native `disabled_providers` list; providers logged in through
 //! `kilo auth` without a config entry show up read-only.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt};
 use crate::i18n::l;
@@ -130,11 +131,7 @@ pub fn state(inst: &Install) -> AgentState {
         Ok((cfg, _, had_comments)) => {
             if had_comments {
                 st.readonly = true;
-                st.notes.push(tr!(
-                    "{} 含注释，写回会丢失注释，已切换为只读。",
-                    "{} contains comments, which would be lost on write, so it's read-only.",
-                    config_path().file_name().unwrap().to_string_lossy()
-                ));
+                st.notes.push(msg::comments_readonly(&config_path().file_name().unwrap().to_string_lossy()));
             }
             cfg
         }
@@ -274,7 +271,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             dirty.cfg = true;
                         }
                     }
-                    other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
+                    other => return Err(msg::unknown_setting(other)),
                 }
             }
             Op::SetCurrentProvider { .. } => {
@@ -283,15 +280,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     "Kilo Code manages providers by enabling and disabling them; pick a model with /models in Kilo"
                 )))
             }
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models; edit the models directly"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by ocfmt"),
         }
     }
 
     if dirty.cfg && had_comments {
-        return Err(anyhow!(l("配置文件含注释，为避免丢失注释不写入", "The config file contains comments; not writing it so they aren't lost")));
+        return Err(msg::comments_not_written(&config_path().file_name().unwrap().to_string_lossy()));
     }
     let mut written = vec![];
     let mut backup_dir = None;
