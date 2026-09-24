@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { useEscape } from "../hooks";
 import { type AgentId, type AgentState, type ApiKind, type GatewayBreaker, type GatewayBreakerView, type GatewayRoute, type GatewayRouteView, type GatewayStatus, type TestResult, api } from "../api";
 import { API_LABEL, type Group, type Station, apiFor, gatewayCapable, gatewayRouteId, plainRoute } from "../services";
 import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { AgentIcon, Icon } from "./icons";
+import { Modal } from "./Modal";
+import { ErrorBox, Seg, ToggleRow } from "./controls";
+import { TestButton, TestResultView } from "./ProviderTest";
 import { t, tn, tx } from "../i18n";
 import { scrub } from "../privacy";
 import { copyText, errText, type Flash, isHttpUrl, onActivateKey } from "../util";
-import { fmtSecs, joinList } from "../format";
+import { joinList } from "../format";
 
 interface Props {
   status: GatewayStatus | null;
@@ -41,15 +43,14 @@ export function tripped(r: GatewayRouteView): GatewayBreakerView | null {
   return r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
 }
 
-/** A wait in whole seconds: "42 秒", "1 分 5 秒". */
-function fmtWait(n: number) {
+function secs(n: number) {
   return n >= 60 ? t("gatewayPage.minSec", { m: Math.floor(n / 60), s: n % 60 }) : t("gatewayPage.sec", { n });
 }
 
 /** "15:41:52 起 · 42 秒后重试" */
 function breakerWhen(b: GatewayBreakerView) {
   return b.state === "open"
-    ? t("gatewayPage.breakerOpen", { at: b.at ?? "", wait: fmtWait(b.remainingSecs) })
+    ? t("gatewayPage.breakerOpen", { at: b.at ?? "", wait: secs(b.remainingSecs) })
     : t("gatewayPage.breakerHalfOpen");
 }
 
@@ -131,7 +132,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <span className="tiny muted">· {tn("gatewayPage.heroRequests", s.requests)} · {tn("gatewayPage.heroFailures", s.failures)}{s.active ? ` · ${tn("gatewayPage.heroActive", s.active)}` : ""}</span>
                   </div>
                 ) : (
-                  <div className="small muted">{s?.error ?? t("gatewayPage.idleHint")}</div>
+                  <div className="small muted">{scrub(s?.error) ?? t("gatewayPage.idleHint")}</div>
                 )}
               </div>
               <label className="gw-port-field">
@@ -149,7 +150,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
               )}
             </div>
             {!portOk && <em className="field-err">{t("gatewayPage.portInvalid")}</em>}
-            {s?.running && s.error && <div className="err">{scrub(s.error)}</div>}
+            {s?.running && s.error && <ErrorBox text={s.error} />}
             {s?.running && paused.length > 0 && (
               <div className="gw-trip" role="alert">
                 <div className="row between gap6">
@@ -219,7 +220,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <span className="gw-weight" title={t("gatewayPage.weightTitle")}>{t("gatewayPage.weightChip", { w: r.weight })}</span>
                     {r.upstreamMissing ? <span className="chip-muted">{t("gatewayPage.chipBroken")}</span>
                       : !r.enabled ? <span className="chip-muted">{t("gatewayPage.chipPaused")}</span>
-                      : trip ? <span className="chip-bad" title={breakerWhen(trip)}>{trip.state === "open" ? t("gatewayPage.chipTripped", { wait: fmtWait(trip.remainingSecs) }) : t("gatewayPage.chipProbe")}</span>
+                      : trip ? <span className="chip-bad" title={breakerWhen(trip)}>{trip.state === "open" ? t("gatewayPage.chipTripped", { wait: secs(trip.remainingSecs) }) : t("gatewayPage.chipProbe")}</span>
                       : <span className="chip-ok">{t("gatewayPage.chipActive")}</span>}
                     <button className="icon-btn sm" aria-label={t("gatewayPage.copyGatewayUrl")} title={t("gatewayPage.copyUrl")} onClick={(e) => { e.stopPropagation(); copy(r.localBase); }}><Icon.copy size={12} /></button>
                     <button className="icon-btn sm" aria-label={t("gatewayPage.deleteRoute")} title={t("gatewayPage.deleteRoute")} onClick={(e) => { e.stopPropagation(); remove(r.id); }}><Icon.trash size={12} /></button>
@@ -244,12 +245,12 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <span className="mono tiny muted">{l.at}</span>
                     <span className="mono small ellipsis">{l.route}</span>
                     <span className="tiny">
-                      {l.inbound ? API_LABEL[l.inbound as ApiKind] ?? l.inbound : l.method}
-                      {l.converted ? <> → {API_LABEL[l.upstream as ApiKind] ?? l.upstream}</> : l.upstream ? t("gatewayPage.passthroughSuffix") : ""}
+                      {l.inbound ? API_LABEL[l.inbound as ApiKind] : l.method}
+                      {l.converted ? <> → {API_LABEL[l.upstream as ApiKind]}</> : l.upstream ? t("gatewayPage.passthroughSuffix") : ""}
                     </span>
                     <span className="mono tiny ellipsis">{l.model}</span>
                     <span className={`mono tiny ${l.status >= 400 ? "warn-text" : "good-ink"}`}>{l.status || "—"}</span>
-                    <span className="mono tiny muted">{fmtSecs(l.ms, 2)}s{l.stream ? t("gatewayPage.streamSuffix") : ""}</span>
+                    <span className="mono tiny muted">{(l.ms / 1000).toFixed(2)}s{l.stream ? t("gatewayPage.streamSuffix") : ""}</span>
                   </div>
                 ))}
               </div>
@@ -331,8 +332,6 @@ function AddForward({ groups, onForward, onClose }: {
   /** Custom upstream already saved to the library by an earlier attempt. */
   const savedId = useRef<string | null>(null);
 
-  useEscape(onClose);
-
   const urlOk = isHttpUrl(url);
   const can = mode === "pick" ? !!pick : name.trim() !== "" && urlOk;
   const save = async () => {
@@ -355,80 +354,64 @@ function AddForward({ groups, onForward, onClose }: {
     }
   };
 
+  const foot = (
+    <>
+      <span className="muted tiny grow">{t("gatewayPage.autoStart")}</span>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={!can || busy} onClick={save}>{busy ? t("gatewayPage.adding") : t("common.add")}</button>
+    </>
+  );
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={t("gatewayPage.addRoute")}>
-        <div className="modal-head">
-          <h2>{t("gatewayPage.addRoute")}</h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
+    <Modal label={t("gatewayPage.addRoute")} title={t("gatewayPage.addRoute")} onClose={onClose} foot={foot}>
+      <Seg value={mode} onChange={setMode} options={[
+        { value: "pick", label: t("gatewayPage.pickExisting"), disabled: !groups.length },
+        { value: "custom", label: t("gatewayPage.customUrl") },
+      ]} />
+      {mode === "pick" ? (
+        <div className="field">
+          <span className="field-label">{t("common.provider")}</span>
+          <Dropdown value={pick} label={t("common.provider")} onChange={setPick}
+            options={groups.map(({ st, g }) => ({ value: g.key, label: g.name, hint: `${st.name} · ${API_LABEL[g.api]} · ${g.baseUrl}` }))} />
+          <em className="muted tiny">{t("gatewayPage.pickHint")}</em>
+          {(() => {
+            const users = replaceable(groups.find((x) => x.g.key === pick)?.g);
+            return (
+              <ToggleRow className="af-replace" on={replace} onChange={setReplace} disabled={users.length === 0} title={t("gatewayPage.replaceTitle")}
+                hint={users.length === 0
+                  ? t("gatewayPage.replaceNone")
+                  : replace
+                    ? t("gatewayPage.replaceOn", {
+                        list: joinList(users.map((u) => t("gatewayPage.agentProvider", { agent: u.agent.name, provider: u.p!.name }))),
+                      })
+                    : tn("gatewayPage.replaceOff", users.length)} />
+            );
+          })()}
         </div>
-        <div className="modal-body">
-          <div className="seg">
-            <button className={mode === "pick" ? "on" : ""} disabled={!groups.length} onClick={() => setMode("pick")}>{t("gatewayPage.pickExisting")}</button>
-            <button className={mode === "custom" ? "on" : ""} onClick={() => setMode("custom")}>{t("gatewayPage.customUrl")}</button>
+      ) : (
+        <>
+          <div className="field">
+            <label htmlFor="af-name">{t("common.name")}</label>
+            <input id="af-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("gatewayPage.namePlaceholder")} />
           </div>
-          {mode === "pick" ? (
-            <div className="field">
-              <span className="field-label">{t("common.provider")}</span>
-              <Dropdown value={pick} label={t("common.provider")} onChange={setPick}
-                options={groups.map(({ st, g }) => ({ value: g.key, label: g.name, hint: `${st.name} · ${API_LABEL[g.api]} · ${g.baseUrl}` }))} />
-              <em className="muted tiny">{t("gatewayPage.pickHint")}</em>
-              {(() => {
-                const users = replaceable(groups.find((x) => x.g.key === pick)?.g);
-                return (
-                  <div className={`gw-toggle af-replace${replace ? " on" : ""}`}>
-                    <div className="grow minw0">
-                      <div className="small strong">{t("gatewayPage.replaceTitle")}</div>
-                      <div className="tiny muted">
-                        {users.length === 0
-                          ? t("gatewayPage.replaceNone")
-                          : replace
-                            ? t("gatewayPage.replaceOn", {
-                                list: joinList(users.map((u) => t("gatewayPage.agentProvider", { agent: u.agent.name, provider: u.p!.name }))),
-                              })
-                            : tn("gatewayPage.replaceOff", users.length)}
-                      </div>
-                    </div>
-                    <button type="button" className={`switch${replace ? " on" : ""}`} role="switch" aria-checked={replace} aria-label={t("gatewayPage.replaceTitle")}
-                      disabled={users.length === 0} onClick={() => setReplace((v) => !v)}><span /></button>
-                  </div>
-                );
-              })()}
-            </div>
-          ) : (
-            <>
-              <div className="field">
-                <label htmlFor="af-name">{t("common.name")}</label>
-                <input id="af-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("gatewayPage.namePlaceholder")} />
-              </div>
-              <div className="field">
-                <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
-                <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-                {url && !urlOk && <em className="field-err">{t("gatewayPage.urlInvalid")}</em>}
-              </div>
-              <div className="field">
-                <span className="field-label">{t("gatewayPage.upstreamProto")}</span>
-                <div className="seg">
-                  {PROTOS.map((p) => <button key={p} className={apiKind === p ? "on" : ""} onClick={() => setApiKind(p)}>{API_LABEL[p]}</button>)}
-                </div>
-                <em className="muted tiny">{t("gatewayPage.protoHint")}</em>
-              </div>
-              <div className="field">
-                <label htmlFor="af-key">{t("common.apiKey")}</label>
-                <input id="af-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
-                <em className="muted tiny">{t("gatewayPage.keyHint")}</em>
-              </div>
-            </>
-          )}
-          {err && <div className="err">{err}</div>}
-        </div>
-        <div className="modal-foot">
-          <span className="muted tiny grow">{t("gatewayPage.autoStart")}</span>
-          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!can || busy} onClick={save}>{busy ? t("gatewayPage.adding") : t("common.add")}</button>
-        </div>
-      </div>
-    </div>
+          <div className="field">
+            <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
+            <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+            {url && !urlOk && <em className="field-err">{t("gatewayPage.urlInvalid")}</em>}
+          </div>
+          <div className="field">
+            <span className="field-label">{t("gatewayPage.upstreamProto")}</span>
+            <Seg value={apiKind} onChange={setApiKind} label={t("gatewayPage.upstreamProto")} options={PROTOS.map((p) => ({ value: p, label: API_LABEL[p] }))} />
+            <em className="muted tiny">{t("gatewayPage.protoHint")}</em>
+          </div>
+          <div className="field">
+            <label htmlFor="af-key">{t("common.apiKey")}</label>
+            <input id="af-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
+            <em className="muted tiny">{t("gatewayPage.keyHint")}</em>
+          </div>
+        </>
+      )}
+      {err && <ErrorBox text={err} />}
+    </Modal>
   );
 }
 
@@ -540,26 +523,11 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
       <div className="gw-block">
         <span className="gw-label">{t("common.test")}</span>
         <div className="gw-test">
-          <div className="seg">
-            {PROTOS.map((p) => <button key={p} className={inbound === p ? "on" : ""} onClick={() => setInbound(p)}>{API_LABEL[p]}</button>)}
-          </div>
+          <Seg value={inbound} onChange={setInbound} options={PROTOS.map((p) => ({ value: p, label: API_LABEL[p] }))} />
           <ComboBox value={model} options={models} onChange={setModel} onEnter={() => { if (canTest) test(); }} placeholder={t("gatewayPage.modelId")} label={t("gatewayPage.testModel")} disabled={testing} />
-          <button className="btn small primary" disabled={!canTest} onClick={test} title={t(running ? "gatewayPage.testTitle" : "gatewayPage.startFirst")}>
-            {testing ? <><span className="spin">↻</span>{t("gatewayPage.testing")}</> : <><Icon.pulse size={12} />{t("common.test")}</>}
-          </button>
+          <TestButton className="btn small primary" running={testing} disabled={!canTest} onClick={test} title={t(running ? "gatewayPage.testTitle" : "gatewayPage.startFirst")} />
         </div>
-        {typeof res === "string" && <div className="ptest-res bad"><strong>{t("gatewayPage.testFailed")}</strong><span>{scrub(res)}</span></div>}
-        {res && typeof res !== "string" && (
-          <div className={`ptest-res ${res.ok ? "good" : "bad"}`}>
-            <div className="row gap6">
-              <strong>{t(res.ok ? "gatewayPage.works" : "gatewayPage.notWorking")}</strong>
-              <span className="mono tiny">{(res.ms / 1000).toFixed(2)} s</span>
-              {res.status != null && <span className="mono tiny">HTTP {res.status}</span>}
-              <span className="tiny">{API_LABEL[inbound]} → {API_LABEL[r.upstreamApi]}</span>
-            </div>
-            <span>{res.ok ? (res.reply ? tx("gatewayPage.reply", { reply: <span className="mono">{res.reply}</span> }) : t("gatewayPage.noReply")) : scrub(res.error)}</span>
-          </div>
-        )}
+        {res !== null && <TestResultView result={res} extra={<span className="tiny">{API_LABEL[inbound]} → {API_LABEL[r.upstreamApi]}</span>} />}
       </div>
 
       <div className="gw-block">
@@ -613,14 +581,8 @@ function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setSt
     <section className="sgroup">
       <h2>{t("gatewayPage.breaker")}</h2>
       <div className="srow stacked">
-        <div className={`gw-toggle${cfg.enabled ? " on" : ""}`}>
-          <div className="grow minw0">
-            <div className="small strong">{t("gatewayPage.breakerToggle")}</div>
-            <div className="tiny muted">{t("gatewayPage.breakerDesc")}</div>
-          </div>
-          <button type="button" className={`switch${cfg.enabled ? " on" : ""}`} role="switch" aria-checked={cfg.enabled} aria-label={t("gatewayPage.breaker")}
-            onClick={() => save({ ...cfg, enabled: !cfg.enabled }, t(cfg.enabled ? "gatewayPage.breakerOff" : "gatewayPage.breakerOn"))}><span /></button>
-        </div>
+        <ToggleRow on={cfg.enabled} title={t("gatewayPage.breakerToggle")} hint={t("gatewayPage.breakerDesc")} label={t("gatewayPage.breaker")}
+          onChange={() => save({ ...cfg, enabled: !cfg.enabled }, t(cfg.enabled ? "gatewayPage.breakerOff" : "gatewayPage.breakerOn"))} />
         {cfg.enabled && (
           <div className="row gap6 gw-breaker-form">
             <span className="small row gap6 gw-breaker-form">

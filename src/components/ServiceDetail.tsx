@@ -2,8 +2,7 @@ import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
 import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, gatewayCapable, gatewayRouteId, importSource, writableAgents } from "../services";
 import { AgentIcon, Icon } from "./icons";
-import { Bars, type Latency, initials } from "./ProviderCard";
-import { latencyText, stationColor } from "./ProvidersHub";
+import { Avatar, Bars, type Latency, latencyText, stationColor } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
 import { t, tn } from "../i18n";
 import { scrub, scrubHost } from "../privacy";
@@ -47,7 +46,7 @@ export function ServiceDetail(props: Props) {
   return (
     <section className="pdetail sdetail" aria-label={t("serviceDetail.detailsAria", { name: s.name })}>
       <div className="pdetail-head">
-        <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
+        <Avatar name={s.name} color={stationColor(s)} />
         <span className="pcard-title">
           <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
           <span className="pcard-host mono ellipsis">{s.builtin ? t("serviceDetail.accountLogin") : tn("serviceDetail.hostGroups", s.groups.length, { host: s.host })}</span>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { type SyncStatus, type SyncSuggestion, api } from "../api";
 import { AgentIcon } from "./icons";
+import { SettingRow } from "./controls";
 import { syncSuggestionIds } from "../services";
 import { locale, t, useLang } from "../i18n";
 import { scrub } from "../privacy";
@@ -77,34 +78,20 @@ export function SyncPage({ flash, onAdopt }: Props) {
 
           <section className="sgroup">
             <h2>{t("syncPage.sync")}</h2>
-            <div className="srow">
-              <div className="grow">
-                <div className="slabel">{t("syncPage.exportLabel")}</div>
-                <div className="muted small">{t("syncPage.exportDesc")}</div>
-              </div>
+            <SettingRow label={t("syncPage.exportLabel")} desc={t("syncPage.exportDesc")}>
               <button className="btn primary" disabled={busy || !status?.folder} onClick={exportNow}>{t("syncPage.export")}</button>
-            </div>
-            <div className="srow">
-              <div className="grow">
-                <div className="slabel">{t("syncPage.importLabel")}</div>
-                <div className="muted small">{t("syncPage.importDesc")}</div>
-              </div>
+            </SettingRow>
+            <SettingRow label={t("syncPage.importLabel")} desc={t("syncPage.importDesc")}>
               <button className="btn" disabled={busy || !status?.fileExists} onClick={preview}>{t("syncPage.compare")}</button>
-            </div>
+            </SettingRow>
           </section>
 
           {sugs && sugs.length > 0 && (
             <section className="sgroup">
               <h2>{t("syncPage.importable")}</h2>
               {sugs.map((s, i) => { const id = ids[i]; return (
-                <label key={id} className="srow check-row">
-                  <input type="checkbox" checked={chosen.has(id)} onChange={() => setChosen((c) => toggled(c, id))} />
-                  <AgentIcon id={s.agent} size={22} />
-                  <div className="grow minw0">
-                    <div className="slabel">{s.title}</div>
-                    <div className="muted small ellipsis">{scrub(s.detail)}</div>
-                  </div>
-                </label>
+                <SettingRow key={id} as="label" className="check-row" label={s.title} desc={scrub(s.detail)} descClassName="ellipsis"
+                  lead={<><input type="checkbox" checked={chosen.has(id)} onChange={() => setChosen((c) => toggled(c, id))} /><AgentIcon id={s.agent} size={22} /></>} />
               ); })}
               <div className="srow">
                 <span className="grow muted small">{t("syncPage.noKeyHint")}</span>

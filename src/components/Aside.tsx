@@ -3,6 +3,7 @@ import { type AgentState, type DiffGroup, isProjectId } from "../api";
 import { Icon } from "./icons";
 import { t, tn } from "../i18n";
 import { scrub } from "../privacy";
+import { ErrorBox } from "./controls";
 
 interface Props {
   st: AgentState;
@@ -45,20 +46,9 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
           <h2>{t("aside.pendingTitle")}</h2>
           <span className={`count${pending ? " warn" : ""}`}>{pending ? tn("aside.pendingCount", pending) : t("common.none")}</span>
         </div>
-        {error && <div className="err">{scrub(error)}</div>}
-        {diff.map((g) => (
-          <div key={g.file} className="dgroup">
-            <div className="dfile mono ellipsis">{scrub(g.file)}</div>
-            {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{scrub(l.text)}</div>)}
-          </div>
-        ))}
-        {pending === 0 && !error && (
-          <div className="dempty">
-            <Icon.check size={20} color="#16A34A" />
-            <strong>{t("aside.upToDate")}</strong>
-            <span className="muted small">{t("aside.upToDateHint")}</span>
-          </div>
-        )}
+        {error && <ErrorBox text={error} />}
+        <DiffGroups groups={diff} />
+        {pending === 0 && !error && <UpToDate hint={t("aside.upToDateHint")} />}
       </section>
 
       <div className="aside-foot">
@@ -71,5 +61,30 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
           : t("aside.footNewSession", { name: isProjectId(st.id) ? "OpenCode" : st.name })}</span>
       </div>
     </aside>
+  );
+}
+
+/** A diff preview: for each file, the lines that go away and the ones that are added. */
+export function DiffGroups({ groups }: { groups: DiffGroup[] }) {
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.file} className="dgroup">
+          <div className="dfile mono ellipsis">{scrub(g.file)}</div>
+          {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{scrub(l.text)}</div>)}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Nothing pending: the config files are up to date. */
+export function UpToDate({ hint }: { hint: string }) {
+  return (
+    <div className="dempty">
+      <Icon.check size={20} color="var(--ok-dot)" />
+      <strong>{t("aside.upToDate")}</strong>
+      <span className="muted small">{hint}</span>
+    </div>
   );
 }

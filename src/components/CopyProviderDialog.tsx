@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
-import type { AgentId, AgentState, ApiKind, LibEntry, Provider } from "../api";
-import { useEscape } from "../hooks";
+import type { AgentId, AgentState, ApiKind, LibEntry } from "../api";
 import { t, tn, useLang } from "../i18n";
 import { API_LABEL } from "../services";
 import { AgentIcon, Icon } from "./icons";
-import { colorFor, initials } from "./ProviderCard";
+import { Modal } from "./Modal";
+import { Avatar, avatarColor } from "./ProviderCard";
 import { scrubHost } from "../privacy";
 import { toggled } from "../util";
 
@@ -46,7 +46,6 @@ const COPYABLE: ApiKind[] = ["chat", "responses", "anthropic"];
 
 /** Copies providers (address, key and visible models) from global OpenCode, other agents or the library into a project. */
 export function CopyProviderDialog({ target, agents, lib, onCopy, onClose }: Props) {
-  useEscape(onClose);
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [disable, setDisable] = useState(true);
@@ -85,57 +84,51 @@ export function CopyProviderDialog({ target, agents, lib, onCopy, onClose }: Pro
     fromAgent: s.from, provider: s.provider, name: s.name, api: s.api, label: s.fromName, disableInherited: disable && s.inherited,
   })));
 
+  const foot = (
+    <>
+      {anyInherited ? (
+        <label className="check-row small grow">
+          <input type="checkbox" checked={disable} onChange={(e) => setDisable(e.target.checked)} />
+          <span>{t("copyProviderDialog.disableInherited")}</span>
+        </label>
+      ) : <span className="grow" />}
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={!chosen.length} onClick={submit}>{tn("copyProviderDialog.copyN", chosen.length)}</button>
+    </>
+  );
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label={t("copyProviderDialog.ariaTitle")}>
-        <div className="modal-head">
-          <h2>{t("copyProviderDialog.title", { name: target.name })}</h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
-        </div>
-        <div className="modal-body">
-          <span className="muted small">{t("copyProviderDialog.intro")}</span>
-          <input className="search-input" autoFocus placeholder={t("copyProviderDialog.filterPlaceholder")} value={q} onChange={(e) => setQ(e.target.value)} />
-          {all.length === 0 && <div className="empty">{t("copyProviderDialog.empty")}</div>}
-          {groups.map((g) => {
-            const items = g.items.filter(match);
-            if (!items.length) return null;
-            return (
-              <div key={g.id} className="copy-group">
-                <div className="copy-group-title">
-                  {g.agent ? <AgentIcon id={g.agent} size={16} /> : <Icon.layers size={14} />}
-                  <span>{g.title}</span>
-                  <span className="tiny muted">{items.length}</span>
-                </div>
-                {items.map((s) => (
-                  <label key={s.key} className={`copy-row${picked.has(s.key) ? " on" : ""}`}>
-                    <input type="checkbox" checked={picked.has(s.key)} onChange={() => toggle(s.key)} />
-                    <span className="pavatar sm" style={{ background: colorFor({ builtin: false, baseUrl: s.host, host: s.host, id: s.provider } as Provider) }}>{initials(s.name)}</span>
-                    <span className="grow minw0">
-                      <span className="row gap6 minw0">
-                        <span className="strong ellipsis">{s.name}</span>
-                        {s.inherited && <span className="ptag tag-soft">{t("copyProviderDialog.inherited")}</span>}
-                      </span>
-                      <span className="block mono tiny muted ellipsis">{scrubHost(s.host)}</span>
-                    </span>
-                    <span className="api-chip">{API_LABEL[s.api]}</span>
-                    <span className="tiny muted copy-meta">{tn("copyProviderDialog.modelCount", s.models)}{s.hasKey ? "" : ` · ${t("copyProviderDialog.noKey")}`}</span>
-                  </label>
-                ))}
-              </div>
-            );
-          })}
-        </div>
-        <div className="modal-foot">
-          {anyInherited ? (
-            <label className="check-row small grow">
-              <input type="checkbox" checked={disable} onChange={(e) => setDisable(e.target.checked)} />
-              <span>{t("copyProviderDialog.disableInherited")}</span>
-            </label>
-          ) : <span className="grow" />}
-          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!chosen.length} onClick={submit}>{tn("copyProviderDialog.copyN", chosen.length)}</button>
-        </div>
-      </div>
-    </div>
+    <Modal label={t("copyProviderDialog.ariaTitle")} title={t("copyProviderDialog.title", { name: target.name })} wide onClose={onClose} foot={foot}>
+      <span className="muted small">{t("copyProviderDialog.intro")}</span>
+      <input className="search-input" autoFocus placeholder={t("copyProviderDialog.filterPlaceholder")} value={q} onChange={(e) => setQ(e.target.value)} />
+      {all.length === 0 && <div className="empty">{t("copyProviderDialog.empty")}</div>}
+      {groups.map((g) => {
+        const items = g.items.filter(match);
+        if (!items.length) return null;
+        return (
+          <div key={g.id} className="copy-group">
+            <div className="copy-group-title">
+              {g.agent ? <AgentIcon id={g.agent} size={16} /> : <Icon.layers size={14} />}
+              <span>{g.title}</span>
+              <span className="tiny muted">{items.length}</span>
+            </div>
+            {items.map((s) => (
+              <label key={s.key} className={`copy-row${picked.has(s.key) ? " on" : ""}`}>
+                <input type="checkbox" checked={picked.has(s.key)} onChange={() => toggle(s.key)} />
+                <Avatar small name={s.name} color={avatarColor(s.host.split("/")[0] || s.provider)} />
+                <span className="grow minw0">
+                  <span className="row gap6 minw0">
+                    <span className="strong ellipsis">{s.name}</span>
+                    {s.inherited && <span className="ptag tag-soft">{t("copyProviderDialog.inherited")}</span>}
+                  </span>
+                  <span className="block mono tiny muted ellipsis">{scrubHost(s.host)}</span>
+                </span>
+                <span className="api-chip">{API_LABEL[s.api]}</span>
+                <span className="tiny muted copy-meta">{tn("copyProviderDialog.modelCount", s.models)}{s.hasKey ? "" : ` · ${t("copyProviderDialog.noKey")}`}</span>
+              </label>
+            ))}
+          </div>
+        );
+      })}
+    </Modal>
   );
 }
