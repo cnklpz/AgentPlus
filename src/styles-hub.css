@@ -217,6 +217,7 @@ html, body, #root, .app { overflow: hidden; }
 .combo-toggle svg { transition: transform var(--t) var(--ease-out); }
 .combo.open .combo-toggle svg { transform: rotate(180deg); }
 .combo-menu { min-width: 0; max-width: none; z-index: 40; }
+.combo-menu.up { transform-origin: bottom; }
 
 /* 切换卡：下划线滑动 + 内容按方向滑入 */
 .tabs { position: relative; }

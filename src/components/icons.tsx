@@ -97,41 +97,43 @@ function TileIcon({ i, size }: { i: Tile; size: number }) {
   );
 }
 
-type P = { size?: number; color?: string };
-const svg = (size: number, color: string, children: React.ReactNode, sw = 2) => (
+/** `sw`: stroke width, for the few places that draw an icon heavier or lighter. */
+type P = { size?: number; color?: string; sw?: number };
+const svg = (size: number, color: string, children: React.ReactNode, sw: number) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {children}
   </svg>
 );
 
 export const Icon = {
-  search: ({ size = 15, color = "currentColor" }: P) => svg(size, color, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>),
-  monitor: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>),
-  folder: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />),
-  refresh: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></>),
-  download: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M12 4v11" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>),
-  external: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>),
-  play: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M7 4.5v15l12.5-7.5Z" />),
-  layers: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>),
-  history: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>),
-  cloud: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3.5 3.5 0 0 0 6 19Z" />),
-  plus: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M12 5v14M5 12h14" />, 2.4),
-  check: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M20 6 9 17l-5-5" />, 2.4),
-  pulse: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M22 12h-4l-3 9L9 3l-3 9H2" />),
-  gear: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>, 1.8),
-  chevron: ({ size = 12, color = "currentColor" }: P) => svg(size, color, <path d="m6 9 6 6 6-6" />, 2.2),
-  close: ({ size = 12, color = "currentColor" }: P) => svg(size, color, <path d="M6 6l12 12M18 6 6 18" />, 2.2),
-  edit: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>),
-  trash: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></>),
-  copy: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>),
-  key: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <><circle cx="7.5" cy="15.5" r="4.5" /><path d="m10.7 12.3 9.8-9.8M17 6l3 3M15 8l2 2" /></>),
-  gateway: ({ size = 16, color = "currentColor" }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6" /></>),
-  back: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M19 12H5M11 18l-6-6 6-6" />),
-  arrow: ({ size = 13, color = "currentColor" }: P) => svg(size, color, <path d="M5 12h14M13 6l6 6-6 6" />),
-  sun: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>),
-  moon: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <path d="M20.5 14.1A8.5 8.5 0 1 1 9.9 3.5a6.6 6.6 0 0 0 10.6 10.6Z" />),
-  power: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><path d="M12 3v8" /><path d="M6.4 6.6a8 8 0 1 0 11.2 0" /></>),
-  terminal: ({ size = 14, color = "currentColor" }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>),
+  search: ({ size = 15, color = "currentColor", sw = 2 }: P) => svg(size, color, <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></>, sw),
+  monitor: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></>, sw),
+  folder: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />, sw),
+  refresh: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></>, sw),
+  download: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M12 4v11" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>, sw),
+  external: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>, sw),
+  play: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M7 4.5v15l12.5-7.5Z" />, sw),
+  layers: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>, sw),
+  history: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>, sw),
+  cloud: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3.5 3.5 0 0 0 6 19Z" />, sw),
+  plus: ({ size = 14, color = "currentColor", sw = 2.4 }: P) => svg(size, color, <path d="M12 5v14M5 12h14" />, sw),
+  check: ({ size = 14, color = "currentColor", sw = 2.4 }: P) => svg(size, color, <path d="M20 6 9 17l-5-5" />, sw),
+  pulse: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M22 12h-4l-3 9L9 3l-3 9H2" />, sw),
+  gear: ({ size = 16, color = "currentColor", sw = 1.8 }: P) => svg(size, color, <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" /></>, sw),
+  chevron: ({ size = 12, color = "currentColor", sw = 2.2 }: P) => svg(size, color, <path d="m6 9 6 6 6-6" />, sw),
+  close: ({ size = 12, color = "currentColor", sw = 2.2 }: P) => svg(size, color, <path d="M6 6l12 12M18 6 6 18" />, sw),
+  edit: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>, sw),
+  trash: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></>, sw),
+  copy: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>, sw),
+  key: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><circle cx="7.5" cy="15.5" r="4.5" /><path d="m10.7 12.3 9.8-9.8M17 6l3 3M15 8l2 2" /></>, sw),
+  gateway: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6" /></>, sw),
+  back: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M19 12H5M11 18l-6-6 6-6" />, sw),
+  arrow: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M5 12h14M13 6l6 6-6 6" />, sw),
+  sun: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>, sw),
+  moon: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M20.5 14.1A8.5 8.5 0 1 1 9.9 3.5a6.6 6.6 0 0 0 10.6 10.6Z" />, sw),
+  power: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M12 3v8" /><path d="M6.4 6.6a8 8 0 1 0 11.2 0" /></>, sw),
+  terminal: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>, sw),
+  warn: ({ size = 12, color = "currentColor", sw = 2.2 }: P) => svg(size, color, <><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /></>, sw),
   grip: ({ size = 14 }: P) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="#B8BFC9" aria-hidden="true">
       {[6, 12, 18].map((y) => [9, 15].map((x) => <circle key={`${x}-${y}`} cx={x} cy={y} r="1.6" />))}
@@ -154,3 +156,13 @@ export const Icon = {
     </svg>
   ),
 };
+
+/** Where configs are read and written: Windows (a monitor) or a WSL distro (a terminal). */
+export function EnvIcon({ id, size }: { id: string; size?: number }) {
+  return id.startsWith("wsl:") ? <Icon.terminal size={size} /> : <Icon.monitor size={size} />;
+}
+
+/** The square tick box of a multi-select option (`.opt-check`), ticked when `on`. */
+export function OptCheck({ on }: { on: boolean }) {
+  return <span className="opt-check" aria-hidden="true">{on && <Icon.check size={10} color="#fff" sw={3.5} />}</span>;
+}
