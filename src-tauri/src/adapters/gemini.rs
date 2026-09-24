@@ -9,6 +9,7 @@
 //! role "default" for it (the first model of the list is the default when none is chosen).
 
 use super::msg;
+use super::profiles::{self, model_list, set_model_list};
 use super::{Plan, Endpoint};
 use crate::dotenv;
 use crate::i18n::l;
@@ -36,6 +37,35 @@ const BASE: &str = "GOOGLE_GEMINI_BASE_URL";
 const KEY: &str = "GEMINI_API_KEY";
 const OAUTH: &str = "oauth-personal";
 const API_KEY_AUTH: &str = "gemini-api-key";
+/// selectedType AgentPlus infers when settings.json names none but .env sets a relay address.
+const GATEWAY_AUTH: &str = "gateway";
+/// Where Gemini CLI goes without GOOGLE_GEMINI_BASE_URL.
+const OFFICIAL_BASE: &str = "https://generativelanguage.googleapis.com";
+
+/// An on/off setting stored as a boolean in settings.json (missing = on).
+struct BoolSetting {
+    key: &'static str,
+    path: [&'static str; 2],
+    /// (zh, en)
+    label: (&'static str, &'static str),
+    /// (zh, en)
+    desc: (&'static str, &'static str),
+}
+
+const BOOL_SETTINGS: [BoolSetting; 2] = [
+    BoolSetting {
+        key: "autoupdate",
+        path: ["general", "enableAutoUpdate"],
+        label: ("自动更新", "Auto-update"),
+        desc: ("general.enableAutoUpdate：启动时自动更新 Gemini CLI", "general.enableAutoUpdate: update Gemini CLI automatically on start"),
+    },
+    BoolSetting {
+        key: "usage_stats",
+        path: ["privacy", "usageStatisticsEnabled"],
+        label: ("发送使用统计", "Send usage statistics"),
+        desc: ("privacy.usageStatisticsEnabled：向 Google 发送使用统计（用中转时建议关闭）", "privacy.usageStatisticsEnabled: send usage statistics to Google (turning it off is recommended with a relay)"),
+    },
+];
 
 // ---------------------------------------------------------------- paths
 
@@ -84,23 +114,14 @@ fn load() -> Result<(Value, TextMeta, bool)> {
 
 // ---------------------------------------------------------------- profiles
 
-fn profiles(root: &Value) -> Map<String, Value> {
-    store::get_obj(root, ID, "profiles")
-}
-
 fn clean_base(u: &str) -> String {
     u.trim().trim_end_matches('/').to_string()
 }
 
-fn model_list(p: &Value) -> Vec<(String, bool)> {
-    p.get("models")
-        .and_then(|m| m.as_array())
-        .map(|a| a.iter().filter_map(|m| Some((m.get("id")?.as_str()?.to_string(), m.get("visible").and_then(|v| v.as_bool()).unwrap_or(true)))).collect())
-        .unwrap_or_default()
-}
-
-fn set_model_list(p: &mut Value, list: &[(String, bool)]) {
-    p["models"] = Value::Array(list.iter().map(|(id, v)| json!({ "id": id, "visible": v })).collect());
+fn drop_default_model(p: &mut Value) {
+    if let Some(o) = p.as_object_mut() {
+        o.remove("defaultModel");
+    }
 }
 
 /// The model written to `model.name`: the chosen default, else the first visible model.
@@ -121,11 +142,16 @@ fn model_name(cfg: &Value) -> Option<String> {
     .filter(|m| !m.is_empty())
 }
 
+/// Whether .env sets the relay address or the key.
+fn has_env_vars(env: &str) -> bool {
+    dotenv::get(env, BASE).is_some() || dotenv::get(env, KEY).is_some()
+}
+
 /// The auth type Gemini CLI ends up with: settings first, else what the env implies.
 fn effective_auth(cfg: &Value, env: &str) -> Option<String> {
     auth_type(cfg).or_else(|| {
         if dotenv::get(env, BASE).is_some() {
-            Some("gateway".into())
+            Some(GATEWAY_AUTH.into())
         } else if dotenv::get(env, KEY).is_some() {
             Some(API_KEY_AUTH.into())
         } else {
@@ -152,7 +178,8 @@ fn matching_profile(env: &str, profs: &Map<String, Value>) -> Option<String> {
 fn current(cfg: &Value, env: &str, profs: &Map<String, Value>) -> String {
     match effective_auth(cfg, env).as_deref() {
         None | Some(OAUTH) => GOOGLE.into(),
-        Some(API_KEY_AUTH) | Some("gateway") => matching_profile(env, profs).unwrap_or_else(|| UNMANAGED.into()),
+        // Without .env vars the key comes from the system environment: nothing to adopt.
+        Some(t @ (API_KEY_AUTH | GATEWAY_AUTH)) => matching_profile(env, profs).unwrap_or_else(|| if has_env_vars(env) { UNMANAGED.into() } else { format!("{AUTH}{t}") }),
         Some(other) => format!("{AUTH}{other}"),
     }
 }
@@ -162,17 +189,14 @@ fn auth_label(t: &str) -> &str {
         "vertex-ai" => "Vertex AI",
         "cloud-shell" => "Cloud Shell",
         "compute-default-credentials" => l("Google Cloud 默认凭据", "Google Cloud default credentials"),
-        "gateway" => l("网关（gateway）", "Gateway (gateway)"),
+        API_KEY_AUTH => l("Gemini API 密钥（来自环境变量）", "Gemini API key (from environment variables)"),
+        GATEWAY_AUTH => l("网关（gateway）", "Gateway (gateway)"),
         other => other,
     }
 }
 
-/// Label of the "stored in" detail row (also used to drop it from the unmanaged entry).
-fn stored_in_label() -> &'static str {
-    l("保存位置", "Stored in")
-}
-
-fn provider_of(id: &str, p: &Value) -> Provider {
+/// `managed`: an AgentPlus profile (not the unmanaged .env entry).
+fn provider_of(id: &str, p: &Value, managed: bool) -> Provider {
     let base = str_field(p, "baseUrl");
     let key = str_field(p, "apiKey");
     let dflt = default_model(p);
@@ -187,12 +211,15 @@ fn provider_of(id: &str, p: &Value) -> Provider {
     if let Some(d) = &dflt {
         details.push(Kv::mono(lbl::default_model(), d.clone()));
     }
-    details.push(Kv::text(stored_in_label(), l("AgentPlus 配置档（切换时写入 ~/.gemini/.env 和 settings.json）", "AgentPlus profile (written to ~/.gemini/.env and settings.json on switch)")));
+    if managed {
+        details.push(Kv::text(l("保存位置", "Stored in"), l("AgentPlus 配置档（切换时写入 ~/.gemini/.env 和 settings.json）", "AgentPlus profile (written to ~/.gemini/.env and settings.json on switch)")));
+    }
+    let base = if base.is_empty() { OFFICIAL_BASE.to_string() } else { base };
     Provider {
         id: id.into(),
         name: str_field(p, "name"),
-        host: if base.is_empty() { "generativelanguage.googleapis.com".into() } else { host_of(&base) },
-        base_url: Some(if base.is_empty() { "https://generativelanguage.googleapis.com".into() } else { base }),
+        host: host_of(&base),
+        base_url: Some(base),
         apis: vec![api_label("gemini").into()],
         enabled: true,
         compatible: true,
@@ -230,7 +257,7 @@ pub fn state(inst: &Install) -> AgentState {
     }
     let root = store::load();
     let (env, _) = dotenv::load(&env_path());
-    let profs = profiles(&root);
+    let profs = profiles::load(&root, ID);
     let cur = current(&cfg, &env, &profs);
     st.current_provider = Some(cur.clone());
 
@@ -249,14 +276,11 @@ pub fn state(inst: &Install) -> AgentState {
         st.providers.push(Provider::builtin(&cur, auth_label(t), l("其他认证方式", "Other auth method"), "gemini", api_label("gemini"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(lbl::note(), l("在 Gemini CLI 里用 /auth 管理", "Manage it with /auth in Gemini CLI"))]));
     }
     for (id, p) in &profs {
-        st.providers.push(provider_of(id, p));
+        st.providers.push(provider_of(id, p, true));
     }
     // A relay / key in .env that no profile covers: show it so it can be adopted.
-    let has_env = dotenv::get(&env, BASE).is_some() || dotenv::get(&env, KEY).is_some();
-    if has_env && matching_profile(&env, &profs).is_none() {
-        let mut prov = provider_of(UNMANAGED, &unmanaged_profile(&env));
-        let stored = stored_in_label();
-        prov.details.retain(|d| d.k != stored);
+    if has_env_vars(&env) && matching_profile(&env, &profs).is_none() {
+        let mut prov = provider_of(UNMANAGED, &unmanaged_profile(&env), false);
         prov.details.push(Kv::text(lbl::note(), l("~/.gemini/.env 里的设置，不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Set in ~/.gemini/.env, not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
         st.providers.push(prov);
         if cur != UNMANAGED {
@@ -270,10 +294,7 @@ pub fn state(inst: &Install) -> AgentState {
     }
     st.notes.push(l("项目目录（或上级目录）里有 .env 时，Gemini CLI 会先读它，而不是 ~/.gemini/.env。", "When the project directory (or a parent) has a .env, Gemini CLI reads that instead of ~/.gemini/.env.").into());
 
-    st.settings = vec![
-        bool_setting("autoupdate", "Gemini CLI", l("自动更新", "Auto-update"), l("general.enableAutoUpdate：启动时自动更新 Gemini CLI", "general.enableAutoUpdate: update Gemini CLI automatically on start"), cfg.pointer("/general/enableAutoUpdate").and_then(|x| x.as_bool()).unwrap_or(true)),
-        bool_setting("usage_stats", "Gemini CLI", l("发送使用统计", "Send usage statistics"), l("privacy.usageStatisticsEnabled：向 Google 发送使用统计（用中转时建议关闭）", "privacy.usageStatisticsEnabled: send usage statistics to Google (turning it off is recommended with a relay)"), cfg.pointer("/privacy/usageStatisticsEnabled").and_then(|x| x.as_bool()).unwrap_or(true)),
-    ];
+    st.settings = BOOL_SETTINGS.iter().map(|s| bool_setting(s.key, NAME, l(s.label.0, s.label.1), l(s.desc.0, s.desc.1), setting_on(&cfg, &s.path))).collect();
     let cur_name = st.providers.iter().find(|p| p.id == cur).map(|p| p.name.clone()).unwrap_or_default();
     st.current = vec![
         Kv::text(lbl::provider(), cur_name),
@@ -290,43 +311,52 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     } else if id == GOOGLE || id.starts_with(AUTH) {
         return Err(anyhow!(l("Google 账号登录没有可用的地址", "Google account sign-in has no usable base URL")));
     } else {
-        profiles(&store::load()).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
+        profiles::load(&store::load(), ID).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
     };
     let base = str_field(&p, "baseUrl");
-    let base = if base.is_empty() { "https://generativelanguage.googleapis.com".to_string() } else { base };
+    let base = if base.is_empty() { OFFICIAL_BASE.to_string() } else { base };
     let key = str_field(&p, "apiKey");
     Ok((base, (!key.is_empty()).then_some(key), "gemini".into()))
 }
 
 // ---------------------------------------------------------------- plan
 
-fn set_ptr(cfg: &mut Value, path: &[&str], v: Option<Value>) {
-    let mut cur = cfg;
-    for k in &path[..path.len() - 1] {
-        if !cur.get(*k).map(|x| x.is_object()).unwrap_or(false) {
-            if v.is_none() {
-                return;
-            }
-            cur[*k] = json!({});
-        }
-        cur = cur.get_mut(*k).unwrap();
+/// A boolean setting (missing = on).
+fn setting_on(cfg: &Value, path: &[&str]) -> bool {
+    cfg.pointer(&jptr(path)).and_then(|x| x.as_bool()).unwrap_or(true)
+}
+
+/// Sets `path` in settings.json; a parent that is not an object is an error, not replaced.
+fn set_at(cfg: &mut Value, path: &[&str], v: Value) -> Result<()> {
+    let (last, parents) = path.split_last().expect("non-empty path");
+    obj_at(cfg, parents)?.insert(last.to_string(), v);
+    Ok(())
+}
+
+/// The profile whose models an op edits; the built-in entries have none.
+fn profile_mut<'a>(profs: &'a mut Map<String, Value>, id: &str) -> Result<&'a mut Value> {
+    if id == GOOGLE || id.starts_with(AUTH) {
+        return Err(anyhow!(l("Google 账号登录没有模型列表可编辑", "Google account sign-in has no model list to edit")));
     }
-    let last = path[path.len() - 1];
-    match v {
-        Some(v) => cur[last] = v,
-        None => {
-            if let Some(o) = cur.as_object_mut() {
-                o.remove(last);
-            }
-        }
+    if id == UNMANAGED {
+        return Err(anyhow!(l("先编辑并保存一次「.env 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in .env\" once so AgentPlus takes it over, then change its models")));
     }
+    profiles::get_mut(profs, id)
+}
+
+/// What the active provider needs in .env and settings.json.
+struct Target {
+    base: Option<String>,
+    key: Option<String>,
+    auth: &'static str,
+    model: Option<String>,
 }
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load()?;
     let cfg0 = cfg.clone();
     let mut root = store::load();
-    let mut profs = profiles(&root);
+    let mut profs = profiles::load(&root, ID);
     // Snapshot: a change to the active profile is re-applied to the live config.
     let profs0 = profs.clone();
     // Unlike the read-only views, a write refuses an .env it can't read (UTF-16, GBK…).
@@ -339,16 +369,6 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let store_label = l("AgentPlus · Gemini CLI 配置档", "AgentPlus · Gemini CLI profiles");
     let mut diff = Diff::default();
     let mut store_dirty = false;
-
-    let profile = |profs: &Map<String, Value>, id: &str| -> Result<()> {
-        if id == GOOGLE || id.starts_with(AUTH) {
-            return Err(anyhow!(l("Google 账号登录没有模型列表可编辑", "Google account sign-in has no model list to edit")));
-        }
-        if id == UNMANAGED {
-            return Err(anyhow!(l("先编辑并保存一次「.env 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in .env\" once so AgentPlus takes it over, then change its models")));
-        }
-        profs.get(id).map(|_| ()).ok_or_else(|| msg::no_provider(id))
-    };
 
     for op in ops {
         match op {
@@ -363,11 +383,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
                 match p.id.as_deref() {
                     None | Some(UNMANAGED) => {
-                        let id = unique_id(&slug(&p.name), |c| profs.contains_key(c) || c == GOOGLE || c == UNMANAGED);
+                        let id = profiles::new_id(&profs, &p.name, &[GOOGLE, UNMANAGED]);
                         let adopting = p.id.as_deref() == Some(UNMANAGED);
                         let key = if adopting { key.or_else(|| dotenv::get(&env0, KEY)) } else { key };
-                        let models: Vec<Value> = clean_ids(&p.models).into_iter().map(|m| json!({ "id": m, "visible": true })).collect();
-                        let mut prof = json!({ "name": p.name.trim(), "baseUrl": base, "apiKey": key.clone().unwrap_or_default(), "models": models });
+                        let mut prof = json!({ "name": p.name.trim(), "baseUrl": base, "apiKey": key.clone().unwrap_or_default(), "models": profiles::models_value(&p.models) });
                         if adopting {
                             if let Some(m) = model_name(&cfg) {
                                 prof["defaultModel"] = json!(m);
@@ -381,8 +400,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         profs.insert(id.clone(), prof);
                         let adopt = if adopting { l("（接管 .env 里的配置）", " (takes over the config in .env)") } else { "" };
                         let where_: &str = if base.is_empty() { l("官方 API", "official API") } else { &base };
-                        let key_part = key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        diff.push(store_label, tr!("+ 「{}」{}（{}{}）", "+ \"{}\"{} ({}{})", p.name.trim(), adopt, where_, key_part), true);
+                        profiles::push_added(&mut diff, store_label, p.name.trim(), adopt, where_, key.as_deref());
                         if adopting && cur == UNMANAGED {
                             cur = id;
                         }
@@ -390,21 +408,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     Some(id) if id == GOOGLE || id.starts_with(AUTH) => return Err(anyhow!(l("Google 账号登录不能编辑", "Google account sign-in can't be edited"))),
                     Some(id) => {
-                        let e = profs.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
-                        for (k, v) in [("name", p.name.trim()), ("baseUrl", base.as_str())] {
-                            if str_field(e, k) != v {
-                                e[k] = json!(v);
-                                diff.push(store_label, tr!("「{id}」{k} = {v}", "\"{id}\" {k} = {v}"), true);
-                                store_dirty = true;
-                            }
-                        }
-                        if let Some(k) = key {
-                            if str_field(e, "apiKey") != k {
-                                e["apiKey"] = json!(k);
-                                diff.push(store_label, tr!("「{id}」密钥 = {}", "\"{id}\" API key = {}", mask_key(&k)), true);
-                                store_dirty = true;
-                            }
-                        }
+                        let e = profiles::get_mut(&mut profs, id)?;
+                        store_dirty |= profiles::edit(e, id, p.name.trim(), &base, key.as_deref(), &mut diff, store_label);
                     }
                 }
             }
@@ -415,17 +420,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 if provider == &cur {
                     return Err(msg::in_use(provider));
                 }
-                if profs.remove(provider).is_none() {
-                    return Err(msg::no_provider(provider));
-                }
-                diff.push(store_label, tr!("- 「{provider}」", "- \"{provider}\""), false);
+                profiles::delete(&mut profs, provider, &mut diff, store_label)?;
                 store_dirty = true;
             }
             Op::SetCurrentProvider { provider } => {
                 if provider.starts_with(AUTH) && provider != &before {
                     return Err(anyhow!(l("这种认证方式请在 Gemini CLI 里用 /auth 选择", "Choose this auth method with /auth in Gemini CLI")));
                 }
-                if provider == UNMANAGED && dotenv::get(&env0, BASE).is_none() && dotenv::get(&env0, KEY).is_none() {
+                if provider == UNMANAGED && !has_env_vars(&env0) {
                     return Err(anyhow!(l(".env 里没有 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY", ".env has no GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY")));
                 }
                 if provider != GOOGLE && provider != UNMANAGED && !provider.starts_with(AUTH) && !profs.contains_key(provider) {
@@ -434,72 +436,41 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 cur = provider.clone();
             }
             Op::SetModelVisible { provider, model, visible } => {
-                profile(&profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let mut list = model_list(p);
-                match list.iter_mut().find(|(id, _)| id == model) {
-                    Some(e) if e.1 != *visible => e.1 = *visible,
-                    Some(_) => continue,
-                    None => list.push((model.clone(), *visible)),
-                }
-                if !*visible && str_field(p, "defaultModel") == *model {
+                let p = profile_mut(&mut profs, provider)?;
+                // The default model can't be hidden (hiding it again is a no-op, not an error).
+                let hidden = model_list(p).iter().any(|(x, v)| x == model && !v);
+                if !*visible && !hidden && str_field(p, "defaultModel") == *model {
                     return Err(anyhow!(tr!("{model} 是默认模型，不能隐藏；先换一个默认模型", "{model} is the default model and can't be hidden; choose another default model first")));
                 }
-                set_model_list(p, &list);
-                diff.push(store_label, if *visible { tr!("「{provider}」{model} 显示", "\"{provider}\" {model} shown") } else { tr!("「{provider}」{model} 隐藏", "\"{provider}\" {model} hidden") }, *visible);
-                store_dirty = true;
+                store_dirty |= profiles::set_visible(p, provider, model, *visible, &mut diff, store_label);
             }
             Op::UpsertModel { provider, model: m } => {
-                profile(&profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let mut list = model_list(p);
-                let id = m.id.trim().to_string();
-                if id.is_empty() {
-                    return Err(msg::model_id_required());
-                }
-                if !list.iter().any(|(x, _)| x == &id) {
-                    list.push((id.clone(), true));
-                    set_model_list(p, &list);
-                    diff.push(store_label, tr!("「{provider}」+ {id}", "\"{provider}\" + {id}"), true);
-                    store_dirty = true;
-                }
+                let p = profile_mut(&mut profs, provider)?;
+                store_dirty |= profiles::add_model(p, provider, &m.id, &mut diff, store_label)?;
             }
             Op::DeleteModel { provider, model } => {
-                profile(&profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let mut list = model_list(p);
-                let n = list.len();
-                list.retain(|(x, _)| x != model);
-                if list.len() != n {
-                    set_model_list(p, &list);
+                let p = profile_mut(&mut profs, provider)?;
+                if profiles::delete_model(p, provider, model, &mut diff, store_label) {
                     if str_field(p, "defaultModel") == *model {
-                        if let Some(o) = p.as_object_mut() {
-                            o.remove("defaultModel");
-                        }
+                        drop_default_model(p);
                     }
-                    diff.push(store_label, tr!("「{provider}」- {model}", "\"{provider}\" - {model}"), false);
                     store_dirty = true;
                 }
             }
             Op::SetProviderModels { provider, models } => {
-                profile(&profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
-                let list: Vec<(String, bool)> = clean_ids(models).into_iter().map(|m| (m, true)).collect();
-                set_model_list(p, &list);
-                if !list.iter().any(|(m, _)| *m == str_field(p, "defaultModel")) {
-                    if let Some(o) = p.as_object_mut() {
-                        o.remove("defaultModel");
-                    }
+                let p = profile_mut(&mut profs, provider)?;
+                profiles::set_models(p, provider, models, &mut diff, store_label);
+                let dflt = str_field(p, "defaultModel");
+                if !model_list(p).iter().any(|(m, _)| *m == dflt) {
+                    drop_default_model(p);
                 }
-                diff.push(store_label, tr!("「{provider}」模型列表：{} 个", "\"{provider}\" model list: {}", list.len()), true);
                 store_dirty = true;
             }
             Op::SetModelRoles { provider, roles } => {
                 if roles.keys().any(|k| k != "default") {
                     return Err(anyhow!(l("Gemini CLI 只有「默认模型」（model.name）一个角色", "Gemini CLI has only one role: \"Default model\" (model.name)")));
                 }
-                profile(&profs, provider)?;
-                let p = profs.get_mut(provider).unwrap();
+                let p = profile_mut(&mut profs, provider)?;
                 let want = roles.get("default").map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
                 if want.clone().unwrap_or_default() != str_field(p, "defaultModel") {
                     match &want {
@@ -511,11 +482,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                                 set_model_list(p, &list);
                             }
                         }
-                        None => {
-                            if let Some(o) = p.as_object_mut() {
-                                o.remove("defaultModel");
-                            }
-                        }
+                        None => drop_default_model(p),
                     }
                     diff.push(store_label, tr!("「{provider}」默认模型 = {}", "\"{provider}\" default model = {}", want.as_deref().unwrap_or(l("（列表第一个）", "(first in list)"))), want.is_some());
                     store_dirty = true;
@@ -523,15 +490,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetSetting { key, value } => {
                 let on = value.as_bool().unwrap_or(false);
-                let path: &[&str] = match key.as_str() {
-                    "autoupdate" => &["general", "enableAutoUpdate"],
-                    "usage_stats" => &["privacy", "usageStatisticsEnabled"],
-                    other => return Err(msg::unknown_setting(other)),
-                };
-                let now = cfg.pointer(&format!("/{}", path.join("/"))).and_then(|x| x.as_bool()).unwrap_or(true);
-                if now != on {
-                    set_ptr(&mut cfg, path, Some(json!(on)));
-                    diff.push(&file, format!("{} = {on}", path.join(".")), on);
+                let Some(s) = BOOL_SETTINGS.iter().find(|s| s.key == key) else { return Err(msg::unknown_setting(key)) };
+                if setting_on(&cfg, &s.path) != on {
+                    set_at(&mut cfg, &s.path, json!(on))?;
+                    diff.push(&file, format!("{} = {on}", s.path.join(".")), on);
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Gemini CLI 同时只用一个供应商，请用「设为当前」", "Gemini CLI uses one provider at a time; use \"Set as current\""))),
@@ -541,20 +503,20 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
 
     // Bring .env and settings.json in line with the active provider.
     let switching = cur != before;
-    #[allow(clippy::type_complexity)]
-    let target: Option<(Option<String>, Option<String>, &str, Option<String>)> = match cur.as_str() {
-        GOOGLE if switching => Some((None, None, OAUTH, None)),
-        UNMANAGED if switching => Some((dotenv::get(&env0, BASE), dotenv::get(&env0, KEY), API_KEY_AUTH, None)),
+    let target = match cur.as_str() {
+        GOOGLE if switching => Some(Target { base: None, key: None, auth: OAUTH, model: None }),
+        UNMANAGED if switching => Some(Target { base: dotenv::get(&env0, BASE), key: dotenv::get(&env0, KEY), auth: API_KEY_AUTH, model: None }),
         GOOGLE | UNMANAGED => None,
         id if id.starts_with(AUTH) => None,
-        id if switching || profs0.get(id) != profs.get(id) => profs.get(id).map(|p| {
-            let base = Some(str_field(p, "baseUrl")).filter(|b| !b.is_empty());
-            let key = Some(str_field(p, "apiKey")).filter(|k| !k.is_empty());
-            (base, key, API_KEY_AUTH, default_model(p))
+        id if switching || profs0.get(id) != profs.get(id) => profs.get(id).map(|p| Target {
+            base: Some(str_field(p, "baseUrl")).filter(|b| !b.is_empty()),
+            key: Some(str_field(p, "apiKey")).filter(|k| !k.is_empty()),
+            auth: API_KEY_AUTH,
+            model: default_model(p),
         }),
         _ => None,
     };
-    if let Some((base, key, auth, model)) = target {
+    if let Some(Target { base, key, auth, model }) = target {
         for (var, v) in [(BASE, &base), (KEY, &key)] {
             if dotenv::get(&env, var) != *v {
                 env = dotenv::set(&env, var, v.as_deref());
@@ -565,25 +527,30 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
         }
         if switching && auth_type(&cfg).as_deref() != Some(auth) {
-            set_ptr(&mut cfg, &["security", "auth", "selectedType"], Some(json!(auth)));
+            set_at(&mut cfg, &["security", "auth", "selectedType"], json!(auth))?;
             diff.push(&file, format!("security.auth.selectedType = {auth}"), true);
         }
         let old_model = model_name(&cfg);
         if let Some(m) = model {
             if old_model.as_deref() != Some(m.as_str()) {
-                if cfg.get("model").map(|x| !x.is_object()).unwrap_or(false) {
+                // The older `"model": "<id>"` form becomes `"model": { "name": … }`.
+                if cfg.get("model").is_some_and(|x| !x.is_object()) {
                     cfg["model"] = json!({});
                 }
-                set_ptr(&mut cfg, &["model", "name"], Some(json!(m)));
+                set_at(&mut cfg, &["model", "name"], json!(m))?;
                 diff.push(&file, format!("model.name = {m}"), true);
             }
         } else if cur == GOOGLE {
             // A relay's model id means nothing to the Google login: drop it if it came from the profile we left.
             let from_profile = profs0.get(&before).map(|p| model_list(p).iter().any(|(x, _)| Some(x) == old_model.as_ref())).unwrap_or(false);
             if from_profile {
-                set_ptr(&mut cfg, &["model", "name"], None);
-                if cfg.get("model").and_then(|m| m.as_object()).map(|m| m.is_empty()).unwrap_or(false) {
-                    cfg.as_object_mut().unwrap().remove("model");
+                // The older string form goes as a whole; `model.name` goes with the object it leaves empty.
+                if cfg.get("model").is_some_and(Value::is_string) {
+                    if let Some(o) = cfg.as_object_mut() {
+                        o.remove("model");
+                    }
+                } else {
+                    crate::mfields::remove(&mut cfg, "/model/name");
                 }
                 diff.push(&file, l("model.name（删除，用 Gemini CLI 默认模型）", "model.name (removed; Gemini CLI uses its default model)"), false);
             }
@@ -618,7 +585,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             written.push(env_path());
         }
         if store_dirty {
-            store::set_value(&mut root, ID, "profiles", Value::Object(profs));
+            profiles::save(&mut root, ID, profs);
             store::save(&root)?;
         }
     }
@@ -809,6 +776,57 @@ mod tests {
         assert_eq!(envtext(&t), "GEMINI_API_KEY=AIza-secret-9999\n");
         assert_eq!(settings(&t).pointer("/security/auth/selectedType").and_then(|x| x.as_str()), Some(API_KEY_AUTH));
         assert_eq!(state(&Install::default()).current_provider.as_deref(), Some("official-key"));
+    }
+
+    #[test]
+    fn api_key_from_system_env_is_listed_as_current() {
+        // Gemini CLI's documented setup: `export GEMINI_API_KEY`, then "Use Gemini API key" in /auth.
+        let t = setup(Some(r#"{"security":{"auth":{"selectedType":"gemini-api-key"}}}"#), None);
+        crate::env::set_test_vars(&[(KEY, "AIza-sys-secret-1111")]);
+        let st = state(&Install::default());
+        let cur = format!("{AUTH}{API_KEY_AUTH}");
+        assert_eq!(st.current_provider.as_deref(), Some(cur.as_str()));
+        let p = st.providers.iter().find(|p| p.id == cur).expect("current provider is listed");
+        assert_eq!(p.name, "Gemini API 密钥（来自环境变量）");
+        assert!(!st.providers.iter().any(|p| p.id == UNMANAGED), "nothing in .env to adopt");
+        assert!(st.notes.iter().any(|n| n.contains(KEY)));
+        // Switching to the Google login still works.
+        apply(vec![Op::SetCurrentProvider { provider: GOOGLE.into() }]).unwrap();
+        assert_eq!(settings(&t).pointer("/security/auth/selectedType").and_then(|x| x.as_str()), Some(OAUTH));
+        assert_eq!(state(&Install::default()).current_provider.as_deref(), Some(GOOGLE));
+    }
+
+    #[test]
+    fn non_object_parent_is_refused() {
+        let raw = r#"{"privacy": "on"}"#;
+        let t = setup(Some(raw), None);
+        assert!(apply(vec![Op::SetSetting { key: "usage_stats".into(), value: json!(false) }]).is_err());
+        assert_eq!(fs::read_to_string(t.0.join("settings.json")).unwrap(), raw);
+    }
+
+    #[test]
+    fn legacy_string_model_is_dropped_for_google() {
+        let t = setup(Some(r#"{"security":{"auth":{"selectedType":"gemini-api-key"}},"model":"m1"}"#), Some(ENV));
+        apply(vec![Op::UpsertProvider { provider: pi(Some(UNMANAGED), "Relay", "https://relay.example:8080", None, &["m1"]) }]).unwrap();
+        assert_eq!(state(&Install::default()).current_provider.as_deref(), Some("relay"));
+        let d = apply(vec![Op::SetCurrentProvider { provider: GOOGLE.into() }]).unwrap();
+        assert!(diff_text(&d).contains("model.name（删除"), "{}", diff_text(&d));
+        assert!(settings(&t).get("model").is_none());
+    }
+
+    #[test]
+    fn hiding_the_default_model() {
+        let _t = setup(Some(SETTINGS), None);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r", None, &["a", "b"]) }]).unwrap();
+        apply(vec![Op::SetModelRoles { provider: "r".into(), roles: BTreeMap::from([("default".into(), "b".into())]) }]).unwrap();
+        assert!(apply(vec![Op::SetModelVisible { provider: "r".into(), model: "b".into(), visible: false }]).is_err());
+        apply(vec![Op::SetModelVisible { provider: "r".into(), model: "a".into(), visible: false }]).unwrap();
+        // Deleting the default model drops the choice; the first visible model takes over.
+        apply(vec![Op::DeleteModel { provider: "r".into(), model: "b".into() }]).unwrap();
+        let root = store::load();
+        assert_eq!(str_field(&profiles::load(&root, ID)["r"], "defaultModel"), "");
+        assert!(apply(vec![Op::UpsertModel { provider: "r".into(), model: ModelInput { id: " ".into(), ..Default::default() } }]).is_err());
+        assert!(apply(vec![Op::DeleteProvider { provider: "nope".into() }]).is_err());
     }
 
     /// Read-only look at the real Gemini CLI config on this machine (keys masked).
