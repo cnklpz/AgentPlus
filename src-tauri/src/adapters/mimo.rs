@@ -15,6 +15,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 pub const ID: &str = "mimo";
+pub const NAME: &str = "MiMo Desktop";
 const SKILLS: [&str; 4] = ["agents", "claude", "codex", "opencode"];
 /// (key, label zh, label en, description)
 const PREFS: [(&str, &str, &str, &str); 4] = [
@@ -42,28 +43,7 @@ fn fmt() -> Fmt {
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "MiMo Desktop".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: engine_path().parent().unwrap().to_string_lossy().to_string(),
-        files: vec![display_path(&engine_path()), display_path(&prefs_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", engine_path().parent().unwrap(), vec![display_path(&engine_path()), display_path(&prefs_path())]);
     let root = store::load();
     let f = fmt();
 
@@ -88,27 +68,19 @@ pub fn state(inst: &Install) -> AgentState {
             })
             .unwrap_or_default();
         st.providers.push(Provider {
-            id: "account".into(),
-            name: l("MiMo 账号内置", "MiMo account (built-in)").into(),
-            base_url: None,
-            host: l("小米账号登录", "Xiaomi account sign-in").into(),
-            apis: vec![l("账号", "Account").into()],
-            builtin: true,
-            enabled: true,
-            compatible: true,
-            reason: None,
             models,
-            details: vec![
-                Kv::text(lbl::auth(), l("小米账号登录", "Xiaomi account sign-in")),
-                Kv::mono(lbl::source(), "model-catalog.json"),
-                Kv::text(lbl::note(), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
-            ],
-            editable: false,
-            api: "chat".into(),
-            has_key: true,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            ..Provider::builtin(
+                "account",
+                l("MiMo 账号内置", "MiMo account (built-in)"),
+                l("小米账号登录", "Xiaomi account sign-in"),
+                "chat",
+                l("账号", "Account"),
+                vec![
+                    Kv::text(lbl::auth(), l("小米账号登录", "Xiaomi account sign-in")),
+                    Kv::mono(lbl::source(), "model-catalog.json"),
+                    Kv::text(lbl::note(), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
+                ],
+            )
         });
     }
 
@@ -121,8 +93,7 @@ pub fn state(inst: &Install) -> AgentState {
             st.providers.extend(f.providers(&cfg, &root));
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
         }
     }
 

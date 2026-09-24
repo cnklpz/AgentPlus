@@ -752,7 +752,6 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
         host: base.as_deref().map(host_of).unwrap_or_default(),
         base_url: base,
         apis: vec![api.map(api_label).unwrap_or(l("其他", "Other")).into()],
-        builtin: false,
         enabled,
         compatible: reason.is_none(),
         reason,
@@ -761,9 +760,7 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
         editable: true,
         api: api.unwrap_or("chat").into(),
         has_key: key.is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
@@ -804,7 +801,6 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
         host: host_of(base),
         base_url: Some(base.clone()),
         apis: vec![api.map(api_label).unwrap_or(l("其他", "Other")).into()],
-        builtin: false,
         enabled: true,
         compatible: api.is_some(),
         reason: api.is_none().then(|| tr!("api_mode = {}，AgentPlus 只能查看", "api_mode = {}; AgentPlus can only view it", mode.clone().unwrap_or_default())),
@@ -813,71 +809,42 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
         editable: true,
         api: api.unwrap_or("chat").into(),
         has_key: key.is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 fn builtin_provider(name: &str, dflt: Option<String>, known: bool) -> Provider {
     Provider {
-        id: format!("{BUILTIN}{name}"),
-        name: tr!("内置 · {name}", "Built-in · {name}"),
-        base_url: None,
-        host: l("Hermes 内置供应商", "Hermes built-in provider").into(),
-        apis: vec![l("内置", "Built-in").into()],
-        builtin: true,
-        enabled: true,
         compatible: known,
         reason: (!known).then(|| l("config.yaml 里找不到这个自定义供应商", "This custom provider isn't in config.yaml").to_string()),
         models: dflt.iter().map(|m| Model { id: m.clone(), visible: true, readonly: true, tags: vec![Tag::default_model()], ..Default::default() }).collect(),
-        details: vec![
-            Kv::mono("model.provider", name.to_string()),
-            Kv::text(
-                lbl::note(),
-                l(
-                    "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
-                    "A provider built into Hermes (credentials live in .env / auth.json; manage them with hermes model / hermes auth)",
+        ..Provider::builtin(
+            format!("{BUILTIN}{name}"),
+            tr!("内置 · {name}", "Built-in · {name}"),
+            l("Hermes 内置供应商", "Hermes built-in provider"),
+            "chat",
+            l("内置", "Built-in"),
+            vec![
+                Kv::mono("model.provider", name.to_string()),
+                Kv::text(
+                    lbl::note(),
+                    l(
+                        "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
+                        "A provider built into Hermes (credentials live in .env / auth.json; manage them with hermes model / hermes auth)",
+                    ),
                 ),
-            ),
-        ],
-        editable: false,
-        api: "chat".into(),
-        has_key: true,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+            ],
+        )
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "single".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&config_path()), display_path(&env_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![l("Hermes 的改动对新会话生效；gateway（消息平台）需要重启。", "Hermes changes apply to new sessions; the gateway (messaging platforms) needs a restart.").into()],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "single", &dir(), vec![display_path(&config_path()), display_path(&env_path())]);
+    st.notes.push(l("Hermes 的改动对新会话生效；gateway（消息平台）需要重启。", "Hermes changes apply to new sessions; the gateway (messaging platforms) needs a restart.").into());
     let (cfg, text, _) = match load() {
         Ok(x) => x,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };

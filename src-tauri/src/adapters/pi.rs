@@ -81,28 +81,8 @@ fn defaults() -> (Option<String>, Option<String>) {
 
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: default_dir().to_string_lossy().to_string(),
-        files: vec![f.file(), display_path(&auth_path()), display_path(&settings_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![l("改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。", "Changes take effect in new pi sessions (running sessions can pick again with /model).").into()],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &default_dir(), vec![f.file(), display_path(&auth_path()), display_path(&settings_path())]);
+    st.notes.push(l("改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。", "Changes take effect in new pi sessions (running sessions can pick again with /model).").into());
     let root = store::load();
     let cfg = match load_models() {
         Ok((cfg, _, had_comments)) => {
@@ -113,8 +93,7 @@ pub fn state(inst: &Install) -> AgentState {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -128,28 +107,17 @@ pub fn state(inst: &Install) -> AgentState {
                 continue;
             }
             let oauth = e.get("type").and_then(|t| t.as_str()) == Some("oauth");
-            st.providers.push(Provider {
-                id: id.clone(),
-                name: id.clone(),
-                base_url: None,
-                host: if oauth { l("账号登录（/login）", "Account sign-in (/login)").into() } else { l("内置供应商 · API Key", "Built-in provider · API key").into() },
-                apis: vec![l("内置", "Built-in").into()],
-                builtin: true,
-                enabled: true,
-                compatible: true,
-                reason: None,
-                models: vec![],
-                details: vec![
+            st.providers.push(Provider::builtin(
+                id.clone(),
+                id.clone(),
+                if oauth { l("账号登录（/login）", "Account sign-in (/login)") } else { l("内置供应商 · API Key", "Built-in provider · API key") },
+                "chat",
+                l("内置", "Built-in"),
+                vec![
                     Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
                     Kv::text(lbl::note(), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
                 ],
-                editable: false,
-                api: "chat".into(),
-                has_key: true,
-                key_fp: None,
-                key_hint: None,
-                official_auth: false,
-            });
+            ));
         }
     }
 

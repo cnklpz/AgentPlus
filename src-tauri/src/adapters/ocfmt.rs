@@ -182,10 +182,8 @@ impl Fmt {
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
             apis: vec![api_label(api).into()],
-            builtin: false,
             enabled,
             compatible: true,
-            reason: None,
             models,
             details: vec![
                 Kv::mono(lbl::config_id(), format!("provider.{id}")),
@@ -196,9 +194,7 @@ impl Fmt {
             editable: true,
             api: api.into(),
             has_key: in_cfg || in_auth,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            ..Default::default()
         }
     }
 

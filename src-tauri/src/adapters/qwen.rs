@@ -400,7 +400,6 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         base_url: g.base.clone(),
         host: g.base.as_deref().map(host_of).unwrap_or_else(|| l("默认地址", "Default URL").into()),
         apis: vec![api_label(api).into()],
-        builtin: false,
         enabled: g.enabled,
         compatible: g.proto.is_some(),
         reason: g.proto.is_none().then(|| tr!("modelProviders.{} 没有在 providerProtocol 里声明协议，Qwen Code 会忽略它", "modelProviders.{} has no protocol declared in providerProtocol, so Qwen Code ignores it", g.key)),
@@ -409,35 +408,12 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         editable: g.proto.is_some(),
         api: api.into(),
         has_key: found.is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&settings_path()), display_path(&dotenv_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&settings_path()), display_path(&dotenv_path())]);
     let cfg = match load() {
         Ok((cfg, _, had)) => {
             if had {
@@ -447,8 +423,7 @@ pub fn state(inst: &Install) -> AgentState {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -458,28 +433,17 @@ pub fn state(inst: &Install) -> AgentState {
     let gs = groups(&cfg, &root);
 
     if sel.auth.as_deref() == Some(OAUTH) || dir().join("oauth_creds.json").exists() {
-        st.providers.push(Provider {
-            id: OAUTH.into(),
-            name: l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into(),
-            base_url: None,
-            host: l("Qwen OAuth 登录", "Qwen OAuth sign-in").into(),
-            apis: vec![l("账号", "Account").into()],
-            builtin: true,
-            enabled: true,
-            compatible: true,
-            reason: None,
-            models: vec![],
-            details: vec![
+        st.providers.push(Provider::builtin(
+            OAUTH,
+            l("Qwen 账号（OAuth）", "Qwen account (OAuth)"),
+            l("Qwen OAuth 登录", "Qwen OAuth sign-in"),
+            "chat",
+            l("账号", "Account"),
+            vec![
                 Kv::text(lbl::auth(), l("qwen-oauth（~/.qwen/oauth_creds.json）", "qwen-oauth (~/.qwen/oauth_creds.json)")),
                 Kv::text(lbl::note(), l("Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换", "Qwen Code's built-in account sign-in. Models are managed by Qwen Code; switch with /auth.")),
             ],
-            editable: false,
-            api: "chat".into(),
-            has_key: true,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
-        });
+        ));
     }
     let mut provs: Vec<Provider> = gs.iter().map(|g| provider_of(g, &cfg, &names, &sel)).collect();
     // Two unnamed providers on the same host: tell them apart by protocol.

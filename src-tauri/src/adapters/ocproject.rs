@@ -101,28 +101,9 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let dir = dir_of(agent)?;
     let f = fmt(agent, &dir);
     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| display_path(&dir));
-    let mut st = AgentState {
-        id: agent.into(),
-        name,
-        installed: true,
-        version: None,
-        running: false,
-        mode: "multi".into(),
-        config_dir: dir.to_string_lossy().to_string(),
-        files: vec![f.file(), display_path(&opencode::auth_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    // A folder is always "installed"; OpenCode itself is detected on the global entry.
+    let found = crate::process::Install { installed: true, ..Default::default() };
+    let mut st = super::new_state(agent, &name, &found, "multi", &dir, vec![f.file(), display_path(&opencode::auth_path())]);
     if !dir.is_dir() {
         st.readonly = true;
         st.notes.push(tr!("找不到文件夹 {}，可能已经移动或删除。", "Folder {} not found. It may have been moved or deleted.", display_path(&dir)));
@@ -138,8 +119,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return Ok(st);
         }
     };

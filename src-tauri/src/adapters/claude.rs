@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 pub const ID: &str = "claude";
+pub const NAME: &str = "Claude Code";
 const OFFICIAL: &str = "official";
 /// The env block points at a relay that is not an AgentPlus profile (yet).
 const UNMANAGED: &str = "settings-env";
@@ -182,49 +183,23 @@ fn provider_of(id: &str, p: &Value, _is_current: bool) -> Provider {
         host: host_of(&base),
         base_url: Some(base),
         apis: vec![api_label("anthropic").into()],
-        builtin: false,
         enabled: true,
         compatible: true,
-        reason: None,
         models: models_with_roles(&model_list(p), &roles),
         details,
         editable: true,
         api: "anthropic".into(),
         has_key: !key.is_empty(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "Claude Code".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "single".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&settings_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "single", &dir(), vec![display_path(&settings_path())]);
     let (cfg, _) = match load() {
         Ok(x) => x,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
@@ -234,28 +209,17 @@ pub fn state(inst: &Install) -> AgentState {
     let cur = current(&env, &profs);
     st.current_provider = Some(cur.clone());
 
-    st.providers.push(Provider {
-        id: OFFICIAL.into(),
-        name: l("Claude 官方账号", "Claude official account").into(),
-        base_url: None,
-        host: l("Claude.ai / Console 登录", "Claude.ai / Console sign-in").into(),
-        apis: vec!["Anthropic".into()],
-        builtin: true,
-        enabled: true,
-        compatible: true,
-        reason: None,
-        models: vec![],
-        details: vec![
+    st.providers.push(Provider::builtin(
+        OFFICIAL,
+        l("Claude 官方账号", "Claude official account"),
+        l("Claude.ai / Console 登录", "Claude.ai / Console sign-in"),
+        "anthropic",
+        api_label("anthropic"),
+        vec![
             Kv::text(lbl::auth(), l("claude 登录（~/.claude/.credentials.json）", "claude sign-in (~/.claude/.credentials.json)")),
             Kv::text(lbl::note(), l("不设置 ANTHROPIC_BASE_URL 等环境变量，用官方账号和官方模型", "Leaves ANTHROPIC_BASE_URL and related variables unset; uses the official account and official models")),
         ],
-        editable: false,
-        api: "anthropic".into(),
-        has_key: true,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
-    });
+    ));
     for (id, p) in &profs {
         st.providers.push(provider_of(id, p, id == &cur));
     }

@@ -259,10 +259,8 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
         base_url: Some(g.key.0.clone()),
         host: host_of(&g.key.0),
         apis: vec![api_label("chat").into()],
-        builtin: false,
         enabled,
         compatible: true,
-        reason: None,
         models,
         details: vec![
             Kv::mono("vendor", if g.key.2.is_empty() { "-".into() } else { g.key.2.clone() }),
@@ -273,36 +271,13 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
         editable: true,
         api: "chat".into(),
         has_key: resolve_key(&g.key.1).is_some() || env_ref(&g.key.1).is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 #[allow(dead_code)]
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&models_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&models_path())]);
     let cfg = match load_models() {
         Ok((cfg, _, had)) => {
             if had {
@@ -312,8 +287,7 @@ pub fn state(inst: &Install) -> AgentState {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };

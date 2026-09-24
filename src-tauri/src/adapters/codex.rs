@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 pub const ID: &str = "codex";
+pub const NAME: &str = "Codex";
 const EFFORTS: [&str; 7] = ["low", "medium", "high", "xhigh", "persistent", "ultra", "max"];
 
 fn inject_file() -> &'static str {
@@ -294,29 +295,18 @@ fn sign_in_from(v: &Value) -> SignIn {
 // ---------------------------------------------------------------- read
 
 fn providers(doc: &DocumentMut) -> Vec<Provider> {
-    let mut out = vec![Provider {
-        id: "openai".into(),
-        name: l("OpenAI 官方", "OpenAI official").into(),
-        base_url: None,
-        host: l("ChatGPT 账号登录", "ChatGPT account sign-in").into(),
-        apis: vec!["Responses".into()],
-        builtin: true,
-        enabled: true,
-        compatible: true,
-        reason: None,
-        models: vec![],
-        details: vec![
+    let mut out = vec![Provider::builtin(
+        "openai",
+        l("OpenAI 官方", "OpenAI official"),
+        l("ChatGPT 账号登录", "ChatGPT account sign-in"),
+        "responses",
+        api_label("responses"),
+        vec![
             Kv::text(lbl::auth(), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
             Kv::text("Fast", l("账号登录时 Codex 原生显示", "Shown natively by Codex when signed in with an account")),
             Kv::mono(lbl::config_id(), l("openai（内置）", "openai (built-in)")),
         ],
-        editable: false,
-        api: "responses".into(),
-        has_key: true,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
-    }];
+    )];
     if let Some(t) = doc.get("model_providers").and_then(|i| i.as_table_like()) {
         for (id, item) in t.iter() {
             if id == FIXED_ID {
@@ -348,17 +338,14 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 host: base.as_deref().map(host_of).unwrap_or_default(),
                 base_url: base,
                 apis: vec![api_label(api).into()],
-                builtin: false,
                 enabled: true,
                 compatible: !chat,
                 reason: if chat { Some(l("Codex 已不支持 Chat 接口", "Codex no longer supports the Chat API").into()) } else { None },
-                models: vec![],
                 editable: true,
                 api: api.into(),
                 has_key: env_key.as_deref().and_then(env_value).is_some(),
-                key_fp: None,
-                key_hint: None,
                 official_auth,
+                ..Default::default()
             });
         }
     }
@@ -504,33 +491,11 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
 }
 
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: "Codex".into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "single".into(),
-        config_dir: codex_home().to_string_lossy().to_string(),
-        files: vec![display_path(&config_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "single", &codex_home(), vec![display_path(&config_path())]);
     let (doc, _) = match load_doc() {
         Ok(d) => d,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };

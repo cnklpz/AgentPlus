@@ -296,10 +296,8 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         base_url: Some(g.key.0.clone()),
         host: host_of(&g.key.0),
         apis: vec![api_label(api).into()],
-        builtin: false,
         enabled: !disabled,
         compatible: true,
-        reason: None,
         models,
         details: vec![
             Kv::mono("provider", if g.key.1.is_empty() { "-".into() } else { g.key.1.clone() }),
@@ -310,36 +308,13 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         editable: !readonly,
         api: api.into(),
         has_key: resolve_key(&g.key.2).is_some() || env_ref(&g.key.2).is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 #[allow(dead_code)]
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&settings_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&settings_path())]);
     let cfg = match load_settings() {
         Ok((cfg, _, had)) => {
             if had {
@@ -349,8 +324,7 @@ pub fn state(inst: &Install) -> AgentState {
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
