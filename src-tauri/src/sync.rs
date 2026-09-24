@@ -9,7 +9,6 @@ use crate::util::*;
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::fs;
 use std::path::PathBuf;
 
 const FILE: &str = "agentplus-sync.json";
@@ -19,10 +18,9 @@ pub fn folder() -> Option<String> {
 }
 
 pub fn set_folder(path: &str) -> Result<()> {
+    // Always a Windows folder (a cloud drive, a share): not resolved against the WSL target.
     let p = PathBuf::from(path.trim());
-    if !p.is_dir() {
-        return Err(anyhow!(tr!("文件夹不存在：{}", "Folder does not exist: {}", p.display())));
-    }
+    require_dir(&p)?;
     store::update(|s| {
         store::set_str(s, "sync", "folder", &p.to_string_lossy());
         Ok(())
@@ -63,7 +61,7 @@ pub struct SyncStatus {
 pub fn status() -> SyncStatus {
     let f = folder();
     let file = f.as_ref().map(|d| PathBuf::from(d).join(FILE));
-    let v: Option<Value> = file.as_ref().and_then(|p| fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok());
+    let v: Option<Value> = file.as_deref().and_then(|p| read_json(p).ok()).map(|(v, _)| v);
     SyncStatus {
         folder: f,
         file_exists: file.map(|p| p.exists()).unwrap_or(false),
@@ -89,7 +87,8 @@ pub fn export() -> Result<String> {
         "machine": std::env::var("COMPUTERNAME").unwrap_or_default(),
         "agents": agents,
     });
-    fs::write(&path, serde_json::to_string_pretty(&doc)?)?;
+    // A sync client may upload the file at any moment: never let it see half of it.
+    write_text_atomic(&path, &serde_json::to_string_pretty(&doc)?, TextMeta::NEW)?;
     Ok(tr!("已导出 {n} 个供应商到 {}（不含密钥）", "Exported {n} provider(s) to {} (API keys not included)", display_path(&path)))
 }
 
@@ -106,7 +105,10 @@ pub struct Suggestion {
 /// Compares the sync file with this machine and proposes additions.
 pub fn preview_import() -> Result<Vec<Suggestion>> {
     let path = sync_path()?;
-    let doc: Value = serde_json::from_str(&fs::read_to_string(&path).map_err(|_| anyhow!(tr!("同步文件夹里还没有 {FILE}，先在另一台设备导出", "No {FILE} in the sync folder yet. Export from another device first")))?)?;
+    if !path.exists() {
+        anyhow::bail!("{}", tr!("同步文件夹里还没有 {FILE}，先在另一台设备导出", "No {FILE} in the sync folder yet. Export from another device first"));
+    }
+    let (doc, _) = read_json(&path)?;
     let mut out = vec![];
     for a in adapters::ALL {
         let Some(remote) = doc["agents"].get(a) else { continue };
@@ -120,7 +122,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
             match lp {
                 None => {
                     let ids: Vec<String> = rmodels.iter().filter(|m| m["visible"].as_bool().unwrap_or(true)).filter_map(|m| m["id"].as_str().map(String::from)).collect();
-                    let key = format!("pu:sync-{a}-{}", slug(name));
+                    // Per address too: two remote providers can share a name.
+                    let key = format!("pu:sync-{a}-{}-{}", slug(name), slug(base));
                     out.push(Suggestion {
                         agent: a.into(),
                         title: tr!("添加供应商「{name}」", "Add provider \"{name}\""),
