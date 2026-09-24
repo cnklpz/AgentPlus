@@ -14,6 +14,7 @@ import agentPage from "./agentPage";
 import providerDialog from "./providerDialog";
 import modelDialog from "./modelDialog";
 import templatePicker from "./templatePicker";
+import modelPicker from "./modelPicker";
 import envSwitch from "./envSwitch";
 import comboBox from "./comboBox";
 import closeDialog from "./closeDialog";
@@ -53,6 +54,7 @@ export default {
   providerDialog,
   modelDialog,
   templatePicker,
+  modelPicker,
   envSwitch,
   comboBox,
   closeDialog,

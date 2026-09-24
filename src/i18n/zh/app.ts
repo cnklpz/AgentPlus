@@ -111,7 +111,6 @@ export default {
   showInFolder: "在文件夹中显示",
   cut: "剪切",
   paste: "粘贴",
-  selectAll: "全选",
   copySelection: "复制所选文字",
   retest: "重新测速",
   searchMenu: "搜索…",

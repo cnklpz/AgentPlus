@@ -7,6 +7,7 @@ const en: typeof zh = {
   custom: "Custom",
   customHint: "Enter the base URL and protocol yourself",
   billing: "Billing",
+  getKey: "Get a key from {vendor} ↗",
 };
 
 export default en;

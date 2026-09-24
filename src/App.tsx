@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
-import { CATALOG, type Draft, type ViewProvider, currentProvider, draftAfterWrite, isEnabled, isVisible, keys, opsToWrite, upsertModel, upsertProvider, viewModels, viewProviders, withOp } from "./draft";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
+import {
+  CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, isEnabled, isVisible, keys, opCount, opsToWrite,
+  pendingTotal, setModelVisible, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders, withOp,
+} from "./draft";
 import { AgentPage, type Tab } from "./components/AgentPage";
 import { Aside } from "./components/Aside";
 import { CommandPalette, type Target } from "./components/CommandPalette";
@@ -19,9 +22,12 @@ import { checkUpdate, useUpdate } from "./updater";
 import { type SettingsTab, SettingsPage } from "./components/SettingsPage";
 import { PendingDialog } from "./components/PendingDialog";
 import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
-import { type Prefs, applyMotion, applyTheme, loadPrefs, savePrefs } from "./prefs";
-import { setLang, t, tn, useLang } from "./i18n";
-import { API_LABEL, GATEWAY_KEY, type Group, type Use, apiFor, buildStations, cannotAdd, gatewayPoolIds, gatewayRouteId, hostKey, importKey, importOp, movedGatewayUrl, plainRoute } from "./services";
+import { type Prefs, applyPrefs, loadPrefs, savePrefs } from "./prefs";
+import { t, tn, useLang } from "./i18n";
+import {
+  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolIds, gatewayRouteId,
+  hostKey, importKey, importOp, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
+} from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { SyncPage } from "./components/SyncPage";
 import { SYNC_ENABLED } from "./features";
@@ -34,7 +40,7 @@ import { type CopyPick, CopyProviderDialog } from "./components/CopyProviderDial
 import { type RestartRun, RestartDialog, applyProgress, finishRun, newRun } from "./components/RestartDialog";
 import { useDismiss } from "./hooks";
 import { inTauri } from "./tauri";
-import { scrub, setPrivacy, usePrivacy } from "./privacy";
+import { scrub, usePrivacy } from "./privacy";
 import { copyText, errText } from "./util";
 import { joinList } from "./format";
 
@@ -74,7 +80,7 @@ export default function App() {
   const runHidden = useRef(false);
   /** The restart in progress was cancelled from its dialog. */
   const runCancelled = useRef(false);
-  const [toast, setToast] = useState<{ text: string; error?: boolean } | null>(null);
+  const [toast, setToast] = useState<{ id: number; text: string; error?: boolean } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [palette, setPalette] = useState(false);
@@ -82,12 +88,8 @@ export default function App() {
   const [lib, setLib] = useState<LibEntry[]>([]);
   const [envs, setEnvs] = useState<EnvInfo[]>([]);
   const [switching, setSwitching] = useState(false);
-  const [prefs, setPrefsState] = useState<Prefs>(() => {
-    const p = loadPrefs();
-    // Before the first render, so nothing sensitive is ever painted.
-    setPrivacy(p.privacy);
-    return p;
-  });
+  // main.tsx applied these before the first render (nothing sensitive is ever painted).
+  const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   // Settings is a full-window page; remember where to go back to.
   const [beforeSettings, setBeforeSettings] = useState<Page | null>(null);
@@ -106,10 +108,7 @@ export default function App() {
   const [projStates, setProjStates] = useState<Record<string, AgentState>>({});
   const [copyOpen, setCopyOpen] = useState(false);
   const setPrefs = (p: Prefs) => { setPrefsState(p); savePrefs(p); };
-  useEffect(() => applyMotion(prefs.motion), [prefs.motion]);
-  useEffect(() => applyTheme(prefs.theme), [prefs.theme]);
-  useEffect(() => { setLang(prefs.lang); }, [prefs.lang]);
-  useEffect(() => { setPrivacy(prefs.privacy); }, [prefs.privacy]);
+  useEffect(() => applyPrefs(prefs), [prefs.motion, prefs.theme, prefs.lang, prefs.privacy]);
   // The window starts hidden (tauri.conf.json) so the WebView's blank white never shows;
   // reveal it once the first frame is committed with theme and styles in place.
   useEffect(() => { if (inTauri) getCurrentWindow().show().catch(() => {}); }, []);
@@ -167,10 +166,16 @@ export default function App() {
   const draft = drafts[sid] ?? {};
   const ops = useMemo(() => Object.values(draft), [draft]);
 
-  const flash = useCallback((text: string, error = false, ms = 3600) => {
-    setToast({ text, error });
-    window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), ms);
+  /** Each notice has its own id: an older one's timer never clears a newer one, even with the same text. */
+  const toastSeq = useRef(0);
+  /** A notice at the bottom of the window; errors stay up longer. */
+  const flash = useCallback((text: string, error = false, ms = error ? 7000 : 3600) => {
+    const id = ++toastSeq.current;
+    setToast({ id, text, error });
+    window.setTimeout(() => setToast((cur) => (cur?.id === id ? null : cur)), ms);
   }, []);
+  /** A notice that stays until the next one (a restart running in the background). */
+  const showSticky = (text: string) => setToast({ id: ++toastSeq.current, text });
 
   // A new release: look once shortly after startup (设置 › 关于 › 启动时检查更新).
   const update = useUpdate();
@@ -186,21 +191,22 @@ export default function App() {
   const reloadLib = () => api.libraryList().then(setLib).catch(() => undefined);
   const reloadEnvs = () => api.listEnvs().then(setEnvs).catch(() => undefined);
   const reloadProjects = () => api.projectsList().then(setProjects).catch(() => undefined);
-  useEffect(() => { reload(); reloadLib(); reloadEnvs(); reloadProjects(); }, [lang]);
-  // Loaded project configs carry backend-rendered text too.
-  const langSeen = useRef(lang);
-  useEffect(() => {
-    if (langSeen.current === lang) return;
-    langSeen.current = lang;
+  /** Re-reads the open project configs (a project closed meanwhile stays closed). */
+  const reloadProjStates = () => {
     for (const id of Object.keys(projStates) as AgentId[]) {
       api.getAgent(id).then((s) => setProjStates((m) => (m[id] ? { ...m, [id]: s } : m))).catch(() => undefined);
     }
-  }, [lang]);
+  };
+  const reloadGateway = () => api.gatewayStatus().then(setGateway).catch(() => undefined);
+  /** Everything read from the agents' config files (after a language switch, F5 or a rollback). */
+  const reloadConfigs = () => { reload(); reloadLib(); reloadProjects(); reloadProjStates(); };
+  // Backend-rendered text follows the language too.
+  useEffect(() => { reloadConfigs(); reloadEnvs(); }, [lang]);
 
   // Gateway status: poll while it is on or its page is open.
   const gwOn = !!gateway?.enabled;
   useEffect(() => {
-    const load = () => api.gatewayStatus().then(setGateway).catch(() => undefined);
+    const load = reloadGateway;
     load();
     if (!gwOn && page !== "gateway") return;
     const timer = window.setInterval(load, page === "gateway" ? 2000 : 5000);
@@ -224,13 +230,15 @@ export default function App() {
   /** The current gateway host first, then earlier ports: addresses there still point at the gateway. */
   const formerKey = (gateway?.formerPorts ?? []).join(",");
   const gatewayHosts = useMemo(() => (gateway ? [gateway.port, ...(gateway.formerPorts ?? [])].map((p) => `127.0.0.1:${p}`) : []), [gateway?.port, formerKey]);
-  const stations = useMemo(() => buildStations(agents.filter((a) => a.installed), drafts, lib, gatewayHosts), [agents, drafts, lib, gatewayHosts, lang]);
+  /** Every agent shown here plus the open project configs: what "apply all" / "discard all" act on. */
+  const allStates = useMemo(() => [...shown, ...Object.values(projStates)], [shown, projStates]);
+  const stations = useMemo(() => buildStations(shown, drafts, lib, gatewayHosts), [shown, drafts, lib, gatewayHosts, lang]);
 
   /** Drafts with every agent address at one of `from` (gateway ports) moved to `port`, and how many moved. */
   const moveGatewayPort = (all: Record<string, Draft>, from: number[], port: number) => {
     const next = { ...all };
     let n = 0;
-    for (const a of [...shown, ...Object.values(projStates)]) {
+    for (const a of allStates) {
       if (a.readonly) continue;
       let d = next[a.id] ?? {};
       const before = d;
@@ -273,7 +281,7 @@ export default function App() {
     flash(tn("app.gatewayPortMoved", n, { port: gateway.port }), false, 8000);
   }, [gateway?.port, agentsReady]);
   const hubStation = stations.find((s) => s.key === hubSel) ?? null;
-  const pendingTotal = Object.values(drafts).reduce((n, d) => n + Object.keys(d).length, 0);
+  const totalPending = pendingTotal(drafts);
   const curEnv = envs.find((e) => e.current);
 
   // Ctrl+K opens search from anywhere; Ctrl+Shift+H switches 隐私模式.
@@ -282,6 +290,8 @@ export default function App() {
     setPrefs(next);
     flash(t(next.privacy ? "app.privacyOnToast" : "app.privacyOffToast"));
   };
+  // F5 / Ctrl+R would reload the webview and lose pending changes: re-read configs instead.
+  const refreshRef = useRef(() => {});
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -290,6 +300,9 @@ export default function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "h") {
         e.preventDefault();
         togglePrivacy();
+      } else if (e.key === "F5" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r")) {
+        e.preventDefault();
+        refreshRef.current();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -359,7 +372,7 @@ export default function App() {
       await api.dismissFixedPrompt();
       replaceAgent(await api.getAgent("codex"));
     } catch (e) {
-      flash(errText(e), true, 7000);
+      flash(errText(e), true);
       return;
     }
     flash(t("app.fixedDeclined"));
@@ -382,10 +395,10 @@ export default function App() {
   // Clicking outside the cards / detail panel, or pressing Esc, closes the details.
   useDismiss(!!pickedProvider && !dialog && !palette && !copyOpen, ".pcard, .pdetail, .toast, .modal-bg", closeDetail);
 
-  const deleteProvider = async (p: ViewProvider) => {
+  const askDeleteProvider = async (p: ViewProvider) => {
     if (!st) return;
     if (!(await ask({ title: t("app.deleteProviderTitle", { name: p.name }), message: t("app.deleteProviderMsg", { agent: st.name }), danger: true }))) return;
-    setDraft(withOp(draft, keys.deleteProvider(p.id), { op: "delete_provider", provider: p.id }));
+    setDraft(deleteProvider(draft, p.id));
   };
 
   const replaceAgent = (next: AgentState) => (isProjectId(next.id)
@@ -395,15 +408,15 @@ export default function App() {
   /** Restarts an agent, or starts it when it isn't running; progress as chosen in 设置 › 界面. */
   const restartAgent = async (a: AgentState) => {
     const starting = !a.running;
-    const dialog = prefs.restartProgress === "dialog";
+    const showDialog = prefs.restartProgress === "dialog";
     setRestarting(a.id);
-    runHidden.current = !dialog;
+    runHidden.current = !showDialog;
     runCancelled.current = false;
-    if (dialog) setRun(newRun(a.id, a.name, starting));
-    else setToast({ text: t(starting ? "app.starting" : "app.restarting", { name: a.name }) });
+    if (showDialog) setRun(newRun(a.id, a.name, starting));
+    else showSticky(t(starting ? "app.starting" : "app.restarting", { name: a.name }));
     const mine = (f: (r: RestartRun) => RestartRun) => setRun((r) => (r && r.agent === a.id && !r.result ? f(r) : r));
     try {
-      const msg = await api.restart(a.id, dialog ? (p) => mine((r) => applyProgress(r, p)) : undefined);
+      const msg = await api.restart(a.id, showDialog ? (p) => mine((r) => applyProgress(r, p)) : undefined);
       mine((r) => finishRun(r, true, msg));
       if (runHidden.current) flash(t("app.nameMsg", { name: a.name, msg }), false, 5000);
       replaceAgent(await api.getAgent(a.id));
@@ -417,7 +430,7 @@ export default function App() {
   };
   /** Restart / Start clicked: unapplied changes won't be read, so offer to apply them first. */
   const restartAsked = async (a: AgentState) => {
-    const n = Object.keys(drafts[a.id] ?? {}).length;
+    const n = opCount(drafts[a.id]);
     if (n) {
       const starting = !a.running;
       const applyFirst = await askCheck({
@@ -436,7 +449,7 @@ export default function App() {
   const closeRun = () => {
     if (run && !run.result) {
       runHidden.current = true;
-      setToast({ text: t(run.starting ? "app.starting" : "app.restarting", { name: run.name }) });
+      showSticky(t(run.starting ? "app.starting" : "app.restarting", { name: run.name }));
     }
     setRun(null);
   };
@@ -445,7 +458,7 @@ export default function App() {
     if (!run || run.result) return;
     runCancelled.current = true;
     runHidden.current = true;
-    setToast({ text: t("app.cancelling") });
+    showSticky(t("app.cancelling"));
     setRun(null);
     api.cancelRestart().catch(() => undefined);
   };
@@ -472,28 +485,46 @@ export default function App() {
     };
   }, [pollRunning]);
 
+  /**
+   * Writes `sent` (a snapshot of the agent's draft; `ops` is what goes to its files). Edits made
+   * meanwhile stay pending. Then the optional auto-restart (off by default), when something
+   * the agent reads changed.
+   */
+  const writeAgent = async (a: AgentState, sent: Draft, ops: Op[] = opsToWrite(a, sent), autoRestart = true): Promise<ApplyResult> => {
+    inFlight.current[a.id] = sent;
+    let r: ApplyResult;
+    try {
+      r = await api.apply(a.id, ops);
+    } finally {
+      delete inFlight.current[a.id];
+    }
+    replaceAgent(r.state);
+    setDrafts((all) => ({ ...all, [a.id]: draftAfterWrite(all[a.id] ?? {}, sent) }));
+    // The project list shows each project's provider count and whether its config exists.
+    if (isProjectId(a.id)) reloadProjects();
+    if (autoRestart && shouldAutoRestart(r.state, ops)) await restartAgent(r.state);
+    return r;
+  };
+
+  /** Notice after writing several agents: all of them, or which ones were written before `err`. */
+  const reportBatch = (done: string[], err: string | null = null) => {
+    if (err !== null) flash(done.length ? t("app.wrotePartial", { names: joinList(done), err }) : err, true, 8000);
+    else if (done.length) flash(t("app.wroteAgents", { names: joinList(done) }));
+  };
+
   const apply = async () => {
     if (!st) return;
     setBusy(true);
-    const sent = draft;
-    const sentOps = opsToWrite(st, sent);
-    inFlight.current[st.id] = sent;
+    const sentOps = opsToWrite(st, draft);
     try {
-      const r = await api.apply(st.id, sentOps);
-      replaceAgent(r.state);
-      // Edits made while writing stay pending.
-      setDrafts((all) => ({ ...all, [st.id]: draftAfterWrite(all[st.id] ?? {}, sent) }));
+      // The notice comes before the restart's own.
+      const r = await writeAgent(st, draft, sentOps, false);
       setPicked((m) => ({ ...m, [st.id]: null }));
       flash(r.files.length ? tn("app.wroteFiles", r.files.length) : t("app.saved"));
-      if (isProjectId(st.id)) reloadProjects();
-      // Optional auto-restart (off by default); only when something the agent reads changed.
-      const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
-      const touchedAgent = sentOps.some((o) => !(o.op === "set_setting" && o.key === "auto_restart"));
-      if (auto && touchedAgent && r.state.running) await restartAgent(r.state);
+      if (shouldAutoRestart(r.state, sentOps)) await restartAgent(r.state);
     } catch (e) {
-      flash(errText(e), true, 7000);
+      flash(errText(e), true);
     } finally {
-      delete inFlight.current[st.id];
       setBusy(false);
     }
   };
@@ -503,30 +534,22 @@ export default function App() {
     setBusy(true);
     const done: string[] = [];
     try {
-      for (const a of [...agents, ...Object.values(projStates)]) {
-        if (!ids.includes(a.id) || !Object.keys(drafts[a.id] ?? {}).length) continue;
-        const sent = drafts[a.id];
-        inFlight.current[a.id] = sent;
-        const r = await api.apply(a.id, opsToWrite(a, sent))
-          .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: errText(e) })); })
-          .finally(() => { delete inFlight.current[a.id]; });
-        replaceAgent(r.state);
-        setDrafts((all) => ({ ...all, [a.id]: draftAfterWrite(all[a.id] ?? {}, sent) }));
+      for (const a of allStates) {
+        if (!ids.includes(a.id) || !opCount(drafts[a.id])) continue;
+        await writeAgent(a, drafts[a.id], undefined, autoRestart)
+          .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: errText(e) })); });
         done.push(a.name);
-        const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
-        if (autoRestart && auto && r.state.running) await restartAgent(r.state);
       }
-      if (done.length) flash(t("app.wroteAgents", { names: joinList(done) }));
+      reportBatch(done);
       return true;
     } catch (e) {
-      const err = errText(e);
-      flash(done.length ? t("app.wrotePartial", { names: joinList(done), err }) : err, true, 8000);
+      reportBatch(done, errText(e));
       return false;
     } finally {
       setBusy(false);
     }
   };
-  const applyAll = () => applyAgents([...agents.map((a) => a.id), ...(Object.keys(projStates) as AgentId[])]);
+  const applyAll = () => applyAgents(allStates.map((a) => a.id));
 
   /** Env switch with pending changes: ask which to apply, discard the rest, then switch. */
   const [envAsk, setEnvAsk] = useState<string | null>(null);
@@ -546,13 +569,13 @@ export default function App() {
       setEnvs(list);
       flash(t("app.switchedTo", { env: list.find((e) => e.current)?.label ?? id }));
     } catch (e) {
-      flash(t("app.switchFailed", { err: errText(e) }), true, 7000);
+      flash(t("app.switchFailed", { err: errText(e) }), true);
     } finally {
       setSwitching(false);
     }
   };
   const switchEnv = (id: string) => {
-    if (pendingTotal) setEnvAsk(id);
+    if (totalPending) setEnvAsk(id);
     else doSwitch(id);
   };
   const confirmSwitch = async (apply: AgentId[]) => {
@@ -574,7 +597,7 @@ export default function App() {
       setProjPath(e.path);
       reloadProjects();
     } catch (err) {
-      flash(errText(err), true, 7000);
+      flash(errText(err), true);
     }
   };
   const pickProject = async () => {
@@ -582,17 +605,17 @@ export default function App() {
       const p = await api.pickFolder(projEntry?.path ?? projects[0]?.path ?? null);
       if (p) await openProject(p);
     } catch (err) {
-      flash(t("app.pickFolderFailed", { err: errText(err) }), true, 7000);
+      flash(t("app.pickFolderFailed", { err: errText(err) }), true);
     }
   };
   const forgetProject = async (p: ProjectEntry) => {
-    const n = Object.keys(drafts[p.agent] ?? {}).length;
+    const n = opCount(drafts[p.agent]);
     if (n && !(await ask({ title: t("app.forgetTitle", { name: p.name }), message: tn("app.forgetMsg", n), danger: true, confirmText: t("common.remove") }))) return;
     try {
       await api.projectForget(p.path);
     } catch (e) {
       // Still in the list: keep its pending changes too.
-      flash(errText(e), true, 7000);
+      flash(errText(e), true);
       return;
     }
     setDraftFor(p.agent, {});
@@ -604,7 +627,7 @@ export default function App() {
     if (!st) return;
     let d = drafts[st.id] ?? {};
     for (const x of picks) {
-      d = withOp(d, `pi:${x.fromAgent}:${x.provider}`, { op: "import_provider", fromAgent: x.fromAgent, provider: x.provider, api: x.api, name: x.name, label: x.label });
+      d = withOp(d, keys.importProvider(x.fromAgent, x.provider), { op: "import_provider", fromAgent: x.fromAgent, provider: x.provider, api: x.api, name: x.name, label: x.label });
       if (x.disableInherited) d = withOp(d, keys.enabled(x.provider), { op: "set_provider_enabled", provider: x.provider, enabled: false });
     }
     setDraftFor(st.id, d);
@@ -623,7 +646,7 @@ export default function App() {
   const hubRemove = async (u: Use) => {
     if (!u.p) return;
     if (!(await ask({ title: t("app.hubRemoveTitle", { agent: u.agent.name, name: u.p.name }), message: t("app.hubRemoveMsg"), danger: true, confirmText: t("common.remove") }))) return;
-    setDraftFor(u.agent.id, withOp(drafts[u.agent.id] ?? {}, keys.deleteProvider(u.p.id), { op: "delete_provider", provider: u.p.id }));
+    setDraftFor(u.agent.id, deleteProvider(drafts[u.agent.id] ?? {}, u.p.id));
   };
   const hubUndo = (u: Use) => {
     const k = u.importKey ?? (u.state === "new" ? u.p?.draftKey : u.p ? keys.deleteProvider(u.p.id) : undefined);
@@ -638,7 +661,7 @@ export default function App() {
     setDrafts((all) => {
       const next = { ...all };
       for (const u of uses) {
-        if (u.p) next[u.agent.id] = withOp(next[u.agent.id] ?? {}, keys.deleteProvider(u.p.id), { op: "delete_provider", provider: u.p.id });
+        if (u.p) next[u.agent.id] = deleteProvider(next[u.agent.id] ?? {}, u.p.id);
       }
       return next;
     });
@@ -647,7 +670,7 @@ export default function App() {
         await api.libraryDelete(s.lib.id);
       } catch (e) {
         // The agent deletes are queued; only the library entry is still there.
-        flash(uses.length ? tn("app.queuedDeletesLibFailed", uses.length, { err: errText(e) }) : errText(e), true, 7000);
+        flash(uses.length ? tn("app.queuedDeletesLibFailed", uses.length, { err: errText(e) }) : errText(e), true);
         return;
       }
       await reloadLib();
@@ -680,7 +703,7 @@ export default function App() {
       try {
         route = await routeForLib(entry.id, v.api, v.name);
       } catch (e) {
-        flash(t("app.savedForwardFailed", { err: errText(e) }), true, 7000);
+        flash(t("app.savedForwardFailed", { err: errText(e) }), true);
         await reloadLib();
         setHubDialog(undefined);
         return;
@@ -689,19 +712,16 @@ export default function App() {
     setDrafts((all) => {
       const next = { ...all };
       for (const u of v.sync) {
-        // The whole group moves to the new protocol, except Codex which only speaks Responses.
-        const apiFor = u.agent.id === "codex" ? "responses" : v.api;
-        next[u.agent.id] = upsertProvider(next[u.agent.id] ?? {}, { id: u.p!.id, name: u.p!.name, baseUrl: v.baseUrl, api: apiFor, apiKey: v.apiKey, models: [] });
+        // The whole group moves to the new protocol, except in agents that speak only one (ONLY_API): they keep theirs.
+        next[u.agent.id] = upsertProvider(next[u.agent.id] ?? {}, { id: u.p!.id, name: u.p!.name, baseUrl: v.baseUrl, api: apiFor(u.agent.id, v.api), apiKey: v.apiKey, models: [] });
       }
       for (const a of v.addTo) {
         next[a] = route
-          ? upsertProvider(next[a] ?? {}, {
-            id: null, name: t("app.gatewayName", { name: v.name }), baseUrl: route.localBase, api: apiFor(a, v.api), apiKey: GATEWAY_KEY, models: a === "codex" ? [] : v.models,
-          }, `pu:gw-${route.id}`)
-          : withOp(next[a] ?? {}, `pi:library:${entry.id}`, { op: "import_provider", fromAgent: "library", provider: entry.id, api: v.api, name: v.name });
+          ? upsertProvider(next[a] ?? {}, gatewayEntry(route.localBase, a, apiFor(a, v.api), t("app.gatewayName", { name: v.name }), v.models), keys.gatewayProvider(route.id))
+          : withOp(next[a] ?? {}, keys.importProvider("library", entry.id), { op: "import_provider", fromAgent: "library", provider: entry.id, api: v.api, name: v.name });
       }
       for (const { e, addTo } of alts) {
-        for (const a of addTo) next[a] = withOp(next[a] ?? {}, `pi:library:${e.id}`, { op: "import_provider", fromAgent: "library", provider: e.id, api: e.api, name: v.name });
+        for (const a of addTo) next[a] = withOp(next[a] ?? {}, keys.importProvider("library", e.id), { op: "import_provider", fromAgent: "library", provider: e.id, api: e.api, name: v.name });
       }
       return next;
     });
@@ -736,20 +756,18 @@ export default function App() {
    */
   const routeFor = async (g: Group): Promise<GatewayRouteView> => routeForLib(await ensureLibrary(g), g.api, g.name);
   const routeForLib = async (libId: string, upstreamApi: ApiKind, name: string): Promise<GatewayRouteView> => {
-    let st = await api.gatewayStatus();
-    let r = st.routes.find((x) => x.library === libId && x.upstreamApi === upstreamApi);
+    let gs = await api.gatewayStatus();
+    let r = findRoute(gs.routes, libId, upstreamApi);
     if (!r) {
-      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "route";
-      let id = base;
-      for (let n = 2; st.routes.some((x) => x.id === id); n++) id = `${base}-${n}`;
-      st = await api.gatewaySaveRoute({ id, name, library: libId, upstreamApi, modelMap: [], enabled: true, weight: 100 }, null);
-      r = st.routes.find((x) => x.id === id)!;
+      const id = newRouteId(name, gs.routes);
+      gs = await api.gatewaySaveRoute({ id, name, library: libId, upstreamApi, modelMap: [], enabled: true, weight: 100 }, null);
+      r = gs.routes.find((x) => x.id === id)!;
     } else if (!r.enabled) {
-      st = await api.gatewaySaveRoute({ ...plainRoute(r), enabled: true }, r.id);
+      gs = await api.gatewaySaveRoute({ ...plainRoute(r), enabled: true }, r.id);
     }
-    if (!st.running) st = await api.gatewaySet(true, null);
-    setGateway(st);
-    return st.routes.find((x) => x.id === r!.id)!;
+    if (!gs.running) gs = await api.gatewaySet(true, null);
+    setGateway(gs);
+    return gs.routes.find((x) => x.id === r!.id)!;
   };
 
   /** Hub: add a group to an agent through the gateway (works for any protocol pair). */
@@ -758,7 +776,7 @@ export default function App() {
       const r = await routeFor(g);
       gatewayToAgent(r, agent, apiFor(agent, g.api));
     } catch (e) {
-      flash(t("app.forwardFailed", { err: errText(e) }), true, 7000);
+      flash(t("app.forwardFailed", { err: errText(e) }), true);
     }
   };
 
@@ -781,13 +799,10 @@ export default function App() {
       }
       return next;
     });
-    const seen = new Set((r.replaced ?? []).map(([a, p]) => `${a}
-${p}`));
-    const replaced = [...(r.replaced ?? []), ...targets.map((u) => [u.agent.id, u.p!.id] as [string, string]).filter(([a, p]) => !seen.has(`${a}
-${p}`))];
-    const st = await api.gatewaySaveRoute({ ...plainRoute(r), replaced }, r.id);
-    setGateway(st);
-    return st.routes.find((x) => x.id === r.id) ?? r;
+    const replaced = mergeReplaced(r.replaced, targets.map((u) => [u.agent.id, u.p!.id] as [string, string]));
+    const gs = await api.gatewaySaveRoute({ ...plainRoute(r), replaced }, r.id);
+    setGateway(gs);
+    return gs.routes.find((x) => x.id === r.id) ?? r;
   };
 
   /** Drafts with the entries a forward replaced pointed back at its upstream, and how many there were. */
@@ -829,7 +844,7 @@ ${p}`))];
     try {
       setGateway(await api.gatewayDeleteRoute(r.id));
     } catch (e) {
-      flash(errText(e), true, 7000);
+      flash(errText(e), true);
       return false;
     }
     const n = restore ? restoreReplaced(drafts, r).n : 0;
@@ -847,9 +862,7 @@ ${p}`))];
   /** Gateway route → a provider in an agent that points at the local address. */
   const gatewayToAgent = (r: GatewayRouteView, agent: AgentId, apiKind: ApiKind) => {
     const models = lib.find((e) => e.id === r.library)?.models ?? [];
-    setDraftFor(agent, upsertProvider(drafts[agent] ?? {}, {
-      id: null, name: t("app.gatewayName", { name: r.name }), baseUrl: r.localBase, api: apiKind, apiKey: GATEWAY_KEY, models: agent === "codex" ? [] : models,
-    }, `pu:gw-${r.id}`));
+    setDraftFor(agent, upsertProvider(drafts[agent] ?? {}, gatewayEntry(r.localBase, agent, apiKind, t("app.gatewayName", { name: r.name }), models), keys.gatewayProvider(r.id)));
     flash(t("app.queuedForAgent", { agent: shown.find((a) => a.id === agent)?.name ?? agent, url: r.localBase }));
   };
 
@@ -860,8 +873,9 @@ ${p}`))];
   const staleGatewayKeys = useMemo(() => {
     if (!gateway) return [];
     const out: { agent: AgentState; p: ViewProvider }[] = [];
-    for (const a of shown) {
+    for (const a of allStates) {
       if (a.readonly) continue;
+      // Gateway keys are per agent: a project config uses its agent's.
       const own = gateway.keyFps[a.id.split("@")[0]];
       for (const p of viewProviders(a, drafts[a.id] ?? {})) {
         if (p.isDeleted || p.isNew || !p.editable || !p.baseUrl) continue;
@@ -871,7 +885,7 @@ ${p}`))];
       }
     }
     return out;
-  }, [gateway, shown, drafts, gatewayHosts]);
+  }, [gateway, allStates, drafts, gatewayHosts]);
 
   /**
    * Lists those entries, then writes each with the gateway key placeholder (the backend fills in
@@ -894,38 +908,30 @@ ${p}`))];
       confirmText: t("app.gatewayKeysConfirm"),
     });
     if (!ok) return;
-    const byAgent = new Map<AgentId, { agent: AgentState; ops: Op[]; keys: string[] }>();
+    // Per agent: the ops to write, and the pending ops they include (only those stop being pending).
+    const byAgent = new Map<AgentId, { agent: AgentState; ops: Op[]; sent: Draft }>();
     for (const { agent, p } of stale) {
       const key = keys.upsertProvider(p.id);
       const pending = drafts[agent.id]?.[key];
       const input: ProviderInput = pending?.op === "upsert_provider"
         ? { ...pending.provider, apiKey: GATEWAY_KEY }
         : { id: p.id, name: p.name, baseUrl: p.baseUrl!, api: p.api, apiKey: GATEWAY_KEY, models: [] };
-      const e = byAgent.get(agent.id) ?? { agent, ops: [], keys: [] };
+      const e = byAgent.get(agent.id) ?? { agent, ops: [], sent: {} };
       e.ops.push({ op: "upsert_provider", provider: input });
-      e.keys.push(key);
+      if (pending) e.sent[key] = pending;
       byAgent.set(agent.id, e);
     }
     setBusy(true);
     const done: string[] = [];
     try {
-      for (const { agent, ops, keys: written } of byAgent.values()) {
-        const r = await api.apply(agent.id, ops)
+      for (const { agent, ops, sent } of byAgent.values()) {
+        await writeAgent(agent, sent, ops)
           .catch((e) => { throw new Error(t("app.nameMsg", { name: agent.name, msg: errText(e) })); });
-        replaceAgent(r.state);
-        setDrafts((all) => {
-          const d = { ...(all[agent.id] ?? {}) };
-          for (const k of written) delete d[k];
-          return { ...all, [agent.id]: d };
-        });
         done.push(agent.name);
-        const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
-        if (auto && r.state.running) await restartAgent(r.state);
       }
-      flash(t("app.wroteAgents", { names: joinList(done) }));
+      reportBatch(done);
     } catch (e) {
-      const err = errText(e);
-      flash(done.length ? t("app.wrotePartial", { names: joinList(done), err }) : err, true, 8000);
+      reportBatch(done, errText(e));
     } finally {
       setBusy(false);
     }
@@ -940,22 +946,23 @@ ${p}`))];
     setProjPath(null);
   };
 
-  const goTo = (t: Target) => {
-    if (t.kind === "page") {
-      if (t.page === "settings") {
-        if (t.settingsTab) setSettingsTab(t.settingsTab);
+  const goTo = (target: Target) => {
+    if (target.kind === "page") {
+      if (target.page === "settings") {
+        if (target.settingsTab) setSettingsTab(target.settingsTab);
         openSettings();
-      } else setPage(t.page);
+      } else setPage(target.page);
       return;
     }
-    openAgent(t.agent);
-    if (t.tab) setTabs((m) => ({ ...m, [t.agent]: t.tab! }));
-    if (t.provider && t.tab === "prov") setPicked((m) => ({ ...m, [t.agent]: t.provider! }));
-    if (t.provider && t.tab === "models") setRails((m) => ({ ...m, [t.agent]: t.provider! }));
-    setSessionQuery(t.tab === "sessions" ? t.query : undefined);
-    if (t.setting) {
+    const { agent, tab, provider, setting } = target;
+    openAgent(agent);
+    if (tab) setTabs((m) => ({ ...m, [agent]: tab }));
+    if (provider && tab === "prov") setPicked((m) => ({ ...m, [agent]: provider }));
+    if (provider && tab === "models") setRails((m) => ({ ...m, [agent]: provider }));
+    setSessionQuery(tab === "sessions" ? target.query : undefined);
+    if (setting) {
       window.setTimeout(() => {
-        const el = document.getElementById(`setting-${t.setting}`);
+        const el = document.getElementById(`setting-${setting}`);
         el?.scrollIntoView({ block: "center", behavior: "smooth" });
         el?.classList.add("flash-row");
         window.setTimeout(() => el?.classList.remove("flash-row"), 1600);
@@ -983,12 +990,14 @@ ${p}`))];
         slot.id = e.id;
         await reloadLib();
         const r = await routeForLib(e.id, e.api, e.name);
-        input = { id: null, name: f.name, baseUrl: r.localBase, api: apiFor(st.id, e.api), apiKey: GATEWAY_KEY, models: st.id === "codex" ? [] : f.models, officialAuth: f.officialAuth };
+        input = { ...gatewayEntry(r.localBase, st.id, apiFor(st.id, e.api), f.name, f.models), officialAuth: f.officialAuth };
       }
       if (sv.connect && editing) {
         const base: ProviderInput = input ?? { id: editing.id, name: editing.name, baseUrl: editing.baseUrl ?? "", api: editing.api, apiKey: null, models: [] };
         if (sv.connect === "gateway") {
-          const g = stations.flatMap((x) => x.groups).find((x) => x.uses.some((u) => u.agent.id === st.id && u.p?.id === editing.id));
+          // A project config isn't among the hub's agents: group its own entries.
+          const pool = isProjectId(st.id) ? buildStations([st], drafts, lib, gatewayHosts) : stations;
+          const g = pool.flatMap((x) => x.groups).find((x) => x.uses.some((u) => u.agent.id === st.id && u.p?.id === editing.id));
           if (!g) throw new Error(t("app.noGroupForProvider"));
           const r = await routeFor(g);
           input = { ...base, baseUrl: r.localBase, api: apiFor(st.id, base.api), apiKey: GATEWAY_KEY };
@@ -1001,14 +1010,14 @@ ${p}`))];
         }
       }
     } catch (e) {
-      flash(errText(e), true, 7000);
+      flash(errText(e), true);
       return;
     }
     if (sv.unified) {
       try {
         await ensureGateway();
       } catch (e) {
-        flash(t("app.gatewayStartFailed", { err: errText(e) }), true, 7000);
+        flash(t("app.gatewayStartFailed", { err: errText(e) }), true);
         return;
       }
     }
@@ -1026,8 +1035,7 @@ ${p}`))];
       if (editing && sv.models) {
         for (const m of editing.models) {
           const want = sv.models.visible[m.id];
-          if (want === undefined) continue;
-          d = withOp(d, keys.visible(editing.id, m.id), want === m.visible ? null : { op: "set_model_visible", provider: editing.id, model: m.id, visible: want });
+          if (want !== undefined) d = setModelVisible(d, editing.id, m, want);
         }
         for (const id of sv.models.added) d = upsertModel(d, editing.id, { id, name: null, context: null });
       }
@@ -1052,24 +1060,21 @@ ${p}`))];
 
   // ------------------------------------------------------------ right-click menu
   const refreshAll = () => {
-    reload();
-    reloadLib();
-    api.gatewayStatus().then(setGateway).catch(() => undefined);
+    reloadConfigs();
+    reloadGateway();
     flash(t("app.reloaded"));
   };
+  refreshRef.current = refreshAll;
   const copy = (s: string) => copyText(s, flash);
-
-  // F5 / Ctrl+R would reload the webview and lose pending changes: re-read configs instead.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "F5" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r")) {
-        e.preventDefault();
-        refreshAll();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  });
+  /** Fire-and-forget action: only a failure is reported. */
+  const attempt = (p: Promise<unknown>) => { p.catch((e) => flash(errText(e), true)); };
+  /** Opens an agent's model list at one provider. */
+  const showModels = (agent: string, pid: string) => {
+    setRails((m) => ({ ...m, [agent]: pid }));
+    setTabs((m) => ({ ...m, [agent]: "models" }));
+  };
+  /** Add-group dialog inside a station (its name and first address suggested). */
+  const addGroupIn = (s: Station) => setHubDialog({ group: null, prefill: { name: `${s.name} — `, baseUrl: s.groups[0]?.baseUrl ?? "", station: s.name } });
 
   /** Actions for the thing that was right-clicked (agent, provider, model, station, forward, session). */
   const contextItems = (target: Element): MenuItem[] => {
@@ -1080,11 +1085,11 @@ ${p}`))];
       case "agent": {
         const a = shown.find((x) => x.id === d("agent"));
         if (!a) return [];
-        const n = Object.keys(drafts[a.id] ?? {}).length;
+        const n = opCount(drafts[a.id]);
         return [
           { label: t("app.openAgent", { name: a.name }), icon: <AgentIcon id={a.id} size={14} />, action: () => openAgent(a.id) },
           ...(a.restartable ? [{ label: t(a.running ? "common.restartAgent" : "common.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAsked(a); } }] : []),
-          { label: t("common.openConfigDir"), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(a.id).catch((e) => flash(errText(e), true)); } },
+          { label: t("common.openConfigDir"), icon: <Icon.folder size={13} />, action: () => attempt(api.openConfigDir(a.id)) },
           ...(n ? [
             "sep" as const,
             { label: tn("app.applyAgentChanges", n, { name: a.name }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAgents([a.id]); } },
@@ -1108,8 +1113,8 @@ ${p}`))];
               ? { label: t(isCur ? "common.inUse" : "app.setCurrent"), icon: <Icon.check size={13} />, disabled: isCur || st.readonly, action: () => providerAction(p) }
               : { label: t(on ? "app.disable" : "app.enable"), icon: <Icon.check size={13} />, disabled: st.readonly, action: () => providerAction(p) }]
             : []),
-          ...(p.models.length ? [{ label: t("common.viewModels"), action: () => { setRails((m) => ({ ...m, [st.id]: p.id })); setTabs((m) => ({ ...m, [st.id]: "models" })); } }] : []),
-          ...(p.editable && !p.isNew && !p.isDeleted ? ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly || isCur, action: () => { deleteProvider(p); } }] : []),
+          ...(p.models.length ? [{ label: t("common.viewModels"), action: () => showModels(st.id, p.id) }] : []),
+          ...(p.editable && !p.isNew && !p.isDeleted ? ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly || isCur, action: () => { askDeleteProvider(p); } }] : []),
           "sep",
         ];
       }
@@ -1122,12 +1127,10 @@ ${p}`))];
         const vis = isVisible(pid, m, draft);
         return [
           { label: t("app.copyModelId"), icon: <Icon.copy size={13} />, action: () => copy(mid) },
-          ...(!m.isDeleted && !m.readonly ? [{ label: t(vis ? "app.hideInPicker" : "app.showInPicker"), disabled: st.readonly, action: () => {
-            setDraft(withOp(draft, keys.visible(pid, m.id), !vis === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible: !vis }));
-          } }] : []),
+          ...(!m.isDeleted && !m.readonly ? [{ label: t(vis ? "app.hideInPicker" : "app.showInPicker"), disabled: st.readonly, action: () => setDraft(setModelVisible(draft, pid, m, !vis)) }] : []),
           ...((m.deletable && !m.isDeleted) ? ["sep" as const, { label: t("app.deleteModelMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly, action: async () => {
             if (!(await ask({ title: t("app.deleteModelTitle", { id: mid }), message: t("app.deleteModelMsg"), danger: true }))) return;
-            setDraft(withOp(draft, keys.deleteModel(pid, mid), { op: "delete_model", provider: pid, model: mid }));
+            setDraft(deleteModel(draft, pid, mid));
           } }] : []),
           "sep",
         ];
@@ -1137,7 +1140,7 @@ ${p}`))];
         if (!stn) return [];
         return [
           { label: t("app.viewDetails"), action: () => setHubSel(stn.key) },
-          ...(!stn.builtin ? [{ label: t("app.addGroupMenu"), icon: <Icon.plus size={12} />, action: () => setHubDialog({ group: null, prefill: { name: `${stn.name} — `, baseUrl: stn.groups[0]?.baseUrl ?? "", station: stn.name } }) }] : []),
+          ...(!stn.builtin ? [{ label: t("app.addGroupMenu"), icon: <Icon.plus size={12} />, action: () => addGroupIn(stn) }] : []),
           "sep",
         ];
       }
@@ -1145,7 +1148,7 @@ ${p}`))];
         const r = gateway?.routes.find((x) => x.id === d("route"));
         if (!r) return [];
         return [
-          { label: t(r.enabled ? "common.pauseRoute" : "common.resumeRoute"), action: () => { api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(errText(e), true)); } },
+          { label: t(r.enabled ? "common.pauseRoute" : "common.resumeRoute"), action: () => attempt(api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway)) },
           { label: t("app.deleteForwardMenu"), icon: <Icon.trash size={12} />, danger: true, action: () => { deleteRoute(r); } },
           "sep",
         ];
@@ -1155,7 +1158,7 @@ ${p}`))];
         return [
           { label: t("app.copySessionId"), icon: <Icon.copy size={13} />, action: () => copy(d("sid")) },
           ...(d("title") ? [{ label: t("app.copyTitle"), action: () => copy(d("title")) }] : []),
-          ...(path ? [{ label: t("app.showInFolder"), icon: <Icon.folder size={13} />, action: () => { api.revealPath(path).catch((e) => flash(errText(e), true)); } }] : []),
+          ...(path ? [{ label: t("app.showInFolder"), icon: <Icon.folder size={13} />, action: () => attempt(api.revealPath(path)) }] : []),
           "sep",
         ];
       }
@@ -1175,7 +1178,7 @@ ${p}`))];
         { label: t("app.cut"), hint: "Ctrl X", disabled: !s || ro || secret, action: () => { navigator.clipboard.writeText(s).then(() => insertText(ed, "")).catch(() => undefined); } },
         { label: t("common.copy"), hint: "Ctrl C", icon: <Icon.copy size={13} />, disabled: !s || secret, action: () => copy(s) },
         { label: t("app.paste"), hint: "Ctrl V", disabled: ro, action: () => { navigator.clipboard.readText().then((x) => insertText(ed, x)).catch(() => flash(t("app.clipboardReadFailed"), true)); } },
-        { label: t("app.selectAll"), hint: "Ctrl A", disabled: !ed.value, action: () => { ed.focus(); ed.select(); } },
+        { label: t("common.selectAll"), hint: "Ctrl A", disabled: !ed.value, action: () => { ed.focus(); ed.select(); } },
         "sep",
       );
     } else if (sel.trim()) {
@@ -1197,12 +1200,12 @@ ${p}`))];
       { label: t("app.searchMenu"), hint: "Ctrl K", icon: <Icon.search size={13} />, action: () => setPalette(true) },
       { label: t("app.reloadConfig"), hint: "F5", icon: <Icon.refresh size={13} />, action: refreshAll },
     );
-    if (pendingTotal) {
+    if (totalPending) {
       items.push(
         "sep",
-        { label: t("app.applyAll", { n: pendingTotal }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAll(); } },
+        { label: t("app.applyAll", { n: totalPending }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAll(); } },
         { label: t("app.discardAll"), icon: <Icon.close size={11} />, danger: true, disabled: busy, action: async () => {
-          if (!(await ask({ title: tn("app.discardAllTitle", pendingTotal), message: t("app.discardAllMsg"), danger: true, confirmText: t("common.discard") }))) return;
+          if (!(await ask({ title: tn("app.discardAllTitle", totalPending), message: t("app.discardAllMsg"), danger: true, confirmText: t("common.discard") }))) return;
           setDrafts({});
           flash(t("app.discardedAll"));
         } },
@@ -1212,13 +1215,13 @@ ${p}`))];
     if (!page && st) {
       items.push(
         ...(st.restartable ? [{ label: t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name }), icon: st.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !st.installed || !!restarting, action: restart }] : []),
-        { label: t("app.openAgentConfigDir", { name: st.name }), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(st.id).catch((e) => flash(errText(e), true)); } },
+        { label: t("app.openAgentConfigDir", { name: st.name }), icon: <Icon.folder size={13} />, action: () => attempt(api.openConfigDir(st.id)) },
       );
     }
     items.push({
       label: t(gateway?.running ? "app.gatewayTurnOff" : "app.gatewayTurnOn"),
       icon: <Icon.gateway size={13} />,
-      action: () => { api.gatewaySet(!gateway?.running, null).then((g) => { setGateway(g); flash(t(g.running ? "common.gatewayStarted" : "common.gatewayStopped")); }).catch((e) => flash(errText(e), true)); },
+      action: () => attempt(api.gatewaySet(!gateway?.running, null).then((g) => { setGateway(g); flash(t(g.running ? "common.gatewayStarted" : "common.gatewayStopped")); })),
     });
     items.push(
       "sep",
@@ -1227,7 +1230,7 @@ ${p}`))];
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
       "sep",
-      { label: t("app.openDataDir"), icon: <Icon.folder size={13} />, action: () => { api.openDataDir().catch((e) => flash(errText(e), true)); } },
+      { label: t("app.openDataDir"), icon: <Icon.folder size={13} />, action: () => attempt(api.openDataDir()) },
     );
     return items;
   };
@@ -1272,6 +1275,7 @@ ${p}`))];
         {page === "providers" && (
           <HubAside
             agents={shown}
+            pending={allStates}
             drafts={drafts}
             stations={stations}
             busy={busy}
@@ -1286,7 +1290,7 @@ ${p}`))];
                 onClose={() => setHubSel(null)}
                 onTest={testOne}
                 onCopy={(text) => copyText(text, flash, t("app.urlCopied"))}
-                onAddGroup={() => setHubDialog({ group: null, prefill: { name: `${hubStation.name} — `, baseUrl: hubStation.groups[0]?.baseUrl ?? "", station: hubStation.name } })}
+                onAddGroup={() => addGroupIn(hubStation)}
                 onEditGroup={(g) => setHubDialog({ group: g })}
                 onAddTo={hubAdd}
                 onRemove={hubRemove}
@@ -1311,11 +1315,11 @@ ${p}`))];
             onAddToAgent={gatewayToAgent}
             staleKeys={staleGatewayKeys.length}
             onUpdateKeys={updateGatewayKeys}
-            flash={(text, error) => flash(text, error, error ? 7000 : 3600)}
+            flash={flash}
           />
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
-        {page === "history" &&<HistoryPage flash={flash} onChanged={reload} />}
+        {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} />}
         {page === "settings" && (
           <SettingsPage
@@ -1329,7 +1333,7 @@ ${p}`))];
             onHistory={() => setPage("history")}
             onClose={closeSettings}
             onAgentsChanged={reload}
-            flash={(text, error) => flash(text, error, error ? 7000 : 3600)}
+            flash={flash}
           />
         )}
 
@@ -1344,22 +1348,22 @@ ${p}`))];
             onTestOne={testOne}
             restarting={restarting === st.id}
             onRestart={restart}
-            onOpenDir={() => (isProjectId(st.id) ? api.openPath(st.configDir) : api.openConfigDir(st.id)).catch((e) => flash(errText(e), true))}
+            onOpenDir={() => attempt(isProjectId(st.id) ? api.openPath(st.configDir) : api.openConfigDir(st.id))}
             tab={tabs[st.id] ?? "prov"}
-            setTab={(t) => setTabs((m) => ({ ...m, [st.id]: t }))}
+            setTab={(tab) => setTabs((m) => ({ ...m, [st.id]: tab }))}
             railSel={rails[st.id] ?? null}
             setRailSel={(id) => setRails((m) => ({ ...m, [st.id]: id }))}
             selectedProvider={picked[st.id] ?? null}
             onSelectProvider={(id) => setPicked((m) => ({ ...m, [st.id]: m[st.id] === id ? null : id }))}
             onProviderAction={providerAction}
             onAddProvider={() => setDialog({ editing: null })}
-            flash={(text, error) => flash(text, error, error ? 7000 : 4000)}
+            flash={flash}
             sessionQuery={sessionQuery}
             onDeclineFixed={declineFixed}
             onReload={() => { api.getAgent(st.id).then(replaceAgent).catch(() => undefined); }}
             head={projSt ? (
               <ProjectHead st={projSt} project={projEntry} projects={projects} onBack={() => setProjPath(null)} onSwitch={openProject}
-                onOpenDir={() => { api.openPath(projSt.configDir).catch((e) => flash(errText(e), true)); }} />
+                onOpenDir={() => attempt(api.openPath(projSt.configDir))} />
             ) : undefined}
             onCopyProvider={projSt ? () => setCopyOpen(true) : undefined}
             projectsTab={st.id === "opencode" ? {
@@ -1368,11 +1372,11 @@ ${p}`))];
                 <ProjectList
                   projects={projects}
                   busy={busy}
-                  pending={Object.fromEntries(Object.entries(drafts).map(([k, d]) => [k, Object.keys(d).length]))}
+                  pending={Object.fromEntries(Object.entries(drafts).map(([k, d]) => [k, opCount(d)]))}
                   onOpen={openProject}
                   onPick={pickProject}
                   onForget={forgetProject}
-                  onReveal={(p) => { api.openPath(p).catch((e) => flash(errText(e), true)); }}
+                  onReveal={(p) => attempt(api.openPath(p))}
                 />
               ),
             } : undefined}
@@ -1400,13 +1404,10 @@ ${p}`))];
                 onClose={closeDetail}
                 onTest={() => pickedProvider.baseUrl && testOne(pickedProvider.baseUrl)}
                 onAction={() => providerAction(pickedProvider)}
-                onModels={() => {
-                  setRails((m) => ({ ...m, [st.id]: pickedProvider.id }));
-                  setTabs((m) => ({ ...m, [st.id]: "models" }));
-                }}
+                onModels={() => showModels(st.id, pickedProvider.id)}
                 onCopy={(text) => copyText(text, flash, t("app.urlCopied"))}
                 onEdit={() => setDialog({ editing: pickedProvider })}
-                onDelete={() => deleteProvider(pickedProvider)}
+                onDelete={() => askDeleteProvider(pickedProvider)}
                 gatewayRoute={routeOfProvider(pickedProvider)}
                 onUndo={() => {
                   if (pickedProvider.isNew) {
@@ -1429,7 +1430,7 @@ ${p}`))];
       {envAsk && (
         <PendingDialog
           title={t("app.beforeSwitch", { env: envs.find((e) => e.id === envAsk)?.label ?? envAsk })}
-          agents={[...shown, ...Object.values(projStates)]}
+          agents={allStates}
           drafts={drafts}
           busy={busy || switching}
           onConfirm={confirmSwitch}

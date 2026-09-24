@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { AgentState } from "../api";
-import { API_LABEL, type Group, type Station, USE_LABEL, writableAgents } from "../services";
+import { API_LABEL, type Station, USE_LABEL, liveUses, splitStations, writableAgents } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { Avatar, Bars, type Latency, latencyText, latencyTone, stationColor } from "./ProviderCard";
 import { type TKey, t, tn } from "../i18n";
@@ -23,7 +23,6 @@ type Filter = "all" | "used" | "idle";
 
 const FILTERS: [Filter, TKey][] = [["all", "providersHub.filterAll"], ["used", "providersHub.filterUsed"], ["idle", "providersHub.filterIdle"]];
 
-const liveUses = (g: Group) => g.uses.filter((u) => u.state !== "removing");
 const used = (s: Station) => s.groups.some((g) => liveUses(g).length > 0);
 
 /** Every provider in one place, by station (host) and its groups. Address and key live here; model lists live in each agent. */
@@ -32,20 +31,19 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
   const [filter, setFilter] = useState<Filter>("all");
   const shown = writableAgents(agents);
 
-  const api = stations.filter((s) => !s.builtin);
-  const accounts = stations.filter((s) => s.builtin);
+  const { relays, accounts } = splitStations(stations);
 
   const list = useMemo(() => {
     const k = q.trim().toLowerCase();
-    return api.filter((s) => {
+    return relays.filter((s) => {
       if (filter === "used" && !used(s)) return false;
       if (filter === "idle" && used(s)) return false;
       return !k || s.name.toLowerCase().includes(k) || s.host.includes(k)
         || s.groups.some((g) => g.name.toLowerCase().includes(k) || g.baseUrl.toLowerCase().includes(k) || g.uses.some((u) => u.p?.name.toLowerCase().includes(k)));
     });
-  }, [api, q, filter]);
+  }, [relays, q, filter]);
 
-  const counts = { all: api.length, used: api.filter(used).length, idle: api.filter((s) => !used(s)).length };
+  const counts = { all: relays.length, used: relays.filter(used).length, idle: relays.filter((s) => !used(s)).length };
 
   return (
     <main className="page">

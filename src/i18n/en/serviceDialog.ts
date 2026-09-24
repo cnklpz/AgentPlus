@@ -2,8 +2,6 @@ import type zh from "../zh/serviceDialog";
 
 const en: typeof zh = {
   hintResponses: "OpenAI Responses API (/v1/responses), the only one Codex supports",
-  hintChat: "OpenAI-compatible Chat Completions (/v1/chat/completions)",
-  hintAnthropic: "Anthropic Messages API (/v1/messages)",
   blockedGateway: "{agent} only supports the Google Gemini protocol, which the local gateway can't convert to",
   blockedProto: "{agent} only supports the {api} API; turn on \"Use local gateway\" to connect it with conversion",
   addGroupTo: "Add group to \"{station}\"",

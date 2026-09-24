@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AgentState, Model, Provider, Setting } from "./api";
-import { type Draft, draftAfterWrite, fmtCtx, keys, mergeExtra, opsToWrite, parseCtx, setSetting, upsertModel, upsertProvider, viewModels, viewProviders, visibleCount, withOp } from "./draft";
+import type { AgentState, Model, Op, Provider, Setting } from "./api";
+import {
+  type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, keys, mergeExtra, opCount, opsToWrite, parseCtx,
+  pendingTotal, providerModelCount, setModelVisible, setSetting, settingOn, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  visibleCount, visibleModelCount, withOp,
+} from "./draft";
 
 const model = (id: string, over: Partial<Model> = {}): Model =>
   ({ id, visible: true, readonly: false, tags: [], ctx: null, name: null, context: null, deletable: true, ...over }) as Model;
@@ -68,7 +72,7 @@ describe("withOp", () => {
 });
 
 describe("setSetting", () => {
-  const s = { key: "tags", value: ["a", "b"] } as unknown as Setting;
+  const s = { key: "tags", kind: "chips", value: ["a", "b"] } as unknown as Setting;
   it("drops the op when the value goes back to the original, even reordered", () => {
     const d = setSetting({}, s, ["c"]);
     expect(Object.keys(d)).toEqual([keys.setting("tags")]);
@@ -77,6 +81,69 @@ describe("setSetting", () => {
   it("treats arrays of different length as different", () => {
     expect(setSetting({}, s, ["a"])).not.toEqual({});
     expect(setSetting({}, s, [])).not.toEqual({});
+  });
+  it("keeps a reordered list setting (one entry per line: order matters)", () => {
+    const l = { key: "instructions", kind: "list", value: ["a", "b"] } as unknown as Setting;
+    const d = setSetting({}, l, ["b", "a"]);
+    expect(d[keys.setting("instructions")]).toEqual({ op: "set_setting", key: "instructions", value: ["b", "a"] });
+    expect(setSetting(d, l, ["a", "b"])).toEqual({});
+    expect(setSetting({}, l, ["a", "b", "c"])).not.toEqual({});
+  });
+});
+
+describe("settingOn / shouldAutoRestart", () => {
+  const st = (auto: boolean, running = true) =>
+    agent({ running, settings: [{ key: "auto_restart", value: auto } as Setting, { key: "x", value: "on" } as Setting] });
+  const toggle: Op = { op: "set_setting", key: "auto_restart", value: true };
+  const other: Op = { op: "set_current_provider", provider: "p" };
+  it("reads only a boolean true", () => {
+    expect(settingOn(st(true), "auto_restart")).toBe(true);
+    expect(settingOn(st(false), "auto_restart")).toBe(false);
+    expect(settingOn(st(true), "x")).toBe(false);
+    expect(settingOn(st(true), "missing")).toBe(false);
+  });
+  it("restarts only when something besides the switch itself was written", () => {
+    expect(shouldAutoRestart(st(true), [toggle])).toBe(false);
+    expect(shouldAutoRestart(st(true), [])).toBe(false);
+    expect(shouldAutoRestart(st(true), [toggle, other])).toBe(true);
+    expect(shouldAutoRestart(st(true), [{ op: "set_setting", key: "fast", value: true }])).toBe(true);
+  });
+  it("never when the switch is off or the agent isn't running", () => {
+    expect(shouldAutoRestart(st(false), [other])).toBe(false);
+    expect(shouldAutoRestart(st(true, false), [other])).toBe(false);
+  });
+});
+
+describe("op builders", () => {
+  it("delete ops use the draft keys the views read", () => {
+    expect(deleteProvider({}, "p")).toEqual({ [keys.deleteProvider("p")]: { op: "delete_provider", provider: "p" } });
+    expect(deleteModel({}, "p", "m")).toEqual({ [keys.deleteModel("p", "m")]: { op: "delete_model", provider: "p", model: "m" } });
+    expect(viewProviders(agent({ providers: [provider("p")] }), deleteProvider({}, "p"))[0].isDeleted).toBe(true);
+  });
+  it("setModelVisible drops the op when back to the applied value", () => {
+    const m = model("m", { visible: true });
+    const d = setModelVisible({}, "p", m, false);
+    expect(d).toEqual({ [keys.visible("p", "m")]: { op: "set_model_visible", provider: "p", model: "m", visible: false } });
+    expect(setModelVisible(d, "p", m, true)).toEqual({});
+    expect(setModelVisible({}, "p", m, true)).toEqual({});
+  });
+  it("key formats", () => {
+    expect(keys.importProvider("library", "e1")).toBe("pi:library:e1");
+    expect(keys.gatewayProvider("relay")).toBe("pu:gw-relay");
+  });
+});
+
+describe("pending counts", () => {
+  const drafts: Record<string, Draft> = { a: { x: { op: "set_current_provider", provider: "p" }, y: { op: "delete_provider", provider: "q" } }, b: {} };
+  it("counts ops per draft and in total", () => {
+    expect(opCount(drafts.a)).toBe(2);
+    expect(opCount(drafts.b)).toBe(0);
+    expect(opCount(undefined)).toBe(0);
+    expect(pendingTotal(drafts)).toBe(2);
+    expect(pendingTotal({})).toBe(0);
+  });
+  it("lists the agents with changes, in order", () => {
+    expect(agentsWithOps([{ id: "c" }, { id: "b" }, { id: "a" }], drafts)).toEqual([{ id: "a" }]);
   });
 });
 
@@ -159,6 +226,19 @@ describe("viewModels / visibleCount", () => {
 
   it("counts zero for an agent with nothing", () => {
     expect(visibleCount(agent(), {})).toBe(0);
+  });
+
+  it("per provider: leaves out hidden and pending-delete models, keeps pending shows and new models", () => {
+    const models = [model("1"), model("2", { visible: false }), model("3")];
+    let d = deleteModel({}, "p", "3");
+    expect(visibleModelCount("p", models, d)).toBe(1);
+    d = setModelVisible(d, "p", models[1], true);
+    d = upsertModel(d, "p", { id: "4", name: null, context: null } as never);
+    expect(visibleModelCount("p", models, d)).toBe(3);
+    // A new provider (not applied) offers everything it lists.
+    const fresh = { ...provider("n", { models: [model("a", { visible: false }), model("b")] }), isNew: true } as ViewProvider;
+    expect(providerModelCount(fresh, {})).toBe(2);
+    expect(providerModelCount(provider("p", { models }) as ViewProvider, d)).toBe(3);
   });
 });
 

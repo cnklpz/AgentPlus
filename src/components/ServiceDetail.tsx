@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
-import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, gatewayCapable, gatewayRouteId, importSource, writableAgents } from "../services";
+import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, freeAgents, gatewayCapable, gatewayRouteId, importSource, liveUses, useKey } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { Avatar, Bars, type Latency, latencyText, stationColor } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
@@ -78,10 +78,9 @@ export function ServiceDetail(props: Props) {
 function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { g: Group; open: boolean; onToggle: () => void; builtin: boolean }) {
   const [deleting, setDeleting] = useState(false);
   const deletable = g.uses.filter((u) => removable(u) === null);
-  const uid = (u: Use) => `${u.agent.id}:${u.p?.id}`;
-  const [pick, setPick] = useState<Set<string>>(new Set(deletable.map(uid)));
+  const [pick, setPick] = useState<Set<string>>(new Set(deletable.map(useKey)));
   const [fromLib, setFromLib] = useState(true);
-  const free = writableAgents(agents).filter((a) => !g.uses.some((u) => u.agent.id === a.id && u.state !== "removing"));
+  const free = freeAgents(agents, g);
 
   const src = g.lib ? { agent: "library", provider: g.lib.id } : (() => {
     const u = g.uses.find((x) => x.p && !x.p.isNew && x.p.baseUrl);
@@ -97,7 +96,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
       <button className="gpanel-head" onClick={onToggle} aria-expanded={open}>
         <span className={`api-chip api-${g.api}`}>{API_LABEL[g.api]}</span>
         <span className="grow minw0 ellipsis small strong">{g.name}</span>
-        <span className="tiny muted">{tn("serviceDetail.uses", g.uses.filter((u) => u.state !== "removing").length)}</span>
+        <span className="tiny muted">{tn("serviceDetail.uses", liveUses(g).length)}</span>
         <Icon.chevron />
       </button>
       {open && (
@@ -123,7 +122,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
           {!builtin && !deleting && (
             <div className="grid2">
               <button className="btn small" onClick={() => props.onEditGroup(g)}><Icon.edit size={12} />{t("serviceDetail.editGroup")}</button>
-              <button className="btn small danger" onClick={() => { setPick(new Set(deletable.map(uid))); setDeleting(true); }}><Icon.trash size={12} />{t("serviceDetail.deleteGroup")}</button>
+              <button className="btn small danger" onClick={() => { setPick(new Set(deletable.map(useKey))); setDeleting(true); }}><Icon.trash size={12} />{t("serviceDetail.deleteGroup")}</button>
             </div>
           )}
 
@@ -133,9 +132,9 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
               {g.uses.filter((u) => u.p).map((u) => {
                 const why = removable(u);
                 return (
-                  <label key={uid(u)} className={`pick${why ? " dim" : ""}`} title={why ?? undefined}>
-                    <input type="checkbox" disabled={!!why} checked={pick.has(uid(u))}
-                      onChange={() => setPick((p) => toggled(p, uid(u)))} />
+                  <label key={useKey(u)} className={`pick${why ? " dim" : ""}`} title={why ?? undefined}>
+                    <input type="checkbox" disabled={!!why} checked={pick.has(useKey(u))}
+                      onChange={() => setPick((p) => toggled(p, useKey(u)))} />
                     <AgentIcon id={u.agent.id} size={16} />
                     <span className="small">{u.agent.name} · {u.p!.name}</span>
                     {why && why !== "—" && <span className="tiny muted">{t("serviceDetail.reason", { why })}</span>}
@@ -153,14 +152,14 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 <span className="tiny muted grow">{t("serviceDetail.deleteQueued")}</span>
                 <button className="btn small" onClick={() => setDeleting(false)}>{t("common.cancel")}</button>
                 <button className="btn small danger" disabled={pick.size === 0 && !(g.lib && fromLib)}
-                  onClick={() => { props.onDeleteGroup(g, deletable.filter((u) => pick.has(uid(u))), !!g.lib && fromLib); setDeleting(false); }}>{t("common.delete")}</button>
+                  onClick={() => { props.onDeleteGroup(g, deletable.filter((u) => pick.has(useKey(u))), !!g.lib && fromLib); setDeleting(false); }}>{t("common.delete")}</button>
               </div>
             </div>
           )}
 
           <div className="uses">
             {g.uses.map((u) => (
-              <div key={u.importKey ?? uid(u)} className={`use ${u.state}`}>
+              <div key={u.importKey ?? useKey(u)} className={`use ${u.state}`}>
                 <AgentIcon id={u.agent.id} size={22} />
                 <span className="grow minw0">
                   <span className="block small strong ellipsis">{u.agent.name} · {u.p?.name ?? g.name}</span>

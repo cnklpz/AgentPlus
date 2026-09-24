@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
-import type { Draft } from "../draft";
+import { type Draft, agentsWithOps, opCount } from "../draft";
 import { t, tn } from "../i18n";
 import { AgentIcon } from "./icons";
 import { usePreviews } from "../hooks";
@@ -21,7 +21,7 @@ interface Props {
 
 /** Lists every agent's pending changes and lets the user apply or drop each before leaving. */
 export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel }: Props) {
-  const withOps = agents.filter((a) => Object.keys(drafts[a.id] ?? {}).length > 0);
+  const withOps = agentsWithOps(agents, drafts);
   const [keep, setKeep] = useState<Record<string, boolean>>(() => Object.fromEntries(withOps.map((a) => [a.id, true])));
   const diffs = usePreviews(agents, drafts);
 
@@ -46,7 +46,7 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
           <section key={a.id} className={`pend${on ? "" : " drop"}`}>
             <div className="row gap10">
               <AgentIcon id={a.id} size={24} />
-              <strong className="grow">{a.name}<span className="tiny muted">{tn("pendingDialog.changeCount", Object.keys(drafts[a.id]).length)}</span></strong>
+              <strong className="grow">{a.name}<span className="tiny muted">{tn("pendingDialog.changeCount", opCount(drafts[a.id]))}</span></strong>
               <div className="seg">
                 <button className={on ? "on" : ""} onClick={() => setKeep((k) => ({ ...k, [a.id]: true }))}>{t("common.apply")}</button>
                 <button className={!on ? "on danger" : ""} onClick={() => setKeep((k) => ({ ...k, [a.id]: false }))}>{t("common.discard")}</button>

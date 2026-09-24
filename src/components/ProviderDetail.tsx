@@ -1,5 +1,5 @@
 import type { AgentId, AgentState, ApiKind, GatewayRouteView } from "../api";
-import { type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, viewModels } from "../draft";
+import { type Draft, type ViewProvider, currentProvider, isEnabled, providerModelCount } from "../draft";
 import { AgentIcon, Icon } from "./icons";
 import { Avatar, Bars, type Latency, colorFor, latencyTone, latencyView, serviceKey } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
@@ -31,7 +31,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
   const isCurrent = st.mode === "single" && currentProvider(st, draft) === p.id;
   const switching = st.currentProvider !== p.id;
   const lat = latencyView(p, off, latency);
-  const visible = p.isNew ? p.models.length : viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length;
+  const visible = providerModelCount(p, draft);
 
   // The same service configured in other agents (matched by host:port).
   const key = serviceKey(p);

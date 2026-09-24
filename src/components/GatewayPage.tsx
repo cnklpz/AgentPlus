@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type ApiKind, type GatewayBreaker, type GatewayBreakerView, type GatewayRoute, type GatewayRouteView, type GatewayStatus, type TestResult, api } from "../api";
-import { API_LABEL, type Group, type Station, apiFor, gatewayCapable, gatewayRouteId, plainRoute } from "../services";
+import {
+  API_LABEL, DEFAULT_GATEWAY_PORT, type Group, type Station, apiFor, findRoute, gatewayCapable, gatewayRouteId, isGatewayHost, plainRoute, tripped,
+  writableAgents,
+} from "../services";
 import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { AgentIcon, Icon } from "./icons";
@@ -38,11 +41,6 @@ interface Props {
 const PROTOS: ApiKind[] = ["chat", "responses", "anthropic"];
 const PATHS: Record<ApiKind, string> = { chat: "/chat/completions", responses: "/responses", anthropic: "/messages", gemini: "" };
 
-/** Paused by the error breaker (or waiting for its trial request). */
-export function tripped(r: GatewayRouteView): GatewayBreakerView | null {
-  return r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
-}
-
 function secs(n: number) {
   return n >= 60 ? t("gatewayPage.minSec", { m: Math.floor(n / 60), s: n % 60 }) : t("gatewayPage.sec", { n });
 }
@@ -56,7 +54,7 @@ function breakerWhen(b: GatewayBreakerView) {
 
 /** Local gateway, organised by provider: turn forwarding on for a provider, then plug it into any agent. */
 export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHost, onForward, onDeleteRoute, onAddToAgent, staleKeys, onUpdateKeys, flash }: Props) {
-  const [port, setPort] = useState(String(s?.port ?? 18650));
+  const [port, setPort] = useState(String(s?.port ?? DEFAULT_GATEWAY_PORT));
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -93,8 +91,8 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
     }
   };
 
-  const groups = stations.filter((x) => !x.builtin && !gatewayHost.includes(x.host.replace("localhost", "127.0.0.1"))).flatMap((st) => st.groups.map((g) => ({ st, g })));
-  const routeOf = (g: Group) => s?.routes.find((r) => r.library === g.lib?.id && r.upstreamApi === g.api) ?? null;
+  const groups = stations.filter((x) => !x.builtin && !isGatewayHost(x.host, gatewayHost)).flatMap((st) => st.groups.map((g) => ({ st, g })));
+  const routeOf = (g: Group) => findRoute(s?.routes ?? [], g.lib?.id, g.api) ?? null;
   const forwarded = s?.routes.length ?? 0;
   const portChanged = !!s && String(s.port) !== port.trim();
   const base = s ? `http://127.0.0.1:${s.port}` : "";
@@ -226,7 +224,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <button className="icon-btn sm" aria-label={t("gatewayPage.deleteRoute")} title={t("gatewayPage.deleteRoute")} onClick={(e) => { e.stopPropagation(); remove(r.id); }}><Icon.trash size={12} /></button>
                     <span className="gw-chev"><Icon.chevron /></span>
                   </div>
-                  {expanded && <RouteBody r={r} g={g} agents={agents} running={!!s?.running} threshold={s?.breaker.threshold ?? 3} setStatus={setStatus} copy={copy} flash={flash}
+                  {expanded && <RouteBody r={r} g={g} agents={agents} gatewayHost={gatewayHost} running={!!s?.running} threshold={s?.breaker.threshold ?? 3} setStatus={setStatus} copy={copy} flash={flash}
                     onAddToAgent={onAddToAgent} onDelete={() => remove(r.id)} onResetBreaker={() => resetBreaker(r.id)} />}
                 </div>
               );
@@ -270,7 +268,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
 }
 
 /** The unified entry: one address for every forward, routed by model and split by weight. */
-function Unified({ s, copy }: { s: GatewayStatus; copy: (t: string) => void }) {
+function Unified({ s, copy }: { s: GatewayStatus; copy: (text: string) => void }) {
   const live = s.routes.filter((r) => r.enabled && !r.upstreamMissing);
   const byModel = new Map<string, GatewayRouteView[]>();
   for (const r of live) for (const m of r.models) byModel.set(m, [...(byModel.get(m) ?? []), r]);
@@ -420,11 +418,11 @@ function replaceable(g: Group | undefined) {
   return (g?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && !u.p.isDeleted && u.p.baseUrl);
 }
 
-function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, onAddToAgent, onDelete, onResetBreaker }: {
+function RouteBody({ r, g, agents, gatewayHost, running, threshold, setStatus, copy, flash, onAddToAgent, onDelete, onResetBreaker }: {
   onDelete: () => void;
   onResetBreaker: () => void;
-  r: GatewayRouteView; g: Group | null; agents: AgentState[]; running: boolean; threshold: number; setStatus: (s: GatewayStatus) => void;
-  copy: (t: string) => void; flash: Flash; onAddToAgent: Props["onAddToAgent"];
+  r: GatewayRouteView; g: Group | null; agents: AgentState[]; gatewayHost: readonly string[]; running: boolean; threshold: number;
+  setStatus: (s: GatewayStatus) => void; copy: (text: string) => void; flash: Flash; onAddToAgent: Props["onAddToAgent"];
 }) {
   const [inbound, setInbound] = useState<ApiKind>(r.upstreamApi === "responses" ? "chat" : "responses");
   const models = [...new Set([...(g?.lib?.models ?? []), ...(g?.uses ?? []).flatMap((u) => u.p?.models.map((m) => m.id) ?? [])])];
@@ -435,8 +433,8 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
   const [advanced, setAdvanced] = useState(r.modelMap.length > 0);
   const [weight, setWeight] = useState(String(r.weight));
 
-  // Agents already pointing at this route.
-  const linked = new Set(agents.filter((a) => a.providers.some((p) => gatewayRouteId(p.baseUrl, r.localBase.replace(/^https?:\/\//, "").split("/")[0]) === r.id)).map((a) => a.id));
+  // Agents already pointing at this route (also at an earlier gateway port, which still counts).
+  const linked = new Set(agents.filter((a) => a.providers.some((p) => gatewayRouteId(p.baseUrl, gatewayHost) === r.id)).map((a) => a.id));
 
   const save = async (patch: Partial<GatewayRoute>, msg: string) => {
     try {
@@ -492,7 +490,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
       <div className="gw-block">
         <span className="gw-label">{t("gatewayPage.connectAgents")}</span>
         <div className="gw-actions">
-          {agents.filter((a) => a.installed && !a.readonly && gatewayCapable(a.id)).map((a) => {
+          {writableAgents(agents).filter((a) => gatewayCapable(a.id)).map((a) => {
             const via: ApiKind = apiFor(a.id, r.upstreamApi);
             return linked.has(a.id) ? (
               <span key={a.id} className="gw-linked"><AgentIcon id={a.id} size={16} />{t("gatewayPage.linked", { name: a.name })}</span>
