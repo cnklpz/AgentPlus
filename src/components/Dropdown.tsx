@@ -28,7 +28,7 @@ interface Props {
 export function Dropdown({ value, options, onChange, disabled, label, maxHeight = 280 }: Props) {
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
-  const [pos, setPos] = useState<{ left: number; top: number; minWidth: number; maxHeight: number; up: boolean } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; minWidth: number; maxHeight: number; up: boolean } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const cur = options.find((o) => o.value === value);
@@ -64,8 +64,19 @@ export function Dropdown({ value, options, onChange, disabled, label, maxHeight 
     // Open on the side with room; if neither fits, the roomier side, scrolling inside.
     const up = below < want && above > below;
     const h = Math.max(80, Math.min(want, up ? above : below));
-    setPos({ left: r.left, top: up ? r.top - 6 - h : r.bottom + 6, minWidth: r.width, maxHeight: h, up });
+    // Upwards it hangs from its bottom edge: `want` is only an estimate of the height, and a
+    // shorter menu placed by its top would float off the button.
+    const edge = up ? { bottom: window.innerHeight - r.top + 6 } : { top: r.bottom + 6 };
+    setPos({ left: r.left, ...edge, minWidth: r.width, maxHeight: h, up });
   }, [open]);
+
+  // A menu wider than the button can run off the right edge: slide it back in.
+  useLayoutEffect(() => {
+    const m = menu.current?.getBoundingClientRect();
+    if (!pos || !m) return;
+    const left = Math.max(12, Math.min(pos.left, window.innerWidth - 12 - m.width));
+    if (left !== pos.left) setPos({ ...pos, left });
+  }, [pos]);
 
   const pick = (v: string) => { onChange(v); setOpen(false); };
 
@@ -93,7 +104,7 @@ export function Dropdown({ value, options, onChange, disabled, label, maxHeight 
       </button>
       {open && pos && (
         <div ref={menu} className={`dd-menu dd-float${pos.up ? " up" : ""}`} role="listbox"
-          style={{ position: "fixed", left: pos.left, top: pos.top, minWidth: pos.minWidth, maxHeight: pos.maxHeight }}>
+          style={{ position: "fixed", left: pos.left, top: pos.top ?? "auto", bottom: pos.bottom ?? "auto", minWidth: pos.minWidth, maxHeight: pos.maxHeight }}>
           {options.map((o, i) => [
             o.group && o.group !== options[i - 1]?.group && <div key={`g:${o.group}`} className="dd-group tiny muted">{o.group}</div>,
             <button
