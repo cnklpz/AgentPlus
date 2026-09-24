@@ -15,6 +15,7 @@ pub mod openclaw;
 pub mod opencode;
 pub mod pi;
 pub mod pimodels;
+mod profiles;
 pub mod qwen;
 pub mod zcode;
 
