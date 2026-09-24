@@ -7,7 +7,7 @@
 
 
 use super::{Plan, Endpoint};
-use super::pimodels::{self, Dirty, Flavor, Fmt};
+use super::pimodels::{Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
 use crate::store;
@@ -34,7 +34,7 @@ pub fn default_dir() -> PathBuf {
     if let Some(d) = super::dir_override(ID) {
         return d;
     }
-    if let Some(d) = pimodels::env_var("PI_CODING_AGENT_DIR") {
+    if let Some(d) = crate::env::agent_var("PI_CODING_AGENT_DIR") {
         return crate::env::resolve_path(&d);
     }
     home().join(".pi").join("agent")

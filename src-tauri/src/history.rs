@@ -40,7 +40,7 @@ fn root() -> PathBuf {
 /// Original locations for backups made before manifests existed.
 fn legacy_path(agent: &str, name: &str) -> Option<PathBuf> {
     let h = home();
-    let codex = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
+    let codex = crate::env::agent_var("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
     let app = dirs::config_dir().unwrap_or_else(|| h.clone()).join("Xiaomi MiMo");
     Some(match (agent, name) {
         ("codex", "config.toml" | "models.json" | ".env") => codex.join(name),

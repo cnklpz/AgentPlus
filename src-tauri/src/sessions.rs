@@ -768,6 +768,8 @@ mod tests {
             }
         }
         std::env::set_var("CODEX_HOME", &tmp);
+        // An empty store: a Codex folder picked in AgentPlus would win over CODEX_HOME.
+        std::env::set_var("AGENTPLUS_HOME", tmp.join(".agentplus"));
         let before = list().unwrap();
         // two sessions not on the current provider, copy their rollout files
         let picks: Vec<&SessionRow> = before.sessions.iter().filter(|s| s.provider != before.current_provider && s.rollout_exists).take(2).collect();
@@ -807,6 +809,7 @@ mod tests {
         // remove the test's undo log so the real UI doesn't show it
         let _ = fs::remove_file(repairs_dir().join(format!("{stamp}.json")));
         std::env::set_var("CODEX_HOME", &real);
+        std::env::remove_var("AGENTPLUS_HOME");
         println!("roundtrip ok: {} sessions, {} files", ids.len(), copies.len());
     }
 

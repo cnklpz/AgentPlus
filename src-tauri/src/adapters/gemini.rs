@@ -320,7 +320,7 @@ pub fn state(inst: &Install) -> AgentState {
         }
     }
     for var in [BASE, KEY] {
-        if std::env::var(var).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        if crate::env::agent_var(var).is_some_and(|v| !v.trim().is_empty()) {
             st.notes.push(tr!("系统环境变量 {var} 已设置，它会覆盖 ~/.gemini/.env 里的同名设置。", "System environment variable {var} is set and overrides the same setting in ~/.gemini/.env."));
         }
     }

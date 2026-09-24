@@ -39,16 +39,13 @@ fn dir() -> PathBuf {
 
 /// `KILO_CONFIG` (a file path) only applies to the Windows side.
 fn env_config() -> Option<PathBuf> {
-    if test_home().is_some() || crate::env::is_wsl() {
-        return None;
-    }
-    std::env::var_os("KILO_CONFIG").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    crate::env::agent_var("KILO_CONFIG").map(PathBuf::from)
 }
 
 /// The config file Kilo reads: `KILO_CONFIG`, else the first existing of
 /// kilo.jsonc / kilo.json / opencode.json, else a new kilo.json.
 fn config_path() -> PathBuf {
-    if test_home().is_none() && super::dir_override(ID).is_none() {
+    if super::dir_override(ID).is_none() {
         if let Some(p) = env_config() {
             return p;
         }

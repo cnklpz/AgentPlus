@@ -92,18 +92,6 @@ pub fn raw_api(id: &str, def: &Value) -> String {
     .to_string()
 }
 
-/// An environment variable of the agent's environment (None inside WSL: not ours to read).
-pub fn env_var(name: &str) -> Option<String> {
-    #[cfg(test)]
-    if crate::util::test_home().is_some() {
-        return crate::env::test_var(name);
-    }
-    if crate::env::is_wsl() {
-        return None;
-    }
-    std::env::var(name).ok().filter(|v| !v.is_empty())
-}
-
 fn is_env_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !s.chars().next().unwrap().is_ascii_digit()
 }
@@ -125,7 +113,7 @@ impl Fmt {
     }
 
     fn lookup(&self, name: &str) -> Option<String> {
-        env_var(name).or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
+        crate::env::agent_var(name).or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
     }
 
     /// The real key behind a config value, when it can be known without running anything.
