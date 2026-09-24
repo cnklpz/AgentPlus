@@ -574,6 +574,8 @@ const real = {
 
 /** Browser demo: agents started or restarted from the demo count as running. */
 const demoRunning: Record<string, boolean> = {};
+/** Browser demo: a pause that stands in for real work. */
+const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 let demoCancel = false;
 
 // The snapshot is local-only (.gitignore): a glob resolves to nothing when it is missing, so a
@@ -615,7 +617,10 @@ const demoGw = (): GatewayStatus => ({
   requests: demoGateway.enabled ? 12 : 0, failures: 1, active: 0,
   unifiedBase: `http://127.0.0.1:${demoGateway.port}/v1`,
   breaker: demoGateway.breaker,
-  routes: demoGateway.routes.map((r, i) => ({ ...r, models: demoLib.find((e) => e.id === r.library)?.models ?? [], localBase: `http://127.0.0.1:${demoGateway.port}/${r.id}/v1`, upstreamName: demoLib.find((e) => e.id === r.library)?.name ?? r.library, upstreamUrl: demoLib.find((e) => e.id === r.library)?.baseUrl ?? null, upstreamMissing: false, breaker: demoBreaker(r, i) })),
+  routes: demoGateway.routes.map((r, i) => {
+    const e = demoLib.find((x) => x.id === r.library);
+    return { ...r, models: e?.models ?? [], localBase: `http://127.0.0.1:${demoGateway.port}/${r.id}/v1`, upstreamName: e?.name ?? r.library, upstreamUrl: e?.baseUrl ?? null, upstreamMissing: false, breaker: demoBreaker(r, i) };
+  }),
   log: demoGateway.enabled ? [
     { at: "15:42:10", route: "relay", method: "POST", path: "/relay/v1/responses", inbound: "responses", upstream: "chat", model: "glm-5", status: 200, ms: 3120, stream: true, converted: true, error: null, usage: [18230, 412], agent: "codex" },
     { at: "15:41:52", route: "relay", method: "POST", path: "/relay/v1/responses", inbound: "responses", upstream: "chat", model: "glm-5", status: 401, ms: 210, stream: true, converted: true, error: "invalid api key", usage: null, agent: "claude" },
@@ -693,7 +698,6 @@ const demo: typeof real = {
   testLatency: async () => 120 + Math.round(Math.random() * 300),
   restart: async (agent, onProgress) => {
     const on = onProgress ?? (() => undefined);
-    const wait = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
     const inject = agent === "codex";
     const steps: RestartStep[] = inject ? ["stop", "start", "port", "patch"] : ["stop", "start"];
     const running = (await fixture()).find((a) => a.id === agent)?.running ?? false;
@@ -705,7 +709,7 @@ const demo: typeof real = {
         continue;
       }
       on({ kind: "step", step, status: "active", detail: null });
-      await wait(700 + Math.random() * 900);
+      await sleep(700 + Math.random() * 900);
       if (demoCancel) throw new Error("（演示）已取消");
       on({ kind: "step", step, status: "done", detail: null });
     }
@@ -817,17 +821,17 @@ const demo: typeof real = {
   projectForget: async (path) => { demoProjects = demoProjects.filter((x) => x.path !== path); },
   pickFolder: async () => "D:\\xm\\newapp",
   updateCheck: async () => {
-    await new Promise((r) => setTimeout(r, 800));
+    await sleep(800);
     return { version: "0.2.0", current: "0.1.0", notes: "（演示）\n- 新功能：应用内更新\n- 修复若干问题", date: new Date().toISOString() };
   },
   updateInstall: async (onProgress) => {
     const total = 9_400_000;
     for (let done = 0; done < total; done += 700_000) {
       onProgress({ kind: "download", done, total });
-      await new Promise((r) => setTimeout(r, 120));
+      await sleep(120);
     }
     onProgress({ kind: "install" });
-    await new Promise((r) => setTimeout(r, 1000));
+    await sleep(1000);
     throw new Error("（演示）浏览器预览里不能安装");
   },
   officialStatus: async () => ({ ...demoOfficial, cacheReady: demoOfficial.active && Date.now() - demoOfficialAt > 4000, cacheModels: 9 }),
@@ -841,11 +845,11 @@ const demo: typeof real = {
   gatewaySetBreaker: async (b) => { demoGateway.breaker = b; return demoGw(); },
   gatewayResetBreaker: async (id) => { demoGateway.cleared.push(...(id === null ? demoGateway.routes.map((r) => r.id) : [id])); return demoGw(); },
   gatewayTest: async (route, apiKind, model) => {
-    await new Promise((r) => setTimeout(r, 600));
+    await sleep(600);
     return { ok: true, status: 200, ms: 980, model, url: `http://127.0.0.1:${demoGateway.port}/${route}/v1/${apiKind === "chat" ? "chat/completions" : apiKind === "anthropic" ? "messages" : "responses"}`, reply: "pong", error: null, usage: [12, 2] };
   },
   testProvider: async (_a, _p, model) => {
-    await new Promise((r) => setTimeout(r, 700));
+    await sleep(700);
     return model.includes("bad")
       ? { ok: false, status: 404, ms: 412, model, url: "http://demo/v1/responses", reply: null, error: "地址或接口类型不对，或者没有这个模型（HTTP 404）：model not found", usage: null }
       : { ok: true, status: 200, ms: 1234, model, url: "http://demo/v1/responses", reply: "pong", error: null, usage: [14, 3] };
