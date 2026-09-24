@@ -16,6 +16,7 @@ mod sessions;
 mod store;
 mod sync;
 mod tray;
+mod update;
 mod util;
 
 use model::*;
@@ -424,6 +425,8 @@ pub fn run() {
         // Registered first: a second launch (e.g. while this one sits in the tray) exits
         // right away and brings this window forward instead of starting a second gateway.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::Pending::default())
         .setup(|app| {
             tray::setup(app.handle())?;
             // Off the startup path: binding the port and stopping an old listener can wait.
@@ -495,7 +498,9 @@ pub fn run() {
             gateway_set_breaker,
             gateway_reset_breaker,
             gateway_test,
-            set_agent_dir
+            set_agent_dir,
+            update::update_check,
+            update::update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgentPlus");

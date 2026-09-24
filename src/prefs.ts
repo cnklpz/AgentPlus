@@ -22,10 +22,12 @@ export interface Prefs {
   closeAction: CloseAction;
   /** 隐私模式: mask keys, addresses, user folders and conversation text on screen. */
   privacy: boolean;
+  /** Look for a new AgentPlus release on GitHub at startup. */
+  autoUpdate: boolean;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true };
 
 export function loadPrefs(): Prefs {
   try {

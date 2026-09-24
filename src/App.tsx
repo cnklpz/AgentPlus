@@ -15,6 +15,7 @@ import { HubAside } from "./components/HubAside";
 import { ServiceDetail } from "./components/ServiceDetail";
 import { type ServiceSave, ServiceDialog } from "./components/ServiceDialog";
 import { EnvSwitch } from "./components/EnvSwitch";
+import { checkUpdate, useUpdate } from "./updater";
 import { type SettingsTab, SettingsPage } from "./components/SettingsPage";
 import { PendingDialog } from "./components/PendingDialog";
 import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
@@ -167,6 +168,16 @@ export default function App() {
   const flash = useCallback((text: string, error = false, ms = 3600) => {
     setToast({ text, error });
     window.setTimeout(() => setToast((t) => (t?.text === text ? null : t)), ms);
+  }, []);
+
+  // A new release: look once shortly after startup (设置 › 关于 › 启动时检查更新).
+  const update = useUpdate();
+  useEffect(() => {
+    if (!inTauri || !prefs.autoUpdate) return;
+    const timer = window.setTimeout(() => {
+      checkUpdate(true).then((info) => { if (info) flash(t("app.updateToast", { version: info.version }), false, 9000); });
+    }, 4000);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const reload = () => api.listAgents().then(setAgents).catch((e) => setLoadError(String(e)));
@@ -1257,8 +1268,9 @@ ${p}`))];
         <div className="top-end" data-tauri-drag-region>
         <div className="top-right" data-tauri-drag-region>
           <EnvSwitch envs={envs} current={curEnv} switching={switching} onOpen={reloadEnvs} onPick={switchEnv} />
-          <button className="gear-btn" aria-label={t("app.navSettings")} aria-pressed={page === "settings"} onClick={() => (page === "settings" ? closeSettings() : openSettings())}>
-            <Icon.gear /><span className="gear-label">{t("app.settings")}</span>
+          <button className="gear-btn" aria-label={t("app.navSettings")} aria-pressed={page === "settings"} title={update.kind === "available" ? t("app.updateDot") : undefined}
+            onClick={() => (page === "settings" ? closeSettings() : openSettings())}>
+            <span className="gear-ico"><Icon.gear />{update.kind === "available" && <span className="gear-dot" />}</span><span className="gear-label">{t("app.settings")}</span>
           </button>
         </div>
         <WindowControls />

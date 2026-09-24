@@ -3,12 +3,14 @@ import { getVersion } from "@tauri-apps/api/app";
 import { type AgentDetect, type AgentId, type EnvInfo, api } from "../api";
 import { inTauri } from "../tauri";
 import type { CloseAction, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
-import { LANGS, type TKey, t, useLang } from "../i18n";
+import { LANGS, type TKey, locale, t, useLang } from "../i18n";
 import { useEscape } from "../hooks";
 import { AGENT_NAME } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { TabBar, useSlideDir } from "./TabBar";
 import { scrub } from "../privacy";
+import { fmtSize } from "../format";
+import { RELEASES_URL, checkUpdate, installUpdate, useUpdate } from "../updater";
 
 export type SettingsTab = "general" | "agents";
 
@@ -211,7 +213,59 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
             <div className="muted small">{t("settingsPage.aboutHint")}</div>
           </div>
         </div>
+        <UpdateRow flash={flash} />
+        <div className="srow">
+          <div className="grow minw0">
+            <div className="slabel">{t("settingsPage.autoUpdate")}</div>
+            <div className="muted small">{t("settingsPage.autoUpdateHint")}</div>
+          </div>
+          <button className={`switch${prefs.autoUpdate ? " on" : ""}`} role="switch" aria-checked={prefs.autoUpdate} aria-label={t("settingsPage.autoUpdate")}
+            onClick={() => setPrefs({ ...prefs, autoUpdate: !prefs.autoUpdate })}><span /></button>
+        </div>
       </section>
+    </div>
+  );
+}
+
+/** Check for a new release, read its notes, then download and install it. */
+function UpdateRow({ flash }: { flash: (text: string, error?: boolean) => void }) {
+  const u = useUpdate();
+  const info = u.kind === "available" || u.kind === "downloading" || u.kind === "installing" || u.kind === "error" ? u.info : null;
+  const busy = u.kind === "checking" || u.kind === "downloading" || u.kind === "installing";
+  const openRelease = () => api.openUrl(info ? `${RELEASES_URL}/tag/v${info.version}` : RELEASES_URL).catch((e) => flash(String(e), true));
+  const pct = u.kind === "downloading" ? (u.total ? u.done / u.total : null) : u.kind === "installing" ? 1 : null;
+  const date = info?.date ? new Date(info.date) : null;
+  const status =
+    u.kind === "checking" ? t("settingsPage.checkingUpdate")
+    : u.kind === "latest" ? t("settingsPage.upToDate")
+    : u.kind === "downloading" ? t("settingsPage.updateDownloading", { pct: u.total ? `${Math.floor((u.done / u.total) * 100)}%` : fmtSize(u.done) })
+    : u.kind === "installing" ? t("settingsPage.updateInstalling")
+    : null;
+  return (
+    <div className="srow stacked">
+      <div className="row gap6">
+        <div className="grow minw0">
+          <div className="slabel">
+            {info ? t("settingsPage.updateFound", { version: info.version }) : t("settingsPage.checkUpdate")}
+            {info && <span className="chip-ok">v{info.version}</span>}
+          </div>
+          {date && !Number.isNaN(date.getTime()) && <div className="muted small">{t("settingsPage.updateDate", { date: date.toLocaleDateString(locale()) })}</div>}
+          {status && <div className="muted small" role="status">{status}</div>}
+          {u.kind === "error" && <div className="err" role="alert">{u.error}</div>}
+        </div>
+        {info && <button className="btn" onClick={openRelease}><Icon.external size={13} />{t("settingsPage.viewRelease")}</button>}
+        {info
+          ? <button className="btn primary" disabled={busy} onClick={() => { installUpdate(); }}><Icon.download size={13} />{t("settingsPage.installUpdate")}</button>
+          : <button className="btn" disabled={busy} onClick={() => { checkUpdate(); }}><Icon.refresh size={13} />{t(u.kind === "checking" ? "settingsPage.checkingUpdate" : "settingsPage.checkUpdate")}</button>}
+      </div>
+      {pct !== null && <div className="upd-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct * 100)}><span style={{ width: `${pct * 100}%` }} /></div>}
+      {info?.notes && (
+        <div className="upd-notes">
+          <div className="tiny muted strong">{t("settingsPage.releaseNotes")}</div>
+          <div className="small">{info.notes}</div>
+        </div>
+      )}
+      {info && !busy && <span className="tiny muted">{t("settingsPage.updateInstallHint")}</span>}
     </div>
   );
 }
