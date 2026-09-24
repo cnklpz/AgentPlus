@@ -7,16 +7,17 @@ import { scrub } from "../privacy";
 import { useLoad } from "../hooks";
 import { ErrorBox } from "./controls";
 import { errText, type Flash, onActivateKey } from "../util";
+import { agentLabel } from "../services";
 
-/** Product names stay as-is; AgentPlus's own maintenance jobs are translated. */
-const AGENT_NAME: Record<string, string | { key: TKey }> = {
-  codex: "Codex", zcode: "ZCode", mimo: "MiMo Desktop",
-  "codex-cleanup": { key: "historyPage.agentCodexCleanup" }, "codex-repair": { key: "historyPage.agentCodexRepair" },
+/** AgentPlus's own maintenance jobs (translated); backups of agents show the product name. */
+const JOBS: Record<string, TKey> = {
+  "codex-cleanup": "historyPage.agentCodexCleanup",
+  "codex-repair": "historyPage.agentCodexRepair",
 };
 
 function agentName(id: string): string {
-  const n = AGENT_NAME[id];
-  return n == null ? id : typeof n === "string" ? n : t(n.key);
+  const k = JOBS[id];
+  return k ? t(k) : agentLabel(id);
 }
 
 function fmtStamp(s: string): string {
