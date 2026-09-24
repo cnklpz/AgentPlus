@@ -11,11 +11,17 @@
 //! - Quota: signed in with ChatGPT, an atom disables the composer's send button once
 //!   the account's `rate_limit.allowed` is false and a usage window is at 0%. With the
 //!   official sign-in mix the requests go to the relay, so we make it always false.
+//! - Usage banners: the composer's usage-banner slot shows the account's limit banners
+//!   (server-sent `rate_limit_upsell` ones like "You're out of Codex and Work usage", and
+//!   the app's own warnings). Those are about the ChatGPT quota, not the relay, so we
+//!   make the slot always show what it would without them.
 //!
 //! The patches live in different bundles (app-initial, app-primary); every bundle is
 //! tried with every patch, and a patch is missing only when no bundle has it.
 //!
-//! Strategy 1: intercept the bundle responses on reload (Fetch domain).
+//! Strategy 1: intercept the bundle responses on reload (Fetch domain). The cache is off
+//! for the reload: app-primary is otherwise often served from the memory cache, which
+//! never reaches the interception.
 //! Strategy 2: live-edit the already-loaded scripts (Debugger.setScriptSource).
 
 use crate::process::Progress;
@@ -32,6 +38,7 @@ pub const PORT: u16 = 39229;
 const FAST_MARK: &str = "/*agentplus-fast*/";
 const NAMES_MARK: &str = "/*agentplus-names*/";
 const QUOTA_MARK: &str = "/*agentplus-quota*/";
+const BANNER_MARK: &str = "/*agentplus-banner*/";
 const BUNDLE_HINTS: [&str; 2] = ["app-initial-", "app-primary-"];
 
 /// Which UI patches to apply.
@@ -40,20 +47,26 @@ pub struct Patches {
     pub fast: bool,
     pub full_names: bool,
     pub quota: bool,
+    pub usage_banner: bool,
 }
 
 impl Patches {
     pub fn any(self) -> bool {
-        self.fast || self.full_names || self.quota
+        self.flags().contains(&true)
     }
 
-    fn flags(self) -> [bool; 3] {
-        [self.fast, self.full_names, self.quota]
+    fn flags(self) -> [bool; 4] {
+        [self.fast, self.full_names, self.quota, self.usage_banner]
     }
 
     /// Display names, in the order `patch_source` applies them.
-    fn names() -> [&'static str; 3] {
-        ["Fast", crate::i18n::l("完整模型名", "Full model names"), crate::i18n::l("额度用完仍可发送", "Send after quota runs out")]
+    fn names() -> [&'static str; 4] {
+        [
+            "Fast",
+            crate::i18n::l("完整模型名", "Full model names"),
+            crate::i18n::l("额度用完仍可发送", "Send after quota runs out"),
+            crate::i18n::l("隐藏用量提示横幅", "Hide usage banners"),
+        ]
     }
 
     fn wanted(self) -> Vec<&'static str> {
@@ -91,11 +104,22 @@ fn patch_quota(src: &str) -> Option<String> {
     if out == src { None } else { Some(out.into_owned()) }
 }
 
+/// Makes the composer's usage-banner slot return its fallback content right away:
+///   N=F($v,_);if(!n)return u;let P=pYe({hasImageGenerationLimit:…
+///   → N=F($v,_);if(!0)return u;let P=…
+/// The early return already exists (for `canShowUsageBanners` off), so every hook before
+/// it still runs as usual.
+fn patch_banner(src: &str) -> Option<String> {
+    let re = Regex::new(r"if\(![\w$]+\)return ([\w$]+);(let [\w$]+=[\w$]+\(\{hasImageGenerationLimit:)").unwrap();
+    let out = re.replacen(src, 1, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"));
+    if out == src { None } else { Some(out.into_owned()) }
+}
+
 /// Applies the wanted patches that aren't in `src` yet. Returns the patched source
 /// (`None` when nothing changed) and the patches whose code couldn't be found.
 pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static str>) {
     type Patch = (&'static str, fn(&str) -> Option<String>);
-    let patches: [Patch; 3] = [(FAST_MARK, patch_fast), (NAMES_MARK, patch_names), (QUOTA_MARK, patch_quota)];
+    let patches: [Patch; 4] = [(FAST_MARK, patch_fast), (NAMES_MARK, patch_names), (QUOTA_MARK, patch_quota), (BANNER_MARK, patch_banner)];
     let mut out: Option<String> = None;
     let mut missing = vec![];
     for (i, ((mark, f), on)) in patches.into_iter().zip(want.flags()).enumerate() {
@@ -136,6 +160,11 @@ fn not_found(missing: &[&str]) -> anyhow::Error {
     ))
 }
 
+/// Events kept for `next_event`; others (Network.* while the cache is off) are dropped.
+fn buffered(msg: &Value) -> bool {
+    matches!(msg.get("method").and_then(|m| m.as_str()), Some("Fetch.requestPaused" | "Debugger.scriptParsed"))
+}
+
 struct Session {
     ws: WebSocket<MaybeTlsStream<TcpStream>>,
     next: u64,
@@ -174,7 +203,7 @@ impl Session {
                     }
                     return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                 }
-                if msg.get("method").is_some() {
+                if buffered(&msg) {
                     self.events.push_back(msg);
                 }
             }
@@ -191,7 +220,7 @@ impl Session {
                 return Ok(None);
             }
             if let Some(msg) = self.read()? {
-                if msg.get("method").is_some() {
+                if buffered(&msg) {
                     self.events.push_back(msg);
                 }
             }
@@ -223,8 +252,15 @@ impl JsonValue for reqwest::blocking::Response {
     }
 }
 
+/// The bundle a script URL belongs to. Only `.js` counts: each bundle has a same-named
+/// `.css` that loads first and would otherwise mark the bundle as seen.
 fn bundle_of(url: &str) -> Option<&'static str> {
-    BUNDLE_HINTS.into_iter().find(|h| url.contains(h))
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let file = path.rsplit('/').next().unwrap_or_default();
+    if !file.ends_with(".js") {
+        return None;
+    }
+    BUNDLE_HINTS.into_iter().find(|h| file.starts_with(h))
 }
 
 /// Patches one paused bundle response and lets it through. Returns the patches not found in it.
@@ -261,21 +297,40 @@ fn fulfill(s: &mut Session, p: &Value, want: Patches) -> Result<Vec<&'static str
     Ok(missing)
 }
 
-/// `Ok(None)` when no bundle request was seen; otherwise the patches not found in any bundle.
-fn via_fetch(s: &mut Session, want: Patches) -> Result<Option<Vec<&'static str>>> {
-    let patterns: Vec<Value> = BUNDLE_HINTS.iter().map(|h| json!({ "urlPattern": format!("*{h}*"), "requestStage": "Response" })).collect();
+/// The outcome in one window.
+struct Patched {
+    /// Patches not found in any bundle of the window.
+    missing: Vec<&'static str>,
+    /// Every bundle was there (overlay windows only load app-initial).
+    complete: bool,
+}
+
+/// `Ok(None)` when no bundle request was seen. Once the first bundle is through, waits
+/// up to `lazy` for the rest, calling `waiting` first.
+fn via_fetch(s: &mut Session, want: Patches, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
+    let patterns: Vec<Value> = BUNDLE_HINTS.iter().map(|h| json!({ "urlPattern": format!("*{h}*.js*"), "requestStage": "Response" })).collect();
     s.call("Fetch.enable", json!({ "patterns": patterns }))?;
+    s.call("Network.enable", json!({}))?;
+    s.call("Network.setCacheDisabled", json!({ "cacheDisabled": true }))?;
     s.call("Page.reload", json!({ "ignoreCache": true }))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut deadline = Instant::now() + Duration::from_secs(10);
     let mut seen: Vec<&str> = vec![];
     let mut missing: Option<Vec<&'static str>> = None;
     let result = (|| -> Result<()> {
         while seen.len() < BUNDLE_HINTS.len() {
             let Some(ev) = s.next_event("Fetch.requestPaused", deadline)? else { break };
             let p = &ev["params"];
-            if let Some(h) = bundle_of(p["request"]["url"].as_str().unwrap_or("")) {
-                if !seen.contains(&h) {
-                    seen.push(h);
+            let Some(h) = bundle_of(p["request"]["url"].as_str().unwrap_or("")) else {
+                s.call("Fetch.continueRequest", json!({ "requestId": p["requestId"] }))?;
+                continue;
+            };
+            if !seen.contains(&h) {
+                seen.push(h);
+                // app-primary is imported lazily by app-initial once the app is up; right
+                // after Codex starts that can take well over 10 s.
+                if seen.len() == 1 {
+                    deadline = Instant::now() + lazy;
+                    waiting();
                 }
             }
             let miss = fulfill(s, p, want)?;
@@ -284,17 +339,23 @@ fn via_fetch(s: &mut Session, want: Patches) -> Result<Option<Vec<&'static str>>
         Ok(())
     })();
     let _ = s.call("Fetch.disable", json!({}));
+    let _ = s.call("Network.setCacheDisabled", json!({ "cacheDisabled": false }));
+    let _ = s.call("Network.disable", json!({}));
     result?;
-    missing.map(|m| check_missing(want, m)).transpose()
+    Ok(missing.map(|missing| Patched { missing, complete: seen.len() == BUNDLE_HINTS.len() }))
 }
 
-/// Returns the patches not found in any loaded bundle.
-fn via_live_edit(s: &mut Session, want: Patches) -> Result<Vec<&'static str>> {
+/// `Ok(None)` when the window has no bundle loaded (overlay and detached windows don't);
+/// otherwise what was patched.
+fn via_live_edit(s: &mut Session, want: Patches) -> Result<Option<Patched>> {
     s.call("Debugger.enable", json!({}))?;
+    // Already-loaded scripts are reported right away; stop once they've gone quiet.
     let deadline = Instant::now() + Duration::from_secs(8);
+    let mut quiet = Instant::now() + Duration::from_millis(1500);
     let mut scripts: Vec<(&str, String)> = vec![];
     while scripts.len() < BUNDLE_HINTS.len() {
-        let Some(ev) = s.next_event("Debugger.scriptParsed", deadline)? else { break };
+        let Some(ev) = s.next_event("Debugger.scriptParsed", deadline.min(quiet))? else { break };
+        quiet = Instant::now() + Duration::from_millis(1500);
         if let (Some(h), Some(id)) = (bundle_of(ev["params"]["url"].as_str().unwrap_or("")), ev["params"]["scriptId"].as_str()) {
             if !scripts.iter().any(|(x, _)| *x == h) {
                 scripts.push((h, id.to_string()));
@@ -303,7 +364,7 @@ fn via_live_edit(s: &mut Session, want: Patches) -> Result<Vec<&'static str>> {
     }
     if scripts.is_empty() {
         let _ = s.call("Debugger.disable", json!({}));
-        return Err(anyhow!(crate::i18n::l("没有找到 Codex 界面脚本", "Codex UI script not found")));
+        return Ok(None);
     }
     let result = (|| -> Result<Vec<&'static str>> {
         let mut missing: Option<Vec<&'static str>> = None;
@@ -325,7 +386,7 @@ fn via_live_edit(s: &mut Session, want: Patches) -> Result<Vec<&'static str>> {
         Ok(missing.unwrap_or_default())
     })();
     let _ = s.call("Debugger.disable", json!({}));
-    check_missing(want, result?)
+    Ok(Some(Patched { missing: result?, complete: scripts.len() == BUNDLE_HINTS.len() }))
 }
 
 /// Waits for Codex windows on the debug port and patches each one.
@@ -347,27 +408,41 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
     // Let the first render settle before reloading.
     on(Progress::step("patch", "active", Some(crate::i18n::l("等待界面加载", "Waiting for the UI to load").into())));
     crate::process::pause(Duration::from_secs(2))?;
+    // Main windows first: overlay windows never load app-primary, so once a main window
+    // has had every bundle there's no point waiting long for it elsewhere.
+    let mut pages = pages;
+    pages.sort_by_key(|p| p["url"].as_str().unwrap_or("").contains('?'));
+    let mut lazy = Duration::from_secs(40);
     let total = pages.len();
     let sep = crate::i18n::l("、", ", ");
     let mut done = vec![];
-    let mut missing: Vec<&str> = vec![];
+    let mut missing: Option<Vec<&'static str>> = None;
     for (i, page) in pages.into_iter().enumerate() {
         // A window being patched is finished first: its requests are paused until then.
         crate::process::check_cancel()?;
         on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}", "Window {}/{}", i + 1, total))));
         let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("调试目标缺少 WebSocket 地址", "Debug target has no WebSocket URL")))?;
         let mut s = Session::open(ws)?;
-        let (how, miss) = match via_fetch(&mut s, want)? {
-            Some(m) => (crate::i18n::l("响应拦截", "response interception"), m),
-            None => (crate::i18n::l("热替换", "live patch"), via_live_edit(&mut s, want)?),
+        let waiting = || on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}：等待其余界面脚本加载", "Window {}/{}: waiting for the rest of the UI scripts", i + 1, total))));
+        let (how, r) = match via_fetch(&mut s, want, lazy, &waiting)? {
+            Some(r) => (crate::i18n::l("响应拦截", "response interception"), r),
+            None => match via_live_edit(&mut s, want)? {
+                Some(r) => (crate::i18n::l("热替换", "live patch"), r),
+                // No UI bundle in this window: nothing to patch.
+                None => continue,
+            },
         };
         done.push(how);
-        for m in miss {
-            if !missing.contains(&m) {
-                missing.push(m);
-            }
+        if r.complete {
+            lazy = Duration::from_secs(5);
         }
+        // Found in any window counts: the overlay lacking the composer's code is fine.
+        missing = Some(still_missing(missing.take(), r.missing));
     }
+    let Some(missing) = missing else {
+        return Err(anyhow!(crate::i18n::l("没有找到 Codex 界面脚本", "Codex UI script not found")));
+    };
+    let missing = check_missing(want, missing)?;
     let what: Vec<&str> = want.wanted().into_iter().filter(|w| !missing.contains(w)).collect();
     on(if missing.is_empty() {
         Progress::step("patch", "done", Some(what.join(sep)))
@@ -385,11 +460,12 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
 mod tests {
     use super::*;
 
-    const FAST: Patches = Patches { fast: true, full_names: false, quota: false };
-    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false };
-    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true };
-    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false };
-    const ALL: Patches = Patches { fast: true, full_names: true, quota: true };
+    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false };
+    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false };
+    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false };
+    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true };
+    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false };
+    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false };
     const GATE: &str = "let x=1;d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;";
     const STRIP: &str = "join(``);return t?r.replace(/^GPT-/iu,``):r}function Cpa(){";
     // Codex 26.917 app-primary bundle.
@@ -437,6 +513,30 @@ mod tests {
         // A different atom without the rate-limit check is left alone.
         let other = "x=Hs(Ir,({get:e})=>{let t=e(Zx),n=e(iT).data;if(t.authMethod!==`chatgpt`||t.authLoading)return!1;";
         assert_eq!(patch_source(other, QUOTA), (None, vec![crate::i18n::l("额度用完仍可发送", "Send after quota runs out")]));
+    }
+
+    #[test]
+    fn hides_usage_banners() {
+        // Codex 26.917 app-primary bundle.
+        let slot = "N=F($v,_);if(!n)return u;let P=pYe({hasImageGenerationLimit:i!=null,showModelLimit:f,showUpsell:g,showWorkspaceUsageLimit:h}),I=null;";
+        let (out, missing) = patch_source(slot, BANNER);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(out, "N=F($v,_);if(!0)return u/*agentplus-banner*/;let P=pYe({hasImageGenerationLimit:i!=null,showModelLimit:f,showUpsell:g,showWorkspaceUsageLimit:h}),I=null;");
+        assert_eq!(patch_source(&out, BANNER), (None, vec![]));
+        // The helper that picks the banner kind has the same key but isn't touched.
+        let helper = "function pYe({hasImageGenerationLimit:e,showModelLimit:t}){return t}";
+        assert_eq!(patch_source(helper, BANNER).0, None);
+    }
+
+    #[test]
+    fn bundle_is_js_only() {
+        assert_eq!(bundle_of("app://-/assets/app-primary-a7ff54c980af.js"), Some("app-primary-"));
+        assert_eq!(bundle_of("app://-/assets/app-initial-fc9a33fdda88.js?v=1"), Some("app-initial-"));
+        // The same-named stylesheet loads first; it must not count as the bundle.
+        assert_eq!(bundle_of("app://-/assets/app-primary-484df789f2f5.css"), None);
+        assert_eq!(bundle_of("app://-/assets/app-primary-a7ff54c980af.js.map"), None);
+        assert_eq!(bundle_of("app://-/assets/wrap-app-primary-x.js"), None);
     }
 
     #[test]

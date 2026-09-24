@@ -288,7 +288,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
         if IN_WSL.contains(&agent) || custom.is_some() {
             if agent == codex::ID {
                 // UI injection patches the desktop app; the CLI has nothing to patch.
-                st.settings.retain(|s| !matches!(s.key.as_str(), "fast_inject" | "full_names" | "quota_unlock"));
+                st.settings.retain(|s| !matches!(s.key.as_str(), "fast_inject" | "full_names" | "quota_unlock" | "hide_usage_banner"));
                 st.notes.insert(0, l("WSL 里是 Codex CLI：改动写入后，新开的 codex 会话就会读取。", "In WSL this is the Codex CLI: new codex sessions pick up changes once they're written.").into());
             }
         } else {

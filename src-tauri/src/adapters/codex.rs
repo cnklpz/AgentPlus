@@ -573,6 +573,7 @@ pub fn state(inst: &Install) -> AgentState {
     let inject = store::get_flag(&store, ID, "fastInject");
     let full_names = store::get_flag(&store, ID, "fullModelNames");
     let quota = store::get_flag(&store, ID, "quotaUnlock");
+    let hide_banner = store::get_flag(&store, ID, "hideUsageBanner");
     let tier = service_tier(&doc);
     let sl = status_line(&doc);
     let effs = efforts(&doc);
@@ -604,8 +605,11 @@ pub fn state(inst: &Install) -> AgentState {
             l("Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。",
               "Codex shows full model names only when signed in with a ChatGPT account; with custom providers it drops the \"GPT-\" prefix (GPT-6 Sol shows as 6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and turns this shortening off when the UI loads."), full_names),
         bool_setting("quota_unlock", l("官方登录混用", "Official sign-in mix"), l("ChatGPT 额度用完后仍可发送", "Keep sending after the ChatGPT quota runs out"),
-            l("用 ChatGPT 账号登录时，账号额度用完后 Codex 会禁用发送按钮，即使开启了官方登录混用、请求其实发往中转站。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制（额度提示横幅仍会显示）。",
-              "Signed in with a ChatGPT account, Codex disables the send button once the account's quota runs out, even with the official sign-in mix on and requests actually going to the relay. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads (the usage banner still shows)."), quota),
+            l("用 ChatGPT 账号登录时，账号额度用完后 Codex 会禁用发送按钮，即使开启了官方登录混用、请求其实发往中转站。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制（额度提示横幅用下一项隐藏）。",
+              "Signed in with a ChatGPT account, Codex disables the send button once the account's quota runs out, even with the official sign-in mix on and requests actually going to the relay. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads (hide the usage banner with the next option)."), quota),
+        bool_setting("hide_usage_banner", l("官方登录混用", "Official sign-in mix"), l("隐藏用量提示横幅", "Hide usage banners"),
+            l("用 ChatGPT 账号登录时，输入框上方会显示这个账号的额度横幅（「Codex 和工作使用额度已用完」、即将用完的提醒、升级和重置使用量按钮），与中转站的额度无关。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这些横幅。",
+              "Signed in with a ChatGPT account, Codex shows that account's usage banners above the composer (\"You're out of Codex and Work usage\", running-low warnings, upgrade and reset-usage buttons), which have nothing to do with the relay's quota. When on, restarting Codex through AgentPlus launches it with a debug port and removes these banners when the UI loads."), hide_banner),
         bool_setting("ctx_usage", l("界面", "Interface"), l("显示上下文用量", "Show context usage"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
         bool_setting("plain", l("界面", "Interface"), l("纯文本输入框", "Plain text composer"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
     ];
@@ -944,6 +948,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         store_dirty = true;
                     }
                 }
+                "hide_usage_banner" => {
+                    let on = v.as_bool().unwrap_or(false);
+                    if store::get_flag(&store, ID, "hideUsageBanner") != on {
+                        store::set_flag(&mut store, ID, "hideUsageBanner", on);
+                        diff.push(inject_file(), if on { l("+ 启用隐藏用量提示横幅注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable hide-usage-banner injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用隐藏用量提示横幅注入", "- Disable hide-usage-banner injection") }, on);
+                        store_dirty = true;
+                    }
+                }
                 "fast_default" => {
                     let on = v.as_bool().unwrap_or(false);
                     let old = service_tier(&doc);
@@ -1082,6 +1094,7 @@ pub fn ui_patches() -> crate::cdp::Patches {
         fast: store::get_flag(&s, ID, "fastInject"),
         full_names: store::get_flag(&s, ID, "fullModelNames"),
         quota: store::get_flag(&s, ID, "quotaUnlock"),
+        usage_banner: store::get_flag(&s, ID, "hideUsageBanner"),
     }
 }
 
