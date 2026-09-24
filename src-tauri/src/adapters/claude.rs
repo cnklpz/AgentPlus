@@ -73,8 +73,6 @@ fn claude_base(u: &str) -> String {
     t.strip_suffix("/v1").unwrap_or(t).to_string()
 }
 
-
-
 /// Which provider the env block currently reflects.
 fn current(env: &Map<String, Value>, profs: &Map<String, Value>) -> String {
     let Some(base) = env_str(env, BASE) else { return OFFICIAL.into() };

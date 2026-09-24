@@ -103,7 +103,6 @@ pub struct Suggestion {
     pub ops: Vec<(String, Value)>,
 }
 
-
 /// Compares the sync file with this machine and proposes additions.
 pub fn preview_import() -> Result<Vec<Suggestion>> {
     let path = sync_path()?;
