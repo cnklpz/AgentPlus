@@ -10,6 +10,8 @@ const en: typeof zh = {
   idLocked: "The ID is the model name sent to the provider and can't be changed. To use a different ID, delete this model and add it again.",
   displayName: "Display name",
   displayNamePlaceholder: "Optional; the ID is shown if empty",
+  upstreamModel: "Upstream model",
+  upstreamModelPlaceholder: "Optional; same as the model ID if empty",
   context: "Context window",
   contextPlaceholder: "e.g. 128k / 1m / 200000",
   contextBad: "Enter a number; k / m suffixes are allowed",
