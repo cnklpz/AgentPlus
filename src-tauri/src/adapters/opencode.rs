@@ -17,19 +17,31 @@ use std::path::PathBuf;
 
 pub const ID: &str = "opencode";
 pub const NAME: &str = "OpenCode";
+/// Any of `CONFIG_FILES` also counts.
+pub const MARKER: &str = "opencode.json";
+/// The global config files OpenCode reads, in the order AgentPlus picks one to edit.
+pub const CONFIG_FILES: [&str; 3] = ["opencode.jsonc", MARKER, "config.json"];
+pub const WSL_SCRIPT: &str = "(command -v opencode >/dev/null && opencode --version || $HOME/.opencode/bin/opencode --version) 2>/dev/null; pgrep -x opencode >/dev/null && echo @running; true";
+pub const WSL_MARKER: &str = ".config/opencode";
 
-fn dir() -> PathBuf {
-    super::dir_override(ID).unwrap_or_else(|| home().join(".config").join("opencode"))
+/// `~/.config/opencode`.
+pub fn default_dir() -> PathBuf {
+    home().join(".config").join("opencode")
 }
 
-/// The config file OpenCode reads: an existing opencode.jsonc, else opencode.json.
+fn dir() -> PathBuf {
+    super::dir_override(ID).unwrap_or_else(default_dir)
+}
+
+/// The desktop app, else the CLI.
+pub fn detect() -> Install {
+    crate::process::detect_opencode()
+}
+
+/// The config file OpenCode reads: the first existing of `CONFIG_FILES`, else a new opencode.json.
 fn config_path() -> PathBuf {
     let d = dir();
-    ["opencode.jsonc", "opencode.json", "config.json"]
-        .iter()
-        .map(|n| d.join(n))
-        .find(|p| p.exists())
-        .unwrap_or_else(|| d.join("opencode.json"))
+    CONFIG_FILES.iter().map(|n| d.join(n)).find(|p| p.exists()).unwrap_or_else(|| d.join(MARKER))
 }
 
 pub(super) fn auth_path() -> PathBuf {

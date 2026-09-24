@@ -155,12 +155,6 @@ pub fn state(agent: &str) -> Result<AgentState> {
     all.append(&mut inherited);
     let extra = opencode::auth_only(&f, &all);
     all.extend(extra);
-    for p in all.iter_mut().filter(|p| p.has_key && p.base_url.is_some()) {
-        if let Ok((_, Some(k), _)) = endpoint(agent, &p.id) {
-            p.key_fp = Some(key_fingerprint(&k));
-            p.key_hint = Some(mask_key(&k));
-        }
-    }
     st.providers = all;
 
     let ids: Vec<String> = st.providers.iter().map(|p| p.id.clone()).collect();

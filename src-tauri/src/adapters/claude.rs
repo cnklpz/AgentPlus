@@ -20,6 +20,9 @@ use std::path::PathBuf;
 
 pub const ID: &str = "claude";
 pub const NAME: &str = "Claude Code";
+pub const MARKER: &str = "settings.json";
+pub const WSL_SCRIPT: &str = "claude --version 2>/dev/null; pgrep -x claude >/dev/null && echo @running; true";
+pub const WSL_MARKER: &str = ".claude/settings.json";
 const OFFICIAL: &str = "official";
 /// The env block points at a relay that is not an AgentPlus profile (yet).
 const UNMANAGED: &str = "settings-env";
@@ -39,8 +42,18 @@ const ROLES: [(&str, &str, (&str, &str)); 5] = [
 const SMALL_FAST: &str = "ANTHROPIC_SMALL_FAST_MODEL";
 const QUIET: &str = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
 
+/// `~/.claude`.
+pub fn default_dir() -> PathBuf {
+    home().join(".claude")
+}
+
 fn dir() -> PathBuf {
-    super::dir_override(ID).unwrap_or_else(|| home().join(".claude"))
+    super::dir_override(ID).unwrap_or_else(default_dir)
+}
+
+/// The CLI (npm or the native installer).
+pub fn detect() -> Install {
+    crate::process::detect_claude()
 }
 
 fn settings_path() -> PathBuf {

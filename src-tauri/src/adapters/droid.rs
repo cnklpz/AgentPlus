@@ -64,9 +64,8 @@ pub fn detect() -> Install {
         let native = [h.join(".local").join("bin").join("droid.exe"), h.join("bin").join("droid.exe"), h.join(".factory").join("bin").join("droid.exe")];
         if let Some(exe) = native.into_iter().find(|p| p.is_file()).or_else(|| crate::process::on_path(&["droid.exe", "droid.cmd"])) {
             inst.installed = true;
-            if exe.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
-                static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-                inst.version = V.get_or_init(|| crate::process::cli_version(&exe)).clone();
+            if crate::process::is_exe(&exe) {
+                inst.version = crate::process::cli_version(&exe);
             }
         }
     }
