@@ -824,7 +824,8 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
     let key_env = key_env_of(&def);
     let key = key_of(&def, env);
     let key_note = match (&key_env, &key, ystr(&def, "api_key").is_some()) {
-        (Some(v), Some(k), _) if env_key(env, v).is_some() => tr!("{v}（.env）· {}", "{v} (.env) · {}", mask_key(k)),
+        (Some(v), Some(k), _) if dotenv::get(env, v).is_some() => tr!("{v}（.env）· {}", "{v} (.env) · {}", mask_key(k)),
+        (Some(v), Some(k), _) if env_key(env, v).is_some() => tr!("{v}（系统环境变量）· {}", "{v} (system environment variable) · {}", mask_key(k)),
         (_, Some(k), true) => tr!("api_key · 明文保存在 config.yaml · {}", "api_key · stored in plain text in config.yaml · {}", mask_key(k)),
         (Some(v), _, _) => tr!("{v}（.env 里没有设置）", "{v} (not set in .env)"),
         _ => l("未填写", "Not set").into(),
@@ -2061,6 +2062,18 @@ hooks:
         apply(vec![Op::DeleteProvider { provider: "relay".into() }]).unwrap();
         assert!(hidden("relay").is_empty());
         drop(t);
+    }
+
+    #[test]
+    fn key_note_tells_dotenv_from_system_env() {
+        let t = setup("model:\n  provider: custom:a\n  default: m\nproviders:\n  a:\n    base_url: https://a/v1\n    key_env: A_KEY\n    models: [m]\n  b:\n    base_url: https://b/v1\n    key_env: B_KEY\n    models: [m]\n");
+        fs::write(t.0.join(".env"), "A_KEY=sk-dotenv-1111\n").unwrap();
+        crate::env::set_test_vars(&[("B_KEY", "sk-system-2222")]);
+        let st = state(&Install::default());
+        let note = |id: &str| st.providers.iter().find(|p| p.id == id).unwrap().details.iter().find(|d| d.k == lbl::api_key()).unwrap().v.clone();
+        assert_eq!(note("a"), "A_KEY（.env）· ••••1111");
+        assert_eq!(note("b"), "B_KEY（系统环境变量）· ••••2222");
+        assert!(st.providers.iter().all(|p| p.has_key));
     }
 
     /// Read-only look at the real Hermes config on this machine (keys masked).
