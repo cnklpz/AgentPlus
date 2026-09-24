@@ -43,22 +43,9 @@ const OAUTH: &str = "qwen-oauth";
 
 // ---------------------------------------------------------------- paths & test hooks
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn test_home() -> Option<PathBuf> {
-    TEST_HOME.with(|h| h.borrow().clone())
-}
-#[cfg(not(test))]
-fn test_home() -> Option<PathBuf> {
-    None
-}
-
 /// `$QWEN_HOME` (Windows side only), else `~/.qwen`.
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() {
+    if !crate::env::is_wsl() && test_home().is_none() {
         if let Some(h) = std::env::var_os("QWEN_HOME").filter(|v| !v.is_empty()) {
             return PathBuf::from(h);
         }
@@ -67,9 +54,6 @@ pub fn default_dir() -> PathBuf {
 }
 
 fn dir() -> PathBuf {
-    if let Some(t) = test_home() {
-        return t.join(".qwen");
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -79,34 +63,6 @@ fn settings_path() -> PathBuf {
 
 fn dotenv_path() -> PathBuf {
     dir().join(".env")
-}
-
-fn load_store() -> Value {
-    match test_home() {
-        Some(t) => std::fs::read_to_string(t.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_store(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(t) => Ok(std::fs::write(t.join("store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(t) => {
-            let d = t.join("backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
 }
 
 // ---------------------------------------------------------------- detection
@@ -144,7 +100,6 @@ pub fn detect() -> Install {
 }
 
 // ---------------------------------------------------------------- reading
-
 
 /// (settings, meta, has_comments). A missing or empty file reads as fresh v4 settings.
 fn load() -> Result<(Value, TextMeta, bool)> {
@@ -500,7 +455,7 @@ pub fn state(inst: &Install) -> AgentState {
             return st;
         }
     };
-    let root = load_store();
+    let root = store::load();
     let names = store_obj(&root, "names");
     let sel = selection(&cfg);
     let gs = groups(&cfg, &root);
@@ -569,7 +524,7 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    let g = groups(&cfg, &load_store()).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let g = groups(&cfg, &store::load()).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
     let base = g.base.clone().filter(|b| !b.trim().is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")))?;
     let key = g.key_var().and_then(|v| lookup(&cfg, &v)).map(|x| x.0);
     Ok((base, key, g.api().into()))
@@ -1089,7 +1044,7 @@ fn new_entry(tmpl: &Value, id: &str, name: Option<&str>, ctx: Option<u64>) -> Va
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg, meta, had_comments) = load()?;
-    let mut cx = Ctx { cfg, root: load_store(), diff: Diff::default(), file: display_path(&settings_path()), cfg_dirty: false, store_dirty: false };
+    let mut cx = Ctx { cfg, root: store::load(), diff: Diff::default(), file: display_path(&settings_path()), cfg_dirty: false, store_dirty: false };
 
     for op in ops {
         match op {
@@ -1142,13 +1097,13 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !dry_run {
         if cx.cfg_dirty {
             let p = settings_path();
-            backup_dir = Some(backup_files(std::slice::from_ref(&p))?);
+            backup_dir = Some(backup(ID, std::slice::from_ref(&p))?);
             std::fs::create_dir_all(dir())?;
             write_json(&p, &cx.cfg, meta)?;
             written.push(p);
         }
         if cx.store_dirty {
-            save_store(&cx.root)?;
+            store::save(&cx.root)?;
         }
     }
     Ok((cx.diff, written, backup_dir))
@@ -1228,15 +1183,14 @@ mod tests {
 }
 "#;
 
-    fn setup(tag: &str, sample: Option<&str>) -> PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let t = std::env::temp_dir().join(format!("agentplus-qwen-{tag}-{}-{nanos}", std::process::id()));
+    fn setup(tag: &str, sample: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("qwen-{tag}"));
+        let t = home.0.clone();
         fs::create_dir_all(t.join(".qwen")).unwrap();
         if let Some(s) = sample {
             fs::write(t.join(".qwen").join("settings.json"), s).unwrap();
         }
-        TEST_HOME.with(|h| *h.borrow_mut() = Some(t.clone()));
-        t
+        home
     }
 
     fn cfg_now() -> Value {
@@ -1275,7 +1229,7 @@ mod tests {
 
     #[test]
     fn reads_groups_and_selection() {
-        setup("read", Some(SAMPLE));
+        let _home = setup("read", Some(SAMPLE));
         let s = st();
         assert_eq!(s.mode, "multi");
         assert!(!s.readonly);
@@ -1300,7 +1254,7 @@ mod tests {
 
     #[test]
     fn missing_file_and_create_provider() {
-        let t = setup("create", None);
+        let _home = setup("create", None);
         let s = st();
         assert!(s.providers.is_empty() && !s.readonly);
         let (d, w) = apply(vec![Op::UpsertProvider { provider: input(None, "My Relay", "https://my.relay/v1", "chat", Some(SECRET), &["m1", "m2"]) }]);
@@ -1323,17 +1277,17 @@ mod tests {
         apply(vec![Op::UpsertProvider { provider: input(None, "Empty", "https://e.x/v1", "anthropic", None, &[]) }]);
         let p = prov(&st(), "empty");
         assert!(p.models.is_empty() && p.api == "anthropic");
-        apply(vec![Op::UpsertModel { provider: "empty".into(), model: ModelInput { id: "claude-x".into(), name: None, context: Some(200000), ..Default::default() } }]);
+        let (_, _, backup) = plan(&[Op::UpsertModel { provider: "empty".into(), model: ModelInput { id: "claude-x".into(), name: None, context: Some(200000), ..Default::default() } }], false).unwrap();
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["anthropic"][0]["envKey"], "AGENTPLUS_EMPTY_API_KEY");
         assert_eq!(cfg["modelProviders"]["anthropic"][0]["generationConfig"]["contextWindowSize"], 200000);
-        assert!(store_list(&load_store(), "emptyProviders").is_empty());
-        assert!(t.join("backup").join("settings.json").exists());
+        assert!(store_list(&store::load(), "emptyProviders").is_empty());
+        assert!(backup.unwrap().join("settings.json").exists());
     }
 
     #[test]
     fn edit_provider_keeps_id_and_moves_protocol() {
-        setup("edit", Some(SAMPLE));
+        let _home = setup("edit", Some(SAMPLE));
         let (d, _) = apply(vec![Op::UpsertProvider { provider: input(Some("relay"), "Relay", "https://relay2.example.com/v1", "chat", Some(SECRET), &[]) }]);
         assert!(!lines(&d).join("\n").contains(SECRET));
         let cfg = cfg_now();
@@ -1360,7 +1314,7 @@ mod tests {
 
     #[test]
     fn delete_provider_removes_entries_and_key() {
-        setup("delete", Some(SAMPLE));
+        let _home = setup("delete", Some(SAMPLE));
         apply(vec![Op::DeleteProvider { provider: "dashscope".into() }]);
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["openai"].as_array().unwrap().len(), 1);
@@ -1374,7 +1328,7 @@ mod tests {
 
     #[test]
     fn hide_show_add_delete_models() {
-        setup("models", Some(SAMPLE));
+        let _home = setup("models", Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "dashscope".into(), model: "qwen3-max".into(), visible: false }]);
         let cfg = cfg_now();
         assert_eq!(cfg["modelProviders"]["openai"].as_array().unwrap().len(), 2);
@@ -1387,7 +1341,7 @@ mod tests {
         let e = &cfg["modelProviders"]["openai"][1];
         assert_eq!((e["id"].as_str(), e["name"].as_str()), (Some("qwen3-max"), Some("Max")));
         assert_eq!(e["generationConfig"]["contextWindowSize"], 262144);
-        assert!(store_list(&load_store(), "hiddenModels").is_empty());
+        assert!(store_list(&store::load(), "hiddenModels").is_empty());
         // Add copies the group's baseUrl / envKey / wireApi.
         apply(vec![Op::UpsertModel { provider: "relay".into(), model: ModelInput { id: "gpt-5-mini".into(), name: None, context: None, ..Default::default() } }]);
         let cfg = cfg_now();
@@ -1406,7 +1360,7 @@ mod tests {
 
     #[test]
     fn disable_enable_provider() {
-        setup("enable", Some(SAMPLE));
+        let _home = setup("enable", Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "dashscope".into(), model: "qwen3-max".into(), visible: false }]);
         let (d, _) = apply(vec![Op::SetProviderEnabled { provider: "dashscope".into(), enabled: false }]);
         assert!(!lines(&d).is_empty());
@@ -1427,17 +1381,17 @@ mod tests {
         assert!(p.enabled);
         assert_eq!(p.name, "DS");
         assert_eq!(p.models.iter().filter(|m| !m.visible).count(), 1);
-        assert!(store_obj(&load_store(), "disabledProviders").is_empty());
+        assert!(store_obj(&store::load(), "disabledProviders").is_empty());
     }
 
     #[test]
     fn dry_run_writes_nothing_and_roundtrip_keeps_rest() {
         let t = setup("dry", Some(SAMPLE));
-        let path = t.join(".qwen").join("settings.json");
+        let path = t.0.join(".qwen").join("settings.json");
         let (d, w, b) = plan(&[Op::UpsertProvider { provider: input(None, "X", "https://x/v1", "chat", Some(SECRET), &["a"]) }, Op::SetSetting { key: "usage_stats".into(), value: json!(false) }], true).unwrap();
         assert!(w.is_empty() && b.is_none() && !lines(&d).is_empty());
         assert_eq!(fs::read_to_string(&path).unwrap(), SAMPLE);
-        assert!(!t.join("store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
         // A real no-op-ish write keeps everything else byte-identical.
         apply(vec![Op::SetSetting { key: "usage_stats".into(), value: json!(false) }]);
         let out = fs::read_to_string(&path).unwrap();
@@ -1450,7 +1404,7 @@ mod tests {
 
     #[test]
     fn comments_make_it_readonly() {
-        setup("jsonc", Some("{\n  // my settings\n  \"modelProviders\": {}\n}\n"));
+        let _home = setup("jsonc", Some("{\n  // my settings\n  \"modelProviders\": {}\n}\n"));
         let s = st();
         assert!(s.readonly);
         assert!(plan(&[Op::UpsertProvider { provider: input(None, "X", "https://x/v1", "chat", None, &["a"]) }], false).is_err());
@@ -1460,7 +1414,7 @@ mod tests {
 
     #[test]
     fn custom_key_needs_protocol() {
-        setup("custom", Some(r#"{"modelProviders":{"mine":[{"id":"a","baseUrl":"https://a/v1","envKey":"A_KEY"}],"ok":[{"id":"b","baseUrl":"https://b/v1","envKey":"B_KEY"}]},"providerProtocol":{"ok":"openai"}}"#));
+        let _home = setup("custom", Some(r#"{"modelProviders":{"mine":[{"id":"a","baseUrl":"https://a/v1","envKey":"A_KEY"}],"ok":[{"id":"b","baseUrl":"https://b/v1","envKey":"B_KEY"}]},"providerProtocol":{"ok":"openai"}}"#));
         let s = st();
         let a = prov(&s, "a");
         assert!(!a.compatible && !a.editable);

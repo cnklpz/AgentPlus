@@ -45,7 +45,6 @@ pub struct Dirty {
     pub auth: bool,
 }
 
-
 /// Provider ids pi-ai ships with. A config entry with one of these ids only overrides the
 /// built-in, so removing it does not make "provider/model" references dangle.
 pub const BUILTIN_PROVIDERS: [&str; 24] = [
@@ -93,56 +92,11 @@ pub fn raw_api(id: &str, def: &Value) -> String {
     .to_string()
 }
 
-// ---------- test hooks: tests point everything (files, store, backups, env) at a temp dir ----------
-
-#[cfg(test)]
-thread_local! {
-    pub static TEST_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-    pub static TEST_ENV: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-#[cfg(test)]
-pub fn test_root() -> Option<PathBuf> {
-    TEST_ROOT.with(|t| t.borrow().clone())
-}
-#[cfg(not(test))]
-pub fn test_root() -> Option<PathBuf> {
-    None
-}
-
-pub fn load_store() -> Value {
-    match test_root() {
-        Some(r) => std::fs::read_to_string(r.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-pub fn save_store(v: &Value) -> Result<()> {
-    match test_root() {
-        Some(r) => Ok(std::fs::write(r.join("store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-pub fn backup_files(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
-    match test_root() {
-        Some(r) => {
-            let d = r.join("backups");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(agent, files),
-    }
-}
-
 /// An environment variable of the agent's environment (None inside WSL: not ours to read).
 pub fn env_var(name: &str) -> Option<String> {
     #[cfg(test)]
-    if test_root().is_some() {
-        return TEST_ENV.with(|e| e.borrow().iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()));
+    if crate::util::test_home().is_some() {
+        return crate::env::test_var(name);
     }
     if crate::env::is_wsl() {
         return None;

@@ -35,30 +35,10 @@ pub const WSL_MARKER: &str = ".codebuddy";
 const SUFFIX: &str = "/chat/completions";
 const STORE_LABEL: &str = "AgentPlus · CodeBuddy";
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Tests point the adapter at a temp home (config, store and backups all inside it).
-fn test_home() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        TEST_HOME.with(|t| t.borrow().clone())
-    }
-    #[cfg(not(test))]
-    {
-        None
-    }
-}
-
 /// `CODEBUDDY_CONFIG_DIR` (Windows side only), else `~/.codebuddy`.
 #[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
-    if let Some(h) = test_home() {
-        return h.join(".codebuddy");
-    }
-    if !crate::env::is_wsl() {
+    if !crate::env::is_wsl() && test_home().is_none() {
         if let Some(d) = std::env::var_os("CODEBUDDY_CONFIG_DIR").filter(|d| !d.is_empty()) {
             return PathBuf::from(d);
         }
@@ -67,9 +47,6 @@ pub fn default_dir() -> PathBuf {
 }
 
 fn dir() -> PathBuf {
-    if test_home().is_some() {
-        return default_dir();
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -79,34 +56,6 @@ fn models_path() -> PathBuf {
 
 fn settings_path() -> PathBuf {
     dir().join("settings.json")
-}
-
-fn load_root() -> Value {
-    match test_home() {
-        Some(h) => std::fs::read_to_string(h.join("agentplus-store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_root(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(h) => Ok(std::fs::write(h.join("agentplus-store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(h) => {
-            let d = h.join("agentplus-backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
 }
 
 // ---------- detection ----------
@@ -166,7 +115,6 @@ pub fn detect() -> Install {
 }
 
 // ---------- format helpers ----------
-
 
 /// Full `…/chat/completions` URL → base URL.
 fn base_of(url: &str) -> String {
@@ -234,7 +182,6 @@ fn groups_of(entries: &[Value], parked: &[Value]) -> Vec<Group> {
 fn parked_of(root: &Value) -> Vec<Value> {
     store::get_arr(root, ID, "parked")
 }
-
 
 /// (models.json, meta, had_comments); a missing file reads as `{"models": []}`.
 fn load_models() -> Result<(Value, TextMeta, bool)> {
@@ -373,7 +320,7 @@ pub fn state(inst: &Install) -> AgentState {
             return st;
         }
     };
-    let root = load_root();
+    let root = store::load();
     let entries = entries_of(&cfg);
     let parked = parked_of(&root);
     let avail = available_of(&cfg);
@@ -398,7 +345,7 @@ pub fn state(inst: &Install) -> AgentState {
 #[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
-    let g = groups_of(&entries_of(&cfg), &parked_of(&load_root())).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+    let g = groups_of(&entries_of(&cfg), &parked_of(&store::load())).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
     if g.key.0.is_empty() {
         return Err(anyhow!(tr!("供应商 {id} 没有 url", "Provider {id} has no url")));
     }
@@ -728,7 +675,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load_models()?;
     let entries0 = entries_of(&cfg);
     let avail0 = available_of(&cfg);
-    let mut root = load_root();
+    let mut root = store::load();
     let parked0 = parked_of(&root);
     let groups = groups_of(&entries0, &parked0);
     let mut w = Work { entries: entries0.clone(), avail: avail0.clone(), parked: parked0.clone(), groups, diff: Diff::default(), file: display_path(&models_path()) };
@@ -746,7 +693,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if cfg_dirty {
             let path = models_path();
             if path.exists() {
-                backup_dir = Some(do_backup(std::slice::from_ref(&path))?);
+                backup_dir = Some(backup(ID, std::slice::from_ref(&path))?);
             }
             let o = cfg.as_object_mut().unwrap();
             o.insert("models".into(), Value::Array(w.entries));
@@ -759,7 +706,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         if store_dirty {
             store::set_value(&mut root, ID, "parked", Value::Array(w.parked));
-            save_root(&root)?;
+            store::save(&root)?;
         }
     }
     Ok((w.diff, written, backup_dir))
@@ -804,25 +751,18 @@ mod tests {
 }
 "#;
 
-    struct Home(PathBuf);
-    impl Drop for Home {
-        fn drop(&mut self) {
-            TEST_HOME.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    type Home = TestHome;
 
     fn setup(name: &str, models: Option<&str>) -> Home {
         std::env::set_var("AGENTPLUS_CB_TEST_KEY", "sk-env-3333");
-        let h = std::env::temp_dir().join(format!("agentplus-codebuddy-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&h);
+        let home = TestHome::new(&format!("codebuddy-{name}"));
+        let h = home.0.clone();
         std::fs::create_dir_all(h.join(".codebuddy")).unwrap();
         std::fs::write(h.join(".codebuddy/settings.json"), r#"{"enabledPlugins":{"pdf@x":true},"model":"deepseek-chat"}"#).unwrap();
         if let Some(c) = models {
             std::fs::write(h.join(".codebuddy/models.json"), c).unwrap();
         }
-        TEST_HOME.with(|t| *t.borrow_mut() = Some(h.clone()));
-        Home(h)
+        home
     }
 
     fn cfg_of(h: &Home) -> Value {
@@ -970,7 +910,7 @@ mod tests {
         let (d, w, b) = plan(&[Op::SetProviderEnabled { provider: "deepseek".into(), enabled: false }], true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(before, std::fs::read(h.0.join(".codebuddy/models.json")).unwrap());
-        assert!(!h.0.join("agentplus-store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
         // Hide + show only touches availableModels; the model entries come back unchanged.
         plan(&[Op::SetModelVisible { provider: "custom".into(), model: "glm-4.6".into(), visible: false }], false).unwrap();
         plan(&[Op::SetModelVisible { provider: "custom".into(), model: "glm-4.6".into(), visible: true }], false).unwrap();
