@@ -27,6 +27,15 @@ impl Proto {
         }
     }
 
+    /// The name `from_api` reads: "chat" | "responses" | "anthropic".
+    pub fn api(self) -> &'static str {
+        match self {
+            Proto::Chat => "chat",
+            Proto::Responses => "responses",
+            Proto::Anthropic => "anthropic",
+        }
+    }
+
     pub fn path(self) -> &'static str {
         match self {
             Proto::Chat => "/chat/completions",
@@ -1375,6 +1384,11 @@ pub fn model_entries(upstream: &Value) -> Vec<(String, String, String)> {
     models
 }
 
+/// The model ids in an upstream's list (see `model_entries`).
+pub fn model_ids(upstream: &Value) -> Vec<String> {
+    model_entries(upstream).into_iter().map(|(id, ..)| id).collect()
+}
+
 pub fn models_body(to: Proto, upstream: &Value) -> Value {
     let models = model_entries(upstream);
     match to {
@@ -1893,6 +1907,100 @@ impl UpstreamStream {
             _ => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// whole answers <-> chunks
+
+/// A complete chat.completion as stream chunks (for clients that asked for a stream
+/// when the upstream answered in one piece).
+pub fn chat_as_chunks(chat: &Value) -> Vec<Value> {
+    let id = chat.get("id").cloned().unwrap_or(json!("chatcmpl-agentplus"));
+    let model = chat.get("model").cloned().unwrap_or(json!(""));
+    let created = chat.get("created").cloned().unwrap_or(json!(now_secs()));
+    let msg = chat.pointer("/choices/0/message").cloned().unwrap_or(json!({}));
+    let finish = chat.pointer("/choices/0/finish_reason").cloned().unwrap_or(json!("stop"));
+    let chunk = |delta: Value, finish: Value| chunk_json(&id, &created, &model, json!([{"index": 0, "delta": delta, "finish_reason": finish}]));
+    let mut out = vec![chunk(json!({"role": "assistant"}), Value::Null)];
+    let (text, reasoning) = message_text(&msg);
+    if !reasoning.is_empty() {
+        out.push(chunk(json!({"reasoning_content": reasoning}), Value::Null));
+    }
+    if !text.is_empty() {
+        out.push(chunk(json!({"content": text}), Value::Null));
+    }
+    for (i, c) in arr(msg.get("tool_calls")).iter().enumerate() {
+        out.push(chunk(json!({"tool_calls": [{"index": i, "id": c.get("id"), "type": "function", "function": {"name": c.pointer("/function/name"), "arguments": c.pointer("/function/arguments")}}]}), Value::Null));
+    }
+    out.push(chunk(json!({}), finish));
+    if let Some(u) = chat.get("usage") {
+        let mut c = chunk_json(&id, &created, &model, json!([]));
+        c["usage"] = u.clone();
+        out.push(c);
+    }
+    out
+}
+
+/// The reverse of `chat_as_chunks`: stream chunks folded into one chat.completion. An
+/// error chunk (from the upstream, or a stream cut off) is returned as the error.
+fn chat_from_chunks(chunks: &[Value]) -> std::result::Result<Value, String> {
+    let (mut text, mut reasoning) = (String::new(), String::new());
+    // By index: an upstream picks the indices, so they may be sparse or huge.
+    let mut tools: BTreeMap<u64, ToolCall> = BTreeMap::new();
+    let mut finish = None;
+    let mut usage = Value::Null;
+    for c in chunks {
+        if nonnull(c.get("error")).is_some() {
+            return Err(error_message(c).unwrap_or_default());
+        }
+        if let Some(u) = c.get("usage").filter(|u| u.is_object()) {
+            usage = u.clone();
+        }
+        let Some(ch) = c.pointer("/choices/0") else { continue };
+        if let Some(f) = nonnull(ch.get("finish_reason")) {
+            finish = Some(f.clone());
+        }
+        let d = &ch["delta"];
+        text += sget(d, "content");
+        reasoning += first_str([sget(d, "reasoning_content"), sget(d, "reasoning")]);
+        for tc in arr(d.get("tool_calls")) {
+            let next = tools.last_key_value().map_or(0, |(k, _)| k.saturating_add(1));
+            let t = tools.entry(tc.get("index").and_then(Value::as_u64).unwrap_or(next)).or_default();
+            let piece = chat_call(tc, "");
+            if t.id.is_empty() {
+                t.id = piece.id;
+            }
+            if t.name.is_empty() {
+                t.name = piece.name;
+            }
+            t.args += &piece.args;
+        }
+    }
+    let mut msg = json!({"role": "assistant", "content": text});
+    if !reasoning.is_empty() {
+        msg["reasoning_content"] = json!(reasoning);
+    }
+    if !tools.is_empty() {
+        msg["tool_calls"] = tools.values().map(chat_tool_call).collect();
+    }
+    let first = chunks.iter().find(|c| c.get("id").is_some());
+    let field = |k: &str| first.map_or(Value::Null, |c| c[k].clone());
+    let finish = finish.unwrap_or_else(|| json!(finish_with_tools("stop", !tools.is_empty())));
+    Ok(json!({
+        "id": field("id"), "object": "chat.completion", "created": field("created"), "model": field("model"),
+        "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
+        "usage": usage,
+    }))
+}
+
+/// A whole SSE body (the upstream streamed although the client asked for one piece)
+/// collected into one chat.completion, or the error the stream reported (a stream
+/// without its closing event counts as cut off).
+pub fn collect_stream(from: Proto, text: &str) -> std::result::Result<Value, String> {
+    let mut up = UpstreamStream::new(from);
+    let mut chunks = up.feed(text);
+    chunks.extend(up.finish());
+    chat_from_chunks(&chunks)
 }
 
 // ---------------------------------------------------------------------------
@@ -3320,6 +3428,8 @@ mod tests {
         assert_eq!(g["data"][1]["id"], "plain");
         assert_eq!(models_body(Proto::Anthropic, &json!({"models": [{"name": "models/g", "displayName": "G"}]}))["data"][0]["display_name"], "G");
         assert_eq!(models_body(Proto::Chat, &json!("junk"))["data"], json!([]));
+        // The ids the gateway routes by are the ones it lists.
+        assert_eq!(model_ids(&json!({"data": [{"id": "models/x"}, "y", {"slug": "z"}, {"id": "x"}]})), ["x", "y", "z"]);
     }
 
     /// A whole body fed in one piece is parsed in one pass, not re-copied per event.
@@ -3438,6 +3548,77 @@ mod tests {
         assert_eq!(kinds, ["custom_tool_call", "custom_tool_call"]);
         assert!(fr.iter().any(|(e, d)| e == "response.custom_tool_call_input.done" && d["input"] == "P"));
         assert!(!fr.iter().any(|(e, d)| e == "response.function_call_arguments.done" && d["arguments"].as_str().unwrap().contains("input")));
+    }
+
+    #[test]
+    fn chunks_fold_into_one_answer() {
+        let c = |delta: Value, finish: Value| json!({ "id": "c1", "created": 5, "model": "m", "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] });
+        let chunks = vec![
+            c(json!({ "role": "assistant" }), Value::Null),
+            c(json!({ "reasoning_content": "think" }), Value::Null),
+            c(json!({ "content": "a" }), Value::Null),
+            c(json!({ "tool_calls": [{ "index": 0, "id": "t1", "type": "function", "function": { "name": "run", "arguments": "{\"x\"" } }] }), Value::Null),
+            c(json!({ "tool_calls": [{ "index": 0, "function": { "arguments": ":1}" } }] }), Value::Null),
+            c(json!({}), json!("tool_calls")),
+            json!({ "id": "c1", "choices": [], "usage": { "prompt_tokens": 3, "completion_tokens": 4 } }),
+        ];
+        let v = chat_from_chunks(&chunks).unwrap();
+        // Round trip with chat_as_chunks.
+        assert_eq!(chat_from_chunks(&chat_as_chunks(&v)).unwrap()["choices"], v["choices"]);
+        let m = &v["choices"][0]["message"];
+        assert_eq!((m["content"].as_str(), m["reasoning_content"].as_str()), (Some("a"), Some("think")));
+        assert_eq!(m["tool_calls"][0]["id"], "t1");
+        assert_eq!(m["tool_calls"][0]["function"]["arguments"], "{\"x\":1}");
+        assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!((v["id"].as_str(), v["model"].as_str()), (Some("c1"), Some("m")));
+        assert_eq!(usage_tokens(&v), Some((3, 4)));
+        let err = chat_from_chunks(&[json!({ "choices": [], "error": { "message": "boom" } })]).unwrap_err();
+        assert_eq!(err, "boom");
+    }
+
+    /// Indices come from the upstream: a huge one must not allocate that many slots, and
+    /// "reasoning" counts like "reasoning_content"; arguments sent as an object are kept.
+    #[test]
+    fn chunks_with_odd_tool_indices_and_reasoning() {
+        let c = |delta: Value| json!({ "id": "c1", "choices": [{ "index": 0, "delta": delta }] });
+        let v = chat_from_chunks(&[
+            c(json!({ "reasoning": "hm" })),
+            c(json!({ "tool_calls": [{ "index": 4_000_000_000u64, "id": "a", "function": { "name": "f", "arguments": { "k": 1 } } }] })),
+            c(json!({ "tool_calls": [{ "id": "b", "function": { "name": "g", "arguments": "{}" } }] })),
+            c(json!({ "tool_calls": [{ "index": u64::MAX, "id": "c", "function": { "name": "h" } }] })),
+        ])
+        .unwrap();
+        let m = &v["choices"][0]["message"];
+        assert_eq!(m["reasoning_content"], "hm");
+        let calls = m["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0]["function"]["arguments"], "{\"k\":1}");
+        assert_eq!((calls[1]["id"].as_str(), calls[2]["id"].as_str()), (Some("b"), Some("c")));
+        assert_eq!(calls[2]["function"]["arguments"], "");
+        assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+    }
+
+    #[test]
+    fn replays_array_content_and_reasoning() {
+        let chat = json!({ "id": "c", "model": "m", "choices": [{ "message": { "role": "assistant",
+            "content": [{ "type": "text", "text": "a" }, { "type": "text", "text": "b" }], "reasoning": "hmm" }, "finish_reason": "stop" }] });
+        let chunks = chat_as_chunks(&chat);
+        let text: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["content"].as_str()).collect();
+        let reasoning: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["reasoning_content"].as_str()).collect();
+        assert_eq!((text.as_str(), reasoning.as_str()), ("a\nb", "hmm"));
+    }
+
+    /// An SSE body collected whole: the answer, or the error the stream carried; a stream
+    /// without its closing event is cut off.
+    #[test]
+    fn collects_streams() {
+        let v = collect_stream(Proto::Anthropic, &anthropic_transcript()).unwrap();
+        assert_eq!(v["choices"][0]["message"]["content"], "Hello, wörld 🌍!");
+        assert_eq!(usage_tokens(&v), Some((25, 42)));
+        let mut cut = anthropic_transcript();
+        cut.truncate(cut.find("event: message_stop").unwrap());
+        assert_eq!(collect_stream(Proto::Anthropic, &cut).unwrap_err(), "上游的流没有正常结束就断开了");
+        assert_eq!(collect_stream(Proto::Responses, "").unwrap_err(), stream_cut_off());
     }
 
     #[test]
