@@ -429,6 +429,8 @@ button, input, textarea, select { font-family: inherit; }
    blur until focused (typing needs to see them). Masked text is handled in privacy.ts. */
 [data-privacy] .sensitive { filter: blur(6px); user-select: none; }
 [data-privacy] input.sensitive:focus { filter: none; user-select: auto; }
+/* Empty: only the placeholder's example text shows, nothing to hide. */
+[data-privacy] input.sensitive:placeholder-shown { filter: none; }
 
 /* Top bar: three columns with equal sides, so the search box stays centred whatever
    the right side (environment name, settings) is doing. */
