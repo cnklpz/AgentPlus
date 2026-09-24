@@ -1,8 +1,9 @@
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { MouseEvent } from "react";
 import type { Provider } from "../api";
 import type { ViewProvider } from "../draft";
 import { t, tn } from "../i18n";
 import { scrub, scrubHost } from "../privacy";
+import { onActivateKey } from "../util";
 
 export type Latency = number | "pending" | string | undefined;
 
@@ -86,8 +87,6 @@ export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled,
   const lat = latencyView(p, off, latency);
   const total = p.models.length;
   const stop = (fn: () => void) => (e: MouseEvent) => { e.stopPropagation(); fn(); };
-  // Only the card itself: Enter / Space on a button inside it activates that button.
-  const onKey = (e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onSelect(); } };
 
   const pending = p.isNew || p.isDeleted;
   return (
@@ -101,7 +100,7 @@ export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled,
       data-ctx="provider"
       data-pid={p.id}
       onClick={onSelect}
-      onKeyDown={onKey}
+      onKeyDown={onActivateKey(onSelect)}
     >
       <div className="pcard-head">
         <span className="pavatar" style={{ background: colorFor(p) }}>{initials(p.name)}</span>

@@ -10,7 +10,8 @@ import { AgentIcon, Icon } from "./icons";
 import { TabBar, useSlideDir } from "./TabBar";
 import { scrub } from "../privacy";
 import { fmtSize } from "../format";
-import { RELEASES_URL, checkUpdate, installUpdate, useUpdate } from "../updater";
+import { RELEASES_URL, checkUpdate, installUpdate, updateBusy, useUpdate } from "../updater";
+import { errText, type Flash, toggled } from "../util";
 
 export type SettingsTab = "general" | "agents";
 
@@ -25,7 +26,7 @@ interface Props {
   onHistory: () => void;
   /** Detection or a folder changed: reload agents. */
   onAgentsChanged: () => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
   /** Back to where the user came from. */
   onClose: () => void;
 }
@@ -200,7 +201,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
             <div className="slabel">{t("settingsPage.dataDir")}</div>
             <div className="muted small mono">{t("settingsPage.dataDirHint")}</div>
           </div>
-          <button className="btn" onClick={() => api.openDataDir().catch((e) => flash(String(e), true))}><Icon.folder />{t("common.open")}</button>
+          <button className="btn" onClick={() => api.openDataDir().catch((e) => flash(errText(e), true))}><Icon.folder />{t("common.open")}</button>
           <button className="btn" onClick={onHistory}><Icon.history size={14} />{t("settingsPage.backups")}</button>
         </div>
       </section>
@@ -228,11 +229,11 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
 }
 
 /** Check for a new release, read its notes, then download and install it. */
-function UpdateRow({ flash }: { flash: (text: string, error?: boolean) => void }) {
+function UpdateRow({ flash }: { flash: Flash }) {
   const u = useUpdate();
   const info = u.kind === "available" || u.kind === "downloading" || u.kind === "installing" || u.kind === "error" ? u.info : null;
-  const busy = u.kind === "checking" || u.kind === "downloading" || u.kind === "installing";
-  const openRelease = () => api.openUrl(info ? `${RELEASES_URL}/tag/v${info.version}` : RELEASES_URL).catch((e) => flash(String(e), true));
+  const busy = updateBusy(u);
+  const openRelease = () => api.openUrl(info ? `${RELEASES_URL}/tag/v${info.version}` : RELEASES_URL).catch((e) => flash(errText(e), true));
   const pct = u.kind === "downloading" ? (u.total ? u.done / u.total : null) : u.kind === "installing" ? 1 : null;
   const date = info?.date ? new Date(info.date) : null;
   const status =
@@ -271,14 +272,10 @@ function UpdateRow({ flash }: { flash: (text: string, error?: boolean) => void }
 }
 
 function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
-  envLabel: string; onChanged: () => void; flash: (t: string, e?: boolean) => void; prefs: Prefs; setPrefs: (p: Prefs) => void;
+  envLabel: string; onChanged: () => void; flash: Flash; prefs: Prefs; setPrefs: (p: Prefs) => void;
 }) {
   const hidden = new Set(prefs.hiddenAgents);
-  const toggleShown = (id: string) => {
-    const next = new Set(hidden);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    setPrefs({ ...prefs, hiddenAgents: [...next] });
-  };
+  const toggleShown = (id: string) => setPrefs({ ...prefs, hiddenAgents: [...toggled(hidden, id)] });
   const [list, setList] = useState<AgentDetect[] | null>(null);
   const [edit, setEdit] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
@@ -289,7 +286,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
   const rank = (d: AgentDetect) => (d.enabled && !hidden.has(d.id) ? 0 : d.enabled || d.manual ? 1 : 2);
   const load = () => api.detectAgents()
     .then((l) => setList(l.map((d, i) => [d, i] as const).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([d]) => d)))
-    .catch((e) => flash(String(e), true));
+    .catch((e) => flash(errText(e), true));
   const lang = useLang();
   useEffect(() => { load(); }, [envLabel, lang]);
 
@@ -302,7 +299,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
       onChanged();
       flash(t(path ? "settingsPage.dirUsed" : "settingsPage.dirReset"));
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     } finally {
       setSaving(null);
     }
@@ -351,7 +348,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
                 <span className="small strong">{t("settingsPage.configDir")}</span>
                 <span className={`ptag ${d.customDir ? "tag-new" : "tag-soft"}`}>{t(d.customDir ? "settingsPage.dirCustom" : "settingsPage.dirDefault")}</span>
                 <span className="grow" />
-                <button className="link" onClick={() => api.openPath(d.configDir).catch((e) => flash(String(e), true))}>{t("common.open")}</button>
+                <button className="link" onClick={() => api.openPath(d.configDir).catch((e) => flash(errText(e), true))}>{t("common.open")}</button>
               </div>
               {draft === undefined ? (
                 <div className="row gap6">

@@ -3,6 +3,7 @@ import { type FetchedModel, type OfficialFetch as Status, api } from "../api";
 import { Icon } from "./icons";
 import { t, tn, tx } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, type Flash } from "../util";
 
 interface Props {
   /** Pending Codex changes block the flow (config.toml is swapped temporarily). */
@@ -14,7 +15,7 @@ interface Props {
   onRestart: () => void;
   /** Re-read Codex after the catalog changed. */
   onReload: () => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
 }
 
 type Step = "idle" | "confirm" | "wait" | "ready" | "done";
@@ -46,7 +47,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
     try {
       await f();
     } catch (e) {
-      flash(String(e).replace(/^Error: /, ""), true);
+      flash(errText(e), true);
     } finally {
       setBusy(false);
     }

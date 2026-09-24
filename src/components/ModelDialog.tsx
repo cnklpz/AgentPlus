@@ -5,6 +5,7 @@ import { type ViewModel, fmtCtx, parseCtx } from "../draft";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { locale, t, tx } from "../i18n";
+import { toggledIn } from "../util";
 
 interface Props {
   agentName: string;
@@ -193,7 +194,7 @@ function FieldRow({ f, value, text, bad, changed, onChange, onText }: {
                 // Nothing picked means "not set", not an empty list.
                 // Starting from the default, keep text in the list: "image" alone would drop it.
                 const start = arr ?? (f.options.includes("text") && o !== "text" ? ["text"] : []);
-                const next = on ? start.filter((x) => x !== o) : [...start, o];
+                const next = toggledIn(start, o);
                 onChange(next.length ? next : undefined);
               }}>
               <span className="opt-check" aria-hidden="true">

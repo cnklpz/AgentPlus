@@ -4,9 +4,10 @@ import { AgentIcon } from "./icons";
 import { syncSuggestionIds } from "../services";
 import { locale, t, useLang } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, type Flash, toggled } from "../util";
 
 interface Props {
-  flash: (t: string, e?: boolean) => void;
+  flash: Flash;
   /** Adds the chosen suggestions to the drafts of their agents. */
   onAdopt: (s: SyncSuggestion[]) => void;
 }
@@ -19,14 +20,14 @@ export function SyncPage({ flash, onAdopt }: Props) {
   const [busy, setBusy] = useState(false);
   const lang = useLang();
 
-  const load = () => api.syncStatus().then((s) => { setStatus(s); setFolder(s.folder ?? ""); }).catch((e) => flash(String(e), true));
+  const load = () => api.syncStatus().then((s) => { setStatus(s); setFolder(s.folder ?? ""); }).catch((e) => flash(errText(e), true));
   useEffect(() => { load(); }, []);
   // The suggestions' titles are rendered by the backend: re-fetch them in the new language.
   useEffect(() => { if (sugs) api.syncPreview().then(setSugs).catch(() => undefined); }, [lang]);
 
   const wrap = async (fn: () => Promise<void>) => {
     setBusy(true);
-    try { await fn(); } catch (e) { flash(String(e), true); } finally { setBusy(false); }
+    try { await fn(); } catch (e) { flash(errText(e), true); } finally { setBusy(false); }
   };
 
   const saveFolder = () => wrap(async () => { await api.syncSetFolder(folder); flash(t("syncPage.folderSaved")); await load(); });
@@ -62,7 +63,7 @@ export function SyncPage({ flash, onAdopt }: Props) {
             <div className="srow">
               <input className="input mono grow sensitive" value={folder} onChange={(e) => setFolder(e.target.value)} placeholder={t("syncPage.folderPlaceholder")} />
               <button className="btn" disabled={busy || !folder.trim()} onClick={saveFolder}>{t("common.save")}</button>
-              {status?.folder && <button className="btn" onClick={() => { api.openPath(status.folder!).catch((e) => flash(String(e), true)); }}>{t("common.open")}</button>}
+              {status?.folder && <button className="btn" onClick={() => { api.openPath(status.folder!).catch((e) => flash(errText(e), true)); }}>{t("common.open")}</button>}
             </div>
             <div className="srow muted small">
               {status?.fileExists
@@ -97,7 +98,7 @@ export function SyncPage({ flash, onAdopt }: Props) {
               <h2>{t("syncPage.importable")}</h2>
               {sugs.map((s, i) => { const id = ids[i]; return (
                 <label key={id} className="srow check-row">
-                  <input type="checkbox" checked={chosen.has(id)} onChange={() => setChosen((c) => { const n = new Set(c); if (n.has(id)) n.delete(id); else n.add(id); return n; })} />
+                  <input type="checkbox" checked={chosen.has(id)} onChange={() => setChosen((c) => toggled(c, id))} />
                   <AgentIcon id={s.agent} size={22} />
                   <div className="grow minw0">
                     <div className="slabel">{s.title}</div>

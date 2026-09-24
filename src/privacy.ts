@@ -1,24 +1,22 @@
 // 隐私模式 (privacy mode): API keys, provider addresses, the user name in folder paths and
 // conversation text are masked or blurred, so the window can be shown in screenshots,
 // screen shares and recordings. Only what is displayed changes; nothing is written.
-import { useSyncExternalStore } from "react";
+import { createStore } from "./store";
 
 let on = false;
-const subs = new Set<() => void>();
+const store = createStore(() => on);
 
 export function setPrivacy(v: boolean): void {
   if (v === on) return;
   on = v;
   // CSS hook: `.sensitive` blocks (conversation text, inputs) blur while this is set.
   if (typeof document !== "undefined") document.documentElement.toggleAttribute("data-privacy", v);
-  subs.forEach((f) => f());
+  store.notify();
 }
-
-export const privacyOn = (): boolean => on;
 
 /** Re-render when privacy mode is switched. */
 export function usePrivacy(): boolean {
-  return useSyncExternalStore((f) => { subs.add(f); return () => { subs.delete(f); }; }, () => on);
+  return store.use();
 }
 
 export const DOTS = "•••";

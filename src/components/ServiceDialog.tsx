@@ -7,6 +7,7 @@ import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, isHttpUrl, toggled, toggledIn } from "../util";
 
 export interface ServiceSave {
   name: string;
@@ -94,7 +95,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   useEscape(onClose);
 
   const url = baseUrl.trim().replace(/\/+$/, "");
-  const urlOk = /^https?:\/\/\S+$/.test(url);
+  const urlOk = isHttpUrl(url);
   const changedAddr = !!service && url !== (service.baseUrl ?? "").replace(/\/+$/, "");
   const changedKey = key.trim() !== "";
   const changedApi = !!service && kind !== service.api;
@@ -112,13 +113,13 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
       setFetched(list);
       if (models.length === 0) setModels(list.slice(0, 20));
     } catch (e) {
-      setErr(t("serviceDialog.fetchFailed", { err: String(e) }));
+      setErr(t("serviceDialog.fetchFailed", { err: errText(e) }));
     } finally {
       setFetching(false);
     }
   };
 
-  const toggle = (m: string) => setModels((l) => (l.includes(m) ? l.filter((x) => x !== m) : [...l, m]));
+  const toggle = (m: string) => setModels((l) => toggledIn(l, m));
   const addManual = () => {
     const ids = manual.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
     setModels((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
@@ -140,7 +141,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
         })).filter((x) => x.addTo.length),
       });
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
       setSaving(false);
     }
   };
@@ -227,7 +228,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
                 {editable.map((u) => (
                   <label key={uid(u)} className={`apick${sync.has(uid(u)) && changed ? " on" : ""}${!changed ? " dim" : ""}`}>
                     <input type="checkbox" disabled={!changed} checked={sync.has(uid(u))}
-                      onChange={() => setSync((p) => { const n = new Set(p); n.has(uid(u)) ? n.delete(uid(u)) : n.add(uid(u)); return n; })} />
+                      onChange={() => setSync((p) => toggled(p, uid(u)))} />
                     <AgentIcon id={u.agent.id} size={18} />
                     <span className="small ellipsis">{u.agent.name} · {u.p!.name}</span>
                   </label>
@@ -257,7 +258,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
                   return (
                     <label key={a.id} className={`apick${addTo.has(a.id) && !why ? " on" : ""}${why ? " dim" : ""}`} title={why ?? undefined}>
                       <input type="checkbox" disabled={!!why} checked={addTo.has(a.id) && !why}
-                        onChange={() => setAddTo((p) => { const n = new Set(p); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; })} />
+                        onChange={() => setAddTo((p) => toggled(p, a.id))} />
                       <AgentIcon id={a.id} size={18} />
                       <span className="small">{a.name}</span>
                       {why && <span className="tiny muted">{t("serviceDialog.needsApi", { api: API_LABEL[only!] })}</span>}

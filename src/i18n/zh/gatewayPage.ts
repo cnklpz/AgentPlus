@@ -7,7 +7,6 @@ export default {
   breakerHalfOpen: "暂停已到期，下一个请求会试探是否恢复",
   upstreamError: "上游出错",
   // flashes
-  copyFailed: "复制失败",
   resumedOne: "已恢复转发，下一个请求会正常发出",
   resumedAll: "已恢复全部转发",
   gatewayOn: "本地网关已开启",
@@ -69,7 +68,6 @@ export default {
   unifiedExample: "/转发A+转发B/v1",
   splitTitle: "{name}：权重 {weight}（{pct}%）",
   moreModels: "还有 {n} 个模型…",
-  listSep: "、",
   unknownModels: "{names} 的模型列表还不知道：网关第一次收到请求时会去上游查，也可以在「供应商」里给它补上常用模型。",
   // add dialog
   chooseProvider: "请选择供应商",

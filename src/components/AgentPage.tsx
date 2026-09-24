@@ -16,6 +16,7 @@ import { Dropdown } from "./Dropdown";
 import { ModelDialog } from "./ModelDialog";
 import { t, tn } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, type Flash, toggled, toggledIn } from "../util";
 
 export type Tab = "prov" | "models" | "sessions" | "maint" | "projects" | "set";
 
@@ -37,7 +38,7 @@ interface Props {
   onSelectProvider: (id: string) => void;
   onProviderAction: (p: ViewProvider) => void;
   onAddProvider: () => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
   sessionQuery?: string;
   /** Codex: stop turning the fixed id on by default. */
   onDeclineFixed: () => void;
@@ -259,7 +260,7 @@ interface ModelTableProps {
   setDraft: (d: Draft) => void;
   readonly: boolean;
   onToggle: (pid: string, m: Model) => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
 }
 
 /** Backend capability tags (`cap:*`), replaced by the ones below (they would lag behind pending edits). */
@@ -320,7 +321,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
       setPick(new Set());
       if (fresh.length === 0) flash(tn("agentPage.allListed", list.length));
     } catch (e) {
-      flash(t("agentPage.fetchFailed", { err: String(e) }), true);
+      flash(t("agentPage.fetchFailed", { err: errText(e) }), true);
     } finally {
       setFetching(false);
     }
@@ -388,7 +389,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
           <div className="pick-list wide">
             {fetched.map((m) => (
               <label key={m} className="pick">
-                <input type="checkbox" checked={pick.has(m)} onChange={() => setPick((s) => { const n = new Set(s); if (n.has(m)) n.delete(m); else n.add(m); return n; })} />
+                <input type="checkbox" checked={pick.has(m)} onChange={() => setPick((s) => toggled(s, m))} />
                 <span className="mono small">{m}</span>
               </label>
             ))}
@@ -532,7 +533,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
                     const on = arr.includes(o);
                     return (
                       <button key={o} className={`opt${on ? " on" : ""}`} aria-pressed={on} disabled={readonly}
-                        onClick={() => onChange(s, on ? arr.filter((x) => x !== o) : [...arr, o])}>
+                        onClick={() => onChange(s, toggledIn(arr, o))}>
                         <span className="opt-check" aria-hidden="true">
                           {on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
                         </span>

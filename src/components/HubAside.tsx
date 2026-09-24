@@ -5,6 +5,7 @@ import type { Station } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { t, tn, useLang } from "../i18n";
 import { scrub } from "../privacy";
+import { errText } from "../util";
 
 interface Props {
   agents: AgentState[];
@@ -29,7 +30,7 @@ export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, on
     for (const a of withOps) {
       api.preview(a.id, opsToWrite(a, drafts[a.id]))
         .then((d) => alive && setDiffs((m) => ({ ...m, [a.id]: d })))
-        .catch((e) => alive && setDiffs((m) => ({ ...m, [a.id]: String(e) })));
+        .catch((e) => alive && setDiffs((m) => ({ ...m, [a.id]: errText(e) })));
     }
     return () => { alive = false; };
   }, [drafts, agents, lang]);

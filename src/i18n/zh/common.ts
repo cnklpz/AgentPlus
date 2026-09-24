@@ -43,4 +43,6 @@ export default {
   optional: "可选",
   minimizeToTray: "最小化到托盘",
   quitApp: "退出程序",
+  copyFailed: "复制失败",
+  listSep: "、",
 };
