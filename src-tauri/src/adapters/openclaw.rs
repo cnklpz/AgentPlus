@@ -25,11 +25,8 @@ use std::path::PathBuf;
 
 pub const ID: &str = "openclaw";
 pub const NAME: &str = "OpenClaw";
-#[allow(dead_code)]
 pub const MARKER: &str = "openclaw.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "openclaw --version 2>/dev/null; (pgrep -x openclaw-gatewa || pgrep -x openclaw) >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".openclaw/openclaw.json";
 
 /// `~/.openclaw` (or `$OPENCLAW_STATE_DIR`, or the folder picked in AgentPlus).

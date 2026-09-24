@@ -29,14 +29,11 @@ use serde_yaml::{Mapping, Value as Y};
 use std::path::{Path, PathBuf};
 
 pub const ID: &str = "hermes";
-#[allow(dead_code)]
 pub const NAME: &str = "Hermes";
 /// Relative to the config dir.
 pub const MARKER: &str = "config.yaml";
 /// WSL: the launcher lives in ~/.local/bin, which is not on a non-login PATH.
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "(command -v hermes >/dev/null && hermes --version || $HOME/.local/bin/hermes --version) 2>/dev/null | head -n 1; pgrep -f '[b]in/hermes' >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".hermes/config.yaml";
 
 /// The synthetic provider for bare `model.provider: custom` (inline base_url / api_key).
@@ -78,7 +75,7 @@ fn native_home() -> Option<PathBuf> {
 }
 
 /// `%LOCALAPPDATA%\x` → the value of the variable (REG_EXPAND_SZ values come back raw).
-#[allow(dead_code)]
+#[cfg(windows)]
 fn expand_percent(s: &str) -> String {
     let re = regex::Regex::new(r"%([^%]+)%").unwrap();
     re.replace_all(s, |c: &regex::Captures| std::env::var(&c[1]).unwrap_or_else(|_| c[0].to_string())).to_string()
@@ -112,7 +109,6 @@ fn pyproject_version(p: &Path) -> Option<String> {
 
 /// Windows: `<HERMES_HOME>\hermes-agent\venv\Scripts\hermes.exe`; version from pyproject.toml
 /// (no Python start-up). A CLI, so `exe` stays None.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let mut roots = vec![default_dir()];

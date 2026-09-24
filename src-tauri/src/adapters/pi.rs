@@ -19,13 +19,9 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 pub const ID: &str = "pi";
-#[allow(dead_code)]
 pub const NAME: &str = "pi";
-#[allow(dead_code)]
 pub const MARKER: &str = "settings.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "pi --version 2>/dev/null; pgrep -x pi >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".pi/agent/settings.json";
 /// npm package names, new and old.
 const PACKAGES: [&str; 2] = ["@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"];

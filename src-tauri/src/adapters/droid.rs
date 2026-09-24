@@ -22,15 +22,10 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
-#[allow(dead_code)]
 pub const ID: &str = "droid";
-#[allow(dead_code)]
 pub const NAME: &str = "Droid";
-#[allow(dead_code)]
 pub const MARKER: &str = "settings.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "droid --version 2>/dev/null | head -n 1; pgrep -x droid >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".factory/settings.json";
 
 /// Temporary markers carried on entries during a plan (never written).
@@ -39,7 +34,6 @@ const IDFMT: &str = "__agentplus_idfmt";
 const STORE_LABEL: &str = "AgentPlus · Droid";
 
 /// Droid's default config dir, `~/.factory`.
-#[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
     home().join(".factory")
 }
@@ -59,7 +53,6 @@ fn legacy_path() -> PathBuf {
 // ---------- detection ----------
 
 /// The `droid` CLI: npm global package, or the native installer's `droid.exe`.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some(v) = crate::process::npm_global_version("droid").or_else(|| crate::process::npm_global_version("@factory/cli")) {
@@ -312,7 +305,6 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
     }
 }
 
-#[allow(dead_code)]
 pub fn state(inst: &Install) -> AgentState {
     let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&settings_path())]);
     let cfg = match load_settings() {
@@ -364,7 +356,6 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-#[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_settings()?;
     let root = store::load();
@@ -645,7 +636,6 @@ impl Work {
     }
 }
 
-#[allow(dead_code)]
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg, _, had_comments) = load_settings()?;
     let orig_entries = custom_models(&cfg);

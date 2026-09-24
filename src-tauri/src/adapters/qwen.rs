@@ -13,8 +13,6 @@
 //! The active model is `security.auth.selectedType` + `model.name`; Qwen Code
 //! hot-reloads `modelProviders`.
 
-// Unused until the integrator wires the adapter into adapters::mod.
-
 use super::msg;
 use super::{Plan, Endpoint};
 use crate::model::*;
