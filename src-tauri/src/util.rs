@@ -289,6 +289,20 @@ pub fn str_list(v: Option<&serde_json::Value>) -> Option<Vec<String>> {
     v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
 }
 
+/// Locks `m` even when a panic elsewhere poisoned it: shared state (the gateway's, caches)
+/// stays usable, so one failed request can't take every later one (or the status view) down.
+pub fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `s` cut to at most `max` characters, with "…" when something was cut.
+pub fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
 /// Strips `//` and `/* */` comments outside strings, plus trailing commas.
 /// Returns (clean json, had_comments).
 pub fn strip_jsonc(src: &str) -> (String, bool) {
@@ -458,6 +472,21 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn clips_characters_and_survives_poison() {
+        assert_eq!(clip("密钥密钥", 2), "密钥…");
+        assert_eq!(clip("abc", 3), "abc");
+        assert_eq!(clip("", 0), "");
+        let m = std::sync::Mutex::new(1);
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        });
+        assert!(m.is_poisoned());
+        *lock(&m) += 1;
+        assert_eq!(*lock(&m), 2);
     }
 
     #[test]

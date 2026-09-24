@@ -87,7 +87,7 @@ pub(crate) fn on_path(names: &[&str]) -> Option<PathBuf> {
 fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
     type Pkg = Option<(PathBuf, String, String, Option<PathBuf>)>;
     static CACHE: std::sync::Mutex<Option<Pkg>> = std::sync::Mutex::new(None);
-    if let Some(p) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(p) = crate::util::lock(&CACHE).clone() {
         return p;
     }
     let out = output_within(
@@ -108,7 +108,7 @@ fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
         let main = lines.next().map(|e| dir.join(e.replace('/', "\\")));
         Some((dir, ver, pfn, main))
     })();
-    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(pkg.clone());
+    *crate::util::lock(&CACHE) = Some(pkg.clone());
     pkg
 }
 
@@ -342,7 +342,7 @@ fn detect_wsl(e: &crate::adapters::Ext) -> Install {
 /// quoting (paths with `&` or parentheses) and without AutoRun hooks.
 pub(crate) fn cli_version(exe: &Path) -> Option<String> {
     static CACHE: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
-    let cache = || CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = || crate::util::lock(&CACHE);
     if let Some((_, v)) = cache().iter().find(|(p, _)| p == exe) {
         return v.clone();
     }
