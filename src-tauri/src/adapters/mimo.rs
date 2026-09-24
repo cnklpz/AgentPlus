@@ -53,7 +53,7 @@ fn catalog_path() -> PathBuf {
 }
 
 fn fmt() -> Fmt {
-    Fmt { agent: ID, path: engine_path(), auth: None, native_disable: false }
+    Fmt::new(ID, engine_path(), None, false)
 }
 
 pub fn state(inst: &Install) -> AgentState {
@@ -98,17 +98,8 @@ pub fn state(inst: &Install) -> AgentState {
         });
     }
 
-    match f.load(false) {
-        Ok((cfg, _, had_comments)) => {
-            if had_comments {
-                st.readonly = true;
-                st.notes.push(msg::comments_readonly("mimocode.jsonc"));
-            }
-            st.providers.extend(f.providers(&cfg, &root));
-        }
-        Err(e) => {
-            st.fail(e);
-        }
+    if let Some(cfg) = f.load_for_state(&mut st, false) {
+        st.providers.extend(f.providers(&cfg, &root));
     }
 
     let prefs = read_json(&prefs_path()).ok().map(|x| x.0).unwrap_or(json!({}));
@@ -202,10 +193,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
 
+    f.guard_comments(&dirty, had_comments)?;
     let (cfg_dirty, store_dirty) = (dirty.cfg, dirty.store);
-    if cfg_dirty && had_comments {
-        return Err(msg::comments_not_written("mimocode.jsonc"));
-    }
     let mut written = vec![];
     let mut backup_dir = None;
     if !dry_run && (cfg_dirty || prefs_dirty) {

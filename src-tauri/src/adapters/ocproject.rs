@@ -10,7 +10,7 @@
 
 use super::msg;
 use super::{Plan, Endpoint};
-use super::ocfmt::{Dirty, Fmt, RESERVED};
+use super::ocfmt::{cfg_key, Dirty, Fmt};
 use super::ocsettings::{self, Scope};
 use super::opencode;
 use crate::model::*;
@@ -19,11 +19,12 @@ use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 pub const PREFIX: &str = "opencode@";
+
+/// The project files OpenCode reads in a folder, in the order AgentPlus picks one to edit.
+const PROJECT_NAMES: [&str; 2] = ["opencode.jsonc", "opencode.json"];
 
 pub fn is_project(agent: &str) -> bool {
     agent.starts_with(PREFIX)
@@ -40,26 +41,16 @@ fn dir_of(agent: &str) -> Result<PathBuf> {
 
 /// The project file AgentPlus edits: an existing opencode.jsonc / opencode.json, else a new opencode.json.
 pub fn config_path(dir: &Path) -> PathBuf {
-    ["opencode.jsonc", "opencode.json"].iter().map(|n| dir.join(n)).find(|p| p.exists()).unwrap_or_else(|| dir.join("opencode.json"))
+    PROJECT_NAMES.iter().map(|n| dir.join(n)).find(|p| p.exists()).unwrap_or_else(|| dir.join("opencode.json"))
 }
 
-/// `Fmt::agent` names the AgentPlus store section for stashed (hidden) models; each project gets its own.
-fn intern(s: &str) -> &'static str {
-    static NAMES: OnceLock<Mutex<HashMap<String, &'static str>>> = OnceLock::new();
-    let mut m = NAMES.get_or_init(Default::default).lock().unwrap();
-    if let Some(x) = m.get(s) {
-        return x;
-    }
-    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
-    m.insert(s.to_string(), leaked);
-    leaked
-}
-
+/// Each project keeps its own AgentPlus store section (stashed models), named by its agent id.
 fn fmt(agent: &str, dir: &Path) -> Fmt {
-    Fmt { agent: intern(agent), path: config_path(dir), auth: Some(opencode::auth_path()), native_disable: true }
+    Fmt::new(agent, config_path(dir), Some(opencode::auth_path()), true)
 }
 
-fn git_root(dir: &Path) -> Option<PathBuf> {
+/// The nearest folder at or above `dir` that holds `.git`.
+pub(crate) fn git_root(dir: &Path) -> Option<PathBuf> {
     dir.ancestors().find(|d| d.join(".git").exists()).map(Path::to_path_buf)
 }
 
@@ -69,7 +60,7 @@ fn other_files(dir: &Path, edited: &Path) -> Vec<PathBuf> {
     let mut out = vec![];
     let top = git_root(dir);
     for d in dir.ancestors() {
-        for f in ["opencode.json", "opencode.jsonc"] {
+        for f in PROJECT_NAMES {
             for p in [d.join(f), d.join(".opencode").join(f)] {
                 if p.exists() && p != edited {
                     out.push(p);
@@ -84,8 +75,8 @@ fn other_files(dir: &Path, edited: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn global_cfg() -> Value {
-    opencode::fmt().load(true).map(|x| x.0).unwrap_or_else(|_| json!({}))
+fn global_cfg() -> Result<Value> {
+    opencode::fmt().load(true).map(|x| x.0)
 }
 
 /// Effective `disabled_providers`: the project's list replaces the global one when present.
@@ -110,36 +101,25 @@ pub fn state(agent: &str) -> Result<AgentState> {
         return Ok(st);
     }
     let exists = f.path.exists();
-    let cfg = match f.load(true) {
-        Ok((cfg, _, had_comments)) => {
-            if had_comments {
-                st.readonly = true;
-                st.notes.push(msg::comments_readonly(&f.path.file_name().unwrap().to_string_lossy()));
-            }
-            cfg
-        }
-        Err(e) => {
-            st.fail(e);
-            return Ok(st);
-        }
-    };
+    let Some(cfg) = f.load_for_state(&mut st, true) else { return Ok(st) };
     let gf = opencode::fmt();
-    let gcfg = global_cfg();
+    let gcfg = global_cfg().unwrap_or_else(|e| {
+        st.notes.push(tr!("全局配置读取失败，继承的内容没有显示：{e}", "Couldn't read the global config, so inherited items aren't shown: {e}"));
+        json!({})
+    });
     let root = store::load();
     let off = disabled(&cfg, &gcfg);
     let global_ids = provider_ids(&gcfg);
 
-    let mut own = f.providers(&cfg, &root);
+    let mut own = f.providers_with(&cfg, &root, &off);
     for p in own.iter_mut() {
-        p.enabled = !off.contains(&p.id);
         p.details.push(Kv::text(lbl::source(), l("项目配置", "Project config")));
         if global_ids.contains(&p.id) {
             p.details.push(Kv::text(l("注意", "Note"), l("全局配置里也有同名供应商，OpenCode 会把两份合并（项目的优先）", "The global config has a provider with the same id. OpenCode merges the two (the project wins).")));
         }
     }
-    let mut inherited: Vec<Provider> = gf.providers(&gcfg, &root).into_iter().filter(|g| !own.iter().any(|p| p.id == g.id)).collect();
+    let mut inherited: Vec<Provider> = gf.providers_with(&gcfg, &root, &off).into_iter().filter(|g| !own.iter().any(|p| p.id == g.id)).collect();
     for g in inherited.iter_mut() {
-        g.enabled = !off.contains(&g.id);
         g.editable = false;
         g.apis.push(l("全局", "Global").into());
         // Hidden global models are not in OpenCode's config at all.
@@ -148,12 +128,11 @@ pub fn state(agent: &str) -> Result<AgentState> {
             m.readonly = true;
             m.deletable = false;
         }
-        g.details.retain(|kv| kv.k != lbl::status());
         g.details.push(Kv::text(lbl::source(), l("全局配置（继承）：项目里只能启用或停用；要单独改地址或模型，先复制到项目", "Global config (inherited): the project can only enable or disable it. To change its base URL or models, copy it to the project first.")));
     }
     let mut all = own;
     all.append(&mut inherited);
-    let extra = opencode::auth_only(&f, &all);
+    let extra = opencode::auth_only(&f, &all, &off);
     all.extend(extra);
     st.providers = all;
 
@@ -180,7 +159,8 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let inline: Vec<String> = cfg
         .get("provider")
         .and_then(|p| p.as_object())
-        .map(|o| o.iter().filter(|(_, d)| d.pointer("/options/apiKey").and_then(|k| k.as_str()).map(|k| !k.is_empty() && !k.starts_with('{')).unwrap_or(false)).map(|(id, _)| id.clone()).collect())
+        // `{env:…}` / `{file:…}` references are not plain text.
+        .map(|o| o.iter().filter(|(_, d)| cfg_key(d).is_some_and(|k| !k.starts_with('{'))).map(|(id, _)| id.clone()).collect())
         .unwrap_or_default();
     if !inline.is_empty() && git_root(&dir).is_some() {
         st.notes.push(tr!("项目文件里有明文 apiKey（{}），提交到 git 前记得处理。", "The project file contains a plain-text apiKey ({}). Remember to deal with it before committing to git.", crate::i18n::join(&inline)));
@@ -200,43 +180,22 @@ pub fn endpoint(agent: &str, id: &str) -> Result<Endpoint> {
     }
 }
 
-/// Clears the reserved ids even when applying an op fails.
-struct Reserve;
-
-impl Reserve {
-    fn set(ids: Vec<String>) -> Self {
-        RESERVED.with(|r| *r.borrow_mut() = ids);
-        Reserve
-    }
-}
-
-impl Drop for Reserve {
-    fn drop(&mut self) {
-        RESERVED.with(|r| r.borrow_mut().clear());
-    }
-}
-
 pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     let dir = dir_of(agent)?;
     if !dir.is_dir() {
         return Err(anyhow!(tr!("找不到文件夹 {}", "Folder not found: {}", display_path(&dir))));
     }
-    let f = fmt(agent, &dir);
-    let path = f.path.clone();
+    // Checks below need the global ids: never write a project against an unknown global config.
+    let gcfg = global_cfg()?;
+    let mut f = fmt(agent, &dir);
+    // New project providers stay clear of global ids (Fmt also skips ids already in auth.json).
+    f.reserved = provider_ids(&gcfg);
     let (mut cfg, cfg_meta, had_comments) = f.load(true)?;
     let mut auth = f.load_auth();
     let mut root = store::load();
-    let gcfg = global_cfg();
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
     let ef = f.file();
-
-    // New project providers stay clear of global ids (and keys already in auth.json).
-    let mut reserved = provider_ids(&gcfg);
-    if let Some((a, _)) = &auth {
-        reserved.extend(a.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default());
-    }
-    let _guard = Reserve::set(reserved);
 
     let global_only = |cfg: &Value, id: &str| cfg.pointer(&crate::util::jptr(&["provider", id])).is_none() && gcfg.pointer(&crate::util::jptr(&["provider", id])).is_some();
     let inherited_err = |id: &str| anyhow!(tr!("「{id}」来自全局配置，在项目里只能启用或停用；要单独修改，先把它复制到项目", "\"{id}\" comes from the global config and can only be enabled or disabled in a project. To change it, copy it to the project first."));
@@ -244,7 +203,7 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     for op in ops {
         match op {
             Op::SetSetting { key, value } => {
-                dirty.cfg |= ocsettings::apply(&mut cfg, key, value, &mut diff, &ef)?;
+                dirty.cfg |= ocsettings::apply(&mut cfg, key, value, Scope::Project, &mut diff, &ef)?;
                 continue;
             }
             Op::SetProviderEnabled { .. } => {
@@ -275,30 +234,9 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
 
-    if dirty.cfg && had_comments {
-        return Err(msg::comments_not_written(&path.file_name().unwrap().to_string_lossy()));
-    }
-    let mut written = vec![];
-    let mut backup_dir = None;
-    if !dry_run && (dirty.cfg || dirty.auth) {
-        let mut targets = vec![];
-        if dirty.cfg { targets.push(path.clone()) }
-        if dirty.auth { targets.push(opencode::auth_path()) }
-        backup_dir = Some(backup_tagged(opencode::ID, &targets, &tr!("项目配置 · {}", "Project config · {}", display_path(&dir)))?);
-        if dirty.cfg {
-            write_json(&path, &cfg, cfg_meta)?;
-            written.push(path.clone());
-        }
-        if dirty.auth {
-            // Written in place (not tmp + rename) so the file keeps its owner-only permissions.
-            let (a, _) = auth.as_ref().unwrap();
-            if let Some(d) = opencode::auth_path().parent() {
-                std::fs::create_dir_all(d)?;
-            }
-            std::fs::write(opencode::auth_path(), serde_json::to_string_pretty(a)? + "\n")?;
-            written.push(opencode::auth_path());
-        }
-    }
+    f.guard_comments(&dirty, had_comments)?;
+    let reason = tr!("项目配置 · {}", "Project config · {}", display_path(&dir));
+    let (written, backup_dir) = f.commit(&cfg, cfg_meta, &auth, &dirty, dry_run, |t| backup_tagged(opencode::ID, t, &reason))?;
     if !dry_run && dirty.store {
         store::save(&root)?;
     }
@@ -314,7 +252,6 @@ mod tests {
         assert!(is_project(&agent_id(r"D:\xm\demo")));
         assert!(!is_project("opencode"));
         assert!(dir_of("opencode@").is_err());
-        assert_eq!(intern("opencode@x").as_ptr(), intern("opencode@x").as_ptr());
     }
 
     /// Read-only against this machine's OpenCode config: a temp project, dry runs only.
@@ -360,18 +297,59 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A temp home with a global OpenCode config and an empty project folder in it.
+    fn setup(tag: &str, global: &str, project: Option<&str>) -> (TestHome, String) {
+        let h = TestHome::new(tag);
+        let g = h.0.join(".config").join("opencode");
+        std::fs::create_dir_all(&g).unwrap();
+        std::fs::write(g.join("opencode.json"), global).unwrap();
+        let dir = h.0.join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(p) = project {
+            std::fs::write(dir.join("opencode.json"), p).unwrap();
+        }
+        let agent = agent_id(&dir.to_string_lossy());
+        (h, agent)
+    }
+
+    #[test]
+    fn status_follows_the_effective_disabled_list() {
+        let prov = r#"{ "options": { "baseURL": "https://r.example.com/v1" } }"#;
+        let global = format!(r#"{{ "disabled_providers": ["relay", "g2"], "provider": {{ "g1": {prov}, "g2": {prov} }} }}"#);
+        let (_h, agent) = setup("ocp-status", &global, Some(&format!(r#"{{ "provider": {{ "relay": {prov} }} }}"#)));
+        let st = state(&agent).unwrap();
+        let status = |id: &str| {
+            let p = st.providers.iter().find(|p| p.id == id).unwrap();
+            let rows: Vec<&str> = p.details.iter().filter(|kv| kv.k == lbl::status()).map(|kv| kv.v.as_str()).collect();
+            (p.enabled, rows)
+        };
+        // The project has no list of its own, so the global one applies to its providers too.
+        assert_eq!(status("relay"), (false, vec!["已停用（disabled_providers）"]));
+        assert_eq!(status("g1"), (true, vec!["已启用"]));
+        assert_eq!(status("g2"), (false, vec!["已停用（disabled_providers）"]));
+    }
+
+    #[test]
+    fn broken_global_config_blocks_writes() {
+        let (_h, agent) = setup("ocp-broken", "{ \"provider\": ", None);
+        let st = state(&agent).unwrap();
+        assert!(st.notes.iter().any(|n| n.starts_with("全局配置读取失败")), "{:?}", st.notes);
+        let op: Op = serde_json::from_value(json!({"op": "upsert_provider", "provider": {"name": "Relay", "baseUrl": "https://r.example.com/v1", "api": "chat", "models": ["m1"]}})).unwrap();
+        assert!(plan(&agent, &[op], true).is_err());
+    }
+
     #[test]
     fn new_project_provider_avoids_reserved_ids() {
         let tmp = std::env::temp_dir().join(format!("agentplus-oc-proj-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let agent = agent_id(&tmp.to_string_lossy());
-        let f = Fmt { agent: intern(&agent), path: config_path(&tmp), auth: None, native_disable: true };
+        let mut f = Fmt::new(&agent, config_path(&tmp), None, true);
+        f.reserved = vec!["relay".into()];
         let (mut cfg, _, _) = f.load(true).unwrap();
         let mut root = json!({});
         let mut auth = None;
         let mut diff = Diff::default();
         let mut dirty = Dirty::default();
-        let _g = Reserve::set(vec!["relay".into()]);
         let op: Op = serde_json::from_value(json!({"op": "upsert_provider", "provider": {"name": "Relay", "baseUrl": "https://r.example.com/v1", "api": "chat", "models": ["m1"]}})).unwrap();
         f.apply(&op, &mut cfg, &mut root, &mut auth, &mut diff, &mut dirty).unwrap();
         assert!(cfg.pointer("/provider/relay-2/options/baseURL").is_some());
