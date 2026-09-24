@@ -18,18 +18,21 @@ use std::path::{Path, PathBuf};
 
 pub const ID: &str = "kilo";
 pub const NAME: &str = "Kilo Code";
-/// `kilo.jsonc` / `opencode.json` in the same dir also count (see `config_path`).
+/// Any of `CONFIG_FILES` also counts.
 pub const MARKER: &str = "kilo.json";
+/// The config files Kilo reads in a folder, in the order AgentPlus picks one to edit
+/// (opencode.jsonc last, so it never wins over a file picked before it was listed).
+pub const CONFIG_FILES: [&str; 4] = ["kilo.jsonc", MARKER, "opencode.json", "opencode.jsonc"];
 pub const WSL_SCRIPT: &str = "(kilo --version || kilocode --version) 2>/dev/null | head -n 1; pgrep -x kilo >/dev/null && echo @running; true";
 pub const WSL_MARKER: &str = ".config/kilo";
 
-/// Kilo's default config dir, `~/.config/kilo`.
+/// The folder of `KILO_CONFIG` (Windows side only), else `~/.config/kilo`.
 pub fn default_dir() -> PathBuf {
-    home().join(".config").join("kilo")
+    env_config().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| home().join(".config").join("kilo"))
 }
 
 fn dir() -> PathBuf {
-    super::dir_override(ID).unwrap_or_else(|| env_config().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(default_dir))
+    super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
 /// `KILO_CONFIG` (a file path) only applies to the Windows side.
@@ -37,8 +40,8 @@ fn env_config() -> Option<PathBuf> {
     crate::env::agent_var("KILO_CONFIG").map(PathBuf::from)
 }
 
-/// The config file Kilo reads: `KILO_CONFIG`, else the first existing of
-/// kilo.jsonc / kilo.json / opencode.json, else a new kilo.json.
+/// The config file Kilo reads: `KILO_CONFIG`, else the first existing of `CONFIG_FILES`,
+/// else a new kilo.json.
 fn config_path() -> PathBuf {
     if super::dir_override(ID).is_none() {
         if let Some(p) = env_config() {
@@ -46,7 +49,7 @@ fn config_path() -> PathBuf {
         }
     }
     let d = dir();
-    ["kilo.jsonc", "kilo.json", "opencode.json"].iter().map(|n| d.join(n)).find(|p| p.exists()).unwrap_or_else(|| d.join("kilo.json"))
+    CONFIG_FILES.iter().map(|n| d.join(n)).find(|p| p.exists()).unwrap_or_else(|| d.join(MARKER))
 }
 
 fn auth_path() -> PathBuf {
@@ -80,9 +83,8 @@ pub fn detect() -> Install {
         inst.version = Some(v);
     } else if let Some(exe) = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]) {
         inst.installed = true;
-        if exe.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
-            static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-            inst.version = V.get_or_init(|| crate::process::cli_version(&exe)).clone();
+        if crate::process::is_exe(&exe) {
+            inst.version = crate::process::cli_version(&exe);
         }
     } else if let Some(v) = vscode_extension() {
         inst.installed = true;
@@ -357,6 +359,21 @@ mod tests {
         assert!(st.providers[1].builtin);
         let (base, key, api) = provider_endpoint("relay").unwrap();
         assert_eq!((base.as_str(), key.as_deref(), api.as_str()), ("https://relay.example.com/v1", Some("sk-relay-abcd"), "chat"));
+    }
+
+    #[test]
+    fn reads_and_edits_a_lone_opencode_jsonc() {
+        // A folder detection accepts must be the one the adapter edits, not a new kilo.json beside it.
+        let h = setup("oc-jsonc", None, None);
+        let file = h.0.join(".config/kilo/opencode.jsonc");
+        std::fs::write(&file, SAMPLE).unwrap();
+        let st = state(&Install::default());
+        assert_eq!(st.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["relay"]);
+        let (_, w, _) = plan(&[upsert(None, "New One", "https://n.example.com/v1", "chat", None, &["m1"])], false).unwrap();
+        assert_eq!(w, [file.as_path()]);
+        assert!(!h.0.join(".config/kilo/kilo.json").exists());
+        let c: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(c.pointer("/provider/relay").is_some() && c.pointer("/provider/new-one").is_some());
     }
 
     #[test]

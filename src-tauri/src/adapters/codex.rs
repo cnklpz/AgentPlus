@@ -26,11 +26,23 @@ fn inject_file() -> &'static str {
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
 const FAST_TIER: &str = "priority";
 
-/// The folder picked in AgentPlus, else `$CODEX_HOME`, else `~/.codex`.
+pub const MARKER: &str = "config.toml";
+pub const WSL_SCRIPT: &str = "codex --version 2>/dev/null; pgrep -x codex >/dev/null && echo @running; true";
+pub const WSL_MARKER: &str = ".codex";
+
+/// `$CODEX_HOME` (Windows side only), else `~/.codex`.
+pub fn default_dir() -> PathBuf {
+    crate::env::agent_var("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".codex"))
+}
+
+/// The folder picked in AgentPlus, else the default.
 pub fn codex_home() -> PathBuf {
-    super::dir_override(ID)
-        .or_else(|| crate::env::agent_var("CODEX_HOME").map(PathBuf::from))
-        .unwrap_or_else(|| home().join(".codex"))
+    super::dir_override(ID).unwrap_or_else(default_dir)
+}
+
+/// The desktop app (MSIX package).
+pub fn detect() -> Install {
+    crate::process::detect_codex()
 }
 
 pub(crate) fn config_path() -> PathBuf {

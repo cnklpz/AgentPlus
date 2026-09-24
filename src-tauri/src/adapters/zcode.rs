@@ -16,17 +16,32 @@ use std::path::PathBuf;
 
 pub const ID: &str = "zcode";
 pub const NAME: &str = "ZCode";
+pub const MARKER: &str = "provider_config.json";
+/// A desktop app only: nothing to find in WSL.
+pub const WSL_SCRIPT: &str = "";
+pub const WSL_MARKER: &str = "";
+
+/// `~/.zcode/v2`.
+pub fn default_dir() -> PathBuf {
+    home().join(".zcode").join("v2")
+}
 
 fn dir() -> PathBuf {
     match super::dir_override(ID) {
         // Accept either ~/.zcode or ~/.zcode/v2.
-        Some(d) if d.join("v2").join("provider_config.json").exists() => d.join("v2"),
+        Some(d) if d.join("v2").join(MARKER).exists() => d.join("v2"),
         Some(d) => d,
-        None => home().join(".zcode").join("v2"),
+        None => default_dir(),
     }
 }
+
+/// The desktop app (registry uninstall entry).
+pub fn detect() -> Install {
+    crate::process::detect_zcode()
+}
+
 fn provider_path() -> PathBuf {
-    dir().join("provider_config.json")
+    dir().join(MARKER)
 }
 fn setting_path() -> PathBuf {
     dir().join("setting.json")

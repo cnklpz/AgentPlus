@@ -95,14 +95,22 @@ pub type Plan = (Diff, Vec<PathBuf>, Option<PathBuf>);
 /// (base_url, key, api) of a provider.
 pub type Endpoint = (String, Option<String>, String);
 
-/// Adapters written against the common adapter API (each module brings its own detection).
+/// One agent's adapter: what AgentPlus knows about it and the functions that read and write
+/// its config. Every adapter module has the same surface, listed in [`EXT`].
 pub struct Ext {
     pub id: &'static str,
+    /// Display name (a product name: not translated).
     pub name: &'static str,
+    /// Where the agent keeps its config when no folder is picked in AgentPlus; never the
+    /// picked folder (the settings page shows it as the default).
     pub default_dir: fn() -> PathBuf,
+    /// The config file whose presence means "configured here" (see [`markers`] for the others).
     pub marker: &'static str,
+    /// Detection on Windows; see `process::detect`.
     pub detect: fn() -> process::Install,
+    /// Shell script that finds the CLI inside WSL; "" for a Windows-only desktop app.
     pub wsl_script: &'static str,
+    /// Relative to the WSL home; its presence also means installed.
     pub wsl_marker: &'static str,
     pub state: fn(&process::Install) -> AgentState,
     pub endpoint: fn(&str) -> Result<Endpoint>,
@@ -126,34 +134,53 @@ macro_rules! ext {
     };
 }
 
-pub const EXT: &[Ext] = &[ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(qwen), ext!(kimi)];
+/// Every agent, in sidebar order.
+pub const EXT: &[Ext] = &[
+    ext!(codex), ext!(claude), ext!(opencode), ext!(zcode), ext!(mimo),
+    ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(qwen), ext!(kimi),
+];
+
+/// The ids of [`EXT`], in the same order.
+pub const ALL: [&str; EXT.len()] = {
+    let mut ids = [""; EXT.len()];
+    let mut i = 0;
+    while i < EXT.len() {
+        ids[i] = EXT[i].id;
+        i += 1;
+    }
+    ids
+};
 
 pub fn ext(agent: &str) -> Option<&'static Ext> {
     EXT.iter().find(|e| e.id == agent)
 }
 
-pub const ALL: [&str; 14] = [
-    codex::ID, claude::ID, opencode::ID, zcode::ID, mimo::ID,
-    hermes::ID, gemini::ID, pi::ID, openclaw::ID, droid::ID, kilo::ID, codebuddy::ID, qwen::ID, kimi::ID,
-];
+/// [`ext`], or the error for an id no adapter has.
+fn adapter(agent: &str) -> Result<&'static Ext> {
+    ext(agent).ok_or_else(|| anyhow!(tr!("未知 Agent {agent}", "Unknown agent: {agent}")))
+}
+
+/// The agent an id belongs to: OpenCode for its project configs (`opencode@<folder>`).
+pub fn base_agent(agent: &str) -> &str {
+    if ocproject::is_project(agent) {
+        opencode::ID
+    } else {
+        agent
+    }
+}
 
 /// Agents that also run inside WSL (CLIs); the others are Windows desktop apps.
-const IN_WSL: [&str; 12] = [codex::ID, claude::ID, opencode::ID, hermes::ID, gemini::ID, pi::ID, openclaw::ID, droid::ID, kilo::ID, codebuddy::ID, qwen::ID, kimi::ID];
+fn in_wsl(e: &Ext) -> bool {
+    !e.wsl_script.is_empty()
+}
 
 pub fn display_name(agent: &str) -> &'static str {
-    match agent {
-        codex::ID => codex::NAME,
-        claude::ID => claude::NAME,
-        opencode::ID => opencode::NAME,
-        zcode::ID => zcode::NAME,
-        mimo::ID => mimo::NAME,
-        _ => ext(agent).map(|e| e.name).unwrap_or("?"),
-    }
+    ext(base_agent(agent)).map(|e| e.name).unwrap_or("?")
 }
 
 /// The one protocol an agent accepts, when it accepts only one.
 pub fn only_api(agent: &str) -> Option<&'static str> {
-    match agent {
+    match base_agent(agent) {
         codex::ID => Some("responses"),
         claude::ID => Some("anthropic"),
         codebuddy::ID => Some("chat"),
@@ -162,15 +189,18 @@ pub fn only_api(agent: &str) -> Option<&'static str> {
     }
 }
 
-/// AgentPlus-owned per-agent switch, stored in ~/.agentplus/store.json.
-const AUTO_RESTART: &str = "auto_restart";
+/// Setting key of the AgentPlus-owned per-agent switch "restart after applying".
+const AUTO_RESTART_SETTING: &str = "auto_restart";
+/// Where that switch is kept in ~/.agentplus/store.json.
+const AUTO_RESTART_STORE_KEY: &str = "autoRestart";
 
 pub fn auto_restart(agent: &str) -> bool {
-    store::get_flag(&store::load(), agent, "autoRestart")
+    store::get_flag(&store::load(), agent, AUTO_RESTART_STORE_KEY)
 }
 
-/// AgentPlus-owned: which desktop copy to start when several are installed ("" = automatic).
-const DESKTOP_EXE: &str = "desktop_exe";
+/// Setting key of the AgentPlus-owned pick of which desktop copy to start when several are
+/// installed ("" = automatic); stored under `process::DESKTOP_EXE_STORE_KEY`.
+const DESKTOP_EXE_SETTING: &str = "desktop_exe";
 
 /// Label of a desktop copy in the picker: version, folder, and whether it runs.
 fn copy_label(c: &process::DesktopCopy) -> String {
@@ -188,7 +218,7 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
     if inst.copies.len() < 2 {
         return None;
     }
-    let picked = store::get_str(&store::load(), agent, process::DESKTOP_EXE).unwrap_or_default();
+    let picked = store::get_str(&store::load(), agent, process::DESKTOP_EXE_STORE_KEY).unwrap_or_default();
     let current = inst.copies.iter().find(|c| Some(&c.exe) == inst.exe.as_ref());
     let auto = match current {
         Some(c) => tr!("自动（现在是 {}）", "Automatic (now {})", c.version.as_deref().unwrap_or("?")),
@@ -203,7 +233,7 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
     // A pick whose copy is gone shows as automatic, which is what detection does with it.
     let value = if options.contains(&picked) { picked } else { String::new() };
     Some(Setting {
-        key: DESKTOP_EXE.into(),
+        key: DESKTOP_EXE_SETTING.into(),
         group: "AgentPlus".into(),
         label: tr!("启动哪个 {}", "Which {} to start", name),
         desc: tr!(
@@ -218,42 +248,35 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
     })
 }
 
+/// Store key of the config folder picked by hand in 设置 › Agent 识别 (kept per environment).
+const CONFIG_DIR_STORE_KEY: &str = "configDir";
+
+/// The picked folder as typed (None when unset or blank).
+fn custom_dir(root: &serde_json::Value, agent: &str) -> Option<String> {
+    store::get_str(root, agent, CONFIG_DIR_STORE_KEY).filter(|s| !s.trim().is_empty())
+}
+
 /// Config folder picked by hand in 设置 › Agent 识别 (kept per environment).
 pub fn dir_override(agent: &str) -> Option<PathBuf> {
-    store::get_str(&store::load(), agent, "configDir").filter(|s| !s.trim().is_empty()).map(|s| crate::env::resolve_path(&s))
+    custom_dir(&store::load(), agent).map(|s| crate::env::resolve_path(&s))
 }
 
-fn default_dir(agent: &str) -> PathBuf {
-    let h = crate::util::home();
-    match agent {
-        codex::ID => h.join(".codex"),
-        claude::ID => h.join(".claude"),
-        opencode::ID => h.join(".config").join("opencode"),
-        zcode::ID => h.join(".zcode").join("v2"),
-        mimo::ID => h.join(".config").join("mimocode"),
-        _ => ext(agent).map(|e| (e.default_dir)()).unwrap_or(h),
+/// Config files (relative, `/`-separated) whose presence in a folder means "this agent is
+/// configured here": every file its adapter reads there, the marker among them.
+fn markers(e: &'static Ext) -> &'static [&'static str] {
+    match e.id {
+        opencode::ID => &opencode::CONFIG_FILES,
+        kilo::ID => &kilo::CONFIG_FILES,
+        // ~/.zcode is accepted as well as ~/.zcode/v2 (see zcode::dir).
+        zcode::ID => &[zcode::MARKER, "v2/provider_config.json"],
+        pi::ID => &[pi::MARKER, "models.json"],
+        codebuddy::ID => &[codebuddy::MARKER, "models.json"],
+        _ => std::slice::from_ref(&e.marker),
     }
 }
 
-/// The file whose presence means "this agent is configured here".
-fn marker(agent: &str) -> &'static str {
-    match agent {
-        codex::ID => "config.toml",
-        claude::ID => "settings.json",
-        opencode::ID => "opencode.json",
-        zcode::ID => "provider_config.json",
-        mimo::ID => "mimocode.jsonc",
-        _ => ext(agent).map(|e| e.marker).unwrap_or("?"),
-    }
-}
-
-fn has_marker(dir: &std::path::Path, agent: &str) -> bool {
-    dir.join(marker(agent)).exists()
-        || (agent == zcode::ID && dir.join("v2").join(marker(agent)).exists())
-        || (agent == opencode::ID && dir.join("opencode.jsonc").exists())
-        || (agent == kilo::ID && ["kilo.jsonc", "opencode.json", "opencode.jsonc"].iter().any(|f| dir.join(f).exists()))
-        || (agent == pi::ID && dir.join("models.json").exists())
-        || (agent == codebuddy::ID && dir.join("models.json").exists())
+fn has_marker(dir: &Path, e: &'static Ext) -> bool {
+    markers(e).iter().any(|m| m.split('/').fold(dir.to_path_buf(), |d, part| d.join(part)).exists())
 }
 
 #[derive(serde::Serialize)]
@@ -314,21 +337,24 @@ fn detect_manual() -> Vec<Detect> {
 }
 
 pub fn detect_all() -> Vec<Detect> {
-    let mut out: Vec<Detect> = ALL.iter()
-        .map(|a| {
-            let inst = process::detect(a);
-            let custom = store::get_str(&store::load(), a, "configDir").filter(|s| !s.trim().is_empty());
-            let dir = dir_override(a).unwrap_or_else(|| default_dir(a));
-            let found = has_marker(&dir, a);
-            let name = display_name(a);
-            let wsl_desktop = crate::env::is_wsl() && !IN_WSL.contains(a);
+    let root = store::load();
+    let mut out: Vec<Detect> = EXT
+        .iter()
+        .map(|e| {
+            let inst = process::detect(e.id);
+            let custom = custom_dir(&root, e.id);
+            let default_dir = (e.default_dir)();
+            let dir = custom.as_deref().map(crate::env::resolve_path).unwrap_or_else(|| default_dir.clone());
+            let found = has_marker(&dir, e);
+            let name = e.name;
+            let wsl_desktop = crate::env::is_wsl() && !in_wsl(e);
             Detect {
-                id: a.to_string(),
+                id: e.id.to_string(),
                 name: name.into(),
                 app_found: inst.installed,
                 version: inst.version,
                 running: inst.running,
-                default_dir: default_dir(a).to_string_lossy().to_string(),
+                default_dir: default_dir.to_string_lossy().to_string(),
                 enabled: (inst.installed && !wsl_desktop) || (custom.is_some() && found),
                 custom_dir: custom,
                 config_dir: dir.to_string_lossy().to_string(),
@@ -343,9 +369,7 @@ pub fn detect_all() -> Vec<Detect> {
 }
 
 pub fn set_dir(agent: &str, path: Option<&str>) -> Result<()> {
-    if !ALL.contains(&agent) {
-        return Err(anyhow!(tr!("未知 Agent {agent}", "Unknown agent: {agent}")));
-    }
+    let e = adapter(agent)?;
     let mut s = store::load();
     match path.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => {
@@ -353,42 +377,30 @@ pub fn set_dir(agent: &str, path: Option<&str>) -> Result<()> {
             if !dir.is_dir() {
                 return Err(anyhow!(tr!("找不到目录 {}", "Folder not found: {}", dir.display())));
             }
-            if !has_marker(&dir, agent) {
+            if !has_marker(&dir, e) {
                 return Err(anyhow!(tr!(
-                    "这个目录里没有 {}，不像是 {agent} 的配置目录",
-                    "No {} in this folder; it doesn't look like a {agent} config folder",
-                    marker(agent)
+                    "这个目录里没有 {}，不像是 {} 的配置目录",
+                    "No {} in this folder; it doesn't look like a {} config folder",
+                    e.marker,
+                    e.name
                 )));
             }
-            store::set_str(&mut s, agent, "configDir", p);
+            store::set_str(&mut s, agent, CONFIG_DIR_STORE_KEY, p);
         }
-        None => store::set_value(&mut s, agent, "configDir", serde_json::Value::Null),
+        None => store::set_value(&mut s, agent, CONFIG_DIR_STORE_KEY, serde_json::Value::Null),
     }
     store::save(&s)
 }
 
 pub fn state(agent: &str) -> Result<AgentState> {
-    if ocproject::is_project(agent) {
-        return ocproject::state(agent).map(|mut st| {
-            st.model_fields = crate::mfields::fields(crate::mfields::for_agent(agent));
-            st
-        });
-    }
-    let inst = process::detect(agent);
-    let mut st = match agent {
-        codex::ID => codex::state(&inst),
-        claude::ID => claude::state(&inst),
-        opencode::ID => opencode::state(&inst),
-        zcode::ID => zcode::state(&inst),
-        mimo::ID => mimo::state(&inst),
-        _ => match ext(agent) {
-            Some(e) => (e.state)(&inst),
-            None => return Err(anyhow!(tr!("未知 Agent {agent}", "Unknown agent: {agent}"))),
-        },
+    let (mut st, found) = if ocproject::is_project(agent) {
+        (ocproject::state(agent)?, None)
+    } else {
+        let e = adapter(agent)?;
+        let inst = process::detect(agent);
+        ((e.state)(&inst), Some((e, inst)))
     };
     st.model_fields = crate::mfields::fields(crate::mfields::for_agent(agent));
-    // Only desktop apps can be restarted; CLIs read the new config on their next run.
-    st.restartable = !crate::env::is_wsl() && (inst.exe.is_some() || inst.aumid.is_some());
     // Key fingerprints let the UI group a relay's entries by key without seeing it.
     for p in st.providers.iter_mut().filter(|p| p.has_key && p.base_url.is_some()) {
         if let Ok((_, Some(k), _)) = provider_endpoint(agent, &p.id) {
@@ -396,12 +408,16 @@ pub fn state(agent: &str) -> Result<AgentState> {
             p.key_hint = Some(crate::model::mask_key(&k));
         }
     }
-    let custom = dir_override(agent).filter(|d| has_marker(d, agent));
+    // A project folder is neither installed nor started: nothing below applies.
+    let Some((e, inst)) = found else { return Ok(st) };
+    // Only desktop apps can be restarted; CLIs read the new config on their next run.
+    st.restartable = !crate::env::is_wsl() && (inst.exe.is_some() || inst.aumid.is_some());
+    let custom = dir_override(agent).filter(|d| has_marker(d, e));
     if custom.is_some() {
         st.installed = true;
     }
     if crate::env::is_wsl() {
-        if IN_WSL.contains(&agent) || custom.is_some() {
+        if in_wsl(e) || custom.is_some() {
             if agent == codex::ID {
                 // UI injection patches the desktop app; the CLI has nothing to patch.
                 st.settings.retain(|s| !matches!(s.key.as_str(), "fast_inject" | "full_names" | "quota_unlock" | "hide_usage_banner"));
@@ -430,7 +446,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     }
     st.settings.extend(desktop_setting(agent, &st.name, &inst));
     st.settings.push(bool_setting(
-        AUTO_RESTART,
+        AUTO_RESTART_SETTING,
         "AgentPlus",
         &tr!("应用后自动重启 {}", "Restart {} after applying", st.name),
         l(
@@ -444,18 +460,10 @@ pub fn state(agent: &str) -> Result<AgentState> {
 
 /// (base_url, key, api) of an existing provider; the key stays in the backend.
 pub fn provider_endpoint(agent: &str, provider: &str) -> Result<Endpoint> {
-    match agent {
-        _ if ocproject::is_project(agent) => ocproject::endpoint(agent, provider),
-        codex::ID => codex::provider_endpoint(provider),
-        claude::ID => claude::provider_endpoint(provider),
-        opencode::ID => opencode::provider_endpoint(provider),
-        zcode::ID => zcode::provider_endpoint(provider),
-        mimo::ID => mimo::provider_endpoint(provider),
-        _ => match ext(agent) {
-            Some(e) => (e.endpoint)(provider),
-            None => Err(anyhow!(tr!("未知 Agent {agent}", "Unknown agent: {agent}"))),
-        },
+    if ocproject::is_project(agent) {
+        return ocproject::endpoint(agent, provider);
     }
+    (adapter(agent)?.endpoint)(provider)
 }
 
 /// Turns "copy provider X from agent A (or the library)" into a normal UpsertProvider.
@@ -484,7 +492,6 @@ fn resolve_import(agent: &str, from: &str, provider: &str, api: Option<&str>, na
         None if api == "gemini" => return Err(anyhow!(tr!("{} 不支持 Gemini 协议", "{} doesn't support the Gemini protocol", display_name(agent)))),
         _ => {}
     }
-    let models = if agent == codex::ID { vec![] } else { models };
     Ok(Op::UpsertProvider {
         provider: ProviderInput { id: None, name: name.map(String::from).unwrap_or(src_name), base_url, api, api_key: key, models, key_from_library: None, official_auth: None },
     })
@@ -516,7 +523,7 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
 /// `plan` for ops already passed through `resolve`.
 pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     // AgentPlus's own settings (auto-restart, desktop copy) are handled here; the adapters never see them.
-    let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART || key == DESKTOP_EXE));
+    let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART_SETTING || key == DESKTOP_EXE_SETTING));
     // Entries pointing at the local gateway carry the placeholder (or, copied, another
     // agent's key): every agent gets its own, so the gateway can check and count its calls.
     let rest: Vec<Op> = rest
@@ -530,23 +537,16 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
             other => Ok(other),
         })
         .collect::<Result<_>>()?;
-    let (mut diff, written, backup) = match agent {
-        _ if ocproject::is_project(agent) => ocproject::plan(agent, &rest, dry_run)?,
-        codex::ID => codex::plan(&rest, dry_run)?,
-        claude::ID => claude::plan(&rest, dry_run)?,
-        opencode::ID => opencode::plan(&rest, dry_run)?,
-        zcode::ID => zcode::plan(&rest, dry_run)?,
-        mimo::ID => mimo::plan(&rest, dry_run)?,
-        _ => match ext(agent) {
-            Some(e) => (e.plan)(&rest, dry_run)?,
-            None => return Err(anyhow!(tr!("未知 Agent {agent}", "Unknown agent: {agent}"))),
-        },
+    let (mut diff, written, backup) = if ocproject::is_project(agent) {
+        ocproject::plan(agent, &rest, dry_run)?
+    } else {
+        (adapter(agent)?.plan)(&rest, dry_run)?
     };
     for op in own {
         if let Op::SetSetting { key, value } = op {
-            if key == DESKTOP_EXE {
+            if key == DESKTOP_EXE_SETTING {
                 let v = value.as_str().unwrap_or("").to_string();
-                if store::get_str(&store::load(), agent, process::DESKTOP_EXE).unwrap_or_default() != v {
+                if store::get_str(&store::load(), agent, process::DESKTOP_EXE_STORE_KEY).unwrap_or_default() != v {
                     let inst = process::detect(agent);
                     let label = match inst.copies.iter().find(|c| c.exe.to_string_lossy() == v) {
                         Some(c) => copy_label(c),
@@ -555,7 +555,7 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
                     diff.push(l("AgentPlus 设置", "AgentPlus settings"), &tr!("启动的桌面版 → {label}", "Desktop copy to start → {label}"), true);
                     if !dry_run {
                         let mut s = store::load();
-                        store::set_str(&mut s, agent, process::DESKTOP_EXE, &v);
+                        store::set_str(&mut s, agent, process::DESKTOP_EXE_STORE_KEY, &v);
                         store::save(&s)?;
                     }
                 }
@@ -570,13 +570,103 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
                 );
                 if !dry_run {
                     let mut s = store::load();
-                    store::set_flag(&mut s, agent, "autoRestart", on);
+                    store::set_flag(&mut s, agent, AUTO_RESTART_STORE_KEY, on);
                     store::save(&s)?;
                 }
             }
         }
     }
     Ok((diff, written, backup))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::TestHome;
+
+    #[test]
+    fn all_lists_every_adapter_once() {
+        assert_eq!(ALL.to_vec(), EXT.iter().map(|e| e.id).collect::<Vec<_>>());
+        let mut ids = ALL.to_vec();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), ALL.len());
+        for e in EXT {
+            assert!(!e.name.is_empty() && !e.marker.is_empty(), "{}", e.id);
+            assert!(markers(e).contains(&e.marker), "{}", e.id);
+            // A CLI found in WSL needs a marker to look for; a desktop-only app has neither.
+            assert_eq!(e.wsl_script.is_empty(), e.wsl_marker.is_empty(), "{}", e.id);
+        }
+        // The Windows desktop apps.
+        let desktop: Vec<&str> = EXT.iter().filter(|e| !in_wsl(e)).map(|e| e.id).collect();
+        assert_eq!(desktop, [zcode::ID, mimo::ID]);
+    }
+
+    #[test]
+    fn unknown_agents_are_errors() {
+        let _h = TestHome::new("adapters-unknown");
+        for r in [state("nope").map(|_| ()), provider_endpoint("nope", "x").map(|_| ()), plan_resolved("nope", &[], true).map(|_| ()), set_dir("nope", None)] {
+            assert_eq!(r.unwrap_err().to_string(), "未知 Agent nope");
+        }
+    }
+
+    #[test]
+    fn project_ids_resolve_to_opencode() {
+        assert_eq!(base_agent("opencode@D:/work/x"), opencode::ID);
+        assert_eq!(base_agent(kilo::ID), kilo::ID);
+        assert_eq!(display_name("opencode@D:/work/x"), opencode::NAME);
+        assert_eq!(display_name(codex::ID), codex::NAME);
+        assert_eq!(display_name("nope"), "?");
+        assert_eq!(only_api("opencode@D:/work/x"), None);
+        assert_eq!(only_api(claude::ID), Some("anthropic"));
+    }
+
+    #[test]
+    fn every_file_an_adapter_reads_marks_its_folder() {
+        let h = TestHome::new("adapters-markers");
+        let cases: Vec<(&str, &str)> = opencode::CONFIG_FILES
+            .iter()
+            .map(|f| (opencode::ID, *f))
+            .chain(kilo::CONFIG_FILES.iter().map(|f| (kilo::ID, *f)))
+            .chain([(zcode::ID, "provider_config.json"), (zcode::ID, "v2/provider_config.json"), (pi::ID, "models.json"), (codebuddy::ID, "models.json")])
+            .chain(EXT.iter().map(|e| (e.id, e.marker)))
+            .collect();
+        for (i, (agent, file)) in cases.into_iter().enumerate() {
+            let dir = h.0.join(format!("case-{i}"));
+            let e = ext(agent).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            assert!(!has_marker(&dir, e), "{agent}: empty folder");
+            let p = file.split('/').fold(dir.clone(), |d, part| d.join(part));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "{}").unwrap();
+            assert!(has_marker(&dir, e), "{agent}: {file}");
+            // set_dir takes exactly the folders detection accepts.
+            set_dir(agent, Some(&dir.to_string_lossy())).unwrap();
+            assert_eq!(dir_override(agent), Some(dir));
+            set_dir(agent, None).unwrap();
+        }
+        let other = h.0.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("opencode.jsonc"), "{}").unwrap();
+        let err = set_dir(codex::ID, Some(&other.to_string_lossy())).unwrap_err().to_string();
+        assert_eq!(err, "这个目录里没有 config.toml，不像是 Codex 的配置目录");
+    }
+
+    #[test]
+    fn the_default_folder_is_never_the_picked_one() {
+        let h = TestHome::new("adapters-default-dir");
+        let picked = h.0.join("picked");
+        std::fs::create_dir_all(&picked).unwrap();
+        let mut root = store::load();
+        for a in ALL {
+            store::set_str(&mut root, a, CONFIG_DIR_STORE_KEY, &picked.to_string_lossy());
+        }
+        store::save(&root).unwrap();
+        for e in EXT {
+            assert_eq!(dir_override(e.id).as_deref(), Some(picked.as_path()));
+            assert_ne!((e.default_dir)(), picked, "{}", e.id);
+        }
+    }
 }
 
 #[cfg(test)]
