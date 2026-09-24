@@ -845,7 +845,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let raw = configured_provider(&doc);
                 let src = store::get_str(&store, ID, "fixedSource");
                 if &raw == provider || (raw == FIXED_ID && src.as_deref() == Some(provider.as_str())) {
-                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商再删除", "\"{provider}\" is in use; switch to another provider before deleting it")));
+                    return Err(msg::in_use(provider));
                 }
                 let removed = doc
                     .get_mut("model_providers")
