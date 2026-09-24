@@ -14,9 +14,9 @@ use crate::process::Install;
 use crate::store;
 use crate::util::*;
 use crate::i18n::l;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const ID: &str = "pi";
 pub const NAME: &str = "pi";
@@ -55,14 +55,6 @@ fn fmt() -> Fmt {
 
 fn load_models() -> Result<(Value, TextMeta, bool)> {
     read_jsonc_object_or(&models_path(), json!({ "providers": {} }))
-}
-
-/// Writes JSON in place (not tmp + rename) so auth.json keeps its owner-only permissions.
-fn write_json_in_place(path: &Path, v: &Value) -> Result<()> {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).with_context(|| tr!("创建 {} 失败", "Failed to create {}", display_path(d)))?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(v)? + "\n").with_context(|| tr!("写入 {} 失败", "Failed to write {}", display_path(path)))
 }
 
 pub fn detect() -> Install {
@@ -107,25 +99,9 @@ pub fn state(inst: &Install) -> AgentState {
     st.providers = f.providers(&cfg, &root, auth.as_ref());
 
     // Built-in providers logged in through `pi` (/login or an API key) but not configured here.
-    if let Some(obj) = auth.as_ref().and_then(|a| a.as_object()) {
-        for (id, e) in obj {
-            if st.providers.iter().any(|p| &p.id == id) {
-                continue;
-            }
-            let oauth = e.get("type").and_then(|t| t.as_str()) == Some("oauth");
-            st.providers.push(Provider::builtin(
-                id.clone(),
-                id.clone(),
-                if oauth { l("账号登录（/login）", "Account sign-in (/login)") } else { l("内置供应商 · API Key", "Built-in provider · API key") },
-                "chat",
-                l("内置", "Built-in"),
-                vec![
-                    Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
-                    Kv::text(lbl::note(), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
-                ],
-            ));
-        }
-    }
+    let about = l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.");
+    let cards = super::ocfmt::auth_cards(auth.as_ref(), &st.providers, "/login", about, &[]);
+    st.providers.extend(cards);
 
     let default = match defaults() {
         (Some(p), Some(m)) => format!("{p}/{m}"),
@@ -198,7 +174,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             written.push(models_path());
         }
         if let (true, Some((a, _))) = (dirty.auth, &auth) {
-            write_json_in_place(&auth_path(), a)?;
+            super::ocfmt::write_auth(&auth_path(), a)?;
             written.push(auth_path());
         }
         if let Some((s, m)) = &settings {
