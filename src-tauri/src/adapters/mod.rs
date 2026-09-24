@@ -374,9 +374,7 @@ pub fn set_dir(agent: &str, path: Option<&str>) -> Result<()> {
     match path.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => {
             let dir = crate::env::resolve_path(p);
-            if !dir.is_dir() {
-                return Err(anyhow!(tr!("找不到目录 {}", "Folder not found: {}", dir.display())));
-            }
+            crate::util::require_dir(&dir)?;
             if !has_marker(&dir, e) {
                 return Err(anyhow!(tr!(
                     "这个目录里没有 {}，不像是 {} 的配置目录",
@@ -458,8 +456,13 @@ pub fn state(agent: &str) -> Result<AgentState> {
     Ok(st)
 }
 
-/// (base_url, key, api) of an existing provider; the key stays in the backend.
+/// (base_url, key, api) of an existing provider: an agent's, or a library entry's (agent
+/// `library::FROM`); the key stays in the backend.
 pub fn provider_endpoint(agent: &str, provider: &str) -> Result<Endpoint> {
+    if agent == crate::library::FROM {
+        let e = crate::library::endpoint(provider)?;
+        return Ok((e.base_url, e.key, e.api));
+    }
     if ocproject::is_project(agent) {
         return ocproject::endpoint(agent, provider);
     }
@@ -611,6 +614,20 @@ mod tests {
     }
 
     #[test]
+    fn library_entries_have_endpoints() {
+        let _h = TestHome::new("adapters-library-endpoint");
+        let lib = serde_json::json!([
+            { "id": "relay", "name": "Relay", "baseUrl": "https://relay.example.com/v1", "apiKey": "sk-lib-1234", "api": "chat" },
+            { "id": "open", "name": "Open", "baseUrl": "https://open.example.com", "api": "responses" },
+        ]);
+        store::save(&serde_json::json!({ "library": lib })).unwrap();
+        let from = crate::library::FROM;
+        assert_eq!(provider_endpoint(from, "relay").unwrap(), ("https://relay.example.com/v1".into(), Some("sk-lib-1234".into()), "chat".into()));
+        assert_eq!(provider_endpoint(from, "open").unwrap(), ("https://open.example.com".into(), None, "responses".into()));
+        assert_eq!(provider_endpoint(from, "nope").unwrap_err().to_string(), "供应商库里没有 nope");
+    }
+
+    #[test]
     fn project_ids_resolve_to_opencode() {
         assert_eq!(base_agent("opencode@D:/work/x"), opencode::ID);
         assert_eq!(base_agent(kilo::ID), kilo::ID);
@@ -650,6 +667,8 @@ mod tests {
         std::fs::write(other.join("opencode.jsonc"), "{}").unwrap();
         let err = set_dir(codex::ID, Some(&other.to_string_lossy())).unwrap_err().to_string();
         assert_eq!(err, "这个目录里没有 config.toml，不像是 Codex 的配置目录");
+        let err = set_dir(codex::ID, Some(&h.0.join("missing").to_string_lossy())).unwrap_err().to_string();
+        assert!(err.starts_with("找不到文件夹：") && err.ends_with("missing"), "{err}");
     }
 
     #[test]

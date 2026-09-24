@@ -45,16 +45,6 @@ fn with_status(r: anyhow::Result<()>) -> Result<gateway::server::Status, String>
     Ok(gateway::server::status())
 }
 
-/// (base URL, key, api) of a provider: an agent's, or a library entry's (agent "library").
-fn endpoint(agent: &str, provider: &str) -> anyhow::Result<adapters::Endpoint> {
-    if agent == library::FROM {
-        let e = library::endpoint(provider)?;
-        Ok((e.base_url, e.key, e.api))
-    } else {
-        adapters::provider_endpoint(agent, provider)
-    }
-}
-
 #[tauri::command]
 async fn list_agents() -> Result<Vec<AgentState>, String> {
     blocking(|| Ok(adapters::ALL.iter().filter_map(|a| adapters::state(a).ok()).collect())).await
@@ -182,7 +172,7 @@ async fn fetch_models(agent: String, provider: String) -> Result<Vec<String>, St
 #[tauri::command]
 async fn test_provider(agent: String, provider: String, model: String) -> Result<net::TestResult, String> {
     blocking(move || {
-        let (base, key, api) = endpoint(&agent, &provider)?;
+        let (base, key, api) = adapters::provider_endpoint(&agent, &provider)?;
         Ok(net::test_call(&base, key.as_deref(), &api, model.trim()))
     })
     .await
@@ -192,7 +182,7 @@ async fn test_provider(agent: String, provider: String, model: String) -> Result
 #[tauri::command]
 async fn fetch_models_lib(id: String) -> Result<Vec<String>, String> {
     blocking(move || {
-        let (base, key, api) = endpoint(library::FROM, &id)?;
+        let (base, key, api) = adapters::provider_endpoint(library::FROM, &id)?;
         net::list_models(&base, key.as_deref(), &api).map_err(anyhow::Error::msg)
     })
     .await
