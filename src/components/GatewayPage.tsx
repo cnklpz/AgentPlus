@@ -7,6 +7,8 @@ import { Dropdown } from "./Dropdown";
 import { AgentIcon, Icon } from "./icons";
 import { t, tn, tx } from "../i18n";
 import { scrub } from "../privacy";
+import { copyText, errText, type Flash, isHttpUrl, onActivateKey } from "../util";
+import { fmtSecs, joinList } from "../format";
 
 interface Props {
   status: GatewayStatus | null;
@@ -28,7 +30,7 @@ interface Props {
   staleKeys: number;
   /** Queue those entries for rewriting with each agent's key (pending changes). */
   onUpdateKeys: () => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
 }
 
 const PROTOS: ApiKind[] = ["chat", "responses", "anthropic"];
@@ -39,14 +41,15 @@ export function tripped(r: GatewayRouteView): GatewayBreakerView | null {
   return r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
 }
 
-function secs(n: number) {
+/** A wait in whole seconds: "42 秒", "1 分 5 秒". */
+function fmtWait(n: number) {
   return n >= 60 ? t("gatewayPage.minSec", { m: Math.floor(n / 60), s: n % 60 }) : t("gatewayPage.sec", { n });
 }
 
 /** "15:41:52 起 · 42 秒后重试" */
 function breakerWhen(b: GatewayBreakerView) {
   return b.state === "open"
-    ? t("gatewayPage.breakerOpen", { at: b.at ?? "", wait: secs(b.remainingSecs) })
+    ? t("gatewayPage.breakerOpen", { at: b.at ?? "", wait: fmtWait(b.remainingSecs) })
     : t("gatewayPage.breakerHalfOpen");
 }
 
@@ -62,14 +65,14 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
   };
   useEffect(() => { if (s) setPort(String(s.port)); }, [s?.port]);
 
-  const copy = (text: string) => navigator.clipboard.writeText(text).then(() => flash(t("common.copied"))).catch(() => flash(t("gatewayPage.copyFailed"), true));
+  const copy = (text: string) => copyText(text, flash);
   const paused = s?.routes.filter((r) => tripped(r)) ?? [];
   const resetBreaker = async (id: string | null) => {
     try {
       setStatus(await api.gatewayResetBreaker(id));
       flash(t(id ? "gatewayPage.resumedOne" : "gatewayPage.resumedAll"));
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     }
   };
   const portNum = /^\d+$/.test(port.trim()) ? Number(port.trim()) : NaN;
@@ -82,7 +85,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
       setStatus(await api.gatewaySet(on, portOk ? portNum : null));
       flash(t(on ? "gatewayPage.gatewayOn" : "gatewayPage.gatewayOff"));
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
       api.gatewayStatus().then(setStatus).catch(() => undefined);
     } finally {
       setBusy(null);
@@ -205,7 +208,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
               return (
                 <div key={r.id} className={`gw-item fwd${expanded ? " open" : ""}`} data-url={r.localBase} data-ctx="route" data-route={r.id}>
                   <div className="gw-item-head" role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setOpen(expanded ? null : r.id)}
-                    onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen(expanded ? null : r.id); } }}>
+                    onKeyDown={onActivateKey(() => setOpen(expanded ? null : r.id))}>
                     <span className={`api-chip api-${r.upstreamApi}`}>{API_LABEL[r.upstreamApi]}</span>
                     <span className="grow minw0">
                       <span className="block small strong ellipsis">{r.name}</span>
@@ -216,7 +219,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <span className="gw-weight" title={t("gatewayPage.weightTitle")}>{t("gatewayPage.weightChip", { w: r.weight })}</span>
                     {r.upstreamMissing ? <span className="chip-muted">{t("gatewayPage.chipBroken")}</span>
                       : !r.enabled ? <span className="chip-muted">{t("gatewayPage.chipPaused")}</span>
-                      : trip ? <span className="chip-bad" title={breakerWhen(trip)}>{trip.state === "open" ? t("gatewayPage.chipTripped", { wait: secs(trip.remainingSecs) }) : t("gatewayPage.chipProbe")}</span>
+                      : trip ? <span className="chip-bad" title={breakerWhen(trip)}>{trip.state === "open" ? t("gatewayPage.chipTripped", { wait: fmtWait(trip.remainingSecs) }) : t("gatewayPage.chipProbe")}</span>
                       : <span className="chip-ok">{t("gatewayPage.chipActive")}</span>}
                     <button className="icon-btn sm" aria-label={t("gatewayPage.copyGatewayUrl")} title={t("gatewayPage.copyUrl")} onClick={(e) => { e.stopPropagation(); copy(r.localBase); }}><Icon.copy size={12} /></button>
                     <button className="icon-btn sm" aria-label={t("gatewayPage.deleteRoute")} title={t("gatewayPage.deleteRoute")} onClick={(e) => { e.stopPropagation(); remove(r.id); }}><Icon.trash size={12} /></button>
@@ -246,7 +249,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     </span>
                     <span className="mono tiny ellipsis">{l.model}</span>
                     <span className={`mono tiny ${l.status >= 400 ? "warn-text" : "good-ink"}`}>{l.status || "—"}</span>
-                    <span className="mono tiny muted">{(l.ms / 1000).toFixed(2)}s{l.stream ? t("gatewayPage.streamSuffix") : ""}</span>
+                    <span className="mono tiny muted">{fmtSecs(l.ms, 2)}s{l.stream ? t("gatewayPage.streamSuffix") : ""}</span>
                   </div>
                 ))}
               </div>
@@ -303,7 +306,7 @@ function Unified({ s, copy }: { s: GatewayStatus; copy: (t: string) => void }) {
           </div>
         )}
         {unknown.length > 0 && (
-          <span className="tiny muted">{t("gatewayPage.unknownModels", { names: unknown.map((r) => r.name).join(t("gatewayPage.listSep")) })}</span>
+          <span className="tiny muted">{t("gatewayPage.unknownModels", { names: joinList(unknown.map((r) => r.name)) })}</span>
         )}
       </div>
     </section>
@@ -330,7 +333,7 @@ function AddForward({ groups, onForward, onClose }: {
 
   useEscape(onClose);
 
-  const urlOk = /^https?:\/\/\S+$/.test(url.trim());
+  const urlOk = isHttpUrl(url);
   const can = mode === "pick" ? !!pick : name.trim() !== "" && urlOk;
   const save = async () => {
     setBusy(true);
@@ -347,7 +350,7 @@ function AddForward({ groups, onForward, onClose }: {
         await onForward({ key: `lib:${e.id}`, name: e.name, baseUrl: e.baseUrl, api: e.api, keyFp: e.keyFp, keyHint: e.keyHint, lib: e, uses: [] }, false);
       }
     } catch (e) {
-      setErr(String(e).replace(/^Error: /, ""));
+      setErr(errText(e));
       setBusy(false);
     }
   };
@@ -381,7 +384,7 @@ function AddForward({ groups, onForward, onClose }: {
                           ? t("gatewayPage.replaceNone")
                           : replace
                             ? t("gatewayPage.replaceOn", {
-                                list: users.map((u) => t("gatewayPage.agentProvider", { agent: u.agent.name, provider: u.p!.name })).join(t("gatewayPage.listSep")),
+                                list: joinList(users.map((u) => t("gatewayPage.agentProvider", { agent: u.agent.name, provider: u.p!.name }))),
                               })
                             : tn("gatewayPage.replaceOff", users.length)}
                       </div>
@@ -438,7 +441,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
   onDelete: () => void;
   onResetBreaker: () => void;
   r: GatewayRouteView; g: Group | null; agents: AgentState[]; running: boolean; threshold: number; setStatus: (s: GatewayStatus) => void;
-  copy: (t: string) => void; flash: Props["flash"]; onAddToAgent: Props["onAddToAgent"];
+  copy: (t: string) => void; flash: Flash; onAddToAgent: Props["onAddToAgent"];
 }) {
   const [inbound, setInbound] = useState<ApiKind>(r.upstreamApi === "responses" ? "chat" : "responses");
   const models = [...new Set([...(g?.lib?.models ?? []), ...(g?.uses ?? []).flatMap((u) => u.p?.models.map((m) => m.id) ?? [])])];
@@ -457,7 +460,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
       setStatus(await api.gatewaySaveRoute({ ...plainRoute(r), ...patch }, r.id));
       flash(msg);
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     }
   };
   const test = async () => {
@@ -466,7 +469,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
     try {
       setRes(await api.gatewayTest(r.id, inbound, model.trim()));
     } catch (e) {
-      setRes(String(e));
+      setRes(errText(e));
     } finally {
       setTesting(false);
       // A passing test un-pauses a tripped forward.
@@ -593,7 +596,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
 }
 
 /** Error breaker settings: when to pause a forward that keeps failing, and for how long. */
-function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setStatus: (s: GatewayStatus) => void; flash: Props["flash"] }) {
+function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setStatus: (s: GatewayStatus) => void; flash: Flash }) {
   const [threshold, setThreshold] = useState(String(cfg.threshold));
   const [cooldown, setCooldown] = useState(String(cfg.cooldownSecs));
   useEffect(() => { setThreshold(String(cfg.threshold)); setCooldown(String(cfg.cooldownSecs)); }, [cfg.threshold, cfg.cooldownSecs]);
@@ -603,7 +606,7 @@ function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setSt
       setStatus(await api.gatewaySetBreaker(next));
       flash(msg);
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     }
   };
   return (

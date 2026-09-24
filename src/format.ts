@@ -1,19 +1,26 @@
-// Sizes and relative times, shared by the pages that list files, sessions and projects.
+// Numbers, sizes, durations and relative times, formatted for the UI language.
 import { locale, t, tn } from "./i18n";
 
 const KB = 1024;
 const MB = KB * 1024;
 const GB = MB * 1024;
 
-const num = (n: number, digits: number) =>
+/** `n` with exactly `digits` decimals, in the UI language's number format ("1,234.5"). */
+export const fmtNum = (n: number, digits: number) =>
   n.toLocaleString(locale(), { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+/** Milliseconds as seconds, without a unit: "1.2", "12.35". */
+export const fmtSecs = (ms: number, digits = 1) => fmtNum(ms / 1000, digits);
+
+/** "a、b、c" / "a, b, c". */
+export const joinList = (items: readonly string[]) => items.join(t("common.listSep"));
 
 /** "0 KB", "1 KB" (anything from 1 byte up), "12 KB", "3.4 MB", "1.2 GB". */
 export function fmtSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
-  if (bytes >= GB) return `${num(bytes / GB, 1)} GB`;
-  if (bytes >= MB) return `${num(bytes / MB, 1)} MB`;
-  return `${num(Math.max(1, Math.round(bytes / KB)), 0)} KB`;
+  if (bytes >= GB) return `${fmtNum(bytes / GB, 1)} GB`;
+  if (bytes >= MB) return `${fmtNum(bytes / MB, 1)} MB`;
+  return `${fmtNum(Math.max(1, Math.round(bytes / KB)), 0)} KB`;
 }
 
 /**

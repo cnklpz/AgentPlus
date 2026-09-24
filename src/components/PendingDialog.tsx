@@ -5,6 +5,8 @@ import { t, tn } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
 import { useEscape } from "../hooks";
 import { scrub } from "../privacy";
+import { joinList } from "../format";
+import { errText } from "../util";
 
 interface Props {
   title: string;
@@ -26,7 +28,7 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
     for (const a of withOps) {
       api.preview(a.id, opsToWrite(a, drafts[a.id]))
         .then((d) => setDiffs((m) => ({ ...m, [a.id]: d })))
-        .catch((e) => setDiffs((m) => ({ ...m, [a.id]: String(e) })));
+        .catch((e) => setDiffs((m) => ({ ...m, [a.id]: errText(e) })));
     }
   }, []);
   // Like the backdrop and the close button: nothing to cancel while the changes are being written.
@@ -70,7 +72,7 @@ export function PendingDialog({ title, agents, drafts, busy, onConfirm, onCancel
         </div>
         <div className="modal-foot">
           <span className="muted tiny grow">
-            {applying.length ? t("pendingDialog.willWrite", { names: applying.map((a) => a.name).join(t("pendingDialog.nameSep")) }) : t("pendingDialog.discardAll")}
+            {applying.length ? t("pendingDialog.willWrite", { names: joinList(applying.map((a) => a.name)) }) : t("pendingDialog.discardAll")}
             {withOps.length > applying.length && applying.length ? t("pendingDialog.restDiscarded") : ""}
           </span>
           <button className="btn" disabled={busy} onClick={onCancel}>{t("common.cancel")}</button>

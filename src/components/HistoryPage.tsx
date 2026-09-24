@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { type BackupDetail, type BackupEntry, type BackupFileDetail, api } from "../api";
 import { type TKey, t, tn, tx, useLang } from "../i18n";
 import { Icon } from "./icons";
-import { fmtSize as size } from "../format";
+import { fmtSize, joinList } from "../format";
 import { scrub } from "../privacy";
+import { errText, type Flash, onActivateKey } from "../util";
 
 /** Product names stay as-is; AgentPlus's own maintenance jobs are translated. */
 const AGENT_NAME: Record<string, string | { key: TKey }> = {
@@ -21,14 +22,14 @@ function fmtStamp(s: string): string {
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : s;
 }
 
-export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boolean) => void; onChanged: () => void }) {
+export function HistoryPage({ flash, onChanged }: { flash: Flash; onChanged: () => void }) {
   const [list, setList] = useState<BackupEntry[] | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   // Bumped after a rollback so the open detail re-reads the current files.
   const [rev, setRev] = useState(0);
-  const load = () => api.listBackups().then(setList).catch((e) => flash(String(e), true));
+  const load = () => api.listBackups().then(setList).catch((e) => flash(errText(e), true));
   // Reasons and "blocked" texts come from the backend in the UI language: reload on switch.
   const lang = useLang();
   useEffect(() => { load(); }, [lang]);
@@ -42,7 +43,7 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
       setRev((n) => n + 1);
       onChanged();
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     } finally {
       setBusy(false);
     }
@@ -80,14 +81,14 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
               {list.map((b) => (
                 <div key={b.id} className={`hrow pick${sel === b.id ? " on" : ""}`} role="button" tabIndex={0} aria-pressed={sel === b.id}
                   onClick={() => setSel(sel === b.id ? null : b.id)}
-                  onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSel(sel === b.id ? null : b.id); } }}>
+                  onKeyDown={onActivateKey(() => setSel(sel === b.id ? null : b.id))}>
                   <div className="minw0">
                     <div className="row gap6">
                       <span className="strong small">{fmtStamp(b.stamp)}</span>
                       <span className="ptag tag-soft">{agentName(b.agent)}</span>
                       <span className="tiny muted">{scrub(b.reason)}</span>
                     </div>
-                    <div className="mono tiny muted ellipsis">{b.files.map((f) => f.name).join(t("historyPage.listSep"))} · {size(b.bytes)}</div>
+                    <div className="mono tiny muted ellipsis">{joinList(b.files.map((f) => f.name))} · {fmtSize(b.bytes)}</div>
                   </div>
                   <div className="row gap6" onClick={(e) => e.stopPropagation()}>{rollback(b, true)}</div>
                 </div>
@@ -107,7 +108,7 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
               <div className="hub-stats">
                 <div><b>{list.length}</b><span>{t("historyPage.statRecords")}</span></div>
                 <div><b>{list.filter((b) => b.restorable).length}</b><span>{t("historyPage.statRestorable")}</span></div>
-                <div><b>{size(list.reduce((n, b) => n + b.bytes, 0))}</b><span>{t("historyPage.statSize")}</span></div>
+                <div><b>{fmtSize(list.reduce((n, b) => n + b.bytes, 0))}</b><span>{t("historyPage.statSize")}</span></div>
               </div>
             )}
           </section>
@@ -121,7 +122,7 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
   const [d, setD] = useState<BackupDetail | string | null>(null);
   useEffect(() => {
     let alive = true;
-    api.backupDetail(b.id).then((x) => alive && setD(x)).catch((e) => alive && setD(String(e)));
+    api.backupDetail(b.id).then((x) => alive && setD(x)).catch((e) => alive && setD(errText(e)));
     return () => { alive = false; };
   }, [b.id]);
   const changed = typeof d === "object" && d ? d.files.filter((f) => !f.same).length : 0;
@@ -141,7 +142,7 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
         </div>
         <div className="kv">
           <div className="kv-row"><span className="tiny muted">{t("historyPage.backupLocation")}</span><span className="mono tiny ellipsis" title={typeof d === "object" && d ? scrub(d.dir) : undefined}>{typeof d === "object" && d ? scrub(d.dir) : "…"}</span></div>
-          <div className="kv-row"><span className="tiny muted">{t("historyPage.files")}</span><span className="tiny">{tn("historyPage.filesValue", b.files.length, { size: size(b.bytes) })}</span></div>
+          <div className="kv-row"><span className="tiny muted">{t("historyPage.files")}</span><span className="tiny">{tn("historyPage.filesValue", b.files.length, { size: fmtSize(b.bytes) })}</span></div>
           <div className="kv-row">
             <span className="tiny muted">{t("historyPage.vsNow")}</span>
             <span className="tiny">{typeof d === "object" && d ? (changed ? tn("historyPage.changedFiles", changed) : t("historyPage.allSame")) : "…"}</span>
@@ -183,8 +184,8 @@ function FileDiff({ f }: { f: BackupFileDetail }) {
         </div>
         {f.path && <span className="mono tiny muted ellipsis" title={scrub(f.path)}>{scrub(f.path)}</span>}
         <span className="tiny muted">
-          {t("historyPage.backupSize", { size: size(f.backupBytes) })}
-          {f.currentBytes != null && t("historyPage.nowSize", { size: size(f.currentBytes) })}
+          {t("historyPage.backupSize", { size: fmtSize(f.backupBytes) })}
+          {f.currentBytes != null && t("historyPage.nowSize", { size: fmtSize(f.currentBytes) })}
           {f.currentModified && t("historyPage.modifiedAt", { time: f.currentModified })}
         </span>
       </div>

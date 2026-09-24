@@ -6,6 +6,7 @@ import { API_LABEL } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { colorFor, initials } from "./ProviderCard";
 import { scrubHost } from "../privacy";
+import { toggled } from "../util";
 
 /** One provider that can be copied into a project. */
 interface Source {
@@ -78,7 +79,7 @@ export function CopyProviderDialog({ target, agents, lib, onCopy, onClose }: Pro
   const all = groups.flatMap((g) => g.items);
   const chosen = all.filter((s) => picked.has(s.key));
   const anyInherited = chosen.some((s) => s.inherited);
-  const toggle = (k: string) => setPicked((cur) => { const n = new Set(cur); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const toggle = (k: string) => setPicked((cur) => toggled(cur, k));
 
   const submit = () => onCopy(chosen.map((s) => ({
     fromAgent: s.from, provider: s.provider, name: s.name, api: s.api, label: s.fromName, disableInherited: disable && s.inherited,

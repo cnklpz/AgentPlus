@@ -11,7 +11,6 @@ export default {
   subtitle: "AgentPlus 每次写入前都会备份原文件。回滚会把文件恢复到那次写入之前，回滚前的文件也会先备份。",
   reading: "正在读取…",
   empty: "还没有备份。应用过配置之后，这里会列出每一次写入。",
-  listSep: "、",
   detailTitle: "备份详情",
   detailHint: "点左边的一条记录，查看这次备份了哪些文件、原文件在哪，以及从那之后文件改了什么。",
   statRecords: "条记录",

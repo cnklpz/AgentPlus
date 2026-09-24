@@ -6,7 +6,6 @@ const en: typeof zh = {
   discard: "Discard",
   reading: "Loading…",
   willWrite: "Will write {names} (backed up first)",
-  nameSep: ", ",
   discardAll: "Discard all",
   restDiscarded: "; the rest are discarded",
   writing: "Writing…",

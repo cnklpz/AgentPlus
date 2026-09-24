@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentId, AgentState, GatewayAgentUse, GatewayMinute, GatewayStatus } from "../api";
 import { type TKey, t, tn } from "../i18n";
 import { AGENT_NAME } from "../services";
+import { fmtNum, fmtSecs } from "../format";
 import { AgentIcon, Icon } from "./icons";
 
 type Range = 15 | 60;
@@ -38,14 +39,12 @@ interface Metric {
 const sum = (ms: GatewayMinute[], f: (m: GatewayMinute) => number) => ms.reduce((n, m) => n + f(m), 0);
 
 function tokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}K`;
+  if (n >= 1_000_000) return `${fmtNum(n / 1_000_000, n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1000) return `${fmtNum(n / 1000, n >= 10_000 ? 0 : 1)}K`;
   return String(Math.round(n));
 }
 
-function secs(ms: number): string {
-  return ms >= 10_000 ? `${Math.round(ms / 1000)}s` : `${(ms / 1000).toFixed(1)}s`;
-}
+const secs = (ms: number) => `${fmtSecs(ms, ms >= 10_000 ? 0 : 1)}s`;
 
 const one = (s: Omit<Series, "name" | "tone"> & { tone?: Tone }): Series[] => [{ name: null, tone: "a", ...s }];
 
@@ -92,7 +91,7 @@ const METRICS: Metric[] = [
     headline: (ms) => {
       const n = sum(ms, (m) => m.requests);
       const f = sum(ms, (m) => m.failures);
-      return n ? t("gatewayAside.successRate", { pct: (((n - f) / n) * 100).toFixed(f && f < n ? 1 : 0) }) : "—";
+      return n ? t("gatewayAside.successRate", { pct: fmtNum(((n - f) / n) * 100, f && f < n ? 1 : 0) }) : "—";
     },
     fmt: (v) => tn("gatewayAside.failCount", Math.round(v)),
     axis: int,

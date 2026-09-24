@@ -44,6 +44,8 @@ const en: typeof zh = {
   optional: "Optional",
   minimizeToTray: "Minimize to tray",
   quitApp: "Quit",
+  copyFailed: "Copy failed",
+  listSep: ", ",
 };
 
 export default en;

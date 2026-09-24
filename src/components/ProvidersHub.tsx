@@ -5,6 +5,7 @@ import { AgentIcon, Icon } from "./icons";
 import { Bars, type Latency, colorFor, initials } from "./ProviderCard";
 import { type TKey, t, tn } from "../i18n";
 import { scrubHost } from "../privacy";
+import { onActivateKey } from "../util";
 
 interface Props {
   agents: AgentState[];
@@ -100,7 +101,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
                 role="button"
                 aria-pressed={selected === s.key}
                 onClick={() => onSelect(selected === s.key ? null : s.key)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(selected === s.key ? null : s.key); } }}
+                onKeyDown={onActivateKey(() => onSelect(selected === s.key ? null : s.key))}
               >
                 <div className="hcard-head">
                   <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
@@ -111,7 +112,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
                   {s.baseUrl && (
                     <button className={`hlat lat-btn${lat.level >= 2 ? " good" : lat.level === 1 ? " slow" : ""}`} title={t("providersHub.retestTitle")}
                       disabled={latency[s.baseUrl] === "pending"}
-                      onClick={(e) => { e.stopPropagation(); onTestOne(s.baseUrl!); }} onKeyDown={(e) => e.stopPropagation()}>
+                      onClick={(e) => { e.stopPropagation(); onTestOne(s.baseUrl!); }}>
                       <Bars level={lat.level} />{lat.text}<span className="lat-re" aria-hidden="true">↻</span>
                     </button>
                   )}

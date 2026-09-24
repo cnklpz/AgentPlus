@@ -12,7 +12,6 @@ const en: typeof zh = {
   subtitle: "AgentPlus backs up the original files before every write. Rolling back restores the files to how they were before that write, and backs up the current files first.",
   reading: "Loading…",
   empty: "No backups yet. Once you've applied a configuration, every write is listed here.",
-  listSep: ", ",
   detailTitle: "Backup details",
   detailHint: "Click an entry on the left to see which files were backed up, where the originals are, and what has changed since.",
   statRecords: "entries",

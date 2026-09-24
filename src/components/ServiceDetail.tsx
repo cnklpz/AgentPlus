@@ -7,6 +7,7 @@ import { latencyText, stationColor } from "./ProvidersHub";
 import { ProviderTest } from "./ProviderTest";
 import { t, tn } from "../i18n";
 import { scrub, scrubHost } from "../privacy";
+import { toggled } from "../util";
 
 interface Props {
   s: Station;
@@ -40,7 +41,7 @@ function removable(u: Use): string | null {
 export function ServiceDetail(props: Props) {
   const { s, latency } = props;
   const [open, setOpen] = useState<Set<string>>(() => new Set(s.groups.length <= 2 ? s.groups.map((g) => g.key) : [s.groups[0]?.key]));
-  const toggle = (k: string) => setOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggle = (k: string) => setOpen((o) => toggled(o, k));
   const lat = s.baseUrl ? latencyText(latency[s.baseUrl]) : null;
 
   return (
@@ -135,7 +136,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 return (
                   <label key={uid(u)} className={`pick${why ? " dim" : ""}`} title={why ?? undefined}>
                     <input type="checkbox" disabled={!!why} checked={pick.has(uid(u))}
-                      onChange={() => setPick((p) => { const n = new Set(p); n.has(uid(u)) ? n.delete(uid(u)) : n.add(uid(u)); return n; })} />
+                      onChange={() => setPick((p) => toggled(p, uid(u)))} />
                     <AgentIcon id={u.agent.id} size={16} />
                     <span className="small">{u.agent.name} · {u.p!.name}</span>
                     {why && why !== "—" && <span className="tiny muted">{t("serviceDetail.reason", { why })}</span>}

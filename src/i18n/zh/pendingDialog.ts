@@ -5,7 +5,6 @@ export default {
   discard: "放弃",
   reading: "正在读取…",
   willWrite: "将写入 {names}（先备份）",
-  nameSep: "、",
   discardAll: "全部放弃",
   restDiscarded: "，其余放弃",
   writing: "写入中…",

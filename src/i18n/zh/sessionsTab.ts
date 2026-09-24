@@ -42,7 +42,6 @@ export default {
   copyResumeTitle: "复制恢复命令 {cmd}",
   copyResume: "复制恢复命令",
   resumeCopied: "已复制恢复命令",
-  copyFailed: "复制失败",
   revealTitle: "在资源管理器中显示会话文件",
   reveal: "显示会话文件",
   noMatch: "没有符合条件的会话",

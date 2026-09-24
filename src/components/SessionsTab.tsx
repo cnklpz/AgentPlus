@@ -4,11 +4,12 @@ import { type TKey, t, tn, useLang } from "../i18n";
 import { fmtAgo, fmtSize } from "../format";
 import { Dropdown } from "./Dropdown";
 import { scrub } from "../privacy";
+import { copyText, errText, type Flash, toggled } from "../util";
 
 interface Props {
   /** Default target: the fixed id when on, else the configured provider. */
   target: string;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
   /** Prefilled search (e.g. a session id picked in Ctrl+K). */
   initialQuery?: string;
 }
@@ -42,7 +43,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
 
   const load = () => {
     setError(null);
-    api.codexSessions().then((d) => { setData(d); setPicked(new Set()); }).catch((e) => setError(String(e)));
+    api.codexSessions().then((d) => { setData(d); setPicked(new Set()); }).catch((e) => setError(errText(e)));
   };
   // Backend notes and hidden-reasons are rendered in the UI language: reload on switch.
   const lang = useLang();
@@ -89,7 +90,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
       setConfirm(null);
       load();
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     } finally {
       setBusy(false);
     }
@@ -102,7 +103,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
   const blockedWhy = data.codexRunning ? t("sessionsTab.quitCodexFirst") : !data.writable ? t("sessionsTab.readOnly") : undefined;
   const definedTarget = (id: string) => data.targets.includes(id);
   const last = data.lastRepair && !data.lastRepair.undone ? data.lastRepair : null;
-  const togglePick = (id: string) => setPicked((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const togglePick = (id: string) => setPicked((s) => toggled(s, id));
 
   return (
     <div className="stack12">
@@ -121,7 +122,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
                   const on = chosenSources.has(p);
                   return (
                     <button key={p} className={`chip${on ? " on" : ""}`} aria-pressed={on}
-                      onClick={() => { const next = new Set(chosenSources); if (on) next.delete(p); else next.add(p); setSources(next); }}>
+                      onClick={() => setSources(toggled(chosenSources, p))}>
                       {p} <b>{n}</b>
                     </button>
                   );
@@ -227,10 +228,10 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
                   )
                 )}
                 <button className="icon-btn sm" title={t("sessionsTab.copyResumeTitle", { cmd: `codex resume ${s.id}` })} aria-label={t("sessionsTab.copyResume")}
-                  onClick={() => navigator.clipboard.writeText(`codex resume ${s.id}`).then(() => flash(t("sessionsTab.resumeCopied"))).catch(() => flash(t("sessionsTab.copyFailed"), true))}>
+                  onClick={() => copyText(`codex resume ${s.id}`, flash, t("sessionsTab.resumeCopied"))}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
                 </button>
-                <button className="icon-btn sm" title={t("sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => { api.revealPath(s.rolloutPath).catch((e) => flash(String(e), true)); }}>
+                <button className="icon-btn sm" title={t("sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => { api.revealPath(s.rolloutPath).catch((e) => flash(errText(e), true)); }}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
                 </button>
               </span>

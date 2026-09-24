@@ -8,7 +8,6 @@ const en: typeof zh = {
   breakerHalfOpen: "Pause expired; the next request will test whether it has recovered",
   upstreamError: "Upstream error",
   // flashes
-  copyFailed: "Copy failed",
   resumedOne: "Route resumed; the next request will be sent normally",
   resumedAll: "All routes resumed",
   gatewayOn: "Local gateway started",
@@ -70,7 +69,6 @@ const en: typeof zh = {
   unifiedExample: "/routeA+routeB/v1",
   splitTitle: "{name}: weight {weight} ({pct}%)",
   moreModels: "{n} more model…|{n} more models…",
-  listSep: ", ",
   unknownModels: "Model lists not known yet for {names}: the gateway asks the upstream on the first request, or you can add common models under \"Providers\".",
   // add dialog
   chooseProvider: "Choose a provider",

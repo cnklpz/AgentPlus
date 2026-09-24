@@ -43,7 +43,6 @@ const en: typeof zh = {
   copyResumeTitle: "Copy resume command: {cmd}",
   copyResume: "Copy resume command",
   resumeCopied: "Resume command copied",
-  copyFailed: "Copy failed",
   revealTitle: "Show session file in Explorer",
   reveal: "Show session file",
   noMatch: "No matching sessions",

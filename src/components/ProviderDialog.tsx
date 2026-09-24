@@ -9,6 +9,7 @@ import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t, tn } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, isHttpUrl, toggledIn } from "../util";
 
 /** What the dialog asks the app to do; every part is optional. */
 export interface ProviderSave {
@@ -126,7 +127,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   useEffect(() => { first.current?.focus(); }, []);
   useEscape(onClose);
 
-  const urlOk = /^https?:\/\/\S+$/.test(baseUrl.trim());
+  const urlOk = isHttpUrl(baseUrl);
   const gw = connect === "gateway";
   const [saving, setSaving] = useState(false);
   const canSave = !saving && name.trim() !== "" && (gw || unifiedNew || urlOk) && (!tpl || unifiedNew || key.trim() !== "");
@@ -151,13 +152,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       setFetched(list);
       if (checked.length === 0) setChecked(list.slice(0, 20));
     } catch (e) {
-      setErr(t("providerDialog.fetchFailed", { err: String(e) }));
+      setErr(t("providerDialog.fetchFailed", { err: errText(e) }));
     } finally {
       setFetching(false);
     }
   };
 
-  const toggle = (m: string) => setChecked((l) => (l.includes(m) ? l.filter((x) => x !== m) : [...l, m]));
+  const toggle = (m: string) => setChecked((l) => toggledIn(l, m));
   const addManual = () => {
     const ids = manual.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
     setChecked((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
@@ -189,7 +190,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     try {
       await onSave(out);
     } catch (e) {
-      setErr(String(e).replace(/^Error: /, ""));
+      setErr(errText(e));
     } finally {
       setSaving(false);
     }
@@ -463,7 +464,7 @@ function ForwardPicker({ routes, value, onChange }: { routes: GatewayRouteView[]
   const usable = routes.filter((r) => !r.upstreamMissing);
   // Picked earlier but since deleted: still listed so they can be unticked.
   const gone = value.filter((id) => !usable.some((r) => r.id === id));
-  const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  const toggle = (id: string) => onChange(toggledIn(value, id));
   return (
     <div className="field">
       <div className="row between">

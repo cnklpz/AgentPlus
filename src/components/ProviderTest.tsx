@@ -4,6 +4,7 @@ import { ComboBox } from "./ComboBox";
 import { Icon } from "./icons";
 import { t, tx } from "../i18n";
 import { scrub } from "../privacy";
+import { errText } from "../util";
 
 interface Props {
   /** Where the address and key come from: an agent entry, or "library". */
@@ -33,7 +34,7 @@ export function ProviderTest({ source, models, defaultModel, disabled }: Props) 
     try {
       setResult(await api.testProvider(source.agent, source.provider, model.trim()));
     } catch (e) {
-      setResult(String(e));
+      setResult(errText(e));
     } finally {
       setRunning(false);
     }
