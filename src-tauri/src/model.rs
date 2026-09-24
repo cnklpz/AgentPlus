@@ -222,7 +222,7 @@ pub(crate) mod lbl {
     /// A summary row's list of names ("A、B" / "A, B"), or "None".
     pub fn names_or_none<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> String {
         let names: Vec<String> = names.into_iter().map(|s| s.as_ref().to_string()).collect();
-        if names.is_empty() { l("无", "None").into() } else { names.join(l("、", ", ")) }
+        if names.is_empty() { l("无", "None").into() } else { crate::i18n::join(&names) }
     }
 }
 

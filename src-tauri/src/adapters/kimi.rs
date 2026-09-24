@@ -613,7 +613,7 @@ impl Ctx {
             for k in &keys {
                 self.remove("models", k);
             }
-            self.diff.push(&self.file, tr!("- [providers.{id}] 和它的 {} 个模型（含密钥）", "- [providers.{id}] and its {} model(s) (API key included)", keys.len()), false);
+            self.diff.push(&self.file, trn!(keys.len(), "- [providers.{id}] 和它的 {n} 个模型（含密钥）", "- [providers.{id}] and its {n} model (API key included)", "- [providers.{id}] and its {n} models (API key included)"), false);
             self.cfg_dirty = true;
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
@@ -627,7 +627,7 @@ impl Ctx {
         let n = hidden.len();
         hidden.retain(|_, h| h.get("provider").and_then(|x| x.as_str()) != Some(id));
         if hidden.len() != n {
-            self.diff.push(store_label(), tr!("- 「{id}」暂存的 {} 个隐藏模型", "- {} hidden model(s) stashed for \"{id}\"", n - hidden.len()), false);
+            self.diff.push(store_label(), trn!(n - hidden.len(), "- 「{id}」暂存的 {n} 个隐藏模型", "- {n} hidden model stashed for \"{id}\"", "- {n} hidden models stashed for \"{id}\""), false);
             self.set_store("hiddenModels", hidden);
         }
         let mut names = store_obj(&self.root, "names");
@@ -651,7 +651,7 @@ impl Ctx {
             parts.extend(models.iter().map(|(k, m)| ("models", k.as_str(), m)));
             d.insert(id.into(), json!({ "toml": to_text(&parts) }));
             self.set_store("disabledProviders", d);
-            self.diff.push(&self.file, tr!("- [providers.{id}] 和它的 {} 个模型（暂存在 AgentPlus，可恢复）", "- [providers.{id}] and its {} model(s) (stashed in AgentPlus; can be restored)", models.len()), false);
+            self.diff.push(&self.file, trn!(models.len(), "- [providers.{id}] 和它的 {n} 个模型（暂存在 AgentPlus，可恢复）", "- [providers.{id}] and its {n} model (stashed in AgentPlus; can be restored)", "- [providers.{id}] and its {n} models (stashed in AgentPlus; can be restored)"), false);
             self.cfg_dirty = true;
         } else {
             let Some(rec) = d.remove(id) else {
@@ -669,7 +669,7 @@ impl Ctx {
                 self.parent("models")?.insert(k, fresh(m));
             }
             self.set_store("disabledProviders", d);
-            self.diff.push(&self.file, tr!("+ [providers.{id}] 和它的 {} 个模型", "+ [providers.{id}] and its {} model(s)", models.len()), true);
+            self.diff.push(&self.file, trn!(models.len(), "+ [providers.{id}] 和它的 {n} 个模型", "+ [providers.{id}] and its {n} model", "+ [providers.{id}] and its {n} models"), true);
             self.cfg_dirty = true;
         }
         Ok(())

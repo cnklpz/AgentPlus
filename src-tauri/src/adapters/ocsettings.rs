@@ -7,7 +7,7 @@
 //! missing key means "use the global value". Project rows show that value in their labels.
 
 use super::msg;
-use crate::i18n::l;
+use crate::i18n::{join, l, on_off};
 use crate::model::{Diff, Setting};
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
@@ -113,9 +113,6 @@ fn label_of(opts: &[(&'static str, &'static str, &'static str)], v: &str) -> Str
     opts.iter().find(|o| o.0 == v).map(|o| l(o.1, o.2).to_string()).unwrap_or_else(|| if v == "custom" { l("按规则细分", "Per rule").into() } else { v.to_string() })
 }
 
-fn on_off(b: bool) -> &'static str {
-    if b { l("开", "On") } else { l("关", "Off") }
-}
 
 /// Rows for one config. `global` is the global config when `cfg` is a project's.
 /// `models` / `providers` feed the suggestions.
@@ -196,7 +193,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 if scope == Scope::Project {
                     let g = str_list(inherited).unwrap_or_default();
                     let tail = if s.key == "instructions" { l("和全局的合并", "Merged with global") } else { l("留空＝继承全局", "Leave empty to inherit global") };
-                    let shown = if g.is_empty() { String::new() } else { tr!("（全局：{}）", " (global: {})", g.join(l("、", ", "))) };
+                    let shown = if g.is_empty() { String::new() } else { tr!("（全局：{}）", " (global: {})", join(&g)) };
                     row.desc = tr!("{}。{tail}{shown}", "{}. {tail}{shown}", row.desc);
                 }
             }
@@ -216,7 +213,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 if scope == Scope::Project {
                     let g = str_list(inherited).unwrap_or_default();
                     if !g.is_empty() {
-                        row.desc = tr!("{}。都不选＝沿用全局的 {}", "{}. None selected = use the global {}", row.desc, g.join(l("、", ", ")));
+                        row.desc = tr!("{}。都不选＝沿用全局的 {}", "{}. None selected = use the global {}", row.desc, join(&g));
                     }
                 }
             }

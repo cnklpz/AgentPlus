@@ -376,7 +376,7 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         _ => l("未设置", "Not set").into(),
     };
     let mut details = vec![
-        Kv::mono(lbl::config_location(), tr!("modelProviders.{}（{} 个条目）", "modelProviders.{} ({} entries)", g.key, g.live.len())),
+        Kv::mono(lbl::config_location(), trn!(g.live.len(), "modelProviders.{}（{n} 个条目）", "modelProviders.{} ({n} entry)", "modelProviders.{} ({n} entries)", g.key)),
         Kv::mono("envKey", g.env_key.clone().unwrap_or_else(|| tr!("-（默认 {}）", "- (default {})", var.clone().unwrap_or_default()))),
         Kv::text(lbl::api_key(), key_note),
         Kv::text(lbl::status(), if g.enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries kept in AgentPlus") }),
@@ -701,7 +701,7 @@ impl Ctx {
         } else {
             let entries: Vec<Value> = models.iter().map(|m| new_entry(&tmpl, m, None, None)).collect();
             self.arr(key)?.extend(entries);
-            self.diff.push(&self.file, tr!("+ modelProviders.{key}：「{}」{} · {} · {} 个模型（envKey = {var}）", "+ modelProviders.{key}: \"{}\" {} · {} · {} models (envKey = {var})", p.name.trim(), p.base_url.trim(), api_label(api), models.len()), true);
+            self.diff.push(&self.file, trn!(models.len(), "+ modelProviders.{key}：「{}」{} · {} · {n} 个模型（envKey = {var}）", "+ modelProviders.{key}: \"{}\" {} · {} · {n} model (envKey = {var})", "+ modelProviders.{key}: \"{}\" {} · {} · {n} models (envKey = {var})", p.name.trim(), p.base_url.trim(), api_label(api)), true);
             self.cfg_dirty = true;
         }
         self.set_name(&id, p.name.trim());
@@ -742,14 +742,14 @@ impl Ctx {
             self.transform(&g, &new_key, &f)?;
             let file = if g.enabled { self.file.clone() } else { store_label().to_string() };
             if base_changed {
-                self.diff.push(&file, tr!("modelProviders.{new_key}「{id}」baseUrl = \"{base}\"（{n} 个条目）", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entries)"), true);
+                self.diff.push(&file, trn!(n, "modelProviders.{new_key}「{id}」baseUrl = \"{base}\"（{n} 个条目）", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entry)", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entries)"), true);
             }
             if api_changed {
                 let moved = if new_key != g.key { tr!("，移到 modelProviders.{new_key}", ", moved to modelProviders.{new_key}") } else { String::new() };
                 self.diff.push(&file, tr!("「{id}」协议 {} → {}{moved}", "\"{id}\" protocol {} → {}{moved}", api_label(g.api()), api_label(api)), true);
             }
             if let Some(v) = &new_env {
-                self.diff.push(&file, tr!("「{id}」envKey = \"{v}\"（{n} 个条目）", "\"{id}\" envKey = \"{v}\" ({n} entries)"), true);
+                self.diff.push(&file, trn!(n, "「{id}」envKey = \"{v}\"（{n} 个条目）", "\"{id}\" envKey = \"{v}\" ({n} entry)", "\"{id}\" envKey = \"{v}\" ({n} entries)"), true);
             }
         }
         // The id follows (key, baseUrl, envKey); carry the name over if it moved.
@@ -786,7 +786,7 @@ impl Ctx {
             let h = self.take_hidden(&g, &|_| true).len();
             self.take_skeleton(&g);
             if n > 0 {
-                self.diff.push(&self.file, tr!("- modelProviders.{}：「{name}」的 {n} 个条目", "- modelProviders.{}: {n} entries of \"{name}\"", g.key), false);
+                self.diff.push(&self.file, trn!(n, "- modelProviders.{}：「{name}」的 {n} 个条目", "- modelProviders.{}: {n} entry of \"{name}\"", "- modelProviders.{}: {n} entries of \"{name}\"", g.key), false);
             }
             if h > 0 || n == 0 {
                 self.diff.push(store_label(), tr!("- 「{name}」暂存的 {h} 个隐藏模型", "- {h} stashed hidden models of \"{name}\""), false);
@@ -828,7 +828,7 @@ impl Ctx {
             self.prune(&g.key);
             let hidden = self.take_hidden(&g, &|_| true);
             self.take_skeleton(&g);
-            self.diff.push(&self.file, tr!("- modelProviders.{}：「{name}」的 {} 个条目（暂存在 AgentPlus，可恢复）", "- modelProviders.{}: {} entries of \"{name}\" (kept in AgentPlus, can be restored)", g.key, entries.len()), false);
+            self.diff.push(&self.file, trn!(entries.len(), "- modelProviders.{}：「{name}」的 {n} 个条目（暂存在 AgentPlus，可恢复）", "- modelProviders.{}: {n} entry of \"{name}\" (kept in AgentPlus, can be restored)", "- modelProviders.{}: {n} entries of \"{name}\" (kept in AgentPlus, can be restored)", g.key), false);
             d.insert(g.id.clone(), json!({ "key": g.key, "entries": entries, "hidden": hidden, "template": g.template() }));
         } else {
             let rec = d.remove(id).unwrap_or_default();
@@ -836,7 +836,7 @@ impl Ctx {
             let arr = |k: &str| rec.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
             let (entries, hidden) = (arr("entries"), arr("hidden"));
             if !entries.is_empty() {
-                self.diff.push(&self.file, tr!("+ modelProviders.{key}：「{name}」的 {} 个条目", "+ modelProviders.{key}: {} entries of \"{name}\"", entries.len()), true);
+                self.diff.push(&self.file, trn!(entries.len(), "+ modelProviders.{key}：「{name}」的 {n} 个条目", "+ modelProviders.{key}: {n} entry of \"{name}\"", "+ modelProviders.{key}: {n} entries of \"{name}\""), true);
                 self.arr(&key)?.extend(entries.clone());
                 self.cfg_dirty = true;
             } else {

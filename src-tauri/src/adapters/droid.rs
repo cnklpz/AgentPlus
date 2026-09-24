@@ -284,7 +284,7 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         models,
         details: vec![
             Kv::mono("provider", if g.key.1.is_empty() { "-".into() } else { g.key.1.clone() }),
-            Kv::text(l("条目", "Entries"), tr!("customModels 里 {} 个模型条目（每个条目自带地址和密钥）", "{} model entries in customModels (each carries its own base URL and API key)", active.len())),
+            Kv::text(l("条目", "Entries"), trn!(active.len(), "customModels 里 {n} 个模型条目（每个条目自带地址和密钥）", "{n} model entry in customModels (it carries its own base URL and API key)", "{n} model entries in customModels (each carries its own base URL and API key)")),
             Kv::text(lbl::api_key(), key_note(&g.key.2)),
             Kv::text(lbl::status(), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
         ],
@@ -442,7 +442,7 @@ impl Work {
                         };
                         self.names.insert(fp(&key), json!(p.name.trim()));
                         let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        self.diff.push(&file, tr!("+ 「{}」{} 个模型条目（{base} · {}{}）", "+ \"{}\" {} model entries ({base} · {}{})", p.name.trim(), models.len(), api_label(&p.api), key_part), true);
+                        self.diff.push(&file, trn!(models.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), key_part), true);
                         for m in &models {
                             if !self.entries.iter().any(|e| key_of(e) == key && str_field(e, "model") == *m) {
                                 self.entries.push(Self::new_entry(&g, m, None));
@@ -499,7 +499,7 @@ impl Work {
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
                 self.names.remove(&fp(&g.key));
                 self.groups.retain(|x| x.id != g.id);
-                self.diff.push(&file, tr!("- 「{}」（{removed} 个模型条目，含地址和密钥）", "- \"{}\" ({removed} model entries, with base URL and API key)", g.name), false);
+                self.diff.push(&file, trn!(removed, "- 「{}」（{n} 个模型条目，含地址和密钥）", "- \"{}\" ({n} model entry, with base URL and API key)", "- \"{}\" ({n} model entries, with base URL and API key)", g.name), false);
             }
             Op::SetProviderEnabled { provider, enabled } => {
                 let g = self.group(provider)?;
@@ -507,14 +507,14 @@ impl Work {
                     let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| parked_why(p) == "disabled" && p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false));
                     self.parked = keep;
                     if !back.is_empty() {
-                        self.diff.push(&file, tr!("+ 「{}」{} 个模型条目（从 AgentPlus 恢复）", "+ \"{}\" {} model entries (restored from AgentPlus)", g.name, back.len()), true);
+                        self.diff.push(&file, trn!(back.len(), "+ 「{}」{n} 个模型条目（从 AgentPlus 恢复）", "+ \"{}\" {n} model entry (restored from AgentPlus)", "+ \"{}\" {n} model entries (restored from AgentPlus)", g.name), true);
                         self.entries.extend(back.into_iter().filter_map(|p| p.get("entry").cloned()));
                     }
                 } else {
                     let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key);
                     self.entries = keep;
                     if !out.is_empty() {
-                        self.diff.push(&file, tr!("- 「{}」{} 个模型条目（暂存在 AgentPlus，可恢复）", "- \"{}\" {} model entries (parked in AgentPlus, restorable)", g.name, out.len()), false);
+                        self.diff.push(&file, trn!(out.len(), "- 「{}」{n} 个模型条目（暂存在 AgentPlus，可恢复）", "- \"{}\" {n} model entry (parked in AgentPlus, restorable)", "- \"{}\" {n} model entries (parked in AgentPlus, restorable)", g.name), false);
                         for e in out {
                             self.park(e, "disabled");
                         }

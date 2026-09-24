@@ -884,7 +884,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.notes.push(tr!(
             "config.yaml 的 {} 段里有注释或锚点，写回会丢失，已切换为只读。",
             "The {} block(s) in config.yaml have comments or anchors, which would be lost on write, so it's read-only.",
-            commented.join(l("、", ", "))
+            crate::i18n::join(&commented)
         ));
     }
     if std::fs::read_to_string(auth_path()).map(|t| t.contains("\"custom:")).unwrap_or(false) {
@@ -1043,7 +1043,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         let key_part = key.map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
                         cx.diff.push(
                             &cx.file,
-                            tr!("+ providers.{id}（{base} · {} · {} 个模型{}）", "+ providers.{id} ({base} · {} · {} model(s){})", api_label(&p.api), ids.len(), key_part),
+                            trn!(ids.len(), "+ providers.{id}（{base} · {} · {n} 个模型{}）", "+ providers.{id} ({base} · {} · {n} model{})", "+ providers.{id} ({base} · {} · {n} models{})", api_label(&p.api), key_part),
                             true,
                         );
                     }
@@ -1393,7 +1393,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     .collect();
                 if new != rows {
                     set_model_rows(def, shape, &new);
-                    cx.diff.push(&cx.file, tr!("{provider}.models：{} 个模型", "{provider}.models: {} model(s)", new.len()), true);
+                    cx.diff.push(&cx.file, trn!(new.len(), "{provider}.models：{n} 个模型", "{provider}.models: {n} model", "{provider}.models: {n} models"), true);
                 }
                 let prefix = format!("{provider}|");
                 let h = store::section(&mut root, ID, "hiddenModels");
