@@ -112,7 +112,6 @@ const en: typeof zh = {
   showInFolder: "Show in folder",
   cut: "Cut",
   paste: "Paste",
-  selectAll: "Select all",
   copySelection: "Copy selected text",
   retest: "Test latency again",
   searchMenu: "Search…",
