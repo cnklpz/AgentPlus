@@ -169,27 +169,12 @@ fn load() -> Result<(Value, TextMeta, bool)> {
     Ok((v, meta, had))
 }
 
-fn dotenv() -> Vec<(String, String)> {
-    let Ok((text, _)) = read_text(&dotenv_path()) else { return vec![] };
-    text.lines()
-        .filter_map(|l| {
-            let l = l.trim();
-            if l.starts_with('#') {
-                return None;
-            }
-            let l = l.strip_prefix("export ").unwrap_or(l);
-            let (k, v) = l.split_once('=')?;
-            Some((k.trim().to_string(), v.trim().trim_matches('"').trim_matches('\'').to_string()))
-        })
-        .collect()
-}
-
 /// Where a key variable is set: (value, source).
 fn lookup(cfg: &Value, name: &str) -> Option<(String, &'static str)> {
     if let Some(v) = cfg.get("env").and_then(|e| e.get(name)).and_then(|v| v.as_str()).filter(|v| !v.is_empty()) {
         return Some((v.to_string(), l("settings.json 的 env", "the env block of settings.json")));
     }
-    if let Some((_, v)) = dotenv().into_iter().find(|(k, v)| k == name && !v.is_empty()) {
+    if let Some(v) = crate::dotenv::get(&crate::dotenv::load(&dotenv_path()).0, name) {
         return Some((v, "~/.qwen/.env"));
     }
     if !crate::env::is_wsl() {

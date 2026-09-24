@@ -16,6 +16,7 @@
 
 
 use super::{Plan, Endpoint};
+use crate::dotenv;
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -436,61 +437,8 @@ fn emit_top(key: &str, v: &Y) -> Result<Vec<String>> {
 
 // ---------------------------------------------------------------- .env
 
-fn env_unquote(v: &str) -> String {
-    let v = v.trim();
-    if v.len() >= 2 && ((v.starts_with('"') && v.ends_with('"')) || (v.starts_with('\'') && v.ends_with('\''))) {
-        return v[1..v.len() - 1].to_string();
-    }
-    // Unquoted: an inline comment starts at " #".
-    v.split(" #").next().unwrap_or(v).trim().to_string()
-}
-
-fn env_line_key(l: &str) -> Option<&str> {
-    let t = l.trim_start();
-    if t.starts_with('#') {
-        return None;
-    }
-    let t = t.strip_prefix("export ").unwrap_or(t);
-    let (k, _) = t.split_once('=')?;
-    Some(k.trim())
-}
-
-fn env_get(text: &str, key: &str) -> Option<String> {
-    text.lines().rfind(|l| env_line_key(l) == Some(key)).and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
-}
-
-/// Sets (or removes, value None) `key` in .env text, keeping every other line.
-fn env_set(text: &str, key: &str, value: Option<&str>) -> String {
-    let needs_q = |v: &str| v.chars().any(|c| c.is_whitespace() || c == '#' || c == '"' || c == '\'');
-    let line = value.map(|v| if needs_q(v) { format!("{key}=\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")) } else { format!("{key}={v}") });
-    let mut out: Vec<String> = vec![];
-    let mut done = false;
-    for l in text.split('\n') {
-        if env_line_key(l) == Some(key) {
-            if let (Some(n), false) = (&line, done) {
-                out.push(n.clone());
-            }
-            done = true;
-            continue;
-        }
-        out.push(l.to_string());
-    }
-    if let (Some(n), false) = (line, done) {
-        while out.last().map(|l| l.is_empty()).unwrap_or(false) {
-            out.pop();
-        }
-        out.push(n);
-        out.push(String::new());
-    }
-    out.join("\n")
-}
-
-fn load_env() -> (String, TextMeta) {
-    read_text_or_new(&env_path()).unwrap_or((String::new(), TextMeta::NEW))
-}
-
 fn env_key(env: &str, var: &str) -> Option<String> {
-    env_get(env, var).or_else(|| std::env::var(var).ok().filter(|v| !v.trim().is_empty()))
+    dotenv::get(env, var).or_else(|| std::env::var(var).ok().filter(|v| !v.trim().is_empty()))
 }
 
 // ---------------------------------------------------------------- providers
@@ -971,7 +919,7 @@ pub fn state(inst: &Install) -> AgentState {
         }
     };
     let root = store_load();
-    let (env, _) = load_env();
+    let (env, _) = dotenv::load(&env_path());
     let hidden = store::get_obj(&root, ID, "hiddenModels");
     let (cur_id, cur_src) = current(&cfg);
     let cur_model = model_default(&cfg);
@@ -1046,7 +994,7 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
-    let (env, _) = load_env();
+    let (env, _) = dotenv::load(&env_path());
     let src = find(&cfg, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
     match &src {
         Src::Builtin(_) => Err(anyhow!(l("Hermes 内置供应商没有可用的地址", "Hermes built-in providers have no usable base URL"))),
@@ -1230,8 +1178,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if let Some(k) = key {
                             match key_env_of(&dv) {
                                 Some(var) => {
-                                    if env_get(&env, &var).as_deref() != Some(k) {
-                                        env = env_set(&env, &var, Some(k));
+                                    if dotenv::get(&env, &var).as_deref() != Some(k) {
+                                        env = dotenv::set(&env, &var, Some(k));
                                         cx.diff.push(&cx.envfile, format!("{var} = {}", mask_key(k)), true);
                                     }
                                 }

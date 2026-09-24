@@ -154,15 +154,6 @@ fn is_env_name(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !s.chars().next().unwrap().is_ascii_digit()
 }
 
-fn read_env_file(p: &Path, name: &str) -> Option<String> {
-    let text = std::fs::read_to_string(p).ok()?;
-    text.lines().find_map(|l| {
-        let l = l.trim().strip_prefix("export ").unwrap_or(l.trim());
-        let (k, v) = l.split_once('=')?;
-        (k.trim() == name).then(|| v.trim().trim_matches('"').trim_matches('\'').to_string()).filter(|v| !v.is_empty())
-    })
-}
-
 fn s<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(|x| x.as_str())
 }
@@ -180,7 +171,7 @@ impl Fmt {
     }
 
     fn lookup(&self, name: &str) -> Option<String> {
-        env_var(name).or_else(|| self.env_file.as_deref().and_then(|p| read_env_file(p, name)))
+        env_var(name).or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
     }
 
     /// The real key behind a config value, when it can be known without running anything.

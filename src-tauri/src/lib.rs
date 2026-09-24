@@ -2,6 +2,7 @@
 mod i18n;
 mod adapters;
 mod cdp;
+mod dotenv;
 mod env;
 mod gateway;
 mod history;
