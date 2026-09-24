@@ -14,7 +14,6 @@ export default {
   contextBad: "写成数字，可以带 k / m",
   contextTokens: "{n} tokens（{short}）",
   defaultNote: "标着「默认」的项不写进配置，由 {agent} 自己决定。",
-  pendingNote: "保存后加入「待写入的改动」，点「应用」才会写入配置文件。",
   modified: "已修改",
   default: "默认",
   numberBad: "写成数字，可以带 k",

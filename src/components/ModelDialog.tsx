@@ -69,7 +69,7 @@ export function ModelDialog({ agentName, hasNames, hasContext, fields, initial, 
 
   const foot = (
     <>
-      <span className="muted tiny grow">{t("modelDialog.pendingNote")}</span>
+      <span className="muted tiny grow">{t("common.pendingNote")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!canSave} onClick={save}>{initial ? t("common.save") : t("common.add")}</button>
     </>

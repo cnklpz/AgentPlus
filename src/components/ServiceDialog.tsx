@@ -111,7 +111,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
       setFetched(list);
       if (models.length === 0) setModels(list.slice(0, 20));
     } catch (e) {
-      setErr(t("serviceDialog.fetchFailed", { err: errText(e) }));
+      setErr(t("common.fetchFailed", { err: errText(e) }));
     } finally {
       setFetching(false);
     }
@@ -150,22 +150,22 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
     <>
       <span className="muted tiny grow">{t("serviceDialog.footNote")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-      <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("serviceDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
+      <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
     </>
   );
   return (
-    <Modal label={isNew ? t("serviceDialog.addProvider") : t("serviceDialog.editProvider")} wide onClose={onClose}
-      title={isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("serviceDialog.addProvider")) : t("serviceDialog.editGroup", { name: group!.name })} foot={foot}>
+    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
+      title={isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("common.addProvider")) : t("serviceDialog.editGroup", { name: group!.name })} foot={foot}>
       {isNew && !prefill && <TemplatePicker value={tpl} onPick={pickTpl} />}
       <div className="form2">
         <label className="field">
           <span>{t("common.name")}</span>
-          <input ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("serviceDialog.namePlaceholder")} />
+          <input ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />
         </label>
         <label className="field">
-          <span>{t("serviceDialog.baseUrlLabel")}</span>
+          <span>{t("common.baseUrlLabel")}</span>
           <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-          {baseUrl && !urlOk && <em className="field-err">{t("serviceDialog.urlInvalid")}</em>}
+          {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
         </label>
       </div>
       <div className="form2">
@@ -183,12 +183,12 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
           </em>
         </div>
         <label className="field">
-          <span>{t("serviceDialog.apiKeyLabel")}</span>
+          <span>{t("common.apiKeyLabel")}</span>
           <input className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
-            placeholder={group?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("serviceDialog.keyKeepPlaceholder") : "sk-..."} />
+            placeholder={group?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("common.keyKeepPlaceholder") : "sk-..."} />
           <em className="muted tiny">
             {t("serviceDialog.keyStorage")}
-            {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("serviceDialog.getKey", { vendor: tpl.vendor })}</button></>}
+            {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("common.getKey", { vendor: tpl.vendor })}</button></>}
           </em>
         </label>
       </div>
@@ -197,7 +197,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
         <div className="row between">
           <span>{t("serviceDialog.commonModels")} <em className="muted tiny">{t("serviceDialog.commonModelsHint")}</em></span>
           <button type="button" className="btn small" disabled={!urlOk || fetching} onClick={fetchList}>
-            <Icon.refresh size={12} />{fetching ? t("serviceDialog.fetching") : t("serviceDialog.fetchFromUrl")}
+            <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
           </button>
         </div>
         <div className="pick-list wide">
@@ -211,7 +211,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
         </div>
         <div className="row gap6">
           <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("serviceDialog.manualPlaceholder")} />
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("common.manualModelsPlaceholder")} />
           <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
         </div>
       </div>
@@ -235,7 +235,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
       {free.length > 0 && (
         <div className="field">
           <span>{t("serviceDialog.addTo")}</span>
-          <ToggleRow on={viaGw} onChange={setViaGw} icon={<Icon.gateway size={16} />} title={t("serviceDialog.useGateway")}
+          <ToggleRow on={viaGw} onChange={setViaGw} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
             hint={viaGw ? t("serviceDialog.gatewayOn") : t("serviceDialog.gatewayOff")} />
           <div className="agent-picks">
             {free.map((a) => {

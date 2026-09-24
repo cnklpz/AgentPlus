@@ -7,7 +7,6 @@ const en: typeof zh = {
   closeEsc: "Close (Esc)",
   tabGeneral: "General",
   tabAgents: "Agent detection",
-  localWindows: "This PC · Windows",
 
   envsTitle: "Managed environments",
   envsHint: "The provider library is shared across environments: a provider added on Windows can be added to Codex CLI right after switching to WSL.",

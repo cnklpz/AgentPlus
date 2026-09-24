@@ -76,7 +76,7 @@ export function HistoryPage({ flash, onChanged }: { flash: Flash; onChanged: () 
         </div>
         <div className="page-body">
           {error && (list ? <ErrorBox text={error} /> : <div className="empty">{scrub(error)}</div>)}
-          {!list && !error && <div className="empty">{t("historyPage.reading")}</div>}
+          {!list && !error && <div className="empty">{t("common.reading")}</div>}
           {list && list.length === 0 && <div className="empty">{t("historyPage.empty")}</div>}
           {list && list.length > 0 && (
             <div className="stable">
@@ -135,7 +135,7 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
               <span className="tiny muted">{scrub(b.reason)}</span>
             </div>
           </div>
-          <button className="icon-btn" aria-label={t("historyPage.closeDetail")} onClick={onClose}><Icon.close /></button>
+          <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={onClose}><Icon.close /></button>
         </div>
         <div className="kv">
           <div className="kv-row"><span className="tiny muted">{t("historyPage.backupLocation")}</span><span className="mono tiny ellipsis" title={d ? scrub(d.dir) : undefined}>{d ? scrub(d.dir) : "…"}</span></div>
@@ -148,7 +148,7 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
         </div>
       </section>
       <section className="aside-diff">
-        {!d && !error && <span className="muted small">{t("historyPage.reading")}</span>}
+        {!d && !error && <span className="muted small">{t("common.reading")}</span>}
         {error && <ErrorBox text={error} />}
         {d && (
           <>

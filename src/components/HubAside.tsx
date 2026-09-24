@@ -47,8 +47,8 @@ export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, on
 
       <section className="aside-diff">
         <div className="row between">
-          <h2>{t("hubAside.pending")}</h2>
-          <span className={`count${total ? " warn" : ""}`}>{total ? `${tn("hubAside.agentCount", withOps.length)} · ${tn("hubAside.itemCount", total)}` : t("common.none")}</span>
+          <h2>{t("common.pendingChanges")}</h2>
+          <span className={`count${total ? " warn" : ""}`}>{total ? `${tn("hubAside.agentCount", withOps.length)} · ${tn("common.changeCount", total)}` : t("common.none")}</span>
         </div>
         {withOps.map((a) => {
           const d = diffs[a.id];
@@ -57,8 +57,8 @@ export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, on
               <div className="row gap6">
                 <AgentIcon id={a.id} size={18} />
                 <strong className="small grow">{a.name}</strong>
-                <span className="tiny muted">{tn("hubAside.itemCount", Object.keys(drafts[a.id]).length)}</span>
-                <button className="link" onClick={() => onDiscard(a.id)}>{t("hubAside.discard")}</button>
+                <span className="tiny muted">{tn("common.changeCount", Object.keys(drafts[a.id]).length)}</span>
+                <button className="link" onClick={() => onDiscard(a.id)}>{t("common.discard")}</button>
               </div>
               {typeof d === "string" && <ErrorBox text={d} />}
               {Array.isArray(d) && <DiffGroups groups={d} />}
@@ -70,8 +70,8 @@ export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, on
 
       <div className="aside-foot">
         <div className="grid2">
-          <button className="btn full" disabled={!total || busy} onClick={() => onDiscard(null)}>{t("hubAside.discardAll")}</button>
-          <button className="btn primary full" disabled={!total || busy} onClick={onApplyAll}>{busy ? t("hubAside.writing") : withOps.length > 1 ? tn("hubAside.applyTo", withOps.length) : t("common.apply")}</button>
+          <button className="btn full" disabled={!total || busy} onClick={() => onDiscard(null)}>{t("common.discardAll")}</button>
+          <button className="btn primary full" disabled={!total || busy} onClick={onApplyAll}>{busy ? t("common.writing") : withOps.length > 1 ? tn("hubAside.applyTo", withOps.length) : t("common.apply")}</button>
         </div>
         <span className="muted tiny center">{t("hubAside.backupNote")}</span>
       </div>

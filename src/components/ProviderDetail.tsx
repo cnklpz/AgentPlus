@@ -60,7 +60,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
           <div className="strong ellipsis">{p.name}</div>
           <div className="muted tiny">{status}</div>
         </div>
-        <button className="icon-btn" aria-label={t("providerDetail.closeDetails")} onClick={onClose}>
+        <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={onClose}>
           <Icon.close />
         </button>
       </div>
@@ -69,7 +69,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         <div className="pdetail-lat">
           <Bars level={lat.level} />
           <span className={`lat${lat.live ? ` ${latencyTone(lat.level)}` : ""}`}>{lat.text}</span>
-          {p.baseUrl && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />{t("providerDetail.retest")}</button>}
+          {p.baseUrl && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />{t("common.retest")}</button>}
         </div>
       )}
 
@@ -94,7 +94,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
           <span className="muted small">{t("common.baseUrl")}</span>
           <span className="row gap6 minw0">
             <span className="mono small ellipsis grow minw0" title={scrub(p.baseUrl) ?? scrubHost(p.host)}>{scrub(p.baseUrl) ?? scrubHost(p.host)}</span>
-            {p.baseUrl && <button className="icon-btn sm" aria-label={t("providerDetail.copyUrl")} title={t("providerDetail.copyUrl")} onClick={() => onCopy(p.baseUrl!)}><Icon.copy size={12} /></button>}
+            {p.baseUrl && <button className="icon-btn sm" aria-label={t("common.copyUrl")} title={t("common.copyUrl")} onClick={() => onCopy(p.baseUrl!)}><Icon.copy size={12} /></button>}
           </span>
         </div>
         <div className="kv-row"><span className="muted small">{t("providerDetail.api")}</span><span className="small">{p.apis.join(" · ")}</span></div>
@@ -119,7 +119,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
           <span className="muted small">{t("common.models")}</span>
           <span className="row gap6">
             <span className="small">{t("providerDetail.visibleOf", { visible, total: p.models.length })}</span>
-            {p.models.length > 0 && !p.isNew && <button className="link tiny" onClick={onModels}>{t("providerDetail.viewModels")}</button>}
+            {p.models.length > 0 && !p.isNew && <button className="link tiny" onClick={onModels}>{t("common.viewModels")}</button>}
           </span>
         </div>
       </div>
@@ -136,13 +136,13 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
       {p.isDeleted || p.isNew ? (
         <div className="grid2">
           {p.isNew && <button className="btn full" onClick={onEdit}>{t("common.edit")}</button>}
-          <button className="btn full" onClick={onUndo}>{p.isNew ? t("providerDetail.undoAdd") : t("providerDetail.undoDelete")}</button>
+          <button className="btn full" onClick={onUndo}>{p.isNew ? t("providerDetail.undoAdd") : t("common.undoDelete")}</button>
         </div>
       ) : (
         <>
           {p.compatible && !(st.mode === "multi" && p.builtin) && (
             st.mode === "single" ? (
-              <button className="btn full" disabled={isCurrent || st.readonly} onClick={onAction}>{!isCurrent ? t("providerDetail.setCurrent") : switching ? t("providerDetail.switchOnApply") : t("providerDetail.inUse")}</button>
+              <button className="btn full" disabled={isCurrent || st.readonly} onClick={onAction}>{!isCurrent ? t("providerDetail.setCurrent") : switching ? t("providerDetail.switchOnApply") : t("common.inUse")}</button>
             ) : (
               <button className="btn full" disabled={st.readonly} onClick={onAction}>{enabled ? t("providerDetail.disableThis") : t("providerDetail.enableThis")}</button>
             )

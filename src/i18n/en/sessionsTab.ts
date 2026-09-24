@@ -22,7 +22,6 @@ const en: typeof zh = {
   repair: "Fix {n}",
   targetUndefined: "\"{target}\" isn't defined in config.toml yet, so these sessions can't be resumed after the move for now.",
   lastAction: "Last action: {n} session → \"{target}\"|Last action: {n} sessions → \"{target}\"",
-  undo: "Undo",
   all: "All",
   emptyProvider: "(empty)",
   subagentsReviews: "Subagents/reviews",

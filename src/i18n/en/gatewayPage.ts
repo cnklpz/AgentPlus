@@ -10,8 +10,6 @@ const en: typeof zh = {
   // flashes
   resumedOne: "Route resumed; the next request will be sent normally",
   resumedAll: "All routes resumed",
-  gatewayOn: "Local gateway started",
-  gatewayOff: "Local gateway stopped",
   forwardAddedReplaced: "Route added; switching the original provider URLs to {base} was added to pending changes",
   forwardAdded: "Route added: {base}",
   // header / hero
@@ -20,7 +18,6 @@ const en: typeof zh = {
   online: "Gateway online",
   notRunning: "Gateway not running",
   off: "Gateway off",
-  copyUrl: "Copy URL",
   heroRequests: "{n} request|{n} requests",
   heroFailures: "{n} failure|{n} failures",
   heroActive: "{n} in progress",
@@ -62,7 +59,6 @@ const en: typeof zh = {
   streamSuffix: " · stream",
   // unified entry
   unified: "Unified endpoint",
-  modelCount: "{n} model|{n} models",
   routeCount: "{n} route|{n} routes",
   copyUnified: "Copy unified endpoint",
   unifiedHint: "Agents only need this one URL: the gateway picks a route by the requested model, splits by weight when several routes serve the same model, and fails over automatically. Turn on \"Use local gateway\" when adding a provider in an agent to use it; there you can also select just some of the routes (the URL becomes {example}).",
@@ -82,7 +78,6 @@ const en: typeof zh = {
   replaceOff: "When on, {n} agent provider using this URL will be switched to the gateway route.|When on, {n} agent providers using this URL will be switched to the gateway route.",
   namePlaceholder: "e.g. My relay, Chat group",
   upstreamUrl: "Upstream base URL",
-  urlInvalid: "Must start with http:// or https://",
   upstreamProto: "Upstream protocol",
   protoHint: "The protocol the upstream actually supports; the gateway converts requests made in other protocols.",
   keyHint: "Stored in the local provider library (~/.agentplus) and used only by the gateway when forwarding.",
@@ -118,8 +113,6 @@ const en: typeof zh = {
   saveMap: "Save mapping",
   routePaused: "Route paused",
   routeResumed: "Route resumed",
-  pauseRoute: "Pause route",
-  resumeRoute: "Resume route",
   stopHint: "Once stopped, gateway URLs set in agents stop working; remember to switch them back to direct in those agents.",
   // breaker settings
   breakerToggle: "Pause a route after repeated errors",

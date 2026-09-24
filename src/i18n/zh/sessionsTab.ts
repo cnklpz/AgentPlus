@@ -21,7 +21,6 @@ export default {
   repair: "修复 {n} 个",
   targetUndefined: "「{target}」还没在 config.toml 里定义，迁移后这些会话暂时无法恢复。",
   lastAction: "上次操作：{n} 个会话 → 「{target}」",
-  undo: "撤销",
   all: "全部",
   emptyProvider: "(空)",
   subagentsReviews: "子代理/审查",

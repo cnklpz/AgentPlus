@@ -103,7 +103,7 @@ interface Props {
 export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled, visible, latency, readonly, onSelect, onAction, onModels, onTest }: Props) {
   const off = mode === "multi" && !enabled;
   let tag: { text: string; cls: string } | null = null;
-  if (p.isDeleted) tag = { text: t("providerCard.tagDeleting"), cls: "tag-del" };
+  if (p.isDeleted) tag = { text: t("common.tagDeleting"), cls: "tag-del" };
   else if (p.isNew) tag = { text: t("providerCard.tagNew"), cls: "tag-new" };
   else if (!p.compatible) tag = { text: t("providerCard.incompatible"), cls: "tag-muted" };
   else if (off) tag = { text: t("common.disabled"), cls: "tag-muted" };
@@ -146,11 +146,11 @@ export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled,
         {total > 0 && p.compatible && !pending && (
           <button className="link" onClick={stop(onModels)}>{tn("providerCard.visibleModels", total, { visible })}</button>
         )}
-        {p.isNew && <span className="tiny muted">{tn("providerCard.modelCount", total)}</span>}
+        {p.isNew && <span className="tiny muted">{tn("common.modelCount", total)}</span>}
       </div>
       <div className="pcard-foot">
         {p.baseUrl && p.compatible && !off && !pending ? (
-          <button className="lat-btn" title={t("providerCard.retestHint")} onClick={stop(onTest)} disabled={latency === "pending"}>
+          <button className="lat-btn" title={t("common.retestHint")} onClick={stop(onTest)} disabled={latency === "pending"}>
             <Bars level={lat.level} />
             <span className={`lat${lat.live ? ` ${latencyTone(lat.level)}` : ""}`}>{lat.text}</span>
             <span className="lat-re" aria-hidden="true">↻</span>
@@ -165,7 +165,7 @@ export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled,
         {p.compatible && !pending && !(mode === "multi" && p.builtin) && (
           mode === "single" ? (
             <button className={`pbtn${isCurrent ? " on" : ""}`} aria-pressed={isCurrent} disabled={readonly || isCurrent} onClick={stop(onAction)}>
-              {!isCurrent ? t("providerCard.setCurrent") : switching ? t("providerCard.switchOnApply") : t("providerCard.inUse")}
+              {!isCurrent ? t("providerCard.setCurrent") : switching ? t("providerCard.switchOnApply") : t("common.inUse")}
             </button>
           ) : (
             <button className={`pbtn${enabled ? " enabled" : ""}`} aria-pressed={enabled} disabled={readonly} onClick={stop(onAction)}>

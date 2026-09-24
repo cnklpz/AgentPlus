@@ -423,7 +423,7 @@ export default function App() {
       const applyFirst = await askCheck({
         title: tn("app.restartPendingTitle", n, { name: a.name }),
         message: t(starting ? "app.startPendingMsg" : "app.restartPendingMsg", { name: a.name }),
-        confirmText: t(starting ? "app.startAgent" : "app.restartAgent", { name: a.name }),
+        confirmText: t(starting ? "common.startAgent" : "common.restartAgent", { name: a.name }),
         check: { label: t("app.applyFirst"), hint: t("app.applyFirstHint"), value: true },
       });
       if (applyFirst === null) return;
@@ -1083,13 +1083,13 @@ ${p}`))];
         const n = Object.keys(drafts[a.id] ?? {}).length;
         return [
           { label: t("app.openAgent", { name: a.name }), icon: <AgentIcon id={a.id} size={14} />, action: () => openAgent(a.id) },
-          ...(a.restartable ? [{ label: t(a.running ? "app.restartAgent" : "app.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAsked(a); } }] : []),
-          { label: t("app.openConfigDir"), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(a.id).catch((e) => flash(errText(e), true)); } },
+          ...(a.restartable ? [{ label: t(a.running ? "common.restartAgent" : "common.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAsked(a); } }] : []),
+          { label: t("common.openConfigDir"), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(a.id).catch((e) => flash(errText(e), true)); } },
           ...(n ? [
             "sep" as const,
             { label: tn("app.applyAgentChanges", n, { name: a.name }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAgents([a.id]); } },
             { label: t("app.discardAgentChanges", { name: a.name }), icon: <Icon.close size={11} />, danger: true, action: async () => {
-              if (await ask({ title: tn("app.discardAgentTitle", n, { name: a.name }), message: t("app.discardMsg"), danger: true, confirmText: t("app.discard") })) setDraftFor(a.id, {});
+              if (await ask({ title: tn("app.discardAgentTitle", n, { name: a.name }), message: t("app.discardMsg"), danger: true, confirmText: t("common.discard") })) setDraftFor(a.id, {});
             } },
           ] : []),
           "sep",
@@ -1105,10 +1105,10 @@ ${p}`))];
           ...(p.editable ? [{ label: t("app.editMenu"), icon: <Icon.edit size={12} />, disabled: st.readonly, action: () => setDialog({ editing: p }) }] : []),
           ...(p.compatible && !p.isNew && !p.isDeleted && !(st.mode === "multi" && p.builtin)
             ? [st.mode === "single"
-              ? { label: t(isCur ? "app.inUse" : "app.setCurrent"), icon: <Icon.check size={13} />, disabled: isCur || st.readonly, action: () => providerAction(p) }
+              ? { label: t(isCur ? "common.inUse" : "app.setCurrent"), icon: <Icon.check size={13} />, disabled: isCur || st.readonly, action: () => providerAction(p) }
               : { label: t(on ? "app.disable" : "app.enable"), icon: <Icon.check size={13} />, disabled: st.readonly, action: () => providerAction(p) }]
             : []),
-          ...(p.models.length ? [{ label: t("app.viewModels"), action: () => { setRails((m) => ({ ...m, [st.id]: p.id })); setTabs((m) => ({ ...m, [st.id]: "models" })); } }] : []),
+          ...(p.models.length ? [{ label: t("common.viewModels"), action: () => { setRails((m) => ({ ...m, [st.id]: p.id })); setTabs((m) => ({ ...m, [st.id]: "models" })); } }] : []),
           ...(p.editable && !p.isNew && !p.isDeleted ? ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly || isCur, action: () => { deleteProvider(p); } }] : []),
           "sep",
         ];
@@ -1145,7 +1145,7 @@ ${p}`))];
         const r = gateway?.routes.find((x) => x.id === d("route"));
         if (!r) return [];
         return [
-          { label: t(r.enabled ? "app.pauseForward" : "app.resumeForward"), action: () => { api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(errText(e), true)); } },
+          { label: t(r.enabled ? "common.pauseRoute" : "common.resumeRoute"), action: () => { api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(errText(e), true)); } },
           { label: t("app.deleteForwardMenu"), icon: <Icon.trash size={12} />, danger: true, action: () => { deleteRoute(r); } },
           "sep",
         ];
@@ -1185,7 +1185,7 @@ ${p}`))];
     const url = target.closest("[data-url]")?.getAttribute("data-url");
     if (url) {
       items.push(
-        { label: t("app.copyUrl"), icon: <Icon.copy size={13} />, action: () => copy(url) },
+        { label: t("common.copyUrl"), icon: <Icon.copy size={13} />, action: () => copy(url) },
         { label: t("app.retest"), icon: <Icon.pulse size={13} />, action: () => testOne(url) },
         "sep",
       );
@@ -1202,7 +1202,7 @@ ${p}`))];
         "sep",
         { label: t("app.applyAll", { n: pendingTotal }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAll(); } },
         { label: t("app.discardAll"), icon: <Icon.close size={11} />, danger: true, disabled: busy, action: async () => {
-          if (!(await ask({ title: tn("app.discardAllTitle", pendingTotal), message: t("app.discardAllMsg"), danger: true, confirmText: t("app.discard") }))) return;
+          if (!(await ask({ title: tn("app.discardAllTitle", pendingTotal), message: t("app.discardAllMsg"), danger: true, confirmText: t("common.discard") }))) return;
           setDrafts({});
           flash(t("app.discardedAll"));
         } },
@@ -1211,14 +1211,14 @@ ${p}`))];
     items.push("sep");
     if (!page && st) {
       items.push(
-        ...(st.restartable ? [{ label: t(st.running ? "app.restartAgent" : "app.startAgent", { name: st.name }), icon: st.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !st.installed || !!restarting, action: restart }] : []),
+        ...(st.restartable ? [{ label: t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name }), icon: st.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !st.installed || !!restarting, action: restart }] : []),
         { label: t("app.openAgentConfigDir", { name: st.name }), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(st.id).catch((e) => flash(errText(e), true)); } },
       );
     }
     items.push({
       label: t(gateway?.running ? "app.gatewayTurnOff" : "app.gatewayTurnOn"),
       icon: <Icon.gateway size={13} />,
-      action: () => { api.gatewaySet(!gateway?.running, null).then((g) => { setGateway(g); flash(t(g.running ? "app.gatewayStarted" : "app.gatewayStopped")); }).catch((e) => flash(errText(e), true)); },
+      action: () => { api.gatewaySet(!gateway?.running, null).then((g) => { setGateway(g); flash(t(g.running ? "common.gatewayStarted" : "common.gatewayStopped")); }).catch((e) => flash(errText(e), true)); },
     });
     items.push(
       "sep",
@@ -1266,7 +1266,7 @@ ${p}`))];
             onAdd={() => setHubDialog({ group: null })}
             onTestAll={() => testHub(true)}
             onTestOne={testOne}
-            envLabel={curEnv?.label ?? t("app.localWindows")}
+            envLabel={curEnv?.label ?? t("common.localWindows")}
           />
         )}
         {page === "providers" && (

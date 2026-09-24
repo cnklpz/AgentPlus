@@ -9,8 +9,6 @@ export default {
   // flashes
   resumedOne: "已恢复转发，下一个请求会正常发出",
   resumedAll: "已恢复全部转发",
-  gatewayOn: "本地网关已开启",
-  gatewayOff: "本地网关已关闭",
   forwardAddedReplaced: "已添加转发，原供应商地址改为 {base} 已加入待写入",
   forwardAdded: "已添加转发：{base}",
   // header / hero
@@ -19,7 +17,6 @@ export default {
   online: "网关在线",
   notRunning: "网关未运行",
   off: "网关已关闭",
-  copyUrl: "复制地址",
   heroRequests: "{n} 次请求",
   heroFailures: "{n} 次失败",
   heroActive: "{n} 个进行中",
@@ -61,7 +58,6 @@ export default {
   streamSuffix: " · 流",
   // unified entry
   unified: "统一入口",
-  modelCount: "{n} 个模型",
   routeCount: "{n} 个转发",
   copyUnified: "复制统一入口",
   unifiedHint: "Agent 只要填这一个地址：网关按请求里的模型选择转发，几个转发都有同一模型时按权重分流，失败自动切换。在 Agent 里「添加供应商」时打开「使用本地网关」就会用它，也可以在那里只勾选其中几个转发（地址会变成 {example}）。",
@@ -81,7 +77,6 @@ export default {
   replaceOff: "打开后，{n} 个正在使用这个地址的 Agent 供应商会改为经网关转发。",
   namePlaceholder: "例如：某中转 Chat 分组",
   upstreamUrl: "上游地址（Base URL）",
-  urlInvalid: "需要以 http:// 或 https:// 开头",
   upstreamProto: "上游协议",
   protoHint: "上游真正支持的协议，客户端用其他协议请求时网关会转换。",
   keyHint: "保存在本机供应商库（~/.agentplus），只有网关在转发时使用。",
@@ -117,8 +112,6 @@ export default {
   saveMap: "保存映射",
   routePaused: "已暂停转发",
   routeResumed: "已恢复转发",
-  pauseRoute: "暂停转发",
-  resumeRoute: "恢复转发",
   stopHint: "停止后，接入到 Agent 里的网关地址会失效，记得在 Agent 里「改回直连」。",
   // breaker settings
   breakerToggle: "连续出错时暂停转发",
