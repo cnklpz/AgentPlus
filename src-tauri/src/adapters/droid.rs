@@ -11,7 +11,7 @@
 //! writing and replace only `customModels` and `model` (atomic tmp + rename).
 //! The legacy `~/.factory/config.json` (`custom_models`, snake_case) is shown read-only.
 
-use super::keyref::{self, host, resolve_key, Group, Key};
+use super::keyref::{self, host, resolve_key, set_or_remove, Group, Key};
 use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
@@ -366,12 +366,10 @@ impl Work {
             "model": model,
             "displayName": name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(model),
             "baseUrl": g.key.0,
-            "apiKey": g.key.2,
+            "apiKey": "",
             "provider": g.key.1,
         });
-        if g.key.2.is_empty() {
-            e.as_object_mut().unwrap().remove("apiKey");
-        }
+        set_or_remove(&mut e, "apiKey", &g.key.2);
         e
     }
 
@@ -399,7 +397,13 @@ impl Work {
                         }
                         let key: Key = (base.clone(), prov.to_string(), new_key.clone().unwrap_or_default());
                         let g = match self.groups.iter().find(|g| g.key == key) {
-                            Some(g) => g.clone(),
+                            // Same as an existing provider: add to it, unless it is disabled
+                            // (its entries are parked; adding would orphan them).
+                            Some(g) => {
+                                let g = g.clone();
+                                self.require_enabled(&g)?;
+                                g
+                            }
                             None => {
                                 let id = unique_id(&slug(p.name.trim()), |c| self.groups.iter().any(|g| g.id == c) || self.legacy.iter().any(|l| l == c));
                                 let g = Group { id, key: key.clone(), name: p.name.trim().to_string() };
@@ -408,13 +412,13 @@ impl Work {
                             }
                         };
                         self.names.insert(fp(&key), json!(p.name.trim()));
-                        let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        self.diff.push(&file, trn!(models.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), key_part), true);
-                        for m in &models {
-                            if !self.entries.iter().any(|e| key_of(e) == key && str_field(e, "model") == *m) {
-                                self.entries.push(Self::new_entry(&g, m, None));
-                            }
+                        let added: Vec<&String> = models.iter().filter(|m| !self.entries.iter().any(|e| key_of(e) == key && str_field(e, "model") == **m)).collect();
+                        if !added.is_empty() {
+                            let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
+                            self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), key_part), true);
                         }
+                        let new: Vec<Value> = added.into_iter().map(|m| Self::new_entry(&g, m, None)).collect();
+                        self.entries.extend(new);
                     }
                     Some(id) => {
                         let g = self.group(id)?;
@@ -433,11 +437,18 @@ impl Work {
                             lines.push(format!("apiKey = {}", if key.2.is_empty() { l("（空）", "(empty)").into() } else { mask_key(&key.2) }));
                         }
                         if key != g.key {
+                            // Only the changed fields: a keyless entry gets no `"apiKey": ""`.
                             let set = |e: &mut Value| {
                                 if key_of(e) == g.key {
-                                    e["baseUrl"] = json!(key.0);
-                                    e["provider"] = json!(key.1);
-                                    e["apiKey"] = json!(key.2);
+                                    if key.0 != g.key.0 {
+                                        e["baseUrl"] = json!(key.0);
+                                    }
+                                    if key.1 != g.key.1 {
+                                        e["provider"] = json!(key.1);
+                                    }
+                                    if key.2 != g.key.2 {
+                                        set_or_remove(e, "apiKey", &key.2);
+                                    }
                                 }
                             };
                             self.entries.iter_mut().for_each(set);
@@ -923,6 +934,42 @@ mod tests {
         let _h2 = setup("jsonc", Some("{\n  // c\n  \"customModels\": []\n}"));
         assert!(state(&Install::default()).readonly);
         assert!(plan(&[upsert(None, "x", "https://x/v1", "chat", None, &["m"])], true).is_err());
+    }
+
+    #[test]
+    fn keyless_edit_writes_no_api_key() {
+        let h = setup("keyless", Some(r#"{"customModels":[{"model":"qwen3","displayName":"Qwen3","baseUrl":"http://localhost:11434/v1","provider":"generic-chat-completion-api"}]}"#));
+        let st = state(&Install::default());
+        assert_eq!((st.providers[0].id.as_str(), st.providers[0].name.as_str()), ("localhost", "localhost"));
+        let ops = [
+            upsert(Some("localhost"), "localhost", "http://localhost:11435/v1", "chat", None, &[]),
+            Op::UpsertModel { provider: "localhost".into(), model: ModelInput { id: "llama4".into(), ..Default::default() } },
+        ];
+        plan(&ops, false).unwrap();
+        let c = cfg_of(&h);
+        assert_eq!(models_of(&c), ["qwen3", "llama4"]);
+        for e in c["customModels"].as_array().unwrap() {
+            assert_eq!(e["baseUrl"], "http://localhost:11435/v1");
+            assert!(e.get("apiKey").is_none(), "{e}");
+        }
+    }
+
+    #[test]
+    fn recreating_a_disabled_provider_is_refused() {
+        let h = setup("recreate", Some(SAMPLE));
+        plan(&[Op::SetProviderEnabled { provider: "api-moonshot-cn".into(), enabled: false }], false).unwrap();
+        let store0 = std::fs::read(agentplus_dir().join("store.json")).unwrap();
+        let again = upsert(None, "Kimi", "https://api.moonshot.cn/v1", "chat", Some("sk-moon-1111"), &["kimi-k3"]);
+        let err = plan(std::slice::from_ref(&again), false).err().unwrap();
+        assert!(err.to_string().contains("已停用"), "{err}");
+        assert_eq!(store0, std::fs::read(agentplus_dir().join("store.json")).unwrap());
+        assert_eq!(models_of(&cfg_of(&h)), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5"]);
+
+        // An enabled one takes the new models; the diff counts only those.
+        plan(&[Op::SetProviderEnabled { provider: "api-moonshot-cn".into(), enabled: true }], false).unwrap();
+        let (d, _, _) = plan(&[upsert(None, "Kimi", "https://api.moonshot.cn/v1", "chat", Some("sk-moon-1111"), &["kimi-k2", "kimi-k3"])], false).unwrap();
+        assert!(diff_text(&d).contains("「Kimi」1 个模型条目"), "{}", diff_text(&d));
+        assert_eq!(models_of(&cfg_of(&h)), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5", "kimi-k2", "kimi-k3"]);
     }
 
     /// Read-only look at the real machine: state and a dry-run plan (nothing is written).
