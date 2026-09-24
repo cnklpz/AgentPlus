@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useEscape } from "../hooks";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ProviderInput, api, isProjectId } from "../api";
 import { type Draft, type ViewProvider, isVisible, keys, viewModels } from "../draft";
 import { API_LABEL, GATEWAY_KEY, ONLY_API, gatewayCapable, gatewayPoolBase, gatewayPoolIds } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
+import { Modal } from "./Modal";
+import { ErrorBox, Seg, ToggleRow } from "./controls";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t, tn } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, isHttpUrl, toggledIn } from "../util";
 
 /** What the dialog asks the app to do; every part is optional. */
 export interface ProviderSave {
@@ -124,9 +126,8 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   // Focus the first field once, when the dialog opens (not on every parent re-render).
   useEffect(() => { first.current?.focus(); }, []);
-  useEscape(onClose);
 
-  const urlOk = /^https?:\/\/\S+$/.test(baseUrl.trim());
+  const urlOk = isHttpUrl(baseUrl);
   const gw = connect === "gateway";
   const [saving, setSaving] = useState(false);
   const canSave = !saving && name.trim() !== "" && (gw || unifiedNew || urlOk) && (!tpl || unifiedNew || key.trim() !== "");
@@ -151,13 +152,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       setFetched(list);
       if (checked.length === 0) setChecked(list.slice(0, 20));
     } catch (e) {
-      setErr(t("providerDialog.fetchFailed", { err: String(e) }));
+      setErr(t("common.fetchFailed", { err: errText(e) }));
     } finally {
       setFetching(false);
     }
   };
 
-  const toggle = (m: string) => setChecked((l) => (l.includes(m) ? l.filter((x) => x !== m) : [...l, m]));
+  const toggle = (m: string) => setChecked((l) => toggledIn(l, m));
   const addManual = () => {
     const ids = manual.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
     setChecked((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
@@ -189,7 +190,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     try {
       await onSave(out);
     } catch (e) {
-      setErr(String(e).replace(/^Error: /, ""));
+      setErr(errText(e));
     } finally {
       setSaving(false);
     }
@@ -241,220 +242,178 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     : st.id === "pi" ? t("providerDialog.keyPi")
     : t("providerDialog.keyOther", { agent: st.name });
 
+  const foot = (
+    <>
+      <span className="muted tiny grow">{t("common.pendingNote")}</span>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
+    </>
+  );
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label={isNew ? t("providerDialog.addTitle") : t("providerDialog.editTitle")}>
-        <div className="modal-head">
-          <h2>{isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })}</h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
-        </div>
-
-        <div className="modal-body">
-          {isNew && gatewayCapable(st.id) && !unifiedNew && <TemplatePicker value={tpl} onPick={pickTpl} />}
-          {tplForward && (
-            <div className="gw-toggle on">
-              <Icon.gateway size={16} />
-              <div className="grow minw0">
-                <div className="small strong">{t("providerDialog.viaGatewayTitle")}</div>
-                <div className="tiny muted">{t("providerDialog.viaGatewayDesc", { vendor: tpl!.vendor, only: API_LABEL[only!], agent: st.name, api: API_LABEL[tpl!.api] })}</div>
-              </div>
-            </div>
-          )}
-          <div className="field">
-            <label htmlFor="pd-name">{t("common.name")}</label>
-            <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("providerDialog.namePlaceholder")} />
-          </div>
-
-          {!isNew && editing?.baseUrl && !onUnified && gatewayCapable(st.id) && (
-            <div className={`gw-toggle${gw ? " on" : ""}`}>
-              <Icon.gateway size={16} />
-              <div className="grow minw0">
-                <div className="small strong">{t("providerDialog.useGateway")}</div>
-                <div className="tiny muted">
-                  {gw
-                    ? viaGateway && gatewayRoute
-                      ? t("providerDialog.gwOnRoute", { url: gatewayRoute.upstreamUrl ?? "", api: API_LABEL[gatewayRoute.upstreamApi] })
-                      : t("providerDialog.gwOnNew")
-                    : viaGateway
-                      ? t("providerDialog.gwOffWas")
-                      : t("providerDialog.gwOff")}
-                </div>
-              </div>
-              <button type="button" className={`switch${gw ? " on" : ""}`} role="switch" aria-checked={gw} aria-label={t("providerDialog.useGateway")}
-                onClick={() => {
-                  if (gw) {
-                    setConnect("direct");
-                    // Leaving the gateway: show the upstream it forwarded to, not the local address.
-                    if (viaGateway && gatewayRoute?.upstreamUrl && baseUrl === (editing.baseUrl ?? "")) {
-                      setBaseUrl(gatewayRoute.upstreamUrl);
-                      if (!only) setKind(gatewayRoute.upstreamApi);
-                    }
-                  } else setConnect("gateway");
-                }}><span /></button>
-            </div>
-          )}
-          {!isNew && onUnified && (
-            <>
-              <div className="gw-toggle on">
-                <Icon.gateway size={16} />
-                <div className="grow minw0">
-                  <div className="small strong">{pool.length ? t("providerDialog.unifiedHeadPicked") : t("providerDialog.unifiedHeadAll")}</div>
-                  <div className="tiny muted">{t("providerDialog.unifiedDesc")}</div>
-                </div>
-              </div>
-              <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />
-            </>
-          )}
-          {isNew && gatewayCapable(st.id) && (
-            <div className={`gw-toggle${unifiedNew ? " on" : ""}`}>
-              <Icon.gateway size={16} />
-              <div className="grow minw0">
-                <div className="small strong">{t("providerDialog.useGateway")}</div>
-                <div className="tiny muted">
-                  {unifiedNew
-                    ? pool.length
-                      ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
-                      : t("providerDialog.newPoolAll", { url: poolBase })
-                    : t("providerDialog.newGwOff")}
-                </div>
-              </div>
-              <button type="button" className={`switch${unifiedNew ? " on" : ""}`} role="switch" aria-checked={unifiedNew} aria-label={t("providerDialog.useGateway")}
-                onClick={() => {
-                  if (!unifiedNew) setTpl(null);
-                  setUnifiedNew((v) => !v);
-                  if (!unifiedNew && !name.trim()) setName(t("providerDialog.gatewayName"));
-                }}><span /></button>
-            </div>
-          )}
-
-          {unifiedNew && <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />}
-
-          {unifiedNew && !only && (
-            <div className="field">
-              <span className="field-label">{t("providerDialog.gatewayProtocol")}</span>
-              <div className="seg">
-                {API_OPTIONS.map((o) => <button key={o.v} type="button" className={kind === o.v ? "on" : ""} title={t(o.hint)} onClick={() => setKind(o.v)}>{o.label}</button>)}
-              </div>
-              <em className="muted tiny">{t("providerDialog.gatewayProtocolNote")}</em>
-            </div>
-          )}
-
-          {!gw && !unifiedNew && !onUnified && (
-            <>
-              <div className="field">
-                <label htmlFor="pd-url">{t("providerDialog.baseUrl")}</label>
-                <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-                {baseUrl && !urlOk && <em className="field-err">{t("providerDialog.urlBad")}</em>}
-              </div>
-              <div className="form2">
-                <div className="field">
-                  <span className="field-label">{t("providerDialog.apiType")}</span>
-                  <div className="seg">
-                    {(only === "gemini" ? [{ v: "gemini" as ApiKind, label: "Gemini", hint: "providerDialog.apiGeminiHint" as TKey }] : API_OPTIONS).map((o) => {
-                      const missing = !!tpl && !only && !tpl.endpoints[o.v];
-                      return (
-                        <button key={o.v} type="button" className={kind === o.v ? "on" : ""} disabled={(!!only && o.v !== only) || missing}
-                          title={only && o.v !== only ? t("providerDialog.onlySupports", { agent: st.name, api: API_LABEL[only] }) : missing ? t("providerDialog.vendorNoApi", { vendor: tpl!.vendor, api: o.label }) : t(o.hint)} onClick={() => setProto(o.v)}>{o.label}</button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="field">
-                  <label htmlFor="pd-key">{t("providerDialog.apiKey")}</label>
-                  <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
-                    placeholder={!isNew && editing?.hasKey ? t("providerDialog.keySet") : "sk-..."} />
-                  <em className="muted tiny">
-                    {tplForward ? t("providerDialog.keyForward") : keyHint}
-                    {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("providerDialog.getKey", { vendor: tpl.vendor })}</button></>}
-                  </em>
-                </div>
-              </div>
-            </>
-          )}
-
-          {codex && (
-            <div className={`gw-toggle${officialAuth ? " on" : ""}`}>
-              <Icon.key size={16} />
-              <div className="grow minw0">
-                <div className="small strong">{t("providerDialog.officialAuth")}</div>
-                <div className="tiny muted">{officialAuth ? t("providerDialog.officialAuthOn") : t("providerDialog.officialAuthOff")}</div>
-              </div>
-              <button type="button" className={`switch${officialAuth ? " on" : ""}`} role="switch" aria-checked={officialAuth} aria-label={t("providerDialog.officialAuth")}
-                onClick={() => setOfficialAuth((v) => !v)}><span /></button>
-            </div>
-          )}
-
-          <div className="field">
-            <div className="row between">
-              <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>
-              <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
-                <Icon.refresh size={12} />{fetching ? t("providerDialog.fetching") : t("providerDialog.fetchFromUrl")}
-              </button>
-            </div>
-            <em className="muted tiny">
-              {codex
-                ? isNew
-                  ? t("providerDialog.codexNewNote")
-                  : isCurrent
-                    ? t("providerDialog.codexCurrentNote")
-                    : t("providerDialog.codexOtherNote")
-                : claude
-                  ? unmanaged
-                    ? t("providerDialog.claudeUnmanagedNote")
-                    : t("providerDialog.claudeNote")
-                  : t("providerDialog.pickNote", { agent: st.name })}
-            </em>
-            {!(codex && isNew) && !unmanaged && (
-              <>
-                <div className="mpick-bar">
-                  <span className="tiny muted">{t("providerDialog.selectedN", { n: checked.length })}</span>
-                  {candidates.length > 8 && <input className="input mono mpick-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("providerDialog.filter")} />}
-                  <span className="grow" />
-                  {candidates.length > 0 && <button type="button" className="link tiny" onClick={() => setChecked(checked.length === candidates.length ? [] : candidates)}>{checked.length === candidates.length ? t("providerDialog.selectNone") : t("providerDialog.selectAll")}</button>}
-                </div>
-                <div className="pick-list wide">
-                  {candidates.length === 0 && <div className="muted small">{codex && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}</div>}
-                  {shown.map((m) => (
-                    <label key={m} className="pick">
-                      <input type="checkbox" checked={checked.includes(m)} onChange={() => toggle(m)} />
-                      <span className="mono small">{m}</span>
-                      {fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m) && !isNew && <span className="mtag new">{t("providerDialog.tagNew")}</span>}
-                    </label>
-                  ))}
-                </div>
-                <div className="row gap6">
-                  <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("providerDialog.manualPlaceholder")} />
-                  <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
-                </div>
-              </>
-            )}
-          </div>
-          {roleList.length > 0 && !isNew && !unmanaged && (
-            <div className="field">
-              <span className="field-label">{t("providerDialog.roleAssign")} <em className="muted tiny">{claude ? t("providerDialog.roleScopeClaude") : t("providerDialog.roleScopeHermes")}</em></span>
-              <div className="roles-grid">
-                {roleList.map((r) => (
-                  <div key={r.role} className="role-row" title={t(r.hint)}>
-                    <span className="small strong">{t(r.label)}</span>
-                    <Dropdown value={roles[r.role] ?? ""} label={t(r.label)} onChange={(v) => setRoles((x) => ({ ...x, [r.role]: v }))}
-                      options={[{ value: "", label: t("providerDialog.roleUnset"), hint: r.role === "default" ? t("providerDialog.roleAgentDefault", { agent: st.name }) : t("providerDialog.roleInherit") }, ...checked.map((m) => ({ value: m, label: m }))]} />
-                  </div>
-                ))}
-              </div>
-              <em className="muted tiny">{t("providerDialog.roleNote")}</em>
-            </div>
-          )}
-          {err && <div className="err">{scrub(err)}</div>}
-        </div>
-
-        <div className="modal-foot">
-          <span className="muted tiny grow">{t("providerDialog.pendingNote")}</span>
-          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("providerDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
-        </div>
+    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
+      title={isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })} foot={foot}>
+      {isNew && gatewayCapable(st.id) && !unifiedNew && <TemplatePicker value={tpl} onPick={pickTpl} />}
+      {tplForward && (
+        <ToggleRow on icon={<Icon.gateway size={16} />} title={t("providerDialog.viaGatewayTitle")}
+          hint={t("providerDialog.viaGatewayDesc", { vendor: tpl!.vendor, only: API_LABEL[only!], agent: st.name, api: API_LABEL[tpl!.api] })} />
+      )}
+      <div className="field">
+        <label htmlFor="pd-name">{t("common.name")}</label>
+        <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />
       </div>
-    </div>
+
+      {!isNew && editing?.baseUrl && !onUnified && gatewayCapable(st.id) && (
+        <ToggleRow on={gw} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
+          hint={gw
+            ? viaGateway && gatewayRoute
+              ? t("providerDialog.gwOnRoute", { url: gatewayRoute.upstreamUrl ?? "", api: API_LABEL[gatewayRoute.upstreamApi] })
+              : t("providerDialog.gwOnNew")
+            : viaGateway
+              ? t("providerDialog.gwOffWas")
+              : t("providerDialog.gwOff")}
+          onChange={() => {
+            if (gw) {
+              setConnect("direct");
+              // Leaving the gateway: show the upstream it forwarded to, not the local address.
+              if (viaGateway && gatewayRoute?.upstreamUrl && baseUrl === (editing.baseUrl ?? "")) {
+                setBaseUrl(gatewayRoute.upstreamUrl);
+                if (!only) setKind(gatewayRoute.upstreamApi);
+              }
+            } else setConnect("gateway");
+          }} />
+      )}
+      {!isNew && onUnified && (
+        <>
+          <ToggleRow on icon={<Icon.gateway size={16} />} title={pool.length ? t("providerDialog.unifiedHeadPicked") : t("providerDialog.unifiedHeadAll")}
+            hint={t("providerDialog.unifiedDesc")} />
+          <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />
+        </>
+      )}
+      {isNew && gatewayCapable(st.id) && (
+        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
+          hint={unifiedNew
+            ? pool.length
+              ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
+              : t("providerDialog.newPoolAll", { url: poolBase })
+            : t("providerDialog.newGwOff")}
+          onChange={() => {
+            if (!unifiedNew) setTpl(null);
+            setUnifiedNew((v) => !v);
+            if (!unifiedNew && !name.trim()) setName(t("providerDialog.gatewayName"));
+          }} />
+      )}
+
+      {unifiedNew && <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />}
+
+      {unifiedNew && !only && (
+        <div className="field">
+          <span className="field-label">{t("providerDialog.gatewayProtocol")}</span>
+          <Seg value={kind} onChange={setKind} label={t("providerDialog.gatewayProtocol")}
+            options={API_OPTIONS.map((o) => ({ value: o.v, label: o.label, title: t(o.hint) }))} />
+          <em className="muted tiny">{t("providerDialog.gatewayProtocolNote")}</em>
+        </div>
+      )}
+
+      {!gw && !unifiedNew && !onUnified && (
+        <>
+          <div className="field">
+            <label htmlFor="pd-url">{t("common.baseUrlLabel")}</label>
+            <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+            {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
+          </div>
+          <div className="form2">
+            <div className="field">
+              <span className="field-label">{t("providerDialog.apiType")}</span>
+              <Seg value={kind} onChange={setProto} label={t("providerDialog.apiType")}
+                options={(only === "gemini" ? [{ v: "gemini" as ApiKind, label: "Gemini", hint: "providerDialog.apiGeminiHint" as TKey }] : API_OPTIONS).map((o) => {
+                  const missing = !!tpl && !only && !tpl.endpoints[o.v];
+                  return {
+                    value: o.v, label: o.label, disabled: (!!only && o.v !== only) || missing,
+                    title: only && o.v !== only ? t("providerDialog.onlySupports", { agent: st.name, api: API_LABEL[only] }) : missing ? t("providerDialog.vendorNoApi", { vendor: tpl!.vendor, api: o.label }) : t(o.hint),
+                  };
+                })} />
+            </div>
+            <div className="field">
+              <label htmlFor="pd-key">{t("common.apiKeyLabel")}</label>
+              <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
+                placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
+              <em className="muted tiny">
+                {tplForward ? t("providerDialog.keyForward") : keyHint}
+                {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("common.getKey", { vendor: tpl.vendor })}</button></>}
+              </em>
+            </div>
+          </div>
+        </>
+      )}
+
+      {codex && (
+        <ToggleRow on={officialAuth} onChange={setOfficialAuth} icon={<Icon.key size={16} />} title={t("providerDialog.officialAuth")}
+          hint={officialAuth ? t("providerDialog.officialAuthOn") : t("providerDialog.officialAuthOff")} />
+      )}
+
+      <div className="field">
+        <div className="row between">
+          <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>
+          <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
+            <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
+          </button>
+        </div>
+        <em className="muted tiny">
+          {codex
+            ? isNew
+              ? t("providerDialog.codexNewNote")
+              : isCurrent
+                ? t("providerDialog.codexCurrentNote")
+                : t("providerDialog.codexOtherNote")
+            : claude
+              ? unmanaged
+                ? t("providerDialog.claudeUnmanagedNote")
+                : t("providerDialog.claudeNote")
+              : t("providerDialog.pickNote", { agent: st.name })}
+        </em>
+        {!(codex && isNew) && !unmanaged && (
+          <>
+            <div className="mpick-bar">
+              <span className="tiny muted">{t("providerDialog.selectedN", { n: checked.length })}</span>
+              {candidates.length > 8 && <input className="input mono mpick-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("common.filter")} />}
+              <span className="grow" />
+              {candidates.length > 0 && <button type="button" className="link tiny" onClick={() => setChecked(checked.length === candidates.length ? [] : candidates)}>{checked.length === candidates.length ? t("common.selectNone") : t("common.selectAll")}</button>}
+            </div>
+            <div className="pick-list wide">
+              {candidates.length === 0 && <div className="muted small">{codex && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}</div>}
+              {shown.map((m) => (
+                <label key={m} className="pick">
+                  <input type="checkbox" checked={checked.includes(m)} onChange={() => toggle(m)} />
+                  <span className="mono small">{m}</span>
+                  {fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m) && !isNew && <span className="mtag new">{t("common.tagNew")}</span>}
+                </label>
+              ))}
+            </div>
+            <div className="row gap6">
+              <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("common.manualModelsPlaceholder")} />
+              <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
+            </div>
+          </>
+        )}
+      </div>
+      {roleList.length > 0 && !isNew && !unmanaged && (
+        <div className="field">
+          <span className="field-label">{t("providerDialog.roleAssign")} <em className="muted tiny">{claude ? t("providerDialog.roleScopeClaude") : t("providerDialog.roleScopeHermes")}</em></span>
+          <div className="roles-grid">
+            {roleList.map((r) => (
+              <div key={r.role} className="role-row" title={t(r.hint)}>
+                <span className="small strong">{t(r.label)}</span>
+                <Dropdown value={roles[r.role] ?? ""} label={t(r.label)} onChange={(v) => setRoles((x) => ({ ...x, [r.role]: v }))}
+                  options={[{ value: "", label: t("providerDialog.roleUnset"), hint: r.role === "default" ? t("providerDialog.roleAgentDefault", { agent: st.name }) : t("providerDialog.roleInherit") }, ...checked.map((m) => ({ value: m, label: m }))]} />
+              </div>
+            ))}
+          </div>
+          <em className="muted tiny">{t("providerDialog.roleNote")}</em>
+        </div>
+      )}
+      {err && <ErrorBox text={err} />}
+    </Modal>
   );
 }
 
@@ -463,7 +422,7 @@ function ForwardPicker({ routes, value, onChange }: { routes: GatewayRouteView[]
   const usable = routes.filter((r) => !r.upstreamMissing);
   // Picked earlier but since deleted: still listed so they can be unticked.
   const gone = value.filter((id) => !usable.some((r) => r.id === id));
-  const toggle = (id: string) => onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  const toggle = (id: string) => onChange(toggledIn(value, id));
   return (
     <div className="field">
       <div className="row between">

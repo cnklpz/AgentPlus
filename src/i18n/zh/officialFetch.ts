@@ -30,7 +30,6 @@ export default {
   checkNow: "立即检查",
   cancelRestore: "取消并还原",
   readyNote: "已拿到官方模型列表：{count} 个模型。下一步把它复制为 {catalog}，并还原你原来的 config.toml。",
-  writing: "写入中…",
   writeRestore: "写入模型目录并还原配置",
   pleaseRestart: "请重启 Codex",
   doneNote: "完成：已写入 {n} 个官方模型，config.toml 已还原。{restart}，之后 Codex 的模型选择器会固定使用这份列表。",

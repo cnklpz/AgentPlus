@@ -1,5 +1,6 @@
 import { type Template, VENDORS, planLabel } from "../templates";
 import { Dropdown } from "./Dropdown";
+import { Seg } from "./controls";
 import { Icon, VendorIcon } from "./icons";
 import { t } from "../i18n";
 
@@ -17,11 +18,8 @@ export function TemplatePicker({ value, onPick }: { value: Template | null; onPi
             ...VENDORS.map((v) => ({ value: v.id, label: v.name, hint: v.plans.map(planLabel).join(" / "), icon: <VendorIcon id={v.id} size={20} />, group: v.group })),
           ]} />
         {vendor && vendor.plans.length > 1 && (
-          <div className="seg" role="radiogroup" aria-label={t("templatePicker.billing")}>
-            {vendor.plans.map((t) => (
-              <button key={t.id} type="button" role="radio" aria-checked={value?.id === t.id} className={value?.id === t.id ? "on" : ""} onClick={() => onPick(t)}>{planLabel(t)}</button>
-            ))}
-          </div>
+          <Seg value={value?.id ?? ""} label={t("templatePicker.billing")} onChange={(id) => onPick(vendor.plans.find((p) => p.id === id) ?? null)}
+            options={vendor.plans.map((p) => ({ value: p.id, label: planLabel(p) }))} />
         )}
       </div>
       {value?.note && <em className="muted tiny">{value.note}</em>}

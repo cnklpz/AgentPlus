@@ -76,7 +76,7 @@
 
 /* 长列表：滚动进入视口时浮现 */
 @supports (animation-timeline: view()) {
-  :root[data-motion="rich"] :is(.sess, .mrow:not(.mhead), .hrow, .proj-row, .kv-row, .gw-route) {
+  :root[data-motion="rich"] :is(.sess, .mrow:not(.mhead), .hrow, .proj-row, .kv-row) {
     animation: ap-reveal linear both; animation-timeline: view(); animation-range: entry 0% entry 70%;
   }
 }
@@ -90,7 +90,7 @@
 :root[data-motion="rich"] .btn.primary:hover:not(:disabled)::after { transform: translateX(110%); transition: transform .8s var(--ease-smooth); }
 :root[data-motion="rich"] :is(.btn, .pbtn, .apick, .chip, .seg button, .env-card, .opt, .acct):active:not(:disabled) { transform: scale(.94); transition-duration: .08s; }
 :root[data-motion="rich"] .icon-btn:active:not(:disabled) { transform: scale(.86); transition-duration: .08s; }
-:root[data-motion="rich"] .icon-btn:not(.ghost):hover:not(:disabled) svg { animation: ap-wiggle .55s var(--ease-smooth); }
+:root[data-motion="rich"] .icon-btn:hover:not(:disabled) svg { animation: ap-wiggle .55s var(--ease-smooth); }
 :root[data-motion="rich"] .agent-row:not(.active):not(:disabled):hover,
 :root[data-motion="rich"] .side-link:not(.active):not(:disabled):hover,
 :root[data-motion="rich"] .rail-item:not(.on):hover { transform: translateX(3px); }

@@ -32,9 +32,11 @@ import { ContextMenu, type MenuItem, editableOf, insertText, selectedIn } from "
 import { ProjectHead, ProjectList } from "./components/ProjectsPage";
 import { type CopyPick, CopyProviderDialog } from "./components/CopyProviderDialog";
 import { type RestartRun, RestartDialog, applyProgress, finishRun, newRun } from "./components/RestartDialog";
-import { escapeLayerOpen } from "./hooks";
+import { useDismiss } from "./hooks";
 import { inTauri } from "./tauri";
 import { scrub, setPrivacy, usePrivacy } from "./privacy";
+import { copyText, errText } from "./util";
+import { joinList } from "./format";
 
 /** Windows-style caption buttons; the system title bar is turned off. */
 function WindowControls() {
@@ -180,7 +182,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const reload = () => api.listAgents().then(setAgents).catch((e) => setLoadError(String(e)));
+  const reload = () => api.listAgents().then(setAgents).catch((e) => setLoadError(errText(e)));
   const reloadLib = () => api.libraryList().then(setLib).catch(() => undefined);
   const reloadEnvs = () => api.listEnvs().then(setEnvs).catch(() => undefined);
   const reloadProjects = () => api.projectsList().then(setProjects).catch(() => undefined);
@@ -306,7 +308,7 @@ export default function App() {
     let alive = true;
     api.preview(st.id, opsToWrite(st, draft))
       .then((d) => { if (alive) { setDiff(d); setDiffError(null); } })
-      .catch((e) => { if (alive) { setDiff([]); setDiffError(String(e)); } });
+      .catch((e) => { if (alive) { setDiff([]); setDiffError(errText(e)); } });
     return () => { alive = false; };
   }, [st, ops]);
 
@@ -314,7 +316,7 @@ export default function App() {
     setLatency((l) => ({ ...l, [url]: "pending" }));
     api.testLatency(url)
       .then((ms) => setLatency((l) => ({ ...l, [url]: ms })))
-      .catch((e) => setLatency((l) => ({ ...l, [url]: String(e) })));
+      .catch((e) => setLatency((l) => ({ ...l, [url]: errText(e) })));
   };
 
   const testAll = useCallback((force: boolean) => {
@@ -357,7 +359,7 @@ export default function App() {
       await api.dismissFixedPrompt();
       replaceAgent(await api.getAgent("codex"));
     } catch (e) {
-      flash(String(e), true, 7000);
+      flash(errText(e), true, 7000);
       return;
     }
     flash(t("app.fixedDeclined"));
@@ -378,20 +380,7 @@ export default function App() {
   const closeDetail = () => setPicked((m) => ({ ...m, [sid]: null }));
 
   // Clicking outside the cards / detail panel, or pressing Esc, closes the details.
-  useEffect(() => {
-    if (!pickedProvider || dialog || palette || copyOpen) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Element | null;
-      if (!t?.closest(".pcard, .pdetail, .toast, .modal-bg")) closeDetail();
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !escapeLayerOpen()) closeDetail(); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [pickedProvider?.id, sid, dialog, palette, copyOpen]);
+  useDismiss(!!pickedProvider && !dialog && !palette && !copyOpen, ".pcard, .pdetail, .toast, .modal-bg", closeDetail);
 
   const deleteProvider = async (p: ViewProvider) => {
     if (!st) return;
@@ -419,9 +408,9 @@ export default function App() {
       if (runHidden.current) flash(t("app.nameMsg", { name: a.name, msg }), false, 5000);
       replaceAgent(await api.getAgent(a.id));
     } catch (e) {
-      mine((r) => finishRun(r, false, String(e)));
+      mine((r) => finishRun(r, false, errText(e)));
       if (runCancelled.current) flash(t(starting ? "app.startCancelled" : "app.restartCancelled", { name: a.name }));
-      else if (runHidden.current) flash(t(starting ? "app.startFailed" : "app.restartFailed", { name: a.name, err: String(e) }), true, 8000);
+      else if (runHidden.current) flash(t(starting ? "app.startFailed" : "app.restartFailed", { name: a.name, err: errText(e) }), true, 8000);
     } finally {
       setRestarting(null);
     }
@@ -434,7 +423,7 @@ export default function App() {
       const applyFirst = await askCheck({
         title: tn("app.restartPendingTitle", n, { name: a.name }),
         message: t(starting ? "app.startPendingMsg" : "app.restartPendingMsg", { name: a.name }),
-        confirmText: t(starting ? "app.startAgent" : "app.restartAgent", { name: a.name }),
+        confirmText: t(starting ? "common.startAgent" : "common.restartAgent", { name: a.name }),
         check: { label: t("app.applyFirst"), hint: t("app.applyFirstHint"), value: true },
       });
       if (applyFirst === null) return;
@@ -502,7 +491,7 @@ export default function App() {
       const touchedAgent = sentOps.some((o) => !(o.op === "set_setting" && o.key === "auto_restart"));
       if (auto && touchedAgent && r.state.running) await restartAgent(r.state);
     } catch (e) {
-      flash(String(e), true, 7000);
+      flash(errText(e), true, 7000);
     } finally {
       delete inFlight.current[st.id];
       setBusy(false);
@@ -519,7 +508,7 @@ export default function App() {
         const sent = drafts[a.id];
         inFlight.current[a.id] = sent;
         const r = await api.apply(a.id, opsToWrite(a, sent))
-          .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: String(e) })); })
+          .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: errText(e) })); })
           .finally(() => { delete inFlight.current[a.id]; });
         replaceAgent(r.state);
         setDrafts((all) => ({ ...all, [a.id]: draftAfterWrite(all[a.id] ?? {}, sent) }));
@@ -527,11 +516,11 @@ export default function App() {
         const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
         if (autoRestart && auto && r.state.running) await restartAgent(r.state);
       }
-      if (done.length) flash(t("app.wroteAgents", { names: done.join(t("app.listSep")) }));
+      if (done.length) flash(t("app.wroteAgents", { names: joinList(done) }));
       return true;
     } catch (e) {
-      const err = String(e).replace(/^Error: /, "");
-      flash(done.length ? t("app.wrotePartial", { names: done.join(t("app.listSep")), err }) : err, true, 8000);
+      const err = errText(e);
+      flash(done.length ? t("app.wrotePartial", { names: joinList(done), err }) : err, true, 8000);
       return false;
     } finally {
       setBusy(false);
@@ -557,7 +546,7 @@ export default function App() {
       setEnvs(list);
       flash(t("app.switchedTo", { env: list.find((e) => e.current)?.label ?? id }));
     } catch (e) {
-      flash(t("app.switchFailed", { err: String(e) }), true, 7000);
+      flash(t("app.switchFailed", { err: errText(e) }), true, 7000);
     } finally {
       setSwitching(false);
     }
@@ -585,7 +574,7 @@ export default function App() {
       setProjPath(e.path);
       reloadProjects();
     } catch (err) {
-      flash(String(err), true, 7000);
+      flash(errText(err), true, 7000);
     }
   };
   const pickProject = async () => {
@@ -593,7 +582,7 @@ export default function App() {
       const p = await api.pickFolder(projEntry?.path ?? projects[0]?.path ?? null);
       if (p) await openProject(p);
     } catch (err) {
-      flash(t("app.pickFolderFailed", { err: String(err) }), true, 7000);
+      flash(t("app.pickFolderFailed", { err: errText(err) }), true, 7000);
     }
   };
   const forgetProject = async (p: ProjectEntry) => {
@@ -603,7 +592,7 @@ export default function App() {
       await api.projectForget(p.path);
     } catch (e) {
       // Still in the list: keep its pending changes too.
-      flash(String(e), true, 7000);
+      flash(errText(e), true, 7000);
       return;
     }
     setDraftFor(p.agent, {});
@@ -658,7 +647,7 @@ export default function App() {
         await api.libraryDelete(s.lib.id);
       } catch (e) {
         // The agent deletes are queued; only the library entry is still there.
-        flash(uses.length ? tn("app.queuedDeletesLibFailed", uses.length, { err: String(e) }) : String(e), true, 7000);
+        flash(uses.length ? tn("app.queuedDeletesLibFailed", uses.length, { err: errText(e) }) : errText(e), true, 7000);
         return;
       }
       await reloadLib();
@@ -691,7 +680,7 @@ export default function App() {
       try {
         route = await routeForLib(entry.id, v.api, v.name);
       } catch (e) {
-        flash(t("app.savedForwardFailed", { err: String(e) }), true, 7000);
+        flash(t("app.savedForwardFailed", { err: errText(e) }), true, 7000);
         await reloadLib();
         setHubDialog(undefined);
         return;
@@ -769,7 +758,7 @@ export default function App() {
       const r = await routeFor(g);
       gatewayToAgent(r, agent, apiFor(agent, g.api));
     } catch (e) {
-      flash(t("app.forwardFailed", { err: String(e) }), true, 7000);
+      flash(t("app.forwardFailed", { err: errText(e) }), true, 7000);
     }
   };
 
@@ -840,7 +829,7 @@ ${p}`))];
     try {
       setGateway(await api.gatewayDeleteRoute(r.id));
     } catch (e) {
-      flash(String(e), true, 7000);
+      flash(errText(e), true, 7000);
       return false;
     }
     const n = restore ? restoreReplaced(drafts, r).n : 0;
@@ -922,7 +911,7 @@ ${p}`))];
     try {
       for (const { agent, ops, keys: written } of byAgent.values()) {
         const r = await api.apply(agent.id, ops)
-          .catch((e) => { throw new Error(t("app.nameMsg", { name: agent.name, msg: String(e) })); });
+          .catch((e) => { throw new Error(t("app.nameMsg", { name: agent.name, msg: errText(e) })); });
         replaceAgent(r.state);
         setDrafts((all) => {
           const d = { ...(all[agent.id] ?? {}) };
@@ -933,30 +922,17 @@ ${p}`))];
         const auto = r.state.settings.find((s) => s.key === "auto_restart")?.value === true;
         if (auto && r.state.running) await restartAgent(r.state);
       }
-      flash(t("app.wroteAgents", { names: done.join(t("app.listSep")) }));
+      flash(t("app.wroteAgents", { names: joinList(done) }));
     } catch (e) {
-      const err = String(e).replace(/^Error: /, "");
-      flash(done.length ? t("app.wrotePartial", { names: done.join(t("app.listSep")), err }) : err, true, 8000);
+      const err = errText(e);
+      flash(done.length ? t("app.wrotePartial", { names: joinList(done), err }) : err, true, 8000);
     } finally {
       setBusy(false);
     }
   };
 
   // Hub details close on outside click / Esc, like the agent page.
-  useEffect(() => {
-    if (page !== "providers" || !hubSel || hubDialog !== undefined || palette) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Element | null;
-      if (!t?.closest(".hcard, .acct, .sdetail, .toast, .modal-bg, .aside-diff, .aside-foot")) setHubSel(null);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !escapeLayerOpen()) setHubSel(null); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [page, hubSel, hubDialog, palette]);
+  useDismiss(page === "providers" && !!hubSel && hubDialog === undefined && !palette, ".hcard, .acct, .sdetail, .toast, .modal-bg, .aside-diff, .aside-foot", () => setHubSel(null));
 
   const openAgent = (id: AgentId) => {
     setPage(null);
@@ -1025,14 +1001,14 @@ ${p}`))];
         }
       }
     } catch (e) {
-      flash(String(e).replace(/^Error: /, ""), true, 7000);
+      flash(errText(e), true, 7000);
       return;
     }
     if (sv.unified) {
       try {
         await ensureGateway();
       } catch (e) {
-        flash(t("app.gatewayStartFailed", { err: String(e) }), true, 7000);
+        flash(t("app.gatewayStartFailed", { err: errText(e) }), true, 7000);
         return;
       }
     }
@@ -1081,7 +1057,7 @@ ${p}`))];
     api.gatewayStatus().then(setGateway).catch(() => undefined);
     flash(t("app.reloaded"));
   };
-  const copyText = (s: string) => navigator.clipboard.writeText(s).then(() => flash(t("common.copied"))).catch(() => flash(t("app.copyFailed"), true));
+  const copy = (s: string) => copyText(s, flash);
 
   // F5 / Ctrl+R would reload the webview and lose pending changes: re-read configs instead.
   useEffect(() => {
@@ -1107,13 +1083,13 @@ ${p}`))];
         const n = Object.keys(drafts[a.id] ?? {}).length;
         return [
           { label: t("app.openAgent", { name: a.name }), icon: <AgentIcon id={a.id} size={14} />, action: () => openAgent(a.id) },
-          ...(a.restartable ? [{ label: t(a.running ? "app.restartAgent" : "app.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAsked(a); } }] : []),
-          { label: t("app.openConfigDir"), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(a.id).catch((e) => flash(String(e), true)); } },
+          ...(a.restartable ? [{ label: t(a.running ? "common.restartAgent" : "common.startAgent", { name: a.name }), icon: a.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !!restarting, action: () => { restartAsked(a); } }] : []),
+          { label: t("common.openConfigDir"), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(a.id).catch((e) => flash(errText(e), true)); } },
           ...(n ? [
             "sep" as const,
             { label: tn("app.applyAgentChanges", n, { name: a.name }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAgents([a.id]); } },
             { label: t("app.discardAgentChanges", { name: a.name }), icon: <Icon.close size={11} />, danger: true, action: async () => {
-              if (await ask({ title: tn("app.discardAgentTitle", n, { name: a.name }), message: t("app.discardMsg"), danger: true, confirmText: t("app.discard") })) setDraftFor(a.id, {});
+              if (await ask({ title: tn("app.discardAgentTitle", n, { name: a.name }), message: t("app.discardMsg"), danger: true, confirmText: t("common.discard") })) setDraftFor(a.id, {});
             } },
           ] : []),
           "sep",
@@ -1129,10 +1105,10 @@ ${p}`))];
           ...(p.editable ? [{ label: t("app.editMenu"), icon: <Icon.edit size={12} />, disabled: st.readonly, action: () => setDialog({ editing: p }) }] : []),
           ...(p.compatible && !p.isNew && !p.isDeleted && !(st.mode === "multi" && p.builtin)
             ? [st.mode === "single"
-              ? { label: t(isCur ? "app.inUse" : "app.setCurrent"), icon: <Icon.check size={13} />, disabled: isCur || st.readonly, action: () => providerAction(p) }
+              ? { label: t(isCur ? "common.inUse" : "app.setCurrent"), icon: <Icon.check size={13} />, disabled: isCur || st.readonly, action: () => providerAction(p) }
               : { label: t(on ? "app.disable" : "app.enable"), icon: <Icon.check size={13} />, disabled: st.readonly, action: () => providerAction(p) }]
             : []),
-          ...(p.models.length ? [{ label: t("app.viewModels"), action: () => { setRails((m) => ({ ...m, [st.id]: p.id })); setTabs((m) => ({ ...m, [st.id]: "models" })); } }] : []),
+          ...(p.models.length ? [{ label: t("common.viewModels"), action: () => { setRails((m) => ({ ...m, [st.id]: p.id })); setTabs((m) => ({ ...m, [st.id]: "models" })); } }] : []),
           ...(p.editable && !p.isNew && !p.isDeleted ? ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly || isCur, action: () => { deleteProvider(p); } }] : []),
           "sep",
         ];
@@ -1145,7 +1121,7 @@ ${p}`))];
         if (!m) return [];
         const vis = isVisible(pid, m, draft);
         return [
-          { label: t("app.copyModelId"), icon: <Icon.copy size={13} />, action: () => copyText(mid) },
+          { label: t("app.copyModelId"), icon: <Icon.copy size={13} />, action: () => copy(mid) },
           ...(!m.isDeleted && !m.readonly ? [{ label: t(vis ? "app.hideInPicker" : "app.showInPicker"), disabled: st.readonly, action: () => {
             setDraft(withOp(draft, keys.visible(pid, m.id), !vis === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible: !vis }));
           } }] : []),
@@ -1169,7 +1145,7 @@ ${p}`))];
         const r = gateway?.routes.find((x) => x.id === d("route"));
         if (!r) return [];
         return [
-          { label: t(r.enabled ? "app.pauseForward" : "app.resumeForward"), action: () => { api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(String(e), true)); } },
+          { label: t(r.enabled ? "common.pauseRoute" : "common.resumeRoute"), action: () => { api.gatewaySaveRoute({ ...plainRoute(r), enabled: !r.enabled }, r.id).then(setGateway).catch((e) => flash(errText(e), true)); } },
           { label: t("app.deleteForwardMenu"), icon: <Icon.trash size={12} />, danger: true, action: () => { deleteRoute(r); } },
           "sep",
         ];
@@ -1177,9 +1153,9 @@ ${p}`))];
       case "session": {
         const path = d("path");
         return [
-          { label: t("app.copySessionId"), icon: <Icon.copy size={13} />, action: () => copyText(d("sid")) },
-          ...(d("title") ? [{ label: t("app.copyTitle"), action: () => copyText(d("title")) }] : []),
-          ...(path ? [{ label: t("app.showInFolder"), icon: <Icon.folder size={13} />, action: () => { api.revealPath(path).catch((e) => flash(String(e), true)); } }] : []),
+          { label: t("app.copySessionId"), icon: <Icon.copy size={13} />, action: () => copy(d("sid")) },
+          ...(d("title") ? [{ label: t("app.copyTitle"), action: () => copy(d("title")) }] : []),
+          ...(path ? [{ label: t("app.showInFolder"), icon: <Icon.folder size={13} />, action: () => { api.revealPath(path).catch((e) => flash(errText(e), true)); } }] : []),
           "sep",
         ];
       }
@@ -1197,19 +1173,19 @@ ${p}`))];
       const secret = ed instanceof HTMLInputElement && ed.type === "password";
       items.push(
         { label: t("app.cut"), hint: "Ctrl X", disabled: !s || ro || secret, action: () => { navigator.clipboard.writeText(s).then(() => insertText(ed, "")).catch(() => undefined); } },
-        { label: t("common.copy"), hint: "Ctrl C", icon: <Icon.copy size={13} />, disabled: !s || secret, action: () => copyText(s) },
+        { label: t("common.copy"), hint: "Ctrl C", icon: <Icon.copy size={13} />, disabled: !s || secret, action: () => copy(s) },
         { label: t("app.paste"), hint: "Ctrl V", disabled: ro, action: () => { navigator.clipboard.readText().then((x) => insertText(ed, x)).catch(() => flash(t("app.clipboardReadFailed"), true)); } },
         { label: t("app.selectAll"), hint: "Ctrl A", disabled: !ed.value, action: () => { ed.focus(); ed.select(); } },
         "sep",
       );
     } else if (sel.trim()) {
-      items.push({ label: t("app.copySelection"), hint: "Ctrl C", icon: <Icon.copy size={13} />, action: () => copyText(sel) }, "sep");
+      items.push({ label: t("app.copySelection"), hint: "Ctrl C", icon: <Icon.copy size={13} />, action: () => copy(sel) }, "sep");
     }
     items.push(...contextItems(target));
     const url = target.closest("[data-url]")?.getAttribute("data-url");
     if (url) {
       items.push(
-        { label: t("app.copyUrl"), icon: <Icon.copy size={13} />, action: () => copyText(url) },
+        { label: t("common.copyUrl"), icon: <Icon.copy size={13} />, action: () => copy(url) },
         { label: t("app.retest"), icon: <Icon.pulse size={13} />, action: () => testOne(url) },
         "sep",
       );
@@ -1226,7 +1202,7 @@ ${p}`))];
         "sep",
         { label: t("app.applyAll", { n: pendingTotal }), icon: <Icon.check size={13} />, disabled: busy, action: () => { applyAll(); } },
         { label: t("app.discardAll"), icon: <Icon.close size={11} />, danger: true, disabled: busy, action: async () => {
-          if (!(await ask({ title: tn("app.discardAllTitle", pendingTotal), message: t("app.discardAllMsg"), danger: true, confirmText: t("app.discard") }))) return;
+          if (!(await ask({ title: tn("app.discardAllTitle", pendingTotal), message: t("app.discardAllMsg"), danger: true, confirmText: t("common.discard") }))) return;
           setDrafts({});
           flash(t("app.discardedAll"));
         } },
@@ -1235,14 +1211,14 @@ ${p}`))];
     items.push("sep");
     if (!page && st) {
       items.push(
-        ...(st.restartable ? [{ label: t(st.running ? "app.restartAgent" : "app.startAgent", { name: st.name }), icon: st.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !st.installed || !!restarting, action: restart }] : []),
-        { label: t("app.openAgentConfigDir", { name: st.name }), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(st.id).catch((e) => flash(String(e), true)); } },
+        ...(st.restartable ? [{ label: t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name }), icon: st.running ? <Icon.refresh size={13} /> : <Icon.play size={13} />, disabled: !st.installed || !!restarting, action: restart }] : []),
+        { label: t("app.openAgentConfigDir", { name: st.name }), icon: <Icon.folder size={13} />, action: () => { api.openConfigDir(st.id).catch((e) => flash(errText(e), true)); } },
       );
     }
     items.push({
       label: t(gateway?.running ? "app.gatewayTurnOff" : "app.gatewayTurnOn"),
       icon: <Icon.gateway size={13} />,
-      action: () => { api.gatewaySet(!gateway?.running, null).then((g) => { setGateway(g); flash(t(g.running ? "app.gatewayStarted" : "app.gatewayStopped")); }).catch((e) => flash(String(e), true)); },
+      action: () => { api.gatewaySet(!gateway?.running, null).then((g) => { setGateway(g); flash(t(g.running ? "common.gatewayStarted" : "common.gatewayStopped")); }).catch((e) => flash(errText(e), true)); },
     });
     items.push(
       "sep",
@@ -1251,7 +1227,7 @@ ${p}`))];
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
       "sep",
-      { label: t("app.openDataDir"), icon: <Icon.folder size={13} />, action: () => { api.openDataDir().catch((e) => flash(String(e), true)); } },
+      { label: t("app.openDataDir"), icon: <Icon.folder size={13} />, action: () => { api.openDataDir().catch((e) => flash(errText(e), true)); } },
     );
     return items;
   };
@@ -1290,7 +1266,7 @@ ${p}`))];
             onAdd={() => setHubDialog({ group: null })}
             onTestAll={() => testHub(true)}
             onTestOne={testOne}
-            envLabel={curEnv?.label ?? t("app.localWindows")}
+            envLabel={curEnv?.label ?? t("common.localWindows")}
           />
         )}
         {page === "providers" && (
@@ -1309,7 +1285,7 @@ ${p}`))];
                 latency={latency}
                 onClose={() => setHubSel(null)}
                 onTest={testOne}
-                onCopy={(text) => navigator.clipboard.writeText(text).then(() => flash(t("app.urlCopied"))).catch(() => flash(t("app.copyFailed"), true))}
+                onCopy={(text) => copyText(text, flash, t("app.urlCopied"))}
                 onAddGroup={() => setHubDialog({ group: null, prefill: { name: `${hubStation.name} — `, baseUrl: hubStation.groups[0]?.baseUrl ?? "", station: hubStation.name } })}
                 onEditGroup={(g) => setHubDialog({ group: g })}
                 onAddTo={hubAdd}
@@ -1368,7 +1344,7 @@ ${p}`))];
             onTestOne={testOne}
             restarting={restarting === st.id}
             onRestart={restart}
-            onOpenDir={() => (isProjectId(st.id) ? api.openPath(st.configDir) : api.openConfigDir(st.id)).catch((e) => flash(String(e), true))}
+            onOpenDir={() => (isProjectId(st.id) ? api.openPath(st.configDir) : api.openConfigDir(st.id)).catch((e) => flash(errText(e), true))}
             tab={tabs[st.id] ?? "prov"}
             setTab={(t) => setTabs((m) => ({ ...m, [st.id]: t }))}
             railSel={rails[st.id] ?? null}
@@ -1383,7 +1359,7 @@ ${p}`))];
             onReload={() => { api.getAgent(st.id).then(replaceAgent).catch(() => undefined); }}
             head={projSt ? (
               <ProjectHead st={projSt} project={projEntry} projects={projects} onBack={() => setProjPath(null)} onSwitch={openProject}
-                onOpenDir={() => { api.openPath(projSt.configDir).catch((e) => flash(String(e), true)); }} />
+                onOpenDir={() => { api.openPath(projSt.configDir).catch((e) => flash(errText(e), true)); }} />
             ) : undefined}
             onCopyProvider={projSt ? () => setCopyOpen(true) : undefined}
             projectsTab={st.id === "opencode" ? {
@@ -1396,7 +1372,7 @@ ${p}`))];
                   onOpen={openProject}
                   onPick={pickProject}
                   onForget={forgetProject}
-                  onReveal={(p) => { api.openPath(p).catch((e) => flash(String(e), true)); }}
+                  onReveal={(p) => { api.openPath(p).catch((e) => flash(errText(e), true)); }}
                 />
               ),
             } : undefined}
@@ -1428,7 +1404,7 @@ ${p}`))];
                   setRails((m) => ({ ...m, [st.id]: pickedProvider.id }));
                   setTabs((m) => ({ ...m, [st.id]: "models" }));
                 }}
-                onCopy={(text) => navigator.clipboard.writeText(text).then(() => flash(t("app.urlCopied"))).catch(() => flash(t("app.copyFailed"), true))}
+                onCopy={(text) => copyText(text, flash, t("app.urlCopied"))}
                 onEdit={() => setDialog({ editing: pickedProvider })}
                 onDelete={() => deleteProvider(pickedProvider)}
                 gatewayRoute={routeOfProvider(pickedProvider)}

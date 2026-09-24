@@ -2,9 +2,6 @@
 export default {
   notInstalled: "未检测到安装",
   singleSub: "供应商 {provider} · {n} 个模型",
-  providerCount: "{n} 个供应商",
-  modelCount: "{n} 个模型",
-  providers: "供应商",
   gateway: "本地网关",
   history: "历史与回滚",
   sync: "多设备同步",

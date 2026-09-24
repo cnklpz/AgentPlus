@@ -282,7 +282,7 @@ export function syncSuggestionIds(list: SyncSuggestion[]): string[] {
 const USE_KEY: Record<UseState, TKey> = {
   current: "services.useCurrent",
   on: "services.useOn",
-  off: "services.useOff",
+  off: "common.disabled",
   adding: "services.useAdding",
   removing: "services.useRemoving",
   new: "services.useNew",
