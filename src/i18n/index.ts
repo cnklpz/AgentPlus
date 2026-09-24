@@ -2,12 +2,13 @@
 // exactly the same keys (en/ is type-checked against zh/). The backend renders its own
 // text in the same language: `setLang` tells it via `set_locale`, and every `api` call
 // waits for that first.
-import { createElement, Fragment, useSyncExternalStore, type ReactNode } from "react";
+import { createElement, Fragment, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { scrubVar } from "../privacy";
 import zh from "./zh";
 import en from "./en";
 import { inTauri } from "../tauri";
+import { createStore } from "../store";
 
 export type Lang = "zh" | "en";
 /** The user's choice; "auto" follows the system language. */
@@ -29,7 +30,7 @@ export type Vars = Record<string, string | number>;
 let lang: Lang = "zh";
 let started = false;
 let ready: Promise<void> = Promise.resolve();
-const subs = new Set<() => void>();
+const store = createStore(() => lang);
 
 export function resolveLang(p: LangPref): Lang {
   if (p !== "auto") return p;
@@ -45,7 +46,7 @@ export function setLang(p: LangPref): Promise<void> {
   lang = next;
   document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
   ready = inTauri ? invoke<void>("set_locale", { lang: next }).catch(() => undefined) : Promise.resolve();
-  subs.forEach((f) => f());
+  store.notify();
   return ready;
 }
 
@@ -60,10 +61,7 @@ export const locale = () => (lang === "zh" ? "zh-CN" : "en-US");
 /** Re-render on language change. Call it in any component that caches translated text
  * (useMemo deps) or backend-rendered text (reload when it changes). */
 export function useLang(): Lang {
-  return useSyncExternalStore(
-    (f) => { subs.add(f); return () => { subs.delete(f); }; },
-    () => lang,
-  );
+  return store.use();
 }
 
 function lookup(key: string): string {

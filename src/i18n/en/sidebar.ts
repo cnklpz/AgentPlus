@@ -3,9 +3,6 @@ import type zh from "../zh/sidebar";
 const en: typeof zh = {
   notInstalled: "Not installed",
   singleSub: "Provider {provider} · {n} model|Provider {provider} · {n} models",
-  providerCount: "{n} provider|{n} providers",
-  modelCount: "{n} model|{n} models",
-  providers: "Providers",
   gateway: "Local gateway",
   history: "History & rollback",
   sync: "Multi-device sync",

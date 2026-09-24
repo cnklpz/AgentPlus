@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLatest, useListNav, usePopover } from "../hooks";
 
 export type MenuItem =
   | { label: string; icon?: ReactNode; hint?: string; danger?: boolean; disabled?: boolean; action: () => void }
@@ -13,10 +14,11 @@ interface Props {
 export function ContextMenu({ build }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  const [hi, setHi] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
-  const buildRef = useRef(build);
-  buildRef.current = build;
+  const buildRef = useLatest(build);
+  const items = menu?.items ?? [];
+  // Arrow keys skip separators and disabled items, and wrap around.
+  const nav = useListNav(items.length, { wrap: true, enabled: (i) => items[i] !== "sep" && !(items[i] as Exclude<MenuItem, "sep">).disabled, initial: -1 });
 
   useEffect(() => {
     const onMenu = (e: MouseEvent) => {
@@ -27,7 +29,7 @@ export function ContextMenu({ build }: Props) {
       const clean = items.filter((it, i, a) => it !== "sep" || (i > 0 && i < a.length - 1 && a[i - 1] !== "sep"));
       setMenu(clean.length ? { x: e.clientX, y: e.clientY, items: clean } : null);
       setPos(null);
-      setHi(-1);
+      nav.setHi(-1);
     };
     document.addEventListener("contextmenu", onMenu);
     return () => document.removeEventListener("contextmenu", onMenu);
@@ -43,40 +45,26 @@ export function ContextMenu({ build }: Props) {
     });
   }, [menu]);
 
+  const close = () => setMenu(null);
+  // The menu sits above everything: Esc closes it alone, not the dialog or panel underneath.
+  usePopover(!!menu, close, [ref], { scroll: true, resize: true, blur: true });
+  // Focus stays where it was (the menu takes no focus): listen on the document.
+  const onKey = useLatest((e: KeyboardEvent) => {
+    if (nav.onKey(e)) return;
+    const it = items[nav.hi];
+    // Disabled items can be highlighted by hovering (WebView2 sends them mouse events), not run.
+    if (e.key === "Enter" && it && it !== "sep" && !it.disabled) {
+      e.preventDefault();
+      close();
+      it.action();
+    }
+  });
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
-    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) close(); };
-    const acts = menu.items.map((it, i) => (it !== "sep" && !it.disabled ? i : -1)).filter((i) => i >= 0);
-    // The menu sits above everything: Esc closes it alone, not the dialog or panel underneath.
-    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        const at = acts.indexOf(hi);
-        const next = e.key === "ArrowDown" ? acts[(at + 1) % acts.length] : acts[(at - 1 + acts.length) % acts.length];
-        setHi(next ?? -1);
-      } else if (e.key === "Enter" && hi >= 0) {
-        e.preventDefault();
-        const it = menu.items[hi];
-        if (it !== "sep") { close(); it.action(); }
-      }
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("keydown", onEsc, true);
-    window.addEventListener("blur", close);
-    window.addEventListener("resize", close);
-    document.addEventListener("scroll", close, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("keydown", onEsc, true);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("resize", close);
-      document.removeEventListener("scroll", close, true);
-    };
-  }, [menu, hi]);
+    const f = (e: KeyboardEvent) => onKey.current(e);
+    document.addEventListener("keydown", f);
+    return () => document.removeEventListener("keydown", f);
+  }, [!!menu]);
 
   if (!menu) return null;
   return (
@@ -84,8 +72,8 @@ export function ContextMenu({ build }: Props) {
       onContextMenu={(e) => e.preventDefault()}>
       {menu.items.map((it, i) =>
         it === "sep" ? <div key={i} className="ctx-sep" role="separator" /> : (
-          <button key={i} role="menuitem" className={`ctx-item${i === hi ? " hi" : ""}${it.danger ? " danger" : ""}`} disabled={it.disabled}
-            onMouseEnter={() => setHi(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => { setMenu(null); it.action(); }}>
+          <button key={i} role="menuitem" className={`ctx-item${i === nav.hi ? " hi" : ""}${it.danger ? " danger" : ""}`} disabled={it.disabled}
+            onMouseEnter={() => { if (!it.disabled) nav.setHi(i); }} onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); it.action(); }}>
             <span className="ctx-icon">{it.icon}</span>
             <span className="grow">{it.label}</span>
             {it.hint && <span className="ctx-hint">{it.hint}</span>}

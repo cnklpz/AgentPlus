@@ -58,6 +58,12 @@ describe("dictionaries", () => {
     expect(Object.keys(EN).filter((k) => EN[k].split("|").length > 2)).toEqual([]);
   });
 
+  it("have no unused keys", () => {
+    // Keys are always written out whole ("ns.key"), also in TKey tables; none are built from parts.
+    const all = Object.values(SOURCES).join("\n");
+    expect(Object.keys(ZH).filter((k) => !all.includes(`"${k}"`))).toEqual([]);
+  });
+
   it("only count-format keys that exist", () => {
     expect([...tnKeys()].filter((k) => !(k in ZH))).toEqual([]);
   });

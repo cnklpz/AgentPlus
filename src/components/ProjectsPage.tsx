@@ -5,6 +5,7 @@ import { AgentIcon, Icon } from "./icons";
 import { t, tn, tx } from "../i18n";
 import { fmtAgo } from "../format";
 import { scrub } from "../privacy";
+import { onActivateKey } from "../util";
 
 interface ListProps {
   projects: ProjectEntry[];
@@ -40,7 +41,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
             const n = pending[p.agent] ?? 0;
             return (
               <div key={p.path} className={`proj-row${p.exists ? "" : " gone"}`} role="button" tabIndex={0}
-                onClick={() => p.exists && onOpen(p.path)} onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ") && p.exists) { e.preventDefault(); onOpen(p.path); } }}>
+                onClick={() => p.exists && onOpen(p.path)} onKeyDown={p.exists ? onActivateKey(() => onOpen(p.path)) : undefined}>
                 <span className="proj-icon"><Icon.folder size={16} /></span>
                 <span className="grow minw0">
                   <span className="row gap6 minw0">
@@ -52,7 +53,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
                 </span>
                 <span className="proj-meta small">
                   {!p.exists ? <span className="warn-text">{t("projectsPage.folderMissing")}</span>
-                    : p.config ? <span>opencode.json{p.providers ? ` · ${tn("projectsPage.providerCount", p.providers)}` : ""}</span>
+                    : p.config ? <span>opencode.json{p.providers ? ` · ${tn("common.providerCount", p.providers)}` : ""}</span>
                     : <span className="muted">{t("projectsPage.notConfigured")}</span>}
                   <span className="tiny muted">{fmtAgo(p.lastOpened)}</span>
                 </span>

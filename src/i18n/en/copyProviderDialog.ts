@@ -9,7 +9,6 @@ const en: typeof zh = {
   filterPlaceholder: "Filter by name or URL",
   empty: "No providers to copy. You can \"Add provider\" instead.",
   inherited: "Inherited",
-  modelCount: "{n} model|{n} models",
   noKey: "no API key",
   disableInherited: "Disable the copied global providers in this project (so the picker doesn't show them twice)",
   copyN: "Copy {n}",

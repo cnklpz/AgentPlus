@@ -2,11 +2,11 @@ import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
 import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, gatewayCapable, gatewayRouteId, importSource, writableAgents } from "../services";
 import { AgentIcon, Icon } from "./icons";
-import { Bars, type Latency, initials } from "./ProviderCard";
-import { latencyText, stationColor } from "./ProvidersHub";
+import { Avatar, Bars, type Latency, latencyText, stationColor } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
 import { t, tn } from "../i18n";
 import { scrub, scrubHost } from "../privacy";
+import { toggled } from "../util";
 
 interface Props {
   s: Station;
@@ -40,25 +40,25 @@ function removable(u: Use): string | null {
 export function ServiceDetail(props: Props) {
   const { s, latency } = props;
   const [open, setOpen] = useState<Set<string>>(() => new Set(s.groups.length <= 2 ? s.groups.map((g) => g.key) : [s.groups[0]?.key]));
-  const toggle = (k: string) => setOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggle = (k: string) => setOpen((o) => toggled(o, k));
   const lat = s.baseUrl ? latencyText(latency[s.baseUrl]) : null;
 
   return (
     <section className="pdetail sdetail" aria-label={t("serviceDetail.detailsAria", { name: s.name })}>
       <div className="pdetail-head">
-        <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
+        <Avatar name={s.name} color={stationColor(s)} />
         <span className="pcard-title">
           <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
           <span className="pcard-host mono ellipsis">{s.builtin ? t("serviceDetail.accountLogin") : tn("serviceDetail.hostGroups", s.groups.length, { host: s.host })}</span>
         </span>
-        <button className="icon-btn" aria-label={t("serviceDetail.closeDetails")} onClick={props.onClose}><Icon.close /></button>
+        <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={props.onClose}><Icon.close /></button>
       </div>
 
       {lat && (
         <div className="pdetail-lat">
           <Bars level={lat.level} />
           <span className={`grow small ${lat.level >= 2 ? "mono good-ink" : ""}`}>{lat.text}</span>
-          <button className="link" onClick={() => props.onTest(s.baseUrl!)}>{t("serviceDetail.retest")}</button>
+          <button className="link" onClick={() => props.onTest(s.baseUrl!)}>{t("common.retest")}</button>
         </div>
       )}
 
@@ -108,12 +108,12 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 <span className="muted small">{t("common.baseUrl")}</span>
                 <span className="row gap6 minw0">
                   <span className="mono small ellipsis grow" title={scrub(g.baseUrl)}>{scrub(g.baseUrl)}</span>
-                  <button className="icon-btn sm" aria-label={t("serviceDetail.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
+                  <button className="icon-btn sm" aria-label={t("common.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
                 </span>
               </div>
               <div className="kv-row">
                 <span className="muted small">{t("common.apiKey")}</span>
-                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("serviceDetail.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
+                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("common.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
               </div>
             </div>
           )}
@@ -135,7 +135,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 return (
                   <label key={uid(u)} className={`pick${why ? " dim" : ""}`} title={why ?? undefined}>
                     <input type="checkbox" disabled={!!why} checked={pick.has(uid(u))}
-                      onChange={() => setPick((p) => { const n = new Set(p); n.has(uid(u)) ? n.delete(uid(u)) : n.add(uid(u)); return n; })} />
+                      onChange={() => setPick((p) => toggled(p, uid(u)))} />
                     <AgentIcon id={u.agent.id} size={16} />
                     <span className="small">{u.agent.name} · {u.p!.name}</span>
                     {why && why !== "—" && <span className="tiny muted">{t("serviceDetail.reason", { why })}</span>}
@@ -166,11 +166,11 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                   <span className="block small strong ellipsis">{u.agent.name} · {u.p?.name ?? g.name}</span>
                   <span className="block tiny muted ellipsis">
                     <span className={`ustate ${u.state}`}>{USE_LABEL[u.state]}</span>
-                    {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("serviceDetail.nModels", u.models)}`}
+                    {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("common.modelCount", u.models)}`}
                   </span>
                 </span>
                 {(u.state === "adding" || u.state === "removing" || u.state === "new")
-                  ? <button className="btn xs" onClick={() => props.onUndo(u)}>{t("serviceDetail.undo")}</button>
+                  ? <button className="btn xs" onClick={() => props.onUndo(u)}>{t("common.undo")}</button>
                   : <>
                       {u.p && <button className="btn xs" onClick={() => props.onModels(u)}>{t("common.models")}</button>}
                       {u.p && removable(u) === null && <button className="icon-btn sm" aria-label={t("serviceDetail.removeFrom", { agent: u.agent.name })} title={t("serviceDetail.removeFrom", { agent: u.agent.name })} onClick={() => props.onRemove(u)}><Icon.trash size={12} /></button>}

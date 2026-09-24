@@ -6,7 +6,6 @@ import services from "./services";
 import templates from "./templates";
 import motion from "./motion";
 import draft from "./draft";
-import icons from "./icons";
 import gatewayPage from "./gatewayPage";
 import gatewayAside from "./gatewayAside";
 import projectsPage from "./projectsPage";
@@ -17,7 +16,6 @@ import modelDialog from "./modelDialog";
 import templatePicker from "./templatePicker";
 import envSwitch from "./envSwitch";
 import comboBox from "./comboBox";
-import confirm from "./confirm";
 import closeDialog from "./closeDialog";
 import settingsPage from "./settingsPage";
 import sessionsTab from "./sessionsTab";
@@ -47,7 +45,6 @@ const en: typeof zh = {
   templates,
   motion,
   draft,
-  icons,
   gatewayPage,
   gatewayAside,
   projectsPage,
@@ -58,7 +55,6 @@ const en: typeof zh = {
   templatePicker,
   envSwitch,
   comboBox,
-  confirm,
   closeDialog,
   settingsPage,
   sessionsTab,

@@ -3,6 +3,7 @@ import type { AgentId, AgentState, GatewayAgentUse, GatewayMinute, GatewayStatus
 import { type TKey, t, tn } from "../i18n";
 import { AGENT_NAME } from "../services";
 import { AgentIcon, Icon } from "./icons";
+import { Seg } from "./controls";
 
 type Range = 15 | 60;
 
@@ -127,11 +128,8 @@ export function GatewayAside({ status: s, agents }: { status: GatewayStatus | nu
       <section className="aside-cur">
         <div className="row between">
           <h2>{t("gatewayAside.traffic")}</h2>
-          <div className="seg gwc-range" role="group" aria-label={t("gatewayAside.ariaRange")}>
-            {([15, 60] as Range[]).map((r) => (
-              <button key={r} className={range === r ? "on" : ""} onClick={() => setRange(r)}>{t(r === 60 ? "gatewayAside.range60" : "gatewayAside.range15")}</button>
-            ))}
-          </div>
+          <Seg className="gwc-range" value={range} onChange={setRange} label={t("gatewayAside.ariaRange")}
+            options={([15, 60] as Range[]).map((r) => ({ value: r, label: t(r === 60 ? "gatewayAside.range60" : "gatewayAside.range15") }))} />
         </div>
         <span className="muted tiny">
           {quiet ? t(range === 60 ? "gatewayAside.quiet60" : "gatewayAside.quiet15") : t("gatewayAside.liveNote")}
