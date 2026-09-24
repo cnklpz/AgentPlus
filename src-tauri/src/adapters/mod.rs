@@ -18,7 +18,7 @@ pub mod qwen;
 pub mod zcode;
 
 use crate::i18n::l;
-use crate::model::{bool_setting, AgentState, Diff, Op, ProviderInput};
+use crate::model::{bool_setting, AgentState, Diff, Op, ProviderInput, Setting};
 use crate::{process, store};
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
@@ -100,6 +100,55 @@ const AUTO_RESTART: &str = "auto_restart";
 
 pub fn auto_restart(agent: &str) -> bool {
     store::get_flag(&store::load(), agent, "autoRestart")
+}
+
+/// AgentPlus-owned: which desktop copy to start when several are installed ("" = automatic).
+const DESKTOP_EXE: &str = "desktop_exe";
+
+/// Label of a desktop copy in the picker: version, folder, and whether it runs.
+fn copy_label(c: &process::DesktopCopy) -> String {
+    let dir = c.exe.parent().map(crate::util::display_path).unwrap_or_default();
+    let ver = c.version.as_deref().unwrap_or("?");
+    if c.running {
+        tr!("{ver} · {dir}（运行中）", "{ver} · {dir} (running)")
+    } else {
+        format!("{ver} · {dir}")
+    }
+}
+
+/// The picker for agents with more than one desktop copy installed.
+fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<Setting> {
+    if inst.copies.len() < 2 {
+        return None;
+    }
+    let picked = store::get_str(&store::load(), agent, process::DESKTOP_EXE).unwrap_or_default();
+    let current = inst.copies.iter().find(|c| Some(&c.exe) == inst.exe.as_ref());
+    let auto = match current {
+        Some(c) => tr!("自动（现在是 {}）", "Automatic (now {})", c.version.as_deref().unwrap_or("?")),
+        None => l("自动", "Automatic").to_string(),
+    };
+    let mut options = vec![String::new()];
+    let mut hints = vec![auto];
+    for c in &inst.copies {
+        options.push(c.exe.to_string_lossy().to_string());
+        hints.push(copy_label(c));
+    }
+    // A pick whose copy is gone shows as automatic, which is what detection does with it.
+    let value = if options.contains(&picked) { picked } else { String::new() };
+    Some(Setting {
+        key: DESKTOP_EXE.into(),
+        group: "AgentPlus".into(),
+        label: tr!("启动哪个 {}", "Which {} to start", name),
+        desc: tr!(
+            "检测到 {} 个桌面版。自动：优先用正在运行的那个，都没运行时用版本最新的。启动、重启和自动重启都按这里来。",
+            "{} desktop copies found. Automatic uses the one that's running, or the newest when none is. Start, Restart and restart-after-applying all follow this.",
+            inst.copies.len()
+        ),
+        kind: "select".into(),
+        value: serde_json::Value::from(value),
+        options,
+        hints,
+    })
 }
 
 /// Config folder picked by hand in 设置 › Agent 识别 (kept per environment).
@@ -312,6 +361,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     if !st.restartable {
         return Ok(st);
     }
+    st.settings.extend(desktop_setting(agent, &st.name, &inst));
     st.settings.push(bool_setting(
         AUTO_RESTART,
         "AgentPlus",
@@ -397,8 +447,8 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
 
 /// `plan` for ops already passed through `resolve`.
 pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
-    // The auto-restart switch is handled here; the adapters never see it.
-    let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART));
+    // AgentPlus's own settings (auto-restart, desktop copy) are handled here; the adapters never see them.
+    let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART || key == DESKTOP_EXE));
     // Entries pointing at the local gateway carry the placeholder (or, copied, another
     // agent's key): every agent gets its own, so the gateway can check and count its calls.
     let rest: Vec<Op> = rest
@@ -425,7 +475,24 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
         },
     };
     for op in own {
-        if let Op::SetSetting { value, .. } = op {
+        if let Op::SetSetting { key, value } = op {
+            if key == DESKTOP_EXE {
+                let v = value.as_str().unwrap_or("").to_string();
+                if store::get_str(&store::load(), agent, process::DESKTOP_EXE).unwrap_or_default() != v {
+                    let inst = process::detect(agent);
+                    let label = match inst.copies.iter().find(|c| c.exe.to_string_lossy() == v) {
+                        Some(c) => copy_label(c),
+                        None => l("自动", "Automatic").to_string(),
+                    };
+                    diff.push(l("AgentPlus 设置", "AgentPlus settings"), &tr!("启动的桌面版 → {label}", "Desktop copy to start → {label}"), true);
+                    if !dry_run {
+                        let mut s = store::load();
+                        store::set_str(&mut s, agent, process::DESKTOP_EXE, &v);
+                        store::save(&s)?;
+                    }
+                }
+                continue;
+            }
             let on = value.as_bool().unwrap_or(false);
             if auto_restart(agent) != on {
                 diff.push(
