@@ -53,42 +53,19 @@ fn settings_path() -> PathBuf {
 
 // ---------- detection ----------
 
-/// (DisplayVersion, DisplayIcon, InstallLocation) of the first uninstall entry whose
-/// DisplayName starts with `prefix`.
-#[cfg(windows)]
-fn uninstall_entry(prefix: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
-    use winreg::enums::*;
-    use winreg::RegKey;
-    let path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
-    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
-        let Ok(root) = RegKey::predef(hive).open_subkey(path) else { continue };
-        for name in root.enum_keys().flatten() {
-            let Ok(k) = root.open_subkey(&name) else { continue };
-            let dn: String = k.get_value("DisplayName").unwrap_or_default();
-            if dn.starts_with(prefix) {
-                return Some((k.get_value("DisplayVersion").ok(), k.get_value("DisplayIcon").ok(), k.get_value("InstallLocation").ok()));
-            }
-        }
-    }
-    None
-}
-#[cfg(not(windows))]
-fn uninstall_entry(_: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
-    None
-}
-
 /// The desktop IDE (registry uninstall entry "CodeBuddy …"), else the npm CLI.
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some((ver, icon, loc)) = uninstall_entry("CodeBuddy") {
-        let exe = icon
+    if let Some(e) = crate::process::uninstall_entry("CodeBuddy") {
+        let exe = e
+            .icon
             .and_then(|i| crate::process::unquote_exe(&i))
-            .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false))
-            .or_else(|| loc.map(|l| PathBuf::from(l.trim()).join("CodeBuddy.exe")))
+            .filter(|p| crate::process::is_exe(p))
+            .or_else(|| e.location.map(|l| PathBuf::from(l.trim()).join("CodeBuddy.exe")))
             .filter(|p| p.is_file());
         if let Some(exe) = exe {
             inst.installed = true;
-            inst.version = ver;
+            inst.version = e.version;
             inst.dir = exe.parent().map(Path::to_path_buf);
             inst.exe = Some(exe);
         }
@@ -99,10 +76,8 @@ pub fn detect() -> Install {
             inst.version = Some(v);
         }
     }
-    if let Some(d) = &inst.dir {
-        let d = d.to_string_lossy().to_lowercase();
-        inst.running = crate::process::any_process(|_, path| path.to_lowercase().starts_with(&d));
-    }
+    // The IDE's own processes, the same ones a restart stops.
+    crate::process::set_app_running(&mut inst);
     inst
 }
 
