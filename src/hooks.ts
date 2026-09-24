@@ -1,6 +1,6 @@
 import { type CSSProperties, type DependencyList, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { type AgentState, type DiffGroup, api } from "./api";
-import { type Draft, opsToWrite } from "./draft";
+import { type Draft, opCount, opsToWrite } from "./draft";
 import { useLang } from "./i18n";
 import { errText } from "./util";
 
@@ -281,7 +281,7 @@ export function usePreviews(agents: AgentState[], drafts: Record<string, Draft>)
   useEffect(() => {
     let alive = true;
     for (const a of list) {
-      if (!Object.keys(drafts[a.id] ?? {}).length) continue;
+      if (!opCount(drafts[a.id])) continue;
       api.preview(a.id, opsToWrite(a, drafts[a.id]))
         .then((d) => { if (alive) setDiffs((m) => ({ ...m, [a.id]: d })); })
         .catch((e) => { if (alive) setDiffs((m) => ({ ...m, [a.id]: errText(e) })); });
