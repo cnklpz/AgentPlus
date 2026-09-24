@@ -64,6 +64,7 @@ const en: typeof zh = {
   modelList: "Model list",
   modelListScope: "· Only affects {agent}",
   fetching: "Fetching…",
+  saving: "Saving…",
   fetchFromUrl: "Fetch from URL",
   codexNewNote: "Codex keeps a model list per provider: after adding, set this provider's own list under \"Edit\".",
   codexCurrentNote: "This is the current provider: this list is what Codex's model picker shows now.",

@@ -6,6 +6,8 @@ export type Motion = "rich" | "full" | "reduced" | "off";
 /** How a restart shows its progress: a dialog with each step, or just a notice at the bottom. */
 export type RestartProgressPref = "dialog" | "toast";
 export type Theme = "auto" | "light" | "dark";
+/** What closing the window does: ask each time, hide it in the tray, or quit. */
+export type CloseAction = "ask" | "tray" | "quit";
 
 export interface Prefs {
   motion: Motion;
@@ -17,10 +19,13 @@ export interface Prefs {
   /** Light or dark UI; "auto" follows the system. */
   theme: Theme;
   restartProgress: RestartProgressPref;
+  closeAction: CloseAction;
+  /** 隐私模式: mask keys, addresses, user folders and conversation text on screen. */
+  privacy: boolean;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog" };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false };
 
 export function loadPrefs(): Prefs {
   try {

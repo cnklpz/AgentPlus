@@ -8,9 +8,7 @@
 //! Model roles: Gemini CLI has one model setting, `model.name`; `SetModelRoles` accepts the
 //! role "default" for it (the first model of the list is the default when none is chosen).
 
-// Not wired into adapters::mod dispatch yet (integrator); drop this once it is.
-
-
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -137,7 +135,7 @@ fn load() -> Result<(Value, TextMeta, bool)> {
 }
 
 fn load_env() -> (String, TextMeta) {
-    read_text(&env_path()).unwrap_or_else(|_| (String::new(), default_meta()))
+    read_text_or_new(&env_path()).unwrap_or_else(|_| (String::new(), default_meta()))
 }
 
 fn env_unquote(v: &str) -> String {
@@ -159,7 +157,7 @@ fn env_line_key(l: &str) -> Option<&str> {
 }
 
 fn env_get(text: &str, key: &str) -> Option<String> {
-    text.lines().filter(|l| env_line_key(l) == Some(key)).last().and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
+    text.lines().rfind(|l| env_line_key(l) == Some(key)).and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
 }
 
 /// Sets (or removes, value None) `key` in .env text, keeping every other line.
@@ -292,7 +290,7 @@ fn provider_of(id: &str, p: &Value) -> Provider {
     let dflt = default_model(p);
     let models = model_list(p)
         .into_iter()
-        .map(|(mid, visible)| Model { tags: if dflt.as_deref() == Some(mid.as_str()) { vec![l("默认", "Default").into()] } else { vec![] }, id: mid, visible, deletable: true, ..Default::default() })
+        .map(|(mid, visible)| Model { tags: if dflt.as_deref() == Some(mid.as_str()) { vec![Tag::default_model()] } else { vec![] }, id: mid, visible, deletable: true, ..Default::default() })
         .collect();
     let mut details = vec![
         Kv::mono(l("地址", "Base URL"), if base.is_empty() { l("（Gemini 官方 API）", "(Gemini official API)").into() } else { base.clone() }),
@@ -443,7 +441,7 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let p = if id == UNMANAGED {
         unmanaged_profile(&load_env().0)
     } else if id == GOOGLE || id.starts_with(AUTH) {
@@ -481,14 +479,15 @@ fn set_ptr(cfg: &mut Value, path: &[&str], v: Option<Value>) {
     }
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load()?;
     let cfg0 = cfg.clone();
     let mut root = store_load();
     let mut profs = profiles(&root);
     // Snapshot: a change to the active profile is re-applied to the live config.
     let profs0 = profs.clone();
-    let (env0, env_meta) = load_env();
+    // Unlike the read-only views, a write refuses an .env it can't read (UTF-16, GBK…).
+    let (env0, env_meta) = read_text_or_new(&env_path())?;
     let mut env = env0.clone();
     let before = current(&cfg, &env0, &profs);
     let mut cur = before.clone();
@@ -707,6 +706,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
 
     // Bring .env and settings.json in line with the active provider.
     let switching = cur != before;
+    #[allow(clippy::type_complexity)]
     let target: Option<(Option<String>, Option<String>, &str, Option<String>)> = match cur.as_str() {
         GOOGLE if switching => Some((None, None, OAUTH, None)),
         UNMANAGED if switching => Some((env_get(&env0, BASE), env_get(&env0, KEY), API_KEY_AUTH, None)),
@@ -847,6 +847,24 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_dotenv_is_never_rewritten() {
+        // GBK bytes ("# 中文") as Notepad saves them on a Chinese system.
+        let gbk: &[u8] = b"# \xd6\xd0\xce\xc4\nGEMINI_API_KEY=old\nOTHER=keep\n";
+        let t = setup(Some(SETTINGS), None);
+        fs::write(t.0.join(".env"), gbk).unwrap();
+        assert!(apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r/", Some("sk-x-1234"), &["m"]) }]).is_err());
+        assert_eq!(fs::read(t.0.join(".env")).unwrap(), gbk);
+        let _ = settings(&t);
+    }
+
+    #[test]
+    fn missing_dotenv_is_created() {
+        let t = setup(Some(SETTINGS), None);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r/", Some("sk-x-1234"), &["m"]) }, Op::SetCurrentProvider { provider: "r".into() }]).unwrap();
+        assert!(envtext(&t).contains("sk-x-1234"));
+    }
+
+    #[test]
     fn reads_state_with_unmanaged_env() {
         let _t = setup(Some(SETTINGS), Some(ENV));
         let st = state(&Install::default());
@@ -900,7 +918,7 @@ mod tests {
         let p = st.providers.iter().find(|p| p.id == "my-relay").unwrap();
         assert_eq!(p.base_url.as_deref(), Some("https://r"));
         assert_eq!(p.models.len(), 2);
-        assert!(p.models[0].tags.contains(&"默认".to_string()));
+        assert!(p.models[0].tags.contains(&Tag::default_model()));
         // Models.
         apply(vec![Op::UpsertModel { provider: "my-relay".into(), model: ModelInput { id: "m3".into(), name: None, context: None, ..Default::default() } }]).unwrap();
         apply(vec![Op::SetModelVisible { provider: "my-relay".into(), model: "m2".into(), visible: false }]).unwrap();
@@ -908,7 +926,7 @@ mod tests {
         let st = state(&Install::default());
         let p = st.providers.iter().find(|p| p.id == "my-relay").unwrap();
         assert_eq!(p.models.iter().map(|m| (m.id.as_str(), m.visible)).collect::<Vec<_>>(), vec![("m2", false), ("m3", true)]);
-        assert!(p.models[1].tags.contains(&"默认".to_string()), "first visible model is the default");
+        assert!(p.models[1].tags.contains(&Tag::default_model()), "first visible model is the default");
         apply(vec![Op::SetModelRoles { provider: "my-relay".into(), roles: BTreeMap::from([("default".into(), "m9".into())]) }]).unwrap();
         assert!(apply(vec![Op::SetModelRoles { provider: "my-relay".into(), roles: BTreeMap::from([("opus".into(), "m9".into())]) }]).is_err());
         assert!(apply(vec![Op::SetModelVisible { provider: "my-relay".into(), model: "m9".into(), visible: false }]).is_err());

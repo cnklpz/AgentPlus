@@ -3,6 +3,7 @@ import type { AgentId, RestartProgress, RestartStatus, RestartStep } from "../ap
 import { type TKey, locale, t } from "../i18n";
 import { useEscape } from "../hooks";
 import { AgentIcon, Icon } from "./icons";
+import { scrub } from "../privacy";
 
 export interface RunStep {
   id: RestartStep;
@@ -71,7 +72,7 @@ function StepIcon({ status }: { status: RunStep["status"] }) {
 }
 
 /** Live progress of a restart: each step with its state, detail and time taken. */
-export function RestartDialog({ run, onClose }: { run: RestartRun; onClose: () => void }) {
+export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onClose: () => void; onCancel: () => void }) {
   const { result } = run;
   // Tick while it runs so the timers move.
   const [, setTick] = useState(0);
@@ -123,16 +124,17 @@ export function RestartDialog({ run, onClose }: { run: RestartRun; onClose: () =
                 <span className="rs-icon"><StepIcon status={s.status} /></span>
                 <div className="grow minw0">
                   <div className="small strong">{t(LABEL[s.id], vars)}</div>
-                  {detail && <div className="tiny muted rs-detail">{detail}</div>}
+                  {detail && <div className="tiny muted rs-detail">{scrub(detail)}</div>}
                 </div>
                 {s.start !== null && s.status !== "skip" && <span className="tiny muted mono noshrink">{secs((s.end ?? now) - s.start)}s</span>}
               </li>
             );
           })}
         </ol>
-        {showMsg && <div className={`rs-result${result!.ok ? "" : " error"}`}>{result!.msg}</div>}
+        {showMsg && <div className={`rs-result${result!.ok ? "" : " error"}`}>{scrub(result!.msg)}</div>}
         <div className="modal-foot">
-          <span className="tiny muted grow">{t("restartDialog.settingsHint")}</span>
+          {!result && <button className="btn" onClick={onCancel}>{t(run.starting ? "restartDialog.cancelStart" : "restartDialog.cancelRestart")}</button>}
+          <span className="grow" />
           <button ref={btnRef} className={`btn${result ? " primary" : ""}`} onClick={onClose}>{t(result ? "common.close" : "restartDialog.background")}</button>
         </div>
       </div>

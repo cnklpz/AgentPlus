@@ -1,5 +1,6 @@
 import { Channel, invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { whenReady } from "./i18n";
+import { inTauri } from "./tauri";
 
 /** Every call waits until the backend renders text in the UI language. */
 const invoke = <T>(cmd: string, args?: InvokeArgs) => whenReady().then(() => tauriInvoke<T>(cmd, args));
@@ -9,11 +10,18 @@ export type AgentId =
   | "hermes" | "gemini" | "pi" | "openclaw" | "qwen" | "kimi" | "droid" | "codebuddy" | "kilo"
   | "trae";
 
+/** A badge on a model: `id` is stable (`fast`, `custom`, `cap:image`, `role:default`…) and is
+ * what the UI checks; `label` is display text in the current language. */
+export interface ModelTag {
+  id: string;
+  label: string;
+}
+
 export interface Model {
   id: string;
   visible: boolean;
   readonly: boolean;
-  tags: string[];
+  tags: ModelTag[];
   ctx: string | null;
   name: string | null;
   context: number | null;
@@ -487,6 +495,8 @@ const real = {
     if (onProgress) ch.onmessage = onProgress;
     return invoke<string>("restart_agent", { agent, onProgress: ch });
   },
+  /** Stops the running restart at its next wait (it then rejects); an app already started keeps running. */
+  cancelRestart: () => invoke<void>("cancel_restart"),
   agentRunning: (agent: AgentId) => invoke<boolean>("agent_running", { agent }),
   openConfigDir: (agent: AgentId) => invoke<void>("open_config_dir", { agent }),
   codexSessions: () => invoke<SessionList>("codex_sessions"),
@@ -515,6 +525,7 @@ const real = {
   librarySave: (input: LibInput) => invoke<LibEntry>("library_save", { input }),
   libraryDelete: (id: string) => invoke<void>("library_delete", { id }),
   openDataDir: () => invoke<void>("open_data_dir"),
+  quitApp: () => invoke<void>("quit_app"),
   detectAgents: () => invoke<AgentDetect[]>("detect_agents"),
   testProvider: (agent: string, provider: string, model: string) => invoke<TestResult>("test_provider", { agent, provider, model }),
   officialStatus: () => invoke<OfficialFetch>("codex_official_status"),
@@ -537,16 +548,29 @@ const real = {
 };
 
 // Plain-browser preview (`npm run dev`): serve a static snapshot so the UI can be
-// checked without the Tauri backend. Never used inside the app.
-const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+// checked without the Tauri backend. Never used inside the app, and left out of
+// production builds (see `api` at the bottom).
 
 /** Browser demo: agents started or restarted from the demo count as running. */
 const demoRunning: Record<string, boolean> = {};
+let demoCancel = false;
+
+// The snapshot is local-only (.gitignore): a glob resolves to nothing when it is missing, so a
+// fresh clone still type-checks and builds, and the demo just starts empty.
+const FIXTURE = import.meta.glob<{ default: unknown }>("./dev-fixture.json");
+
+/** Older snapshots have plain-string tags. */
+const tagOf = (g: unknown): ModelTag => (typeof g === "string" ? { id: `tag:${g}`, label: g } : (g as ModelTag));
+const withTags = (m: Model): Model => ({ ...m, tags: (m.tags ?? []).map(tagOf) });
 
 async function fixture(): Promise<AgentState[]> {
-  const m = await import("./dev-fixture.json");
+  const load = FIXTURE["./dev-fixture.json"];
+  const raw = load ? ((await load()).default as AgentState[]) : [];
   // The snapshot predates `restartable`: its desktop apps are.
-  const list = (m.default as unknown as AgentState[]).map((a) => ({ ...a, restartable: a.restartable ?? true, running: demoRunning[a.id] ?? a.running }));
+  const list = raw.map((a) => ({
+    ...a, restartable: a.restartable ?? true, running: demoRunning[a.id] ?? a.running,
+    catalog: a.catalog?.map(withTags) ?? null, providers: a.providers.map((p) => ({ ...p, models: p.models.map(withTags) })),
+  }));
   // No OpenCode in the snapshot: MiMo runs the same config format, so it stands in.
   const mimo = list.find((a) => a.id === "mimo");
   if (list.some((a) => a.id === "opencode") || !mimo) return list;
@@ -652,6 +676,7 @@ const demo: typeof real = {
     const inject = agent === "codex";
     const steps: RestartStep[] = inject ? ["stop", "start", "port", "patch"] : ["stop", "start"];
     const running = (await fixture()).find((a) => a.id === agent)?.running ?? false;
+    demoCancel = false;
     on({ kind: "plan", steps });
     for (const step of steps) {
       if (step === "stop" && !running) {
@@ -660,11 +685,13 @@ const demo: typeof real = {
       }
       on({ kind: "step", step, status: "active", detail: null });
       await wait(700 + Math.random() * 900);
+      if (demoCancel) throw new Error("（演示）已取消");
       on({ kind: "step", step, status: "done", detail: null });
     }
     demoRunning[agent] = true;
     return running ? "（演示）已重启" : "（演示）已启动";
   },
+  cancelRestart: async () => { demoCancel = true; },
   agentRunning: async (agent) => (await fixture()).find((a) => a.id === agent)?.running ?? false,
   openConfigDir: async () => undefined,
   codexSessions: async () => ({
@@ -745,6 +772,7 @@ const demo: typeof real = {
   },
   libraryDelete: async (id) => { demoLib = demoLib.filter((x) => x.id !== id); },
   openDataDir: async () => undefined,
+  quitApp: async () => undefined,
   detectAgents: async () => (await fixture()).map((a) => ({
     id: a.id, name: a.name, appFound: a.installed, version: a.version, running: a.running,
     defaultDir: a.configDir, customDir: null, configDir: a.configDir, configFound: true, enabled: a.installed, note: null,
@@ -789,4 +817,5 @@ const demo: typeof real = {
   },
 };
 
-export const api = inTauri ? real : demo;
+// `import.meta.env.DEV` is a build-time constant: production bundles drop the demo.
+export const api = inTauri || !import.meta.env.DEV ? real : demo;

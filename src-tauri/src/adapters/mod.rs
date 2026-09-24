@@ -23,6 +23,11 @@ use crate::{process, store};
 use anyhow::{anyhow, Result};
 use std::path::PathBuf;
 
+/// What a plan produces: (diff, files written, backup folder).
+pub type Plan = (Diff, Vec<PathBuf>, Option<PathBuf>);
+/// (base_url, key, api) of a provider.
+pub type Endpoint = (String, Option<String>, String);
+
 /// Adapters written against the common adapter API (each module brings its own detection).
 pub struct Ext {
     pub id: &'static str,
@@ -33,8 +38,8 @@ pub struct Ext {
     pub wsl_script: &'static str,
     pub wsl_marker: &'static str,
     pub state: fn(&process::Install) -> AgentState,
-    pub endpoint: fn(&str) -> Result<(String, Option<String>, String)>,
-    pub plan: fn(&[Op], bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)>,
+    pub endpoint: fn(&str) -> Result<Endpoint>,
+    pub plan: fn(&[Op], bool) -> Result<Plan>,
 }
 
 macro_rules! ext {
@@ -283,7 +288,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
         if IN_WSL.contains(&agent) || custom.is_some() {
             if agent == codex::ID {
                 // UI injection patches the desktop app; the CLI has nothing to patch.
-                st.settings.retain(|s| s.key != "fast_inject" && s.key != "full_names");
+                st.settings.retain(|s| !matches!(s.key.as_str(), "fast_inject" | "full_names" | "quota_unlock"));
                 st.notes.insert(0, l("WSL 里是 Codex CLI：改动写入后，新开的 codex 会话就会读取。", "In WSL this is the Codex CLI: new codex sessions pick up changes once they're written.").into());
             }
         } else {
@@ -321,7 +326,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
 }
 
 /// (base_url, key, api) of an existing provider; the key stays in the backend.
-pub fn provider_endpoint(agent: &str, provider: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(agent: &str, provider: &str) -> Result<Endpoint> {
     match agent {
         _ if ocproject::is_project(agent) => ocproject::endpoint(agent, provider),
         codex::ID => codex::provider_endpoint(provider),
@@ -367,11 +372,15 @@ fn resolve_import(agent: &str, from: &str, provider: &str, api: Option<&str>, na
     })
 }
 
-pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
-    // The auto-restart switch is handled here; the adapters never see it.
-    let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART));
-    let rest: Vec<Op> = rest
-        .into_iter()
+pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
+    plan_resolved(agent, &resolve(agent, ops)?, dry_run)
+}
+
+/// Turns copies (another agent's provider, a library entry's key) into plain ops. Only reads,
+/// but reading another agent's state runs its detection (`--version`, PowerShell, WSL), so
+/// callers do this before taking the store lock for `plan_resolved`.
+pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
+    ops.iter()
         .map(|o| match o {
             Op::ImportProvider { from_agent, provider, api, name } => resolve_import(agent, from_agent, provider, api.as_deref(), name.as_deref()),
             Op::UpsertProvider { provider: p } if p.key_from_library.is_some() => {
@@ -383,11 +392,18 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf
             }
             other => Ok(other.clone()),
         })
-        .collect::<Result<_>>()?;
+        .collect()
+}
+
+/// `plan` for ops already passed through `resolve`.
+pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
+    // The auto-restart switch is handled here; the adapters never see it.
+    let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART));
     // Entries pointing at the local gateway carry the placeholder (or, copied, another
     // agent's key): every agent gets its own, so the gateway can check and count its calls.
     let rest: Vec<Op> = rest
         .into_iter()
+        .cloned()
         .map(|o| match o {
             Op::UpsertProvider { provider: mut p } if p.api_key.as_deref().is_some_and(crate::gateway::keys::is_gateway_key) => {
                 p.api_key = Some(crate::gateway::keys::for_agent(agent)?);

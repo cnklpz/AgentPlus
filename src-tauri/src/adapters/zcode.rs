@@ -3,6 +3,7 @@
 //! when its id is in `personalModelIds`; `modelOrder` keeps the full known list.
 //! Per-model context windows live in `config.modelConfigRules.providerModelRules`.
 
+use super::{Plan, Endpoint};
 use crate::mfields;
 use crate::model::*;
 use crate::process::Install;
@@ -98,21 +99,27 @@ fn ctx_for(v: &Value, pid: &str, mid: &str) -> Option<u64> {
 fn model_of(pc: &Value, pid: &str, mid: &str, visible: bool) -> Model {
     let context = ctx_for(pc, pid, mid);
     let extra = rule_config(pc, pid, mid).map(|c| mfields::read(c, mfields::ZCODE)).unwrap_or_default();
-    let tags = [("supportsImage", "图片", "Images"), ("supportsPdf", "PDF", "PDF"), ("supportsVideo", "视频", "Video")]
+    let tags = [("supportsImage", "cap:image", "图片", "Images"), ("supportsPdf", "cap:pdf", "PDF", "PDF"), ("supportsVideo", "cap:video", "视频", "Video")]
         .iter()
         .filter(|(k, ..)| extra.get(&format!("/properties/inputFormat/{k}")) == Some(&json!(true)))
-        .map(|(_, zh, en)| l(*zh, *en).to_string())
+        .map(|(_, id, zh, en)| Tag::new(*id, l(zh, en)))
         .collect();
     Model { id: mid.into(), visible, tags, ctx: context.map(fmt_ctx), context, deletable: true, extra, ..Default::default() }
 }
 
 /// Writes model fields into the model's rule, creating the rule if needed and dropping it
 /// when nothing is left in it.
-fn set_fields(pc: &mut Value, pid: &str, mid: &str, extra: &mfields::Extra) -> Result<Vec<String>> {
-    if pc.pointer("/config/modelConfigRules/providerModelRules").is_none() {
-        pc["config"]["modelConfigRules"]["providerModelRules"] = json!([]);
+/// `config.modelConfigRules.providerModelRules`, created when missing.
+fn model_rules(pc: &mut Value) -> Result<&mut Vec<Value>> {
+    let rules = obj_at(pc, &["config", "modelConfigRules"])?.entry("providerModelRules").or_insert(Value::Null);
+    if rules.is_null() {
+        *rules = json!([]);
     }
-    let list = pc.pointer_mut("/config/modelConfigRules/providerModelRules").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!(l("providerModelRules 不是数组", "providerModelRules is not an array")))?;
+    rules.as_array_mut().ok_or_else(|| anyhow!(l("providerModelRules 不是数组", "providerModelRules is not an array")))
+}
+
+fn set_fields(pc: &mut Value, pid: &str, mid: &str, extra: &mfields::Extra) -> Result<Vec<String>> {
+    let list = model_rules(pc)?;
     let i = match list.iter().position(|r| is_rule(r, pid, mid)) {
         Some(i) => i,
         None => {
@@ -120,9 +127,7 @@ fn set_fields(pc: &mut Value, pid: &str, mid: &str, extra: &mfields::Extra) -> R
             list.len() - 1
         }
     };
-    if !list[i].get("config").map(|c| c.is_object()).unwrap_or(false) {
-        list[i]["config"] = json!({});
-    }
+    obj_at(&mut list[i], &["config"])?;
     let lines = mfields::write(&mut list[i]["config"], mfields::ZCODE, extra)?;
     if list[i]["config"].as_object().map(|c| c.is_empty()).unwrap_or(false) {
         list.remove(i);
@@ -266,7 +271,7 @@ pub fn state(inst: &Install) -> AgentState {
 }
 
 /// Base URL, key and API kind of a provider, for fetching its model list.
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (pc, _) = read_json(&provider_path())?;
     let r = rules(&pc)
         .into_iter()
@@ -317,25 +322,25 @@ fn new_uuid() -> String {
 }
 
 /// Sets or clears a model's context window in modelConfigRules.
-fn set_context(pc: &mut Value, pid: &str, mid: &str, ctx: Option<u64>) {
-    if pc.pointer("/config/modelConfigRules/providerModelRules").is_none() {
-        pc["config"]["modelConfigRules"]["providerModelRules"] = json!([]);
-    }
-    let list = pc.pointer_mut("/config/modelConfigRules/providerModelRules").and_then(|x| x.as_array_mut()).unwrap();
+fn set_context(pc: &mut Value, pid: &str, mid: &str, ctx: Option<u64>) -> Result<()> {
+    let list = model_rules(pc)?;
     let pos = list.iter().position(|r| r.get("providerId").and_then(|x| x.as_str()) == Some(pid) && r.get("modelId").and_then(|x| x.as_str()) == Some(mid));
     match (pos, ctx) {
-        (Some(i), Some(c)) => list[i]["config"]["properties"]["contextWindow"] = json!(c),
+        (Some(i), Some(c)) => {
+            obj_at(&mut list[i], &["config", "properties"])?.insert("contextWindow".into(), json!(c));
+        }
         (None, Some(c)) => list.push(json!({ "modelId": mid, "config": { "properties": { "contextWindow": c } }, "providerId": pid })),
         (Some(i), None) => {
             list.remove(i);
         }
         (None, None) => {}
     }
+    Ok(())
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
-    let (mut pc, pc_meta) = read_json(&provider_path())?;
-    let (mut st, st_meta) = read_json(&setting_path())?;
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
+    let (mut pc, pc_meta) = read_json_object(&provider_path())?;
+    let (mut st, st_meta) = read_json_object(&setting_path())?;
     let (pf, sf) = (display_path(&provider_path()), display_path(&setting_path()));
     let mut diff = Diff::default();
     let (mut pc_dirty, mut st_dirty) = (false, false);
@@ -463,7 +468,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 }
                 if let Some(c) = m.context {
                     if ctx_for(&pc, provider, &mid) != Some(c) {
-                        set_context(&mut pc, provider, &mid, Some(c));
+                        set_context(&mut pc, provider, &mid, Some(c))?;
                         diff.push(&pf, tr!("「{name}」{mid} contextWindow = {c}", "\"{name}\" {mid} contextWindow = {c}"), true);
                         pc_dirty = true;
                     }
@@ -483,7 +488,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 order.retain(|m| m != model);
                 cfg["personalModelIds"] = json!(ids);
                 cfg["modelOrder"] = json!(order);
-                set_context(&mut pc, provider, model, None);
+                set_context(&mut pc, provider, model, None)?;
                 diff.push(&pf, tr!("「{name}」- 模型 \"{model}\"", "\"{name}\" - model \"{model}\""), false);
                 pc_dirty = true;
             }
@@ -536,7 +541,7 @@ mod tests {
         let on: mfields::Extra = [("/properties/inputFormat/supportsImage".to_string(), json!(true))].into_iter().collect();
         assert_eq!(set_fields(&mut pc, "p", "m", &on).unwrap().len(), 1);
         assert_eq!(rule_config(&pc, "p", "m").unwrap()["properties"]["inputFormat"], json!({ "supportsImage": true }));
-        assert_eq!(model_of(&pc, "p", "m", true).tags, vec!["图片".to_string()]);
+        assert_eq!(model_of(&pc, "p", "m", true).tags, vec![Tag::new("cap:image", "图片")]);
         // A model without a rule gets one; clearing its only field drops it again.
         set_fields(&mut pc, "p", "n", &on).unwrap();
         let off: mfields::Extra = [("/properties/inputFormat/supportsImage".to_string(), Value::Null)].into_iter().collect();
@@ -545,5 +550,26 @@ mod tests {
         // Clearing on "m" keeps its context window.
         set_fields(&mut pc, "p", "m", &off).unwrap();
         assert_eq!(rule_config(&pc, "p", "m").unwrap(), &json!({ "properties": { "contextWindow": 1000 } }));
+    }
+
+    #[test]
+    fn context_rules_on_odd_shapes() {
+        // Missing or null levels are created.
+        for mut pc in [json!({}), json!({ "config": null }), json!({ "config": { "modelConfigRules": { "providerModelRules": null } } })] {
+            set_context(&mut pc, "p", "m", Some(8000)).unwrap();
+            assert_eq!(ctx_for(&pc, "p", "m"), Some(8000));
+            set_context(&mut pc, "p", "m", None).unwrap();
+            assert_eq!(ctx_for(&pc, "p", "m"), None);
+        }
+        // Something else in the way is an error, never a panic or an overwrite.
+        for mut pc in [json!({ "config": "x" }), json!({ "config": { "modelConfigRules": { "providerModelRules": {} } } }), json!([])] {
+            let before = pc.clone();
+            assert!(set_context(&mut pc, "p", "m", Some(1)).is_err());
+            assert!(set_fields(&mut pc, "p", "m", &Default::default()).is_err());
+            assert_eq!(pc, before);
+        }
+        // A rule whose config is a string is refused rather than replaced.
+        let mut pc = json!({ "config": { "modelConfigRules": { "providerModelRules": [{ "modelId": "m", "providerId": "p", "config": "?" }] } } });
+        assert!(set_context(&mut pc, "p", "m", Some(1)).is_err());
     }
 }

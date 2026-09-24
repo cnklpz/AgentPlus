@@ -4,6 +4,7 @@ import { type Draft, opsToWrite } from "../draft";
 import type { Station } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { t, tn, useLang } from "../i18n";
+import { scrub } from "../privacy";
 
 interface Props {
   agents: AgentState[];
@@ -69,11 +70,11 @@ export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, on
                 <span className="tiny muted">{tn("hubAside.itemCount", Object.keys(drafts[a.id]).length)}</span>
                 <button className="link" onClick={() => onDiscard(a.id)}>{t("hubAside.discard")}</button>
               </div>
-              {typeof d === "string" && <div className="err">{d}</div>}
+              {typeof d === "string" && <div className="err">{scrub(d)}</div>}
               {Array.isArray(d) && d.map((g) => (
                 <div key={g.file} className="dgroup">
-                  <div className="dfile mono ellipsis">{g.file}</div>
-                  {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{l.text}</div>)}
+                  <div className="dfile mono ellipsis">{scrub(g.file)}</div>
+                  {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{scrub(l.text)}</div>)}
                 </div>
               ))}
             </div>

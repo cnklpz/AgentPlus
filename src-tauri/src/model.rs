@@ -92,7 +92,7 @@ pub struct Model {
     pub id: String,
     pub visible: bool,
     pub readonly: bool,
-    pub tags: Vec<String>,
+    pub tags: Vec<Tag>,
     pub ctx: Option<String>,
     /// Display name, when the agent stores one.
     pub name: Option<String>,
@@ -210,7 +210,35 @@ pub fn key_fingerprint(k: &str) -> String {
 }
 
 /// Masks a secret for display: "••••abcd".
+/// A badge on a model. `id` is stable (`fast`, `custom`, `cap:image`, `role:default`, …) for
+/// the UI to act on; `label` is display text in the current language.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Tag {
+    pub id: String,
+    pub label: String,
+}
+
+impl Tag {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Tag { id: id.into(), label: label.into() }
+    }
+
+    /// A model the agent uses by default.
+    pub fn default_model() -> Self {
+        Tag::new("role:default", crate::i18n::l("默认", "Default"))
+    }
+
+    /// The model currently selected in the agent.
+    pub fn current() -> Self {
+        Tag::new("current", crate::i18n::l("当前", "Current"))
+    }
+}
+
 pub fn mask_key(k: &str) -> String {
+    // A short key would be mostly (or entirely) shown by its last four characters.
+    if k.chars().count() < 8 {
+        return "••••".into();
+    }
     let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
     format!("••••{tail}")
 }
@@ -298,7 +326,7 @@ impl Setting {
 
 #[cfg(test)]
 mod tests {
-    use super::slug;
+    use super::{mask_key, slug};
 
     #[test]
     fn slug_spells_chinese_in_pinyin() {
@@ -307,5 +335,24 @@ mod tests {
         assert_eq!(slug("中转站OP"), "zhong-zhuan-zhan-op");
         assert_eq!(slug("小米 MiMo"), "xiao-mi-mimo");
         assert_eq!(slug("!!!"), "provider");
+    }
+
+    #[test]
+    fn slug_edge_cases() {
+        assert_eq!(slug(""), "provider");
+        assert_eq!(slug("   "), "provider");
+        assert_eq!(slug("a.b/c\\d\"e"), slug("a b c d e"));
+        assert!(!slug("😀 Relay").contains(char::is_whitespace));
+        let long = slug(&"x".repeat(500));
+        assert!(!long.is_empty() && long.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    #[test]
+    fn mask_key_never_shows_short_keys() {
+        assert_eq!(mask_key("sk-abcdef-1234"), "••••1234");
+        assert_eq!(mask_key("密钥密钥密钥密钥"), "••••密钥密钥");
+        for short in ["", "abc", "abcd", "1234567"] {
+            assert_eq!(mask_key(short), "••••", "{short:?}");
+        }
     }
 }

@@ -48,9 +48,10 @@ export function ContextMenu({ build }: Props) {
     const close = () => setMenu(null);
     const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) close(); };
     const acts = menu.items.map((it, i) => (it !== "sep" && !it.disabled ? i : -1)).filter((i) => i >= 0);
+    // The menu sits above everything: Esc closes it alone, not the dialog or panel underneath.
+    const onEsc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); close(); }
-      else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const at = acts.indexOf(hi);
         const next = e.key === "ArrowDown" ? acts[(at + 1) % acts.length] : acts[(at - 1 + acts.length) % acts.length];
@@ -63,12 +64,14 @@ export function ContextMenu({ build }: Props) {
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onEsc, true);
     window.addEventListener("blur", close);
     window.addEventListener("resize", close);
     document.addEventListener("scroll", close, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onEsc, true);
       window.removeEventListener("blur", close);
       window.removeEventListener("resize", close);
       document.removeEventListener("scroll", close, true);

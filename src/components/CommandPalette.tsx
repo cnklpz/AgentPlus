@@ -3,6 +3,9 @@ import { type AgentId, type AgentState, type SessionRow, api } from "../api";
 import type { Tab } from "./AgentPage";
 import { AgentIcon, Icon } from "./icons";
 import { type TKey, t, useLang } from "../i18n";
+import { useEscape } from "../hooks";
+import { scrubHost, usePrivacy } from "../privacy";
+import { SYNC_ENABLED } from "../features";
 
 export type Target =
   | { kind: "agent"; agent: AgentId; tab?: Tab; provider?: string; setting?: string; query?: string }
@@ -29,6 +32,8 @@ interface Item {
   icon?: JSX.Element;
   target: Target;
   haystack: string;
+  /** Shown greyed out; picking it does nothing. */
+  disabled?: boolean;
 }
 
 interface Props {
@@ -44,6 +49,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const lang = useLang();
+  const privacy = usePrivacy();
 
   useEffect(() => {
     input.current?.focus();
@@ -58,7 +64,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
       { label: t("commandPalette.projects"), hint: t("commandPalette.projectsHint"), group: "page", icon: <Icon.folder size={14} />, target: { kind: "agent", agent: "opencode", tab: "projects" }, haystack: "项目 project 文件夹 folder opencode.json 项目级 工作区 workspace" },
       { label: t("commandPalette.gateway"), hint: t("commandPalette.gatewayHint"), group: "page", icon: <Icon.gateway size={14} />, target: { kind: "page", page: "gateway" }, haystack: "网关 gateway 转换 协议 代理 proxy 中转 relay protocol convert" },
       { label: t("commandPalette.history"), hint: t("commandPalette.historyHint"), group: "page", icon: <Icon.history size={14} />, target: { kind: "page", page: "history" }, haystack: "历史 回滚 备份 history backup rollback restore" },
-      { label: t("commandPalette.sync"), hint: t("commandPalette.syncHint"), group: "page", icon: <Icon.cloud size={14} />, target: { kind: "page", page: "sync" }, haystack: "同步 导出 导入 sync export import device" },
+      { label: t("commandPalette.sync"), hint: SYNC_ENABLED ? t("commandPalette.syncHint") : t("common.notAvailable"), group: "page", icon: <Icon.cloud size={14} />, target: { kind: "page", page: "sync" }, haystack: "同步 导出 导入 sync export import device", disabled: !SYNC_ENABLED },
       { label: t("commandPalette.settings"), hint: t("commandPalette.settingsHint"), group: "page", icon: <Icon.gear size={14} />, target: { kind: "page", page: "settings" }, haystack: "设置 settings 环境 wsl windows 动画 测速 environment animation latency language 语言" },
       { label: t("commandPalette.detect"), hint: t("commandPalette.detectHint"), group: "page", icon: <Icon.search size={13} />, target: { kind: "page", page: "settings", settingsTab: "agents" }, haystack: "识别 检测 配置目录 目录 detect detection config folder" },
     ];
@@ -71,7 +77,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
         out.push({ label: `${a.name} · ${l}`, hint: t("commandPalette.groupPage"), group: "page", agent: a.id, target: { kind: "agent", agent: a.id, tab }, haystack: `${a.name} ${l}` });
       }
       for (const p of a.providers) {
-        out.push({ label: p.name, hint: `${a.name} · ${p.host}`, group: "provider", agent: a.id, target: { kind: "agent", agent: a.id, tab: "prov", provider: p.id }, haystack: `${p.name} ${p.host} ${p.id}` });
+        out.push({ label: p.name, hint: `${a.name} · ${scrubHost(p.host)}`, group: "provider", agent: a.id, target: { kind: "agent", agent: a.id, tab: "prov", provider: p.id }, haystack: `${p.name} ${p.host} ${p.id}` });
         for (const m of p.models) {
           out.push({ label: m.id, hint: `${a.name} · ${p.name}`, group: "model", agent: a.id, target: { kind: "agent", agent: a.id, tab: "models", provider: p.id }, haystack: `${m.id} ${m.name ?? ""}` });
         }
@@ -87,7 +93,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
       out.push({ label: s.title, hint: t("commandPalette.sessionHint", { provider: s.provider, cwd: s.cwd }), group: "session", agent: "codex", target: { kind: "agent", agent: "codex", tab: "sessions", query: s.id }, haystack: `${s.title} ${s.cwd} ${s.id}` });
     }
     return out;
-  }, [agents, sessions, lang]);
+  }, [agents, sessions, lang, privacy]);
 
   const results = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -105,7 +111,9 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
 
   useEffect(() => setSel(0), [q]);
 
-  const go = (i: Item | undefined) => { if (i) { onGo(i.target); onClose(); } };
+  const go = (i: Item | undefined) => { if (i && !i.disabled) { onGo(i.target); onClose(); } };
+  // Esc closes only the palette, not a dialog it was opened over.
+  useEscape(onClose);
 
   return (
     <div className="modal-bg top" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -117,8 +125,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
           placeholder={t("commandPalette.placeholder")}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape") onClose();
-            else if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
+            if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
             else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
             else if (e.key === "Enter") go(results[sel]);
           }}
@@ -126,12 +133,12 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
         <div className="palette-list">
           {results.length === 0 && <div className="muted small palette-empty">{t("commandPalette.noResults", { q })}</div>}
           {results.map((r, i) => (
-            <button key={`${r.group}-${r.label}-${r.hint}-${i}`} className={`palette-item${i === sel ? " on" : ""}`}
+            <button key={`${r.group}-${r.label}-${r.hint}-${i}`} className={`palette-item${i === sel ? " on" : ""}${r.disabled ? " off" : ""}`} aria-disabled={r.disabled}
               onMouseEnter={() => setSel(i)} onClick={() => go(r)}>
               {r.agent ? <AgentIcon id={r.agent} size={18} /> : <span className="palette-dot">{r.icon}</span>}
               <span className="grow minw0">
-                <span className="ellipsis block small strong">{r.label}</span>
-                <span className="ellipsis block tiny muted">{r.hint}</span>
+                <span className={`ellipsis block small strong${r.group === "session" ? " sensitive" : ""}`}>{r.label}</span>
+                <span className={`ellipsis block tiny muted${r.group === "session" ? " sensitive" : ""}`}>{r.hint}</span>
               </span>
               <span className="palette-group tiny">{t(GROUP_LABEL[r.group])}</span>
             </button>

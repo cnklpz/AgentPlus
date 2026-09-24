@@ -2,6 +2,7 @@
 //! `provider.<id>.models`), app preferences in `%APPDATA%\Xiaomi MiMo\preferences.json`.
 //! Provider and model editing is shared with OpenCode (see ocfmt).
 
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -166,14 +167,14 @@ pub fn state(inst: &Install) -> AgentState {
 }
 
 /// Base URL, key and API kind of a provider, for fetching its model list.
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     fmt().endpoint(id)
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, cfg_meta, had_comments) = f.load(false)?;
-    let (mut prefs, prefs_meta) = read_json(&prefs_path())?;
+    let (mut prefs, prefs_meta) = read_json_object(&prefs_path())?;
     let mut root = store::load();
     let pf = display_path(&prefs_path());
     let mut diff = Diff::default();

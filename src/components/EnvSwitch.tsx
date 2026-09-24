@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { EnvInfo } from "../api";
 import { Icon } from "./icons";
 import { t } from "../i18n";
+import { scrub } from "../privacy";
 
 interface Props {
   envs: EnvInfo[];
@@ -51,7 +52,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
               <span className="env-ico">{e.id.startsWith("wsl:") ? <Icon.terminal /> : <Icon.monitor />}</span>
               <span className="grow minw0">
                 <span className="block ellipsis">{e.label}</span>
-                <span className="block tiny muted ellipsis">{e.detail}</span>
+                <span className="block tiny muted ellipsis">{scrub(e.detail)}</span>
               </span>
               {e.current && <Icon.check size={13} />}
             </button>

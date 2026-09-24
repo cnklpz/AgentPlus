@@ -2,6 +2,8 @@ import type { AgentId, AgentState, GatewayStatus } from "../api";
 import { type Draft, currentProvider, isEnabled, visibleCount } from "../draft";
 import { AgentIcon, Icon } from "./icons";
 import { type TKey, t, tn } from "../i18n";
+import { scrub } from "../privacy";
+import { SYNC_ENABLED } from "../features";
 
 export type Page = "providers" | "gateway" | "history" | "sync" | "settings";
 
@@ -35,7 +37,7 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
   ];
   return (
     <nav className="sidebar" aria-label={t("sidebar.nav")}>
-      <div className="side-label">AGENT</div>
+      <div className="side-label">{t("sidebar.agents")}</div>
       {agents.map((a) => {
         const d = drafts[a.id] ?? {};
         const fast = a.id === "codex" && a.settings.find((s) => s.key === "fast_inject")?.value === true;
@@ -46,7 +48,7 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
             <span className="agent-row-text">
               <span className="agent-row-name">
                 {a.name}
-                {fast && <span className="badge-fast">FAST</span>}
+                {fast && <span className="badge-fast" title={t("sidebar.fastBadgeTitle")}>{t("sidebar.fastBadge")}</span>}
               </span>
               <span className="agent-row-sub">{subline(a, d)}</span>
             </span>
@@ -56,20 +58,23 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
       })}
 
       <div className="side-label spaced">{t("sidebar.resources")}</div>
-      {links.map(([id, label, icon]) => (
-        <button key={id} className={`side-link${page === id ? " active" : ""}`} onClick={() => onPage(id)}>{icon}{t(label)}</button>
-      ))}
+      {links.map(([id, label, icon]) => {
+        const off = id === "sync" && !SYNC_ENABLED;
+        return (
+          <button key={id} className={`side-link${page === id ? " active" : ""}`} disabled={off} title={off ? t("common.notAvailable") : undefined} onClick={() => onPage(id)}>{icon}{t(label)}</button>
+        );
+      })}
 
       {gateway?.enabled && (() => {
         const paused = gateway.routes.filter((r) => r.breaker && r.breaker.state !== "closed");
         return (
           <button className={`gw-foot${gateway.running ? (paused.length ? " warn" : " on") : " bad"}`} onClick={() => onPage("gateway")}
-            title={gateway.error ?? (paused.length ? paused.map((r) => t("sidebar.pausedRoute", { name: r.name, reason: r.breaker!.reason ?? "" })).join("\n") : t("sidebar.openGateway"))}>
+            title={scrub(gateway.error) ?? (paused.length ? paused.map((r) => t("sidebar.pausedRoute", { name: r.name, reason: r.breaker!.reason ?? "" })).join("\n") : t("sidebar.openGateway"))}>
             <span className="gw-dot" />
             <span className="grow minw0">
               <span className="block strong">{gateway.running ? t("sidebar.gatewayOnline") : t("sidebar.gatewayDown")}</span>
               <span className="block ellipsis">
-                {!gateway.running ? gateway.error ?? t("sidebar.clickToView")
+                {!gateway.running ? scrub(gateway.error) ?? t("sidebar.clickToView")
                   : paused.length ? tn("sidebar.tripped", paused.length)
                   : `127.0.0.1:${gateway.port} · ${tn("sidebar.requests", gateway.requests)}${gateway.active ? ` · ${t("sidebar.active", { n: gateway.active })}` : ""}`}
               </span>

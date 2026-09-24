@@ -15,7 +15,7 @@
 
 // Unused until the integrator wires the adapter into adapters::mod.
 
-
+use super::{Plan, Endpoint};
 use crate::model::*;
 use crate::process::Install;
 use crate::store;
@@ -111,67 +111,9 @@ fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------------------------------------------------------------- detection
 
-#[cfg(windows)]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000)
-}
-#[cfg(not(windows))]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    cmd
-}
-
-fn which(names: &[&str]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
-}
-
 fn pkg_version(p: &Path) -> Option<String> {
     let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
     v.get("version")?.as_str().map(String::from)
-}
-
-fn version_in(text: &str) -> Option<String> {
-    text.split_whitespace()
-        .map(|w| w.trim_start_matches('v').trim_end_matches(','))
-        .find(|w| w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && w.contains('.'))
-        .map(String::from)
-}
-
-/// `<exe> --version`, cached per path, killed after 5 s.
-fn cli_version(exe: &Path) -> Option<String> {
-    use std::process::{Command, Stdio};
-    static CACHE: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
-    if let Some((_, v)) = CACHE.lock().unwrap().iter().find(|(p, _)| p == exe) {
-        return v.clone();
-    }
-    let is_cmd = exe.extension().map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")).unwrap_or(false);
-    let mut cmd = if is_cmd {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(exe);
-        c
-    } else {
-        Command::new(exe)
-    };
-    cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let v = no_window(&mut cmd).spawn().ok().and_then(|mut child| {
-        let t0 = std::time::Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if t0.elapsed() < std::time::Duration::from_secs(5) => std::thread::sleep(std::time::Duration::from_millis(50)),
-                _ => {
-                    let _ = child.kill();
-                    return None;
-                }
-            }
-        }
-        let mut out = String::new();
-        std::io::Read::read_to_string(child.stdout.as_mut()?, &mut out).ok()?;
-        version_in(&out)
-    });
-    CACHE.lock().unwrap().push((exe.to_path_buf(), v.clone()));
-    v
 }
 
 /// npm global `@qwen-code/qwen-code`, or the standalone installer
@@ -179,7 +121,7 @@ fn cli_version(exe: &Path) -> Option<String> {
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let pkg = |root: &Path| root.join("node_modules").join("@qwen-code").join("qwen-code").join("package.json");
-    let on_path = which(&["qwen.cmd", "qwen.exe", "qwen"]);
+    let on_path = crate::process::on_path(&["qwen.cmd", "qwen.exe", "qwen"]);
     let mut roots: Vec<PathBuf> = dirs::data_dir().map(|d| d.join("npm")).into_iter().collect();
     if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
         roots.push(d.to_path_buf());
@@ -192,11 +134,11 @@ pub fn detect() -> Install {
         inst.version = [sd.join("package.json"), pkg(&sd), pkg(&sd.join("lib"))]
             .iter()
             .find_map(|p| pkg_version(p))
-            .or_else(|| cli_version(&sd.join("bin").join("qwen.cmd")));
+            .or_else(|| crate::process::cli_version(&sd.join("bin").join("qwen.cmd")));
         inst.dir = Some(sd);
     } else if let Some(p) = on_path {
         inst.installed = true;
-        inst.version = cli_version(&p);
+        inst.version = crate::process::cli_version(&p);
     }
     if inst.installed {
         inst.running = crate::process::any_process(|name, path| {
@@ -496,7 +438,7 @@ fn model_of(e: &Value, visible: bool, selected: bool) -> Option<Model> {
     Some(Model {
         visible,
         readonly: false,
-        tags: if selected { vec![l("当前", "Current").into()] } else { vec![] },
+        tags: if selected { vec![Tag::current()] } else { vec![] },
         ctx: context.map(fmt_ctx),
         name: s(e, "name").filter(|n| !n.is_empty()).map(String::from),
         context,
@@ -659,7 +601,7 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
     let g = groups(&cfg, &load_store()).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
     let base = g.base.clone().filter(|b| !b.trim().is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")))?;
@@ -1193,7 +1135,7 @@ fn new_entry(tmpl: &Value, id: &str, name: Option<&str>, ctx: Option<u64>) -> Va
     Value::Object(e)
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg, meta, had_comments) = load()?;
     let mut cx = Ctx { cfg, root: load_store(), diff: Diff::default(), file: display_path(&settings_path()), cfg_dirty: false, store_dirty: false };
 
@@ -1392,7 +1334,7 @@ mod tests {
         assert!(d.has_key, "key in env block");
         assert_eq!(d.models.len(), 2);
         assert_eq!(d.models[0].ctx.as_deref(), Some("1M"));
-        assert!(d.models[0].tags.contains(&"当前".to_string()));
+        assert!(d.models[0].tags.contains(&Tag::current()));
         assert_eq!(d.name, "dashscope.aliyuncs.com");
         let r = prov(&s, "relay");
         assert_eq!(r.api, "responses");

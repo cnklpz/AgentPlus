@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "AgentPlus",
+        "visible": false,
         "decorations": false,
         "shadow": true,
         "width": 1320,

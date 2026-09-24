@@ -4,8 +4,10 @@
 // waits for that first.
 import { createElement, Fragment, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { scrubVar } from "../privacy";
 import zh from "./zh";
 import en from "./en";
+import { inTauri } from "../tauri";
 
 export type Lang = "zh" | "en";
 /** The user's choice; "auto" follows the system language. */
@@ -28,7 +30,6 @@ let lang: Lang = "zh";
 let started = false;
 let ready: Promise<void> = Promise.resolve();
 const subs = new Set<() => void>();
-const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function resolveLang(p: LangPref): Lang {
   if (p !== "auto") return p;
@@ -72,8 +73,9 @@ function lookup(key: string): string {
   return get(DICTS[lang]) ?? get(zh) ?? key;
 }
 
+// Placeholder values can carry addresses and paths: masked while 隐私模式 is on.
 const fill = (s: string, vars?: Vars) =>
-  vars ? s.replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? String(vars[n]) : m)) : s;
+  vars ? s.replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? scrubVar(n, String(vars[n])) : m)) : s;
 
 /** Translated text; `{name}` placeholders are filled from `vars`. */
 export function t(key: TKey, vars?: Vars): string {
@@ -94,6 +96,6 @@ export function tx(key: TKey, vars: Record<string, ReactNode>): ReactNode {
   return createElement(
     Fragment,
     null,
-    ...parts.map((p, i) => (i % 2 ? createElement(Fragment, { key: i }, p in vars ? vars[p] : `{${p}}`) : p)),
+    ...parts.map((p, i) => (i % 2 ? createElement(Fragment, { key: i }, !(p in vars) ? `{${p}}` : typeof vars[p] === "string" ? scrubVar(p, vars[p] as string) : vars[p]) : p)),
   );
 }

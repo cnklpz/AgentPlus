@@ -51,8 +51,12 @@
 :root[data-motion="rich"] .agent-row.active::before { animation: ap-bar var(--t-slow) var(--ease-spring) backwards; }
 
 /* 逐个入场：更多列表、更长的错峰 */
-:root[data-motion="rich"] :is(.sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > * {
+:root[data-motion="rich"] :is(.sgroup, .uses, .row-cards, .hub-stats, .sidebar) > * {
   animation: ap-rise var(--t) var(--ease-out) backwards;
+}
+/* 可滚动的浮层里从上往下落：往下平移会把最后一项推出底边，开出来时闪一下滚动条 */
+:root[data-motion="rich"] :is(.dd-menu, .ctx-menu, .palette-list) > * {
+  animation: ap-drop var(--t) var(--ease-out) backwards;
 }
 :root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > * {
   animation-delay: calc(var(--i, 0) * 38ms);

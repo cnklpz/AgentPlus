@@ -139,12 +139,14 @@ pub fn delete(id: &str) -> Result<()> {
 }
 
 /// (name, base_url, key, api, models) of a library entry, for copying into an agent.
-pub fn endpoint(id: &str) -> Result<(String, String, Option<String>, String, Vec<String>)> {
+pub type LibEndpoint = (String, String, Option<String>, String, Vec<String>);
+
+pub fn endpoint(id: &str) -> Result<LibEndpoint> {
     endpoint_in(&store::load(), id)
 }
 
 /// `endpoint` from an already loaded store.
-pub fn endpoint_in(root: &Value, id: &str) -> Result<(String, String, Option<String>, String, Vec<String>)> {
+pub fn endpoint_in(root: &Value, id: &str) -> Result<LibEndpoint> {
     let e = entries(root).into_iter().find(|e| str_of(e, "id") == id).ok_or_else(|| anyhow!(tr!("供应商库里没有 {id}", "Not in the provider library: {id}")))?;
     let key = str_of(&e, "apiKey");
     let le = to_entry(&e);

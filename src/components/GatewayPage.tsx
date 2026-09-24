@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEscape } from "../hooks";
-import { type AgentId, type AgentState, type ApiKind, type GatewayBreaker, type GatewayBreakerView, type GatewayRouteView, type GatewayStatus, type TestResult, api } from "../api";
-import { API_LABEL, type Group, type Station, apiFor, gatewayCapable, gatewayRouteId } from "../services";
+import { type AgentId, type AgentState, type ApiKind, type GatewayBreaker, type GatewayBreakerView, type GatewayRoute, type GatewayRouteView, type GatewayStatus, type TestResult, api } from "../api";
+import { API_LABEL, type Group, type Station, apiFor, gatewayCapable, gatewayRouteId, plainRoute } from "../services";
 import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { AgentIcon, Icon } from "./icons";
 import { t, tn, tx } from "../i18n";
+import { scrub } from "../privacy";
 
 interface Props {
   status: GatewayStatus | null;
@@ -32,11 +33,6 @@ interface Props {
 
 const PROTOS: ApiKind[] = ["chat", "responses", "anthropic"];
 const PATHS: Record<ApiKind, string> = { chat: "/chat/completions", responses: "/responses", anthropic: "/messages", gemini: "" };
-
-function plain(r: GatewayRouteView) {
-  const { localBase: _a, upstreamName: _b, upstreamUrl: _c, upstreamMissing: _d, models: _e, breaker: _f, ...route } = r;
-  return route;
-}
 
 /** Paused by the error breaker (or waiting for its trial request). */
 export function tripped(r: GatewayRouteView): GatewayBreakerView | null {
@@ -76,11 +72,14 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
       flash(String(e), true);
     }
   };
+  const portNum = /^\d+$/.test(port.trim()) ? Number(port.trim()) : NaN;
+  const portOk = portNum >= 1024 && portNum <= 65535;
   const power = async (on: boolean) => {
+    // Starting or switching needs a usable port; stopping keeps whatever is saved.
+    if (on && !portOk) return;
     setBusy("power");
     try {
-      const p = Number(port);
-      setStatus(await api.gatewaySet(on, p >= 1024 && p <= 65535 ? p : null));
+      setStatus(await api.gatewaySet(on, portOk ? portNum : null));
       flash(t(on ? "gatewayPage.gatewayOn" : "gatewayPage.gatewayOff"));
     } catch (e) {
       flash(String(e), true);
@@ -134,18 +133,20 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
               </div>
               <label className="gw-port-field">
                 <span className="tiny muted">{t("gatewayPage.port")}</span>
-                <input className="input mono" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))} aria-label={t("gatewayPage.port")} />
+                <input className="input mono" value={port} onChange={(e) => setPort(e.target.value.replace(/\D/g, "").slice(0, 5))} aria-label={t("gatewayPage.port")}
+                  aria-invalid={!portOk} title={portOk ? undefined : t("gatewayPage.portInvalid")} />
               </label>
               {s?.running ? (
                 <>
-                  {portChanged && <button className="btn primary" disabled={!!busy} onClick={() => power(true)}>{t("gatewayPage.switchPort")}</button>}
+                  {portChanged && <button className="btn primary" disabled={!!busy || !portOk} onClick={() => power(true)}>{t("gatewayPage.switchPort")}</button>}
                   <button className="btn" disabled={!!busy} onClick={() => power(false)}>{t("gatewayPage.stop")}</button>
                 </>
               ) : (
-                <button className="btn primary" disabled={!!busy || !s} onClick={() => power(true)}><Icon.gateway size={13} />{t("gatewayPage.start")}</button>
+                <button className="btn primary" disabled={!!busy || !s || !portOk} onClick={() => power(true)}><Icon.gateway size={13} />{t("gatewayPage.start")}</button>
               )}
             </div>
-            {s?.running && s.error && <div className="err">{s.error}</div>}
+            {!portOk && <em className="field-err">{t("gatewayPage.portInvalid")}</em>}
+            {s?.running && s.error && <div className="err">{scrub(s.error)}</div>}
             {s?.running && paused.length > 0 && (
               <div className="gw-trip" role="alert">
                 <div className="row between gap6">
@@ -155,7 +156,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                 {paused.map((r) => (
                   <div key={r.id} className="gw-trip-row">
                     <span className="small strong ellipsis">{r.name}</span>
-                    <span className="small grow minw0 gw-trip-why">{r.breaker!.reason ?? t("gatewayPage.upstreamError")}</span>
+                    <span className="small grow minw0 gw-trip-why">{scrub(r.breaker!.reason) ?? t("gatewayPage.upstreamError")}</span>
                     <span className="tiny muted nowrap">{breakerWhen(r.breaker!)}</span>
                     <button className="btn xs" onClick={() => resetBreaker(r.id)}>{t("gatewayPage.resumeNow")}</button>
                   </div>
@@ -203,12 +204,13 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
               const trip = tripped(r);
               return (
                 <div key={r.id} className={`gw-item fwd${expanded ? " open" : ""}`} data-url={r.localBase} data-ctx="route" data-route={r.id}>
-                  <div className="gw-item-head" role="button" onClick={() => setOpen(expanded ? null : r.id)}>
+                  <div className="gw-item-head" role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setOpen(expanded ? null : r.id)}
+                    onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen(expanded ? null : r.id); } }}>
                     <span className={`api-chip api-${r.upstreamApi}`}>{API_LABEL[r.upstreamApi]}</span>
                     <span className="grow minw0">
                       <span className="block small strong ellipsis">{r.name}</span>
                       <span className={`block tiny ellipsis ${r.upstreamMissing || (trip && r.enabled) ? "warn-text" : "muted"}`}>
-                        {r.upstreamMissing ? t("gatewayPage.upstreamMissing") : trip && r.enabled ? t("gatewayPage.tripped", { reason: trip.reason ?? t("gatewayPage.upstreamError") }) : `${r.localBase}  →  ${r.upstreamUrl}`}
+                        {r.upstreamMissing ? t("gatewayPage.upstreamMissing") : trip && r.enabled ? t("gatewayPage.tripped", { reason: trip.reason ?? t("gatewayPage.upstreamError") }) : `${r.localBase}  →  ${scrub(r.upstreamUrl)}`}
                       </span>
                     </span>
                     <span className="gw-weight" title={t("gatewayPage.weightTitle")}>{t("gatewayPage.weightChip", { w: r.weight })}</span>
@@ -235,7 +237,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
             {s && s.log.length > 0 && (
               <div className="gw-log">
                 {s.log.map((l, i) => (
-                  <div key={i} className={`gw-logrow${l.status >= 400 || l.error ? " bad" : ""}`} title={l.error ?? undefined}>
+                  <div key={i} className={`gw-logrow${l.status >= 400 || l.error ? " bad" : ""}`} title={scrub(l.error) ?? undefined}>
                     <span className="mono tiny muted">{l.at}</span>
                     <span className="mono small ellipsis">{l.route}</span>
                     <span className="tiny">
@@ -323,6 +325,8 @@ function AddForward({ groups, onForward, onClose }: {
   const [replace, setReplace] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** Custom upstream already saved to the library by an earlier attempt. */
+  const savedId = useRef<string | null>(null);
 
   useEscape(onClose);
 
@@ -337,7 +341,9 @@ function AddForward({ groups, onForward, onClose }: {
         if (!g) throw new Error(t("gatewayPage.chooseProvider"));
         await onForward(g, replace);
       } else {
-        const e = await api.librarySave({ id: null, name: name.trim(), baseUrl: url.trim(), api: apiKind, apiKey: key.trim() || null, models: null, adoptFrom: null });
+        // A retry after a failed forward updates the entry saved the first time instead of adding another.
+        const e = await api.librarySave({ id: savedId.current, name: name.trim(), baseUrl: url.trim(), api: apiKind, apiKey: key.trim() || null, models: null, adoptFrom: null });
+        savedId.current = e.id;
         await onForward({ key: `lib:${e.id}`, name: e.name, baseUrl: e.baseUrl, api: e.api, keyFp: e.keyFp, keyHint: e.keyHint, lib: e, uses: [] }, false);
       }
     } catch (e) {
@@ -394,7 +400,7 @@ function AddForward({ groups, onForward, onClose }: {
               </div>
               <div className="field">
                 <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
-                <input id="af-url" className="input mono" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+                <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
                 {url && !urlOk && <em className="field-err">{t("gatewayPage.urlInvalid")}</em>}
               </div>
               <div className="field">
@@ -405,7 +411,7 @@ function AddForward({ groups, onForward, onClose }: {
                 <em className="muted tiny">{t("gatewayPage.protoHint")}</em>
               </div>
               <div className="field">
-                <label htmlFor="af-key">API Key</label>
+                <label htmlFor="af-key">{t("common.apiKey")}</label>
                 <input id="af-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
                 <em className="muted tiny">{t("gatewayPage.keyHint")}</em>
               </div>
@@ -446,9 +452,9 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
   // Agents already pointing at this route.
   const linked = new Set(agents.filter((a) => a.providers.some((p) => gatewayRouteId(p.baseUrl, r.localBase.replace(/^https?:\/\//, "").split("/")[0]) === r.id)).map((a) => a.id));
 
-  const save = async (patch: Partial<ReturnType<typeof plain>>, msg: string) => {
+  const save = async (patch: Partial<GatewayRoute>, msg: string) => {
     try {
-      setStatus(await api.gatewaySaveRoute({ ...plain(r), ...patch }, r.id));
+      setStatus(await api.gatewaySaveRoute({ ...plainRoute(r), ...patch }, r.id));
       flash(msg);
     } catch (e) {
       flash(String(e), true);
@@ -467,6 +473,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
       api.gatewayStatus().then(setStatus).catch(() => undefined);
     }
   };
+  const canTest = running && r.enabled && !testing && !!model.trim();
   const b = r.breaker;
 
   return (
@@ -475,13 +482,13 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
         <div className={`gw-block gw-breaker ${b.state}`}>
           <span className="gw-label">{t("gatewayPage.breaker")}</span>
           {b.state === "closed" ? (
-            <span className="small">{tx("gatewayPage.breakerCounting", { fails: b.fails, threshold, reason: <span className="gw-trip-why">{b.reason}</span> })}</span>
+            <span className="small">{tx("gatewayPage.breakerCounting", { fails: b.fails, threshold, reason: <span className="gw-trip-why">{scrub(b.reason)}</span> })}</span>
           ) : (
             <>
               <span className="small">
                 {tx("gatewayPage.pausedReason", {
                   paused: <strong>{t("gatewayPage.paused")}</strong>,
-                  reason: <span className="gw-trip-why">{b.reason ?? t("gatewayPage.upstreamError")}</span>,
+                  reason: <span className="gw-trip-why">{scrub(b.reason) ?? t("gatewayPage.upstreamError")}</span>,
                 })}
               </span>
               <div className="row gap6">
@@ -533,12 +540,12 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
           <div className="seg">
             {PROTOS.map((p) => <button key={p} className={inbound === p ? "on" : ""} onClick={() => setInbound(p)}>{API_LABEL[p]}</button>)}
           </div>
-          <ComboBox value={model} options={models} onChange={setModel} onEnter={test} placeholder={t("gatewayPage.modelId")} label={t("gatewayPage.testModel")} disabled={testing} />
-          <button className="btn small primary" disabled={!running || !r.enabled || testing || !model.trim()} onClick={test} title={t(running ? "gatewayPage.testTitle" : "gatewayPage.startFirst")}>
+          <ComboBox value={model} options={models} onChange={setModel} onEnter={() => { if (canTest) test(); }} placeholder={t("gatewayPage.modelId")} label={t("gatewayPage.testModel")} disabled={testing} />
+          <button className="btn small primary" disabled={!canTest} onClick={test} title={t(running ? "gatewayPage.testTitle" : "gatewayPage.startFirst")}>
             {testing ? <><span className="spin">↻</span>{t("gatewayPage.testing")}</> : <><Icon.pulse size={12} />{t("common.test")}</>}
           </button>
         </div>
-        {typeof res === "string" && <div className="ptest-res bad"><strong>{t("gatewayPage.testFailed")}</strong><span>{res}</span></div>}
+        {typeof res === "string" && <div className="ptest-res bad"><strong>{t("gatewayPage.testFailed")}</strong><span>{scrub(res)}</span></div>}
         {res && typeof res !== "string" && (
           <div className={`ptest-res ${res.ok ? "good" : "bad"}`}>
             <div className="row gap6">
@@ -547,7 +554,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
               {res.status != null && <span className="mono tiny">HTTP {res.status}</span>}
               <span className="tiny">{API_LABEL[inbound]} → {API_LABEL[r.upstreamApi]}</span>
             </div>
-            <span>{res.ok ? (res.reply ? tx("gatewayPage.reply", { reply: <span className="mono">{res.reply}</span> }) : t("gatewayPage.noReply")) : res.error}</span>
+            <span>{res.ok ? (res.reply ? tx("gatewayPage.reply", { reply: <span className="mono">{res.reply}</span> }) : t("gatewayPage.noReply")) : scrub(res.error)}</span>
           </div>
         )}
       </div>

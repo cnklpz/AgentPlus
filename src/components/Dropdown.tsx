@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { scrub } from "../privacy";
 
 export interface DropdownOption {
   value: string;
@@ -82,9 +83,9 @@ export function Dropdown({ value, options, onChange, disabled, label, maxHeight 
           if (!open && (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen(true); return; }
           if (!open) return;
           if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setOpen(false); }
-          else if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.min(h + 1, options.length - 1)); }
+          else if (e.key === "ArrowDown") { e.preventDefault(); setHi((h) => Math.max(0, Math.min(h + 1, options.length - 1))); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-          else if (e.key === "Enter") { e.preventDefault(); pick(options[hi].value); }
+          else if (e.key === "Enter") { e.preventDefault(); const o = options[hi]; if (o) pick(o.value); else setOpen(false); }
         }}
       >
         <span className="dd-cur minw0">{cur?.icon}<span className="ellipsis">{cur?.label ?? value}</span></span>
@@ -107,7 +108,7 @@ export function Dropdown({ value, options, onChange, disabled, label, maxHeight 
               {o.icon}
               <span className="grow minw0">
                 <span className="block ellipsis">{o.label}</span>
-                {o.hint && <span className="block tiny muted ellipsis">{o.hint}</span>}
+                {o.hint && <span className="block tiny muted ellipsis">{scrub(o.hint)}</span>}
               </span>
               {o.value === value && (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>

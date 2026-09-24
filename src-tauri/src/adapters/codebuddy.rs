@@ -10,6 +10,7 @@
 //! `availableModels` is the native visibility list: hiding removes the id from it and
 //! keeps the entry. Disabled providers are moved out and parked in the AgentPlus store.
 
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::mfields;
 use crate::model::*;
@@ -134,12 +135,6 @@ fn uninstall_entry(_: &str) -> Option<(Option<String>, Option<String>, Option<St
     None
 }
 
-fn unquote_exe(s: &str) -> PathBuf {
-    let s = s.trim();
-    let s = if let Some(rest) = s.strip_prefix('"') { rest.split('"').next().unwrap_or(rest) } else { s.split(',').next().unwrap_or(s) };
-    PathBuf::from(s)
-}
-
 fn npm_version(pkg: &str) -> Option<String> {
     let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
@@ -152,7 +147,7 @@ pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some((ver, icon, loc)) = uninstall_entry("CodeBuddy") {
         let exe = icon
-            .map(|i| unquote_exe(&i))
+            .and_then(|i| crate::process::unquote_exe(&i))
             .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false))
             .or_else(|| loc.map(|l| PathBuf::from(l.trim()).join("CodeBuddy.exe")))
             .filter(|p| p.is_file());
@@ -288,10 +283,10 @@ fn model_of(e: &Value, visible: bool) -> Model {
     let ctx = e.get("maxInputTokens").and_then(|x| x.as_u64());
     let mut tags = vec![];
     if e.get("supportsImages").and_then(|x| x.as_bool()) == Some(true) {
-        tags.push(l("图片", "Images").into());
+        tags.push(Tag::new("cap:image", l("图片", "Images")));
     }
     if e.get("supportsReasoning").and_then(|x| x.as_bool()) == Some(true) {
-        tags.push(l("推理", "Reasoning").into());
+        tags.push(Tag::new("cap:reasoning", l("推理", "Reasoning")));
     }
     let name = s(e, "name");
     Model {
@@ -414,7 +409,7 @@ pub fn state(inst: &Install) -> AgentState {
 }
 
 #[allow(dead_code)]
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
     let g = groups_of(&entries_of(&cfg), &parked_of(&load_root())).into_iter().find(|g| g.id == id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
     if g.key.0.is_empty() {
@@ -753,7 +748,7 @@ impl Work {
 }
 
 #[allow(dead_code)]
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load_models()?;
     let entries0 = entries_of(&cfg);
     let avail0 = available_of(&cfg);
@@ -775,7 +770,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
         if cfg_dirty {
             let path = models_path();
             if path.exists() {
-                backup_dir = Some(do_backup(&[path.clone()])?);
+                backup_dir = Some(do_backup(std::slice::from_ref(&path))?);
             }
             let o = cfg.as_object_mut().unwrap();
             o.insert("models".into(), Value::Array(w.entries));
@@ -906,7 +901,7 @@ mod tests {
         let err = plan(&[upsert(None, "Relay", "https://r.example.com/v1", "anthropic", None, &["m"])], true).err().unwrap();
         assert!(err.to_string().contains("网关"));
         let op = upsert(None, "My Relay", "https://r.example.com/v1/", "chat", Some("sk-new-abcd9876"), &["gpt-5", "gpt-5-mini"]);
-        let (d, w, _) = plan(&[op.clone()], true).unwrap();
+        let (d, w, _) = plan(std::slice::from_ref(&op), true).unwrap();
         assert!(w.is_empty() && !h.0.join(".codebuddy/models.json").exists());
         let t = diff_text(&d);
         assert!(t.contains("••••9876") && !t.contains("abcd9876"), "{t}");

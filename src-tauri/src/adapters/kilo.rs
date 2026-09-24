@@ -4,6 +4,7 @@
 //! Disabling uses the native `disabled_providers` list; providers logged in through
 //! `kilo auth` without a config entry show up read-only.
 
+use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt};
 use crate::i18n::l;
 use crate::model::*;
@@ -118,34 +119,10 @@ fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------- detection ----------
 
-#[cfg(windows)]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000)
-}
-#[cfg(not(windows))]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    cmd
-}
-
 fn npm_version(pkg: &str) -> Option<String> {
     let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
     v.get("version").and_then(|x| x.as_str()).map(String::from)
-}
-
-fn on_path(names: &[&str]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
-}
-
-fn exe_version(exe: &Path) -> Option<String> {
-    let out = no_window(std::process::Command::new(exe).arg("--version")).output().ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .map(|w| w.trim_start_matches('v'))
-        .find(|w| w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && w.contains('.'))
-        .map(String::from)
 }
 
 /// Newest `kilocode.kilo-code-<version>` folder in the VS Code extensions dir.
@@ -168,11 +145,11 @@ pub fn detect() -> Install {
     if let Some(v) = npm_version("@kilocode/cli") {
         inst.installed = true;
         inst.version = Some(v);
-    } else if let Some(exe) = on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]) {
+    } else if let Some(exe) = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]) {
         inst.installed = true;
         if exe.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
             static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-            inst.version = V.get_or_init(|| exe_version(&exe)).clone();
+            inst.version = V.get_or_init(|| crate::process::cli_version(&exe)).clone();
         }
     } else if let Some(v) = vscode_extension() {
         inst.installed = true;
@@ -310,12 +287,12 @@ pub fn state(inst: &Install) -> AgentState {
 }
 
 #[allow(dead_code)]
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     fmt().endpoint(id)
 }
 
 #[allow(dead_code)]
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let existed = config_path().exists();
     let (mut cfg, cfg_meta, had_comments) = f.load(true)?;
@@ -547,6 +524,44 @@ mod tests {
         plan(&[Op::DeleteModel { provider: "relay".into(), model: "qwen3".into() }, Op::DeleteProvider { provider: "relay".into() }], false).unwrap();
         assert!(cfg_of(&h).pointer("/provider/relay").is_none());
         assert!(plan(&[Op::SetModelRoles { provider: "relay".into(), roles: Default::default() }], true).is_err());
+    }
+
+    #[test]
+    fn model_ids_with_slashes() {
+        let h = setup("slash", Some(SAMPLE), None);
+        let id = "anthropic/claude-sonnet-4~beta";
+        let add = |ctx| Op::UpsertModel { provider: "relay".into(), model: ModelInput { id: id.into(), context: Some(ctx), ..Default::default() } };
+        plan(&[add(200000)], false).unwrap();
+        assert_eq!(cfg_of(&h)["provider"]["relay"]["models"][id]["limit"]["context"], 200000);
+        // Editing the existing entry keeps its other fields.
+        plan(&[Op::UpsertModel { provider: "relay".into(), model: ModelInput { id: id.into(), name: Some("Sonnet".into()), ..Default::default() } }], false).unwrap();
+        let m = &cfg_of(&h)["provider"]["relay"]["models"][id];
+        assert_eq!((m["name"].as_str(), m["limit"]["context"].as_u64()), (Some("Sonnet"), Some(200000)));
+        plan(&[Op::SetModelVisible { provider: "relay".into(), model: id.into(), visible: false }], false).unwrap();
+        assert!(cfg_of(&h)["provider"]["relay"]["models"].get(id).is_none());
+        plan(&[Op::SetModelVisible { provider: "relay".into(), model: id.into(), visible: true }], false).unwrap();
+        assert_eq!(cfg_of(&h)["provider"]["relay"]["models"][id]["name"], "Sonnet");
+        plan(&[Op::DeleteModel { provider: "relay".into(), model: id.into() }], false).unwrap();
+        assert!(cfg_of(&h)["provider"]["relay"]["models"].get(id).is_none());
+    }
+
+    #[test]
+    fn unreadable_auth_is_never_rewritten() {
+        let broken = r#"{"kilo":{"type":"oauth","access":"x"},"#;
+        let h = setup("badauth", Some(SAMPLE), Some(broken));
+        let cfg0 = std::fs::read_to_string(h.0.join(".config/kilo/kilo.json")).unwrap();
+        // Setting a key fails instead of rewriting auth.json or putting the key in the config.
+        assert!(plan(&[upsert(Some("relay"), "My Relay", "https://relay.example.com/v1", "chat", Some("sk-new-1234"), &[])], false).is_err());
+        assert_eq!(std::fs::read_to_string(h.0.join(".local/share/kilo/auth.json")).unwrap(), broken);
+        assert_eq!(std::fs::read_to_string(h.0.join(".config/kilo/kilo.json")).unwrap(), cfg0);
+        // Everything that doesn't touch keys still works.
+        plan(&[upsert(Some("relay"), "Relay 2", "https://relay.example.com/v1", "chat", None, &[])], false).unwrap();
+        assert_eq!(cfg_of(&h)["provider"]["relay"]["name"], "Relay 2");
+        assert!(cfg_of(&h)["provider"]["relay"]["options"].get("apiKey").is_none());
+        // A non-object auth.json is left alone too.
+        std::fs::write(h.0.join(".local/share/kilo/auth.json"), "[]").unwrap();
+        assert!(plan(&[upsert(Some("relay"), "My Relay", "https://relay.example.com/v1", "chat", Some("sk-new-5678"), &[])], false).is_err());
+        assert_eq!(std::fs::read_to_string(h.0.join(".local/share/kilo/auth.json")).unwrap(), "[]");
     }
 
     #[test]

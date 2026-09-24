@@ -29,12 +29,17 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_PORT: u16 = 18650;
 const MAX_BODY: usize = 64 * 1024 * 1024;
+/// Longest request line or header line, and most header lines.
+const MAX_LINE: usize = 16 * 1024;
+const MAX_HEADERS: usize = 100;
+/// Connections served at once; more get a 503 right away.
+const MAX_CONNS: usize = 256;
 
 // ---------------------------------------------------------------- config
 
@@ -93,19 +98,56 @@ impl Default for Config {
 }
 
 fn config_in(root: &Value) -> Config {
-    root.get("gateway").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+    decode(root).0
+}
+
+/// The gateway section field by field: a bad value falls back to its default on its own,
+/// and a route that doesn't decode is skipped (and returned raw, so saving keeps it).
+fn decode(root: &Value) -> (Config, Vec<Value>) {
+    let Some(g) = root.get("gateway").filter(|g| g.is_object()) else { return (Config::default(), vec![]) };
+    fn field<T: serde::de::DeserializeOwned>(g: &Value, k: &str) -> Option<T> {
+        g.get(k).and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
+    let (mut routes, mut bad) = (vec![], vec![]);
+    for r in g.get("routes").and_then(|r| r.as_array()).into_iter().flatten() {
+        match serde_json::from_value::<Route>(r.clone()) {
+            Ok(x) => routes.push(x),
+            Err(_) => bad.push(r.clone()),
+        }
+    }
+    let d = Config::default();
+    let c = Config {
+        enabled: field(g, "enabled").unwrap_or(d.enabled),
+        port: field(g, "port").unwrap_or(d.port),
+        routes,
+        breaker: field::<breaker::Config>(g, "breaker").unwrap_or_default().clamped(),
+        former_ports: field(g, "formerPorts").unwrap_or_default(),
+    };
+    (c, bad)
 }
 
 pub fn load_config() -> Config {
     config_in(&store::load())
 }
 
+/// The config as stored, with the routes that didn't decode put back unchanged.
+fn encode(c: &Config, bad: Vec<Value>) -> Result<Value> {
+    let mut v = serde_json::to_value(c)?;
+    if let Some(r) = v.get_mut("routes").and_then(|r| r.as_array_mut()) {
+        r.extend(bad);
+    }
+    Ok(v)
+}
+
 /// Changes the gateway config under the store's write lock.
 fn update_config<T>(f: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
     store::update(|s| {
-        let mut c = config_in(s);
+        if s.get("gateway").is_some_and(|g| !g.is_object() && !g.is_null()) {
+            return Err(anyhow!(crate::i18n::l("store.json 里的 gateway 设置无法读取，没有保存", "The gateway section of store.json can't be read; nothing was saved")));
+        }
+        let (mut c, bad) = decode(s);
         let out = f(&mut c)?;
-        s["gateway"] = serde_json::to_value(&c)?;
+        s["gateway"] = encode(&c, bad)?;
         Ok(out)
     })
 }
@@ -248,8 +290,8 @@ pub struct Status {
     pub legacy_fp: String,
 }
 
-fn running_port() -> Option<u16> {
-    RUNTIME.lock().unwrap().as_ref().map(|r| r.port)
+pub fn running_port() -> Option<u16> {
+    RUNTIME.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|r| r.port)
 }
 
 pub fn status() -> Status {
@@ -413,13 +455,50 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
             if flag.load(Ordering::SeqCst) {
                 break;
             }
-            if let Ok(s) = conn {
-                std::thread::spawn(move || handle(s));
-            }
+            let mut s = match conn {
+                Ok(s) => s,
+                Err(_) => {
+                    // Out of sockets or similar: don't spin.
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+            };
+            let Some(slot) = ConnSlot::take() else {
+                let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
+                let msg = crate::i18n::l("网关同时处理的连接太多，请稍后再试", "Too many connections to the gateway; try again shortly");
+                write_json(&mut s, 503, &json!({ "error": { "message": msg, "type": "overloaded" } }));
+                continue;
+            };
+            // On failure the closure (connection and slot) is dropped, which closes it.
+            let _ = std::thread::Builder::new().name("agentplus-gateway-conn".into()).spawn(move || {
+                let _slot = slot;
+                handle(s)
+            });
         }
     })?;
     *RUNTIME.lock().unwrap() = Some(Runtime { port, stop, done });
     Ok(())
+}
+
+static CONNS: AtomicUsize = AtomicUsize::new(0);
+
+/// One of the `MAX_CONNS` connection slots, freed on drop.
+struct ConnSlot;
+
+impl ConnSlot {
+    fn take() -> Option<ConnSlot> {
+        if CONNS.fetch_add(1, Ordering::SeqCst) >= MAX_CONNS {
+            CONNS.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(ConnSlot)
+    }
+}
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        CONNS.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Stops accepting and waits (briefly) until the listener is closed, so the same port
@@ -475,7 +554,7 @@ pub fn delete_route(id: &str) -> Result<()> {
 }
 
 pub fn set_breaker(b: breaker::Config) -> Result<()> {
-    let b = breaker::Config { threshold: b.threshold.clamp(1, 100), cooldown_secs: b.cooldown_secs.clamp(5, 3600), ..b };
+    let b = b.clamped();
     let enabled = b.enabled;
     update_config(|c| {
         c.breaker = b;
@@ -503,11 +582,23 @@ fn breaker_cfg(root: &Value) -> breaker::Config {
 }
 
 /// API key AgentPlus's own "测试" button sends: it goes through even while the forward is
-/// paused, so a successful test closes the breaker.
-pub const TEST_KEY: &str = "agentplus-gateway-test";
+/// paused, so a successful test closes the breaker. Random per launch and never written
+/// anywhere, so nothing but AgentPlus itself knows it.
+pub fn test_key() -> &'static str {
+    static K: OnceLock<String> = OnceLock::new();
+    K.get_or_init(|| {
+        let mut b = [0u8; 20];
+        if getrandom::getrandom(&mut b).is_err() {
+            // No OS randomness: fall back to the clock and address-space layout.
+            let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) ^ (&b as *const _ as usize as u128);
+            b[..16].copy_from_slice(&n.to_le_bytes());
+        }
+        format!("agp-test-{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>())
+    })
+}
 
 fn is_test(req: &Request) -> bool {
-    req.header("x-api-key") == Some(TEST_KEY) || req.header("authorization").and_then(|a| a.strip_prefix("Bearer ")).map(str::trim) == Some(TEST_KEY)
+    inbound_key(req) == Some(test_key())
 }
 
 // ---------------------------------------------------------------- HTTP plumbing
@@ -525,23 +616,81 @@ impl Request {
     }
 }
 
-fn read_request(stream: &TcpStream) -> Result<Request> {
-    stream.set_read_timeout(Some(Duration::from_secs(60)))?;
-    let mut r = BufReader::new(stream);
+/// A request the client got wrong, with the status to answer it with.
+#[derive(Debug)]
+struct BadRequest(u16, String);
+
+impl std::fmt::Display for BadRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.1)
+    }
+}
+
+impl std::error::Error for BadRequest {}
+
+fn bad(status: u16, msg: &str) -> anyhow::Error {
+    anyhow::Error::new(BadRequest(status, msg.to_string()))
+}
+
+fn too_large() -> anyhow::Error {
+    bad(413, crate::i18n::l("请求体太大", "Request body too large"))
+}
+
+/// Reads from the client, giving up once the whole request has taken longer than `until`.
+struct Deadline<'a> {
+    s: &'a TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if Instant::now() > self.until {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, crate::i18n::l("读取请求超时", "Timed out reading the request")));
+        }
+        (&mut &*self.s).read(buf)
+    }
+}
+
+/// One line of at most `MAX_LINE` bytes (431 when longer); empty at end of input.
+fn read_line(r: &mut impl BufRead) -> Result<String> {
     let mut line = String::new();
-    r.read_line(&mut line)?;
+    r.take(MAX_LINE as u64 + 1).read_line(&mut line)?;
+    if line.len() > MAX_LINE {
+        return Err(bad(431, crate::i18n::l("请求行或请求头太长", "Request line or header too long")));
+    }
+    Ok(line)
+}
+
+/// Exactly `n` more bytes into `body`, growing it as they arrive.
+fn read_body(r: &mut impl Read, body: &mut Vec<u8>, n: usize) -> Result<()> {
+    let want = body.len() + n;
+    r.take(n as u64).read_to_end(body)?;
+    if body.len() < want {
+        return Err(anyhow!(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)));
+    }
+    Ok(())
+}
+
+fn read_request(stream: &TcpStream) -> Result<Request> {
+    // Per read, and for the whole request.
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    let mut r = BufReader::new(Deadline { s: stream, until: Instant::now() + Duration::from_secs(120) });
+    let line = read_line(&mut r)?;
     let mut parts = line.split_whitespace();
     let method = parts.next().ok_or_else(|| anyhow!(crate::i18n::l("空请求", "Empty request")))?.to_string();
     let path = parts.next().ok_or_else(|| anyhow!(crate::i18n::l("缺少路径", "Missing path")))?.to_string();
     let mut headers = vec![];
     loop {
-        let mut h = String::new();
-        if r.read_line(&mut h)? == 0 {
+        let h = read_line(&mut r)?;
+        if h.is_empty() {
             break;
         }
         let h = h.trim_end();
         if h.is_empty() {
             break;
+        }
+        if headers.len() >= MAX_HEADERS {
+            return Err(bad(431, crate::i18n::l("请求头太多", "Too many request headers")));
         }
         if let Some((k, v)) = h.split_once(':') {
             headers.push((k.trim().to_string(), v.trim().to_string()));
@@ -551,29 +700,24 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
     let mut body = vec![];
     if find("transfer-encoding").map(|v| v.to_ascii_lowercase().contains("chunked")).unwrap_or(false) {
         loop {
-            let mut size = String::new();
-            r.read_line(&mut size)?;
+            let size = read_line(&mut r)?;
             let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).map_err(|_| anyhow!(crate::i18n::l("分块长度无效", "Invalid chunk size")))?;
             if n == 0 {
-                let mut end = String::new();
-                let _ = r.read_line(&mut end);
+                let _ = read_line(&mut r);
                 break;
             }
-            if body.len() + n > MAX_BODY {
-                return Err(anyhow!(crate::i18n::l("请求体太大", "Request body too large")));
+            if body.len().checked_add(n).is_none_or(|t| t > MAX_BODY) {
+                return Err(too_large());
             }
-            let mut chunk = vec![0; n];
-            r.read_exact(&mut chunk)?;
-            body.extend_from_slice(&chunk);
+            read_body(&mut r, &mut body, n)?;
             let mut crlf = [0u8; 2];
             r.read_exact(&mut crlf)?;
         }
     } else if let Some(n) = find("content-length").and_then(|v| v.parse::<usize>().ok()) {
         if n > MAX_BODY {
-            return Err(anyhow!(crate::i18n::l("请求体太大", "Request body too large")));
+            return Err(too_large());
         }
-        body = vec![0; n];
-        r.read_exact(&mut body)?;
+        read_body(&mut r, &mut body, n)?;
     }
     Ok(Request { method, path, headers, body })
 }
@@ -589,6 +733,7 @@ fn reason(status: u16) -> &'static str {
         405 => "Method Not Allowed",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
@@ -626,17 +771,16 @@ fn is_loopback_host(h: &str) -> bool {
 }
 
 /// Browsers send Origin on cross-site requests. An ordinary web page must not reach the
-/// gateway, but desktop apps' own pages (app://, file://, "null") and local pages may.
+/// gateway, but local pages and desktop apps' own pages may: AgentPlus itself (tauri://,
+/// http(s)://tauri.localhost), Electron apps (app://, file://) and VS Code webviews. "null"
+/// is what sandboxed iframes and data: pages send, so it is refused.
 fn origin_allowed(origin: &str) -> bool {
     if origin.chars().any(|c| c.is_control()) {
         return false;
     }
-    if origin == "null" {
-        return true;
-    }
     match url::Url::parse(origin) {
         Ok(u) if matches!(u.scheme(), "http" | "https") => u.host_str().is_some_and(is_loopback_host),
-        Ok(_) => true,
+        Ok(u) => matches!(u.scheme(), "tauri" | "app" | "file" | "vscode-webview" | "vscode-file"),
         Err(_) => false,
     }
 }
@@ -666,7 +810,7 @@ fn authenticate(root: &Value, req: &Request) -> std::result::Result<String, Stri
         )
         .into());
     };
-    if key == TEST_KEY {
+    if key == test_key() {
         return Ok("agentplus".into());
     }
     keys::caller_in(root, key).ok_or_else(|| {
@@ -722,13 +866,21 @@ impl Chunked<'_> {
     }
 }
 
+/// Upstream idle limit. The blocking client applies `timeout` to each wait on its own (the
+/// response head, then every read of the body), not to the whole exchange, so a stream that
+/// keeps sending is never cut off, while an upstream that goes silent is dropped. Generous,
+/// because a non-streaming answer from a reasoning model can take minutes to start.
+const UPSTREAM_IDLE: Duration = Duration::from_secs(600);
+
 fn client() -> &'static reqwest::blocking::Client {
     static C: OnceLock<reqwest::blocking::Client> = OnceLock::new();
     C.get_or_init(|| {
         reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(20))
-            .timeout(None::<Duration>)
+            .timeout(UPSTREAM_IDLE)
             .pool_idle_timeout(Duration::from_secs(60))
+            // A redirect would carry the upstream key to wherever it points.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("http client")
     })
@@ -763,13 +915,31 @@ fn api_name(p: Proto) -> &'static str {
     }
 }
 
+/// Counts a request in flight until dropped (also when the handler panics).
+struct Active;
+
+impl Active {
+    fn start() -> (Active, u64) {
+        (Active, ACTIVE.fetch_add(1, Ordering::Relaxed) + 1)
+    }
+}
+
+impl Drop for Active {
+    fn drop(&mut self) {
+        ACTIVE.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 fn handle(mut s: TcpStream) {
     let t0 = Instant::now();
     CORS.with(|c| c.borrow_mut().clear());
+    // A client that stops reading must not hold the thread forever.
+    let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
     let req = match read_request(&s) {
         Ok(r) => r,
         Err(e) => {
-            write_json(&mut s, 400, &json!({ "error": { "message": format!("{e:#}"), "type": "invalid_request_error" } }));
+            let status = e.downcast_ref::<BadRequest>().map_or(400, |b| b.0);
+            write_json(&mut s, status, &json!({ "error": { "message": format!("{e:#}"), "type": "invalid_request_error" } }));
             return;
         }
     };
@@ -789,11 +959,17 @@ fn handle(mut s: TcpStream) {
         return;
     }
     if req.path == "/" || req.path == "/health" {
-        write_json(&mut s, 200, &json!({ "ok": true, "service": "agentplus-gateway", "routes": load_config().routes.iter().filter(|r| r.enabled).map(|r| r.id.clone()).collect::<Vec<_>>() }));
+        // Anyone local may ask whether it's up; the forward names only go to key holders.
+        let root = store::load();
+        let mut v = json!({ "ok": true, "service": "agentplus-gateway" });
+        if authenticate(&root, &req).is_ok() {
+            v["routes"] = json!(routes(&root).iter().filter(|r| r.enabled).map(|r| r.id.clone()).collect::<Vec<_>>());
+        }
+        write_json(&mut s, 200, &v);
         return;
     }
     REQUESTS.fetch_add(1, Ordering::Relaxed);
-    let active = ACTIVE.fetch_add(1, Ordering::Relaxed) + 1;
+    let (_active, active) = Active::start();
     with_minute(|m| m.peak_active = m.peak_active.max(active as u32));
     let mut log = LogEntry {
         at: chrono::Local::now().format("%H:%M:%S").to_string(),
@@ -836,18 +1012,17 @@ fn handle(mut s: TcpStream) {
         m.ms_total += log.ms;
         m.ms_max = m.ms_max.max(log.ms);
         let (i, o) = log.usage.unwrap_or((0, 0));
-        m.input_tokens += i;
-        m.output_tokens += o;
+        m.input_tokens = m.input_tokens.saturating_add(i);
+        m.output_tokens = m.output_tokens.saturating_add(o);
         if let Some(a) = &log.agent {
             let u = m.agents.entry(a.clone()).or_default();
             u.requests += 1;
             u.failures += (status >= 400) as u32;
-            u.input_tokens += i;
-            u.output_tokens += o;
+            u.input_tokens = u.input_tokens.saturating_add(i);
+            u.output_tokens = u.output_tokens.saturating_add(o);
         }
     });
     push_log(log);
-    ACTIVE.fetch_sub(1, Ordering::Relaxed);
     let _ = s.shutdown(Shutdown::Both);
 }
 
@@ -898,6 +1073,7 @@ fn routes(root: &Value) -> Vec<Route> {
 
 /// (route id, upstream fingerprint, fetched at, list). A changed address, key or protocol
 /// changes the fingerprint, so a list from the old upstream is never used for the new one.
+#[allow(clippy::type_complexity)]
 static MODEL_CACHE: Mutex<Vec<(String, u64, Instant, Vec<String>)>> = Mutex::new(Vec::new());
 
 /// Drops the cached upstream model lists of these forwards.
@@ -1030,14 +1206,19 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     }
     let Some((inbound, body)) = parse_call(s, req, &rest, log)? else { return Ok(log.status) };
     let cfg = breaker_cfg(&root);
-    if !is_test(req) {
-        if let Err(why) = breaker::admit(&cfg, &route.id) {
-            write_json(s, 503, &convert::error_body(inbound, 503, &why));
-            log.error = Some(why);
-            return Ok(503);
+    let ticket = if is_test(req) {
+        breaker::Ticket::TEST
+    } else {
+        match breaker::admit(&cfg, &route.id) {
+            Ok(t) => t,
+            Err(why) => {
+                write_json(s, 503, &convert::error_body(inbound, 503, &why));
+                log.error = Some(why);
+                return Ok(503);
+            }
         }
-    }
-    match tracked(s, req, &t, inbound, &body, log, false, &cfg)? {
+    };
+    match tracked(s, req, &t, inbound, &body, log, false, &cfg, ticket)? {
         Attempt::Done(st) => Ok(st),
         Attempt::Retry(_) => unreachable!("retries are off for a single forward"),
     }
@@ -1123,11 +1304,11 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         log.route = format!("{entry} → {}", t.route.id);
         log.upstream = api_name(t.proto).into();
         // Another request may have paused it meanwhile, or be probing it.
-        if breaker::admit(&cfg, &t.route.id).is_err() {
+        let Ok(ticket) = breaker::admit(&cfg, &t.route.id) else {
             tried.push(tr!("{} 已熔断", "{} paused (circuit breaker)", t.route.id));
             continue;
-        }
-        match tracked(s, req, t, inbound, &body, log, i + 1 < n, &cfg)? {
+        };
+        match tracked(s, req, t, inbound, &body, log, i + 1 < n, &cfg, ticket)? {
             Attempt::Done(st) => {
                 if !tried.is_empty() {
                     log.error = Some(tr!("已切换：{}", "Failed over: {}", tried.join(crate::i18n::l("；", "; "))));
@@ -1160,8 +1341,16 @@ fn parse_call(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry) 
         log.status = 405;
         return Ok(None);
     }
-    let body: Value = serde_json::from_slice(&req.body).map_err(|e| anyhow!(tr!("请求体不是 JSON：{e}", "Request body is not JSON: {e}")))?;
-    Ok(Some((inbound, body)))
+    // The client's mistake: a 400 that says why, not an upstream failure.
+    let err = match serde_json::from_slice::<Value>(&req.body) {
+        Ok(body) if body.is_object() => return Ok(Some((inbound, body))),
+        Ok(_) => crate::i18n::l("请求体必须是 JSON 对象", "The request body must be a JSON object").to_string(),
+        Err(e) => tr!("请求体不是 JSON：{e}", "Request body is not JSON: {e}"),
+    };
+    write_json(s, 400, &convert::error_body(inbound, 400, &err));
+    log.status = 400;
+    log.error = Some(err);
+    Ok(None)
 }
 
 /// Claude Code asks for token counts; only Anthropic upstreams have that endpoint.
@@ -1200,7 +1389,7 @@ fn fault(msg: String) -> anyhow::Error {
 /// `attempt`, reporting how it went to the forward's breaker. When this call pauses the
 /// forward, the log entry says so.
 #[allow(clippy::too_many_arguments)]
-fn tracked(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &Value, log: &mut LogEntry, can_retry: bool, cfg: &breaker::Config) -> Result<Attempt> {
+fn tracked(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &Value, log: &mut LogEntry, can_retry: bool, cfg: &breaker::Config, ticket: breaker::Ticket) -> Result<Attempt> {
     log.error = None;
     log.upstream_broken = false;
     let r = attempt(s, req, t, inbound, body, log, can_retry);
@@ -1214,7 +1403,7 @@ fn tracked(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
             None => Outcome::Neutral,
         },
     };
-    if let Some(note) = breaker::record(cfg, &t.route.id, outcome) {
+    if let Some(note) = breaker::record(cfg, &t.route.id, outcome, ticket) {
         log.error = Some(match log.error.take() {
             Some(e) => tr!("{e}（{note}）", "{e} ({note})"),
             None => note,
@@ -1258,7 +1447,7 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     if ctx.stream {
         up = up.header("accept", "text/event-stream");
     }
-    let resp = match up.send() {
+    let mut resp = match up.send() {
         Ok(r) => r,
         Err(e) if can_retry => return Ok(Attempt::Retry(tr!("连不上：{e}", "unreachable: {e}"))),
         Err(e) => return Err(fault(if e.is_connect() { tr!("连接上游失败：{e}", "Can't connect to upstream: {e}") } else { tr!("请求上游失败：{e}", "Upstream request failed: {e}") })),
@@ -1280,22 +1469,44 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     }
 
     let is_sse = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).map(|v| v.contains("event-stream")).unwrap_or(false);
-    if inbound == upstream {
+    let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/json").to_string();
+    if inbound == upstream && ctx.stream {
         // Passthrough, streamed as it arrives.
-        let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/json").to_string();
-        let mut sniff = UsageSniff::new(is_sse || ctx.stream);
-        let r = pipe(s, resp, status, &ct, &mut sniff);
+        let mut sniff = UsageSniff::new(true);
+        let r = pipe(s, resp, status, &ct, &mut sniff, log);
+        log.usage = sniff.finish();
+        return r.map(Attempt::Done);
+    }
+    let read_err = |e: std::io::Error| fault(tr!("读取上游响应失败：{e}", "Failed to read the upstream response: {e}"));
+    // Some upstreams stream SSE under another Content-Type, or even when asked not to
+    // stream: look at the body too.
+    let (is_sse, head) = if is_sse { (true, vec![]) } else { sniff_sse(&mut resp).map_err(read_err)? };
+    let mut body = std::io::Cursor::new(head).chain(resp);
+    if inbound == upstream && !is_sse {
+        // Passthrough of a one-piece answer.
+        let mut sniff = UsageSniff::new(false);
+        let r = pipe(s, body, status, &ct, &mut sniff, log);
         log.usage = sniff.finish();
         return r.map(Attempt::Done);
     }
     if ctx.stream && is_sse {
-        stream_convert(s, resp, inbound, upstream, ctx, log)?;
+        stream_convert(s, &mut body, inbound, upstream, ctx, log)?;
         return Ok(Attempt::Done(status));
     }
-    // Non-streaming (or an upstream that ignored stream=true).
-    let text = resp.text().map_err(|e| fault(tr!("读取上游响应失败：{e}", "Failed to read the upstream response: {e}")))?;
-    let v: Value = serde_json::from_str(&text).map_err(|_| fault(tr!("上游返回的不是 JSON：{}", "Upstream response is not JSON: {}", text.chars().take(200).collect::<String>())))?;
-    let chat = convert::response_to_chat(upstream, &v).map_err(|e| fault(tr!("上游响应无法解析：{e:#}", "Can't parse the upstream response: {e:#}")))?;
+    // The client gets one piece: the upstream's JSON (also when it ignored stream=true), or
+    // its stream collected when it streamed although asked not to.
+    let mut raw = vec![];
+    body.read_to_end(&mut raw).map_err(read_err)?;
+    let text = String::from_utf8_lossy(&raw);
+    let chat = if is_sse {
+        let mut up = UpstreamStream::new(upstream);
+        let mut chunks = up.feed(&text);
+        chunks.extend(up.finish());
+        chat_from_chunks(&chunks).map_err(|e| fault(tr!("上游的流式响应出错：{e}", "The upstream stream returned an error: {e}")))?
+    } else {
+        let v: Value = serde_json::from_str(&text).map_err(|_| fault(tr!("上游返回的不是 JSON：{}", "Upstream response is not JSON: {}", text.chars().take(200).collect::<String>())))?;
+        convert::response_to_chat(upstream, &v).map_err(|e| fault(tr!("上游响应无法解析：{e:#}", "Can't parse the upstream response: {e:#}")))?
+    };
     log.usage = convert::usage_tokens(&chat);
     if ctx.stream {
         // Client wanted a stream: replay the whole answer as one.
@@ -1410,7 +1621,23 @@ impl UsageSniff {
     }
 }
 
-fn pipe(s: &mut TcpStream, mut resp: reqwest::blocking::Response, status: u16, ct: &str, sniff: &mut UsageSniff) -> Result<u16> {
+/// Reads the start of a body labelled as something other than SSE and tells whether it is
+/// SSE after all. Returns what it read, to be replayed in front of the rest.
+fn sniff_sse(r: &mut impl Read) -> std::io::Result<(bool, Vec<u8>)> {
+    let mut head = vec![];
+    let mut buf = [0u8; 1024];
+    while head.len() < 4096 && head.iter().all(u8::is_ascii_whitespace) {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        head.extend_from_slice(&buf[..n]);
+    }
+    let t = head.trim_ascii_start();
+    Ok((t.starts_with(b"data:") || t.starts_with(b"event:"), head))
+}
+
+fn pipe(s: &mut TcpStream, mut resp: impl Read, status: u16, ct: &str, sniff: &mut UsageSniff, log: &mut LogEntry) -> Result<u16> {
     Chunked::start(s, status, ct)?;
     let mut out = Chunked(s);
     let mut buf = [0u8; 16 * 1024];
@@ -1418,7 +1645,12 @@ fn pipe(s: &mut TcpStream, mut resp: reqwest::blocking::Response, status: u16, c
         let n = match resp.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
-            Err(_) => break,
+            Err(e) => {
+                // No closing chunk: the client sees a cut-off body, not a complete answer.
+                log.error = Some(tr!("上游中断：{e}", "Upstream interrupted: {e}"));
+                log.upstream_broken = true;
+                return Ok(status);
+            }
         };
         sniff.feed(&buf[..n]);
         if out.send(&buf[..n]).is_err() {
@@ -1429,7 +1661,36 @@ fn pipe(s: &mut TcpStream, mut resp: reqwest::blocking::Response, status: u16, c
     Ok(status)
 }
 
-fn stream_convert(s: &mut TcpStream, mut resp: reqwest::blocking::Response, inbound: Proto, upstream: Proto, ctx: convert::ReqCtx, log: &mut LogEntry) -> Result<()> {
+/// Decodes as much of `pending` as is valid UTF-8, turning invalid bytes into U+FFFD and
+/// keeping only an incomplete character at the end for the next read.
+fn take_utf8(pending: &mut Vec<u8>) -> String {
+    let mut text = String::new();
+    loop {
+        match std::str::from_utf8(pending) {
+            Ok(t) => {
+                text.push_str(t);
+                pending.clear();
+                return text;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                text.push_str(std::str::from_utf8(&pending[..valid]).unwrap_or_default());
+                match e.error_len() {
+                    Some(n) => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        pending.drain(..valid + n);
+                    }
+                    None => {
+                        pending.drain(..valid);
+                        return text;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn stream_convert(s: &mut TcpStream, resp: &mut impl Read, inbound: Proto, upstream: Proto, ctx: convert::ReqCtx, log: &mut LogEntry) -> Result<()> {
     Chunked::start(s, 200, "text/event-stream")?;
     let mut out = Chunked(s);
     let mut up = UpstreamStream::new(upstream);
@@ -1452,12 +1713,7 @@ fn stream_convert(s: &mut TcpStream, mut resp: reqwest::blocking::Response, inbo
             }
         };
         pending.extend_from_slice(&buf[..n]);
-        let valid = match std::str::from_utf8(&pending) {
-            Ok(_) => pending.len(),
-            Err(e) => e.valid_up_to(),
-        };
-        let text = String::from_utf8_lossy(&pending[..valid]).to_string();
-        pending.drain(..valid);
+        let text = take_utf8(&mut pending);
         for chunk in up.feed(&text) {
             if let Some(u) = convert::usage_tokens(&chunk) {
                 log.usage = Some(u);
@@ -1472,13 +1728,21 @@ fn stream_convert(s: &mut TcpStream, mut resp: reqwest::blocking::Response, inbo
             return Ok(());
         }
     }
-    for chunk in up.finish() {
+    // A character cut off at the very end.
+    let mut tail = if pending.is_empty() { vec![] } else { up.feed(&String::from_utf8_lossy(&pending)) };
+    tail.extend(up.finish());
+    for chunk in tail {
         if let Some(u) = convert::usage_tokens(&chunk) {
             log.usage = Some(u);
         }
         for f in down.push(&chunk) {
             let _ = out.send(f.as_bytes());
         }
+    }
+    if up.ended_early() {
+        // The client got an error event; the log and the breaker hear about it too.
+        log.error = Some(crate::i18n::l("上游的流没有正常结束就断开了", "The upstream stream ended before it finished").into());
+        log.upstream_broken = true;
     }
     for f in down.finish() {
         let _ = out.send(f.as_bytes());
@@ -1497,11 +1761,12 @@ fn chat_as_chunks(chat: &Value) -> Vec<Value> {
     let finish = chat.pointer("/choices/0/finish_reason").cloned().unwrap_or(json!("stop"));
     let chunk = |delta: Value, finish: Value| json!({ "id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] });
     let mut out = vec![chunk(json!({ "role": "assistant" }), Value::Null)];
-    if let Some(r) = msg.get("reasoning_content").and_then(|r| r.as_str()).filter(|r| !r.is_empty()) {
-        out.push(chunk(json!({ "reasoning_content": r }), Value::Null));
+    let (text, reasoning) = convert::message_text(&msg);
+    if !reasoning.is_empty() {
+        out.push(chunk(json!({ "reasoning_content": reasoning }), Value::Null));
     }
-    if let Some(c) = msg.get("content").and_then(|c| c.as_str()).filter(|c| !c.is_empty()) {
-        out.push(chunk(json!({ "content": c }), Value::Null));
+    if !text.is_empty() {
+        out.push(chunk(json!({ "content": text }), Value::Null));
     }
     if let Some(calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
         for (i, c) in calls.iter().enumerate() {
@@ -1513,6 +1778,60 @@ fn chat_as_chunks(chat: &Value) -> Vec<Value> {
         out.push(json!({ "id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [], "usage": u }));
     }
     out
+}
+
+/// The reverse of `chat_as_chunks`: stream chunks folded into one chat.completion, for
+/// clients that asked for one piece when the upstream streamed anyway. An error chunk
+/// (from the upstream, or a stream cut off) is returned as the error.
+fn chat_from_chunks(chunks: &[Value]) -> std::result::Result<Value, String> {
+    let (mut text, mut reasoning) = (String::new(), String::new());
+    let mut tools: Vec<Value> = vec![];
+    let mut finish = Value::Null;
+    let mut usage = Value::Null;
+    let str_at = |v: &Value, p: &str| v.pointer(p).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    for c in chunks {
+        if let Some(e) = c.get("error").filter(|e| !e.is_null()) {
+            return Err(str_at(e, "/message"));
+        }
+        if let Some(u) = c.get("usage").filter(|u| u.is_object()) {
+            usage = u.clone();
+        }
+        let Some(ch) = c.pointer("/choices/0") else { continue };
+        if let Some(f) = ch.get("finish_reason").filter(|f| !f.is_null()) {
+            finish = f.clone();
+        }
+        let d = ch.get("delta").cloned().unwrap_or(Value::Null);
+        text += &str_at(&d, "/content");
+        reasoning += &str_at(&d, "/reasoning_content");
+        for tc in d.get("tool_calls").and_then(|t| t.as_array()).into_iter().flatten() {
+            let i = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(tools.len() as u64) as usize;
+            while tools.len() <= i {
+                tools.push(json!({ "id": "", "type": "function", "function": { "name": "", "arguments": "" } }));
+            }
+            let t = &mut tools[i];
+            for (key, ptr) in [("id", "/id"), ("name", "/function/name"), ("arguments", "/function/arguments")] {
+                let add = str_at(tc, ptr);
+                let slot = if key == "id" { &mut t["id"] } else { &mut t["function"][key] };
+                let joined = format!("{}{add}", slot.as_str().unwrap_or(""));
+                *slot = json!(joined);
+            }
+        }
+    }
+    let mut msg = json!({ "role": "assistant", "content": text });
+    if !reasoning.is_empty() {
+        msg["reasoning_content"] = json!(reasoning);
+    }
+    if !tools.is_empty() {
+        msg["tool_calls"] = json!(tools);
+    }
+    let first = chunks.iter().find(|c| c.get("id").is_some());
+    let field = |k: &str| first.and_then(|c| c.get(k)).cloned().unwrap_or(Value::Null);
+    let finish = if finish.is_null() { json!(if tools.is_empty() { "stop" } else { "tool_calls" }) } else { finish };
+    Ok(json!({
+        "id": field("id"), "object": "chat.completion", "created": field("created"), "model": field("model"),
+        "choices": [{ "index": 0, "message": msg, "finish_reason": finish }],
+        "usage": usage,
+    }))
 }
 
 /// Tests bypass the store: (route, upstream base, key).
@@ -1654,10 +1973,8 @@ Connection: close
         let gw = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = gw.local_addr().unwrap().port();
         std::thread::spawn(move || {
-            for c in gw.incoming().take(n) {
-                if let Ok(s) = c {
-                    handle(s);
-                }
+            for s in gw.incoming().take(n).flatten() {
+                handle(s);
             }
         });
         port
@@ -1685,7 +2002,7 @@ Connection: close
 
         let r = client
             .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
-            .bearer_auth(TEST_KEY)
+            .bearer_auth(test_key())
             .body(r#"{"model":"glm-5","messages":[{"role":"user","content":"hi"}]}"#)
             .send()
             .unwrap();
@@ -1699,7 +2016,7 @@ Connection: close
         let before = good_hits.load(Ordering::SeqCst);
         let r = client
             .post(format!("http://127.0.0.1:{port}/v1/messages"))
-            .header("x-api-key", TEST_KEY)
+            .header("x-api-key", test_key())
             .body(r#"{"model":"nope","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#)
             .send()
             .unwrap();
@@ -1707,7 +2024,7 @@ Connection: close
         assert!(r.status().as_u16() == 404 || good_hits.load(Ordering::SeqCst) > before);
 
         // Merged model list.
-        let r = client.get(format!("http://127.0.0.1:{port}/v1/models")).bearer_auth(TEST_KEY).send().unwrap();
+        let r = client.get(format!("http://127.0.0.1:{port}/v1/models")).bearer_auth(test_key()).send().unwrap();
         let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
         let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
         assert!(ids.contains(&"glm-5") && ids.contains(&"kimi-k3"), "{ids:?}");
@@ -1744,7 +2061,7 @@ Connection: close
         assert_eq!(hits.load(Ordering::SeqCst), 3, "paused forward is not called");
         assert!(LOG.lock().unwrap().iter().any(|l| l.error.as_deref().is_some_and(|e| e.contains("连续 3 次出错，转发暂停 60 秒"))));
         // AgentPlus's own test still goes through while paused.
-        assert_eq!(call(TEST_KEY).0, 401);
+        assert_eq!(call(test_key()).0, 401);
         assert_eq!(hits.load(Ordering::SeqCst), 4);
         breaker::reset(Some("flaky"));
         assert_eq!(call(keys::PLACEHOLDER).0, 401, "reset lets requests through again");
@@ -1765,11 +2082,11 @@ Connection: close
         let port = gateway_n(4);
         let client = reqwest::blocking::Client::new();
         for _ in 0..3 {
-            let r = client.post(format!("http://127.0.0.1:{port}/pb+nope/v1/chat/completions")).bearer_auth(TEST_KEY).body(r#"{"model":"glm-5","messages":[]}"#).send().unwrap();
+            let r = client.post(format!("http://127.0.0.1:{port}/pb+nope/v1/chat/completions")).bearer_auth(test_key()).body(r#"{"model":"glm-5","messages":[]}"#).send().unwrap();
             assert_eq!(r.status().as_u16(), 200);
         }
         assert_eq!((a_hits.load(Ordering::SeqCst), b_hits.load(Ordering::SeqCst)), (0, 3));
-        let r = client.post(format!("http://127.0.0.1:{port}/x+y/v1/chat/completions")).bearer_auth(TEST_KEY).body(r#"{"model":"glm-5","messages":[]}"#).send().unwrap();
+        let r = client.post(format!("http://127.0.0.1:{port}/x+y/v1/chat/completions")).bearer_auth(test_key()).body(r#"{"model":"glm-5","messages":[]}"#).send().unwrap();
         assert_eq!(r.status().as_u16(), 503);
         TEST_ROUTES.lock().unwrap().clear();
     }
@@ -1891,10 +2208,11 @@ Connection: close
 
     #[test]
     fn checks_origins_and_hosts() {
-        for o in ["null", "app://zcode", "file://", "vscode-webview://abc", "http://localhost:1420", "http://tauri.localhost", "http://127.0.0.1:5173", "http://[::1]:3000"] {
+        for o in ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "app://zcode", "file://", "vscode-webview://abc", "http://localhost:1420", "http://127.0.0.1:5173", "http://[::1]:3000"] {
             assert!(origin_allowed(o), "{o}");
         }
-        for o in ["https://evil.example", "http://192.168.1.2", "http://localhost.evil.example", "not a url"] {
+        // "null" is a sandboxed iframe or data: page; other schemes aren't apps we know.
+        for o in ["null", "data:text/html,x", "chrome-extension://abc", "https://evil.example", "http://192.168.1.2", "http://localhost.evil.example", "not a url"] {
             assert!(!origin_allowed(o), "{o}");
         }
         assert!(is_loopback_host("127.0.0.1") && is_loopback_host("[::1]") && is_loopback_host("LOCALHOST"));
@@ -1936,5 +2254,368 @@ Connection: close
         assert_eq!(b["model"], "glm-5");
         apply_model_map(&mut b, &[("*".into(), "kimi".into())]);
         assert_eq!(b["model"], "kimi");
+    }
+
+    /// The test key is random per launch, not a constant any web page could know.
+    #[test]
+    fn test_key_is_random() {
+        let k = test_key();
+        assert!(k.starts_with("agp-test-") && k.len() == 49, "{k}");
+        assert_eq!(k, test_key(), "stable within one launch");
+        assert_ne!(k, "agentplus-gateway-test");
+    }
+
+    #[test]
+    fn invalid_utf8_does_not_stall() {
+        // A bad byte becomes U+FFFD and is consumed; an incomplete tail waits for more.
+        let mut p = b"ab\xffcd\xe4\xbd".to_vec();
+        assert_eq!(take_utf8(&mut p), "ab\u{fffd}cd");
+        assert_eq!(p, b"\xe4\xbd");
+        p.push(0xa0);
+        assert_eq!(take_utf8(&mut p), "你");
+        assert!(p.is_empty());
+        let mut p = b"\xc3\x28\xff\xff".to_vec();
+        assert_eq!(take_utf8(&mut p), "\u{fffd}(\u{fffd}\u{fffd}");
+        assert!(p.is_empty());
+    }
+
+    /// Raw request to the gateway; returns the status line's code.
+    fn raw_status(port: u16, req: &[u8]) -> u16 {
+        let mut c = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let _ = c.write_all(req);
+        let _ = c.shutdown(Shutdown::Write);
+        let mut out = String::new();
+        let _ = c.read_to_string(&mut out);
+        out.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0)
+    }
+
+    #[test]
+    fn request_limits() {
+        let port = gateway_n(5);
+        let long = format!("GET /{} HTTP/1.1\r\n\r\n", "a".repeat(MAX_LINE + 10));
+        assert_eq!(raw_status(port, long.as_bytes()), 431, "request line too long");
+        let many: String = (0..=MAX_HEADERS).map(|i| format!("x-h{i}: 1\r\n")).collect();
+        assert_eq!(raw_status(port, format!("GET / HTTP/1.1\r\n{many}\r\n").as_bytes()), 431, "too many headers");
+        // Refused before any body arrives (nothing is allocated up front).
+        assert_eq!(raw_status(port, format!("POST /x/v1/responses HTTP/1.1\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1).as_bytes()), 413);
+        // A chunk size that would overflow the running total.
+        assert_eq!(raw_status(port, b"POST /x/v1/responses HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\nffffffffffffffff\r\n"), 413);
+        // A body shorter than announced is an error, not a hang.
+        assert_eq!(raw_status(port, b"POST /x/v1/responses HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc"), 400);
+    }
+
+    #[test]
+    fn connection_slots_are_capped() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = CONNS.load(Ordering::SeqCst);
+        let slots: Vec<ConnSlot> = std::iter::from_fn(ConnSlot::take).take(MAX_CONNS + 5).collect();
+        assert_eq!(slots.len(), MAX_CONNS - before);
+        assert!(ConnSlot::take().is_none());
+        drop(slots);
+        assert_eq!(CONNS.load(Ordering::SeqCst), before);
+        assert!(ConnSlot::take().is_some());
+    }
+
+    #[test]
+    fn active_count_survives_panic() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = ACTIVE.load(Ordering::Relaxed);
+        let r = std::thread::spawn(|| {
+            let (_a, n) = Active::start();
+            assert!(n >= 1);
+            panic!("handler blew up");
+        })
+        .join();
+        assert!(r.is_err());
+        assert_eq!(ACTIVE.load(Ordering::Relaxed), before);
+    }
+
+    /// One bad route (or field) doesn't wipe the rest, and saving keeps the bad route as is.
+    #[test]
+    fn bad_config_field_keeps_the_rest() {
+        let root = json!({ "gateway": {
+            "enabled": true, "port": "not a port",
+            "routes": [
+                { "id": "ok", "name": "ok", "library": "x", "upstreamApi": "chat" },
+                { "id": "broken", "name": 5 },
+            ],
+            "breaker": { "enabled": true, "threshold": 3, "cooldownSecs": 18446744073709551615u64 },
+        }});
+        let (c, bad) = decode(&root);
+        assert!(c.enabled);
+        assert_eq!(c.port, DEFAULT_PORT);
+        assert_eq!(c.routes.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["ok"]);
+        assert_eq!(c.breaker.cooldown_secs, 3600, "clamped on load");
+        assert_eq!(bad, vec![json!({ "id": "broken", "name": 5 })]);
+        let saved = encode(&c, bad).unwrap();
+        assert_eq!(saved["routes"].as_array().unwrap().len(), 2);
+        assert_eq!(saved["routes"][1]["id"], "broken");
+        assert_eq!(saved["enabled"], true);
+        assert!(!config_in(&json!({ "gateway": 5 })).enabled);
+    }
+
+    /// Mock upstream that answers once with a raw response (head and body as given).
+    fn raw_upstream(resp: &'static str) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for c in l.incoming().take(1) {
+                let Ok(mut s) = c else { continue };
+                let _ = read_request(&s);
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        format!("http://{addr}/v1")
+    }
+
+    fn one_route(id: &str, api: &str, up: String) {
+        let route = Route { id: id.into(), name: id.into(), library: "x".into(), upstream_api: api.into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
+        *TEST_ROUTES.lock().unwrap() = vec![(route, up, None)];
+        breaker::reset(Some(id));
+    }
+
+    /// An upstream that breaks off mid-body: the client must not get a clean end of stream.
+    #[test]
+    fn broken_passthrough_is_not_a_clean_end() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        one_route("cut", "chat", raw_upstream("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\nConnection: close\r\n\r\ndata: {\"choices\":[]}\n\n"));
+        let port = gateway_n(1);
+        let r = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/cut/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","stream":true,"messages":[]}"#)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        assert!(r.text().is_err(), "the body is cut off, not terminated");
+        for _ in 0..50 {
+            if LOG.lock().unwrap().iter().any(|l| l.route == "cut") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(LOG.lock().unwrap().iter().any(|l| l.route == "cut" && l.upstream_broken && l.error.as_deref().is_some_and(|e| e.contains("上游中断"))));
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    /// An Anthropic stream that ends without message_stop becomes an error for the client.
+    #[test]
+    fn truncated_converted_stream_reports_error() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"c\",\"usage\":{\"input_tokens\":1}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hal\"}}\n\n";
+        let resp: &'static str = Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_boxed_str());
+        one_route("trunc", "anthropic", raw_upstream(resp));
+        let port = gateway_n(1);
+        let text = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/trunc/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}"#)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert!(text.contains("\"hal\""), "{text}");
+        assert!(text.contains("上游的流没有正常结束就断开了"), "{text}");
+        assert!(!text.contains("\"finish_reason\":\"stop\""), "{text}");
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    /// SSE served as application/json is still recognised and converted.
+    #[test]
+    fn sniffs_sse_without_content_type() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = "\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi there\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let resp: &'static str = Box::leak(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).into_boxed_str());
+        one_route("sniff", "chat", raw_upstream(resp));
+        let port = gateway_n(1);
+        let text = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/sniff/v1/messages"))
+            .header("x-api-key", test_key())
+            .body(r#"{"model":"m","stream":true,"max_tokens":9,"messages":[{"role":"user","content":"hi"}]}"#)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert!(text.contains("text_delta") && text.contains("hi there") && text.contains("message_stop"), "{text}");
+
+        let mut r: &[u8] = b"  \n\nevent: x\n";
+        let (sse, head) = sniff_sse(&mut r).unwrap();
+        assert!(sse && head == b"  \n\nevent: x\n");
+        let mut r: &[u8] = b"{\"data\":1}";
+        assert!(!sniff_sse(&mut r).unwrap().0);
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    /// An upstream that streams although the client asked for one piece (stream=false): the
+    /// stream is collected into the JSON answer, converted or passed through.
+    #[test]
+    fn stream_to_a_non_stream_request_is_collected() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let body = concat!(
+            "event: response.created
+data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-x\",\"output\":[]}}
+
+",
+            "event: response.output_item.added
+data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"content\":[]}}
+
+",
+            "event: response.output_text.delta
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"po\"}
+
+",
+            "event: response.output_text.delta
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"ng\"}
+
+",
+            "event: response.completed
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-x\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":2,\"total_tokens\":14}}}
+
+",
+        );
+        // Labelled application/json, like some relays do.
+        let resp = |ct: &str| -> &'static str { Box::leak(format!("HTTP/1.1 200 OK
+Content-Type: {ct}
+Content-Length: {}
+Connection: close
+
+{body}", body.len()).into_boxed_str()) };
+        let call = |path: &str, req: &str| {
+            let port = gateway_n(1);
+            let r = reqwest::blocking::Client::new().post(format!("http://127.0.0.1:{port}/{path}")).bearer_auth(test_key()).body(req.to_string()).send().unwrap();
+            { let st = r.status().as_u16(); let text = r.text().unwrap(); (st, serde_json::from_str::<Value>(&text).unwrap_or_else(|_| panic!("{text}"))) }
+        };
+
+        one_route("sse1", "responses", raw_upstream(resp("application/json")));
+        let (st, v) = call("sse1/v1/chat/completions", r#"{"model":"m","stream":false,"messages":[{"role":"user","content":"hi"}]}"#);
+        assert_eq!(st, 200, "{v}");
+        assert_eq!(v["object"], "chat.completion", "{v}");
+        assert_eq!(v["choices"][0]["message"]["content"], "pong", "{v}");
+        assert_eq!(convert::usage_tokens(&v), Some((12, 2)), "{v}");
+
+        one_route("sse2", "responses", raw_upstream(resp("text/event-stream")));
+        let (st, v) = call("sse2/v1/responses", r#"{"model":"m","stream":false,"input":"hi"}"#);
+        assert_eq!(st, 200, "{v}");
+        let text: String = v["output"].as_array().unwrap().iter().flat_map(|i| i["content"].as_array().cloned().unwrap_or_default()).filter_map(|c| c["text"].as_str().map(String::from)).collect();
+        assert_eq!(text, "pong", "{v}");
+
+        // An error in the stream is an error for the client, not an empty answer.
+        let failed = "event: response.failed
+data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"model overloaded\"}}}
+
+";
+        let resp: &'static str = Box::leak(format!("HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Content-Length: {}
+Connection: close
+
+{failed}", failed.len()).into_boxed_str());
+        one_route("sse3", "responses", raw_upstream(resp));
+        let (st, v) = call("sse3/v1/chat/completions", r#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#);
+        assert!(st >= 500 && v.to_string().contains("model overloaded"), "{st} {v}");
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn chunks_fold_into_one_answer() {
+        let c = |delta: Value, finish: Value| json!({ "id": "c1", "created": 5, "model": "m", "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] });
+        let chunks = vec![
+            c(json!({ "role": "assistant" }), Value::Null),
+            c(json!({ "reasoning_content": "think" }), Value::Null),
+            c(json!({ "content": "a" }), Value::Null),
+            c(json!({ "tool_calls": [{ "index": 0, "id": "t1", "type": "function", "function": { "name": "run", "arguments": "{\"x\"" } }] }), Value::Null),
+            c(json!({ "tool_calls": [{ "index": 0, "function": { "arguments": ":1}" } }] }), Value::Null),
+            c(json!({}), json!("tool_calls")),
+            json!({ "id": "c1", "choices": [], "usage": { "prompt_tokens": 3, "completion_tokens": 4 } }),
+        ];
+        let v = chat_from_chunks(&chunks).unwrap();
+        // Round trip with chat_as_chunks.
+        assert_eq!(chat_from_chunks(&chat_as_chunks(&v)).unwrap()["choices"], v["choices"]);
+        let m = &v["choices"][0]["message"];
+        assert_eq!((m["content"].as_str(), m["reasoning_content"].as_str()), (Some("a"), Some("think")));
+        assert_eq!(m["tool_calls"][0]["id"], "t1");
+        assert_eq!(m["tool_calls"][0]["function"]["arguments"], "{\"x\":1}");
+        assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!((v["id"].as_str(), v["model"].as_str()), (Some("c1"), Some("m")));
+        assert_eq!(convert::usage_tokens(&v), Some((3, 4)));
+        let err = chat_from_chunks(&[json!({ "choices": [], "error": { "message": "boom" } })]).unwrap_err();
+        assert_eq!(err, "boom");
+    }
+
+    /// A redirect from the upstream is passed back, never followed with the upstream key.
+    #[test]
+    fn upstream_redirects_are_not_followed() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let hits = Arc::new(AtomicU64::new(0));
+        let elsewhere = fixed_upstream(200, "{}", hits.clone());
+        let resp: &'static str = Box::leak(format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: {elsewhere}/chat/completions\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").into_boxed_str());
+        let route = Route { id: "redir".into(), name: "redir".into(), library: "x".into(), upstream_api: "chat".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
+        *TEST_ROUTES.lock().unwrap() = vec![(route, raw_upstream(resp), Some("up-secret".into()))];
+        let port = gateway_n(1);
+        let r = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/redir/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","messages":[]}"#)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 307);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    /// Bad JSON from the client: 400, no upstream call, nothing counted against the forward.
+    #[test]
+    fn client_mistakes_are_400() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let hits = Arc::new(AtomicU64::new(0));
+        let up = fixed_upstream(200, "{}", hits.clone());
+        let route = Route { id: "c400".into(), name: "c400".into(), library: "x".into(), upstream_api: "anthropic".into(), model_map: vec![], enabled: true, weight: 100, replaced: vec![] };
+        *TEST_ROUTES.lock().unwrap() = vec![(route, up, None)];
+        breaker::reset(Some("c400"));
+        let port = gateway_n(2);
+        let client = reqwest::blocking::Client::new();
+        for body in ["{not json", "[1,2]"] {
+            let r = client.post(format!("http://127.0.0.1:{port}/c400/v1/responses")).bearer_auth(test_key()).body(body).send().unwrap();
+            assert_eq!(r.status().as_u16(), 400, "{body}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        assert!(breaker::view(&breaker::Config::default(), "c400").is_none());
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    /// /health says the gateway is up to anyone, but lists forwards only to key holders.
+    #[test]
+    fn health_lists_routes_only_with_key() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        one_route("hidden", "chat", "http://127.0.0.1:9/v1".into());
+        let port = gateway_n(2);
+        let client = reqwest::blocking::Client::new();
+        let v: Value = client.get(format!("http://127.0.0.1:{port}/health")).send().unwrap().json_body();
+        assert_eq!(v["ok"], true);
+        assert!(v.get("routes").is_none(), "{v}");
+        let v: Value = client.get(format!("http://127.0.0.1:{port}/health")).bearer_auth(test_key()).send().unwrap().json_body();
+        assert_eq!(v["routes"], json!(["hidden"]));
+        TEST_ROUTES.lock().unwrap().clear();
+    }
+
+    trait JsonBody {
+        fn json_body(self) -> Value;
+    }
+
+    impl JsonBody for reqwest::blocking::Response {
+        fn json_body(self) -> Value {
+            serde_json::from_str(&self.text().unwrap()).unwrap()
+        }
+    }
+
+    #[test]
+    fn replays_array_content_and_reasoning() {
+        let chat = json!({ "id": "c", "model": "m", "choices": [{ "message": { "role": "assistant",
+            "content": [{ "type": "text", "text": "a" }, { "type": "text", "text": "b" }], "reasoning": "hmm" }, "finish_reason": "stop" }] });
+        let chunks = chat_as_chunks(&chat);
+        let text: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["content"].as_str()).collect();
+        let reasoning: String = chunks.iter().filter_map(|c| c["choices"][0]["delta"]["reasoning_content"].as_str()).collect();
+        assert_eq!((text.as_str(), reasoning.as_str()), ("a\nb", "hmm"));
     }
 }

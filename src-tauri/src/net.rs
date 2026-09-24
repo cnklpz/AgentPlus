@@ -3,10 +3,56 @@
 use std::time::{Duration, Instant};
 
 fn client() -> Result<reqwest::blocking::Client, String> {
+    client_with(Duration::from_secs(12))
+}
+
+fn client_with(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(12))
+        .timeout(timeout)
+        .redirect(same_host_redirects())
         .build()
         .map_err(|e| e.to_string())
+}
+
+/// Follows redirects only within one origin (an added slash, a moved path). reqwest drops
+/// `Authorization` when the host or port changes but keeps `x-api-key`, so a key must
+/// never be replayed to wherever a provider points; anything else comes back as the 3xx.
+fn same_host_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|a| {
+        let origin = |u: &url::Url| (u.scheme().to_string(), u.host_str().map(String::from), u.port_or_known_default());
+        let same = a.previous().first().map(|u| origin(u) == origin(a.url())).unwrap_or(false);
+        if a.previous().len() > 5 {
+            a.error(crate::i18n::l("重定向次数过多", "Too many redirects"))
+        } else if same {
+            a.follow()
+        } else {
+            a.stop()
+        }
+    })
+}
+
+/// Model lists run to a few MB (OpenRouter); anything far bigger is not a model list.
+const MAX_MODELS_BODY: u64 = 32 << 20;
+/// A one-word test reply is tiny; an error page can be a whole HTML document.
+const MAX_TEST_BODY: u64 = 4 << 20;
+
+/// For a redirect that wasn't followed (another host, port or scheme), what to tell the user.
+fn moved_to(resp: &reqwest::blocking::Response) -> Option<String> {
+    if !resp.status().is_redirection() {
+        return None;
+    }
+    let to = resp.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("?");
+    Some(tr!("地址被重定向到 {to}（HTTP {}），为保护密钥没有跟随；请直接填写新地址", "The URL redirects to {to} (HTTP {}); not followed to protect the API key. Use the new URL directly", resp.status().as_u16()))
+}
+
+/// The body as text, read up to `cap` bytes.
+fn body_text(resp: reqwest::blocking::Response, cap: u64) -> Result<String, String> {
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(resp, cap + 1), &mut buf).map_err(|e| e.to_string())?;
+    if buf.len() as u64 > cap {
+        return Err(tr!("响应太大（超过 {} MB）", "Response too large (over {} MB)", cap >> 20));
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
 fn models_url(base_url: &str) -> String {
@@ -18,10 +64,13 @@ fn models_url(base_url: &str) -> String {
 pub fn latency(base_url: &str) -> Result<u64, String> {
     let mut req = client()?.get(models_url(base_url)).timeout(Duration::from_secs(8));
     // The local gateway refuses requests without a key; its test key lets the probe through
-    // to the upstream, so the time still covers the upstream. Only sent to this machine.
-    let local = url::Url::parse(base_url).ok().and_then(|u| u.host_str().map(|h| h == "127.0.0.1" || h == "localhost"));
-    if local == Some(true) {
-        req = req.bearer_auth(crate::gateway::server::TEST_KEY);
+    // to the upstream, so the time still covers the upstream. Only sent to the gateway's own
+    // port on this machine, never to whatever else listens on localhost.
+    let gateway = url::Url::parse(base_url).ok().is_some_and(|u| {
+        matches!(u.host_str(), Some("127.0.0.1" | "localhost")) && u.port().is_some() && u.port() == crate::gateway::server::running_port()
+    });
+    if gateway {
+        req = req.bearer_auth(crate::gateway::server::test_key());
     }
     let t0 = Instant::now();
     req.send()
@@ -41,7 +90,10 @@ pub fn list_models(base_url: &str, key: Option<&str>, api: &str) -> Result<Vec<S
     }
     let resp = req.send().map_err(|e| if e.is_timeout() { crate::i18n::l("请求超时", "Request timed out").to_string() } else { tr!("连接失败：{e}", "Connection failed: {e}") })?;
     let status = resp.status();
-    let text = resp.text().map_err(|e| e.to_string())?;
+    if let Some(to) = moved_to(&resp) {
+        return Err(to);
+    }
+    let text = body_text(resp, MAX_MODELS_BODY)?;
     if !status.is_success() {
         return Err(match status.as_u16() {
             401 | 403 => tr!("密钥无效或没有权限（HTTP {}）", "Invalid API key or no permission (HTTP {})", status.as_str()),
@@ -83,49 +135,142 @@ fn short(s: &str, n: usize) -> String {
     if s.trim().chars().count() > n { format!("{t}…") } else { t }
 }
 
+/// Request bodies for a test call, tried in order. The first ones turn thinking off (the
+/// test only needs one word back, and thinking would eat the small token budget and
+/// time); each field is one that some servers reject as unknown, so on HTTP 400/422
+/// the next body is tried, ending with the plain request.
+fn test_bodies(api: &str, model: &str, prompt: &str) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let with = |base: &serde_json::Value, extra: serde_json::Value| {
+        let mut b = base.clone();
+        if let (Some(b), Some(extra)) = (b.as_object_mut(), extra.as_object()) {
+            b.extend(extra.clone());
+        }
+        b
+    };
+    match api {
+        "anthropic" => {
+            let plain = json!({ "model": model, "max_tokens": 32, "messages": [{ "role": "user", "content": prompt }] });
+            vec![with(&plain, json!({ "thinking": { "type": "disabled" } })), plain]
+        }
+        "chat" => {
+            let plain = json!({ "model": model, "max_tokens": 32, "stream": false, "messages": [{ "role": "user", "content": prompt }] });
+            // `thinking`: DeepSeek, GLM, Doubao, MiMo, Kimi…; `enable_thinking`: Qwen, SiliconFlow.
+            vec![with(&plain, json!({ "thinking": { "type": "disabled" }, "enable_thinking": false })), plain]
+        }
+        _ => {
+            let plain = json!({ "model": model, "input": prompt, "max_output_tokens": 64, "stream": false });
+            // Newer OpenAI models take "none", older reasoning models only "minimal".
+            vec![with(&plain, json!({ "reasoning": { "effort": "none" } })), with(&plain, json!({ "reasoning": { "effort": "minimal" } })), plain]
+        }
+    }
+}
+
+/// Some relays answer with an SSE stream even for `"stream": false`. Folds the events into
+/// the JSON the non-streaming call returns (reply text and usage), or the error the stream
+/// reported. None when the body isn't an event stream.
+fn from_sse(api: &str, text: &str) -> Option<Result<serde_json::Value, String>> {
+    use serde_json::{json, Value};
+    let events: Vec<Value> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .map(str::trim)
+        .filter_map(|d| serde_json::from_str(d).ok())
+        .collect();
+    if events.is_empty() {
+        return None;
+    }
+    let ty = |e: &Value| e.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
+    for e in &events {
+        let t = ty(e);
+        let msg = e.pointer("/error/message").or_else(|| e.pointer("/response/error/message")).or_else(|| if t == "error" { e.get("message") } else { None });
+        if let Some(m) = msg {
+            return Some(Err(m.as_str().map(String::from).unwrap_or_else(|| m.to_string())));
+        }
+        if matches!(t.as_str(), "error" | "response.failed") {
+            return Some(Err(t));
+        }
+    }
+    let text_of = |kind: &str, ptr: &str| events.iter().filter(|e| kind.is_empty() || ty(e) == kind).filter_map(|e| e.pointer(ptr).and_then(|t| t.as_str())).collect::<String>();
+    Some(Ok(match api {
+        "anthropic" => {
+            let input = events.iter().find_map(|e| e.pointer("/message/usage/input_tokens").cloned());
+            let output = events.iter().rev().find_map(|e| (ty(e) == "message_delta").then(|| e.pointer("/usage/output_tokens").cloned()).flatten());
+            json!({ "content": [{ "type": "text", "text": text_of("content_block_delta", "/delta/text") }], "usage": { "input_tokens": input, "output_tokens": output } })
+        }
+        "chat" => {
+            let usage = events.iter().rev().find_map(|e| e.get("usage").filter(|u| u.is_object()).cloned());
+            json!({ "choices": [{ "message": { "content": text_of("", "/choices/0/delta/content") } }], "usage": usage })
+        }
+        _ => {
+            // response.completed carries the whole response (output and usage); the deltas
+            // cover relays whose final event leaves the output out.
+            let done = events.iter().rev().find(|e| matches!(ty(e).as_str(), "response.completed" | "response.incomplete" | "response.done"));
+            let mut v = done.and_then(|e| e.get("response")).filter(|r| r.is_object()).cloned().unwrap_or_else(|| json!({}));
+            let deltas = text_of("response.output_text.delta", "/delta");
+            if !deltas.is_empty() {
+                v["output_text"] = Value::String(deltas);
+            }
+            v
+        }
+    }))
+}
+
 /// Sends one tiny real request with the provider's key and model, so the address,
 /// key, protocol and model are all checked (the request uses a few tokens).
 pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> TestResult {
     let base = base_url.trim_end_matches('/');
-    let prompt = "Reply with exactly one word: pong";
-    let (url, body) = match api {
-        "anthropic" => (
-            format!("{base}/messages"),
-            serde_json::json!({ "model": model, "max_tokens": 32, "messages": [{ "role": "user", "content": prompt }] }),
-        ),
-        "chat" => (
-            format!("{base}/chat/completions"),
-            serde_json::json!({ "model": model, "max_tokens": 32, "stream": false, "messages": [{ "role": "user", "content": prompt }] }),
-        ),
-        _ => (
-            format!("{base}/responses"),
-            serde_json::json!({ "model": model, "input": prompt, "max_output_tokens": 64, "stream": false }),
-        ),
+    let url = match api {
+        "anthropic" => format!("{base}/messages"),
+        "chat" => format!("{base}/chat/completions"),
+        _ => format!("{base}/responses"),
     };
     let mut r = TestResult { ok: false, status: None, ms: 0, model: model.into(), url: url.clone(), reply: None, error: None, usage: None };
-    let client = match reqwest::blocking::Client::builder().timeout(Duration::from_secs(45)).build() {
+    let client = match client_with(Duration::from_secs(45)) {
         Ok(c) => c,
         Err(e) => {
-            r.error = Some(e.to_string());
+            r.error = Some(e);
             return r;
         }
     };
-    let mut req = client.post(&url).header("content-type", "application/json").body(body.to_string());
-    if let Some(k) = key {
-        req = if api == "anthropic" { req.header("x-api-key", k).header("anthropic-version", "2023-06-01") } else { req.bearer_auth(k) };
-    }
-    let t0 = Instant::now();
-    let resp = match req.send() {
-        Ok(x) => x,
-        Err(e) => {
+    let mut bodies = test_bodies(api, model, "Reply with exactly one word: pong").into_iter().peekable();
+    let (status, text) = loop {
+        let body = bodies.next().expect("test_bodies is never empty");
+        let mut req = client.post(&url).header("content-type", "application/json").body(body.to_string());
+        if let Some(k) = key {
+            req = if api == "anthropic" { req.header("x-api-key", k).header("anthropic-version", "2023-06-01") } else { req.bearer_auth(k) };
+        }
+        let t0 = Instant::now();
+        let resp = match req.send() {
+            Ok(x) => x,
+            Err(e) => {
+                r.ms = t0.elapsed().as_millis() as u64;
+                r.error = Some(if e.is_timeout() { crate::i18n::l("请求超时（45 秒）", "Request timed out (45 s)").into() } else if e.is_connect() { crate::i18n::l("连接失败：地址不可达", "Connection failed: URL unreachable").into() } else { tr!("请求失败：{e}", "Request failed: {e}") });
+                return r;
+            }
+        };
+        let status = resp.status();
+        if matches!(status.as_u16(), 400 | 422) && bodies.peek().is_some() {
+            continue;
+        }
+        if let Some(to) = moved_to(&resp) {
             r.ms = t0.elapsed().as_millis() as u64;
-            r.error = Some(if e.is_timeout() { crate::i18n::l("请求超时（45 秒）", "Request timed out (45 s)").into() } else if e.is_connect() { crate::i18n::l("连接失败：地址不可达", "Connection failed: URL unreachable").into() } else { tr!("请求失败：{e}", "Request failed: {e}") });
+            r.status = Some(status.as_u16());
+            r.error = Some(to);
             return r;
         }
+        let text = match body_text(resp, MAX_TEST_BODY) {
+            Ok(t) => t,
+            Err(e) => {
+                r.ms = t0.elapsed().as_millis() as u64;
+                r.status = Some(status.as_u16());
+                r.error = Some(e);
+                return r;
+            }
+        };
+        r.ms = t0.elapsed().as_millis() as u64;
+        break (status, text);
     };
-    let status = resp.status();
-    let text = resp.text().unwrap_or_default();
-    r.ms = t0.elapsed().as_millis() as u64;
     r.status = Some(status.as_u16());
     let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
     if !status.is_success() {
@@ -145,9 +290,16 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
         r.error = Some(if msg.is_empty() { tr!("{hint}（HTTP {status}）", "{hint} (HTTP {status})") } else { tr!("{hint}（HTTP {}）：{}", "{hint} (HTTP {}): {}", status.as_u16(), short(&msg, 200)) });
         return r;
     }
-    let Some(v) = v else {
-        r.error = Some(tr!("返回的不是 JSON：{}", "Response is not JSON: {}", short(&text, 120)));
-        return r;
+    let v = match v.map(Ok).or_else(|| from_sse(api, &text)) {
+        Some(Ok(v)) => v,
+        Some(Err(e)) => {
+            r.error = Some(tr!("流式响应中返回了错误：{}", "The stream returned an error: {}", short(&e, 200)));
+            return r;
+        }
+        None => {
+            r.error = Some(tr!("返回的不是 JSON：{}", "Response is not JSON: {}", short(&text, 120)));
+            return r;
+        }
     };
     let reply = match api {
         "anthropic" => v.get("content").and_then(|c| c.as_array()).map(|a| a.iter().filter_map(|b| b.get("text").and_then(|t| t.as_str())).collect::<String>()),
@@ -205,5 +357,216 @@ mod tests {
         assert!(!r.ok && r.status == Some(401) && r.error.as_deref().unwrap().contains("密钥无效") && r.error.as_deref().unwrap().contains("invalid api key"));
         let r = test_call("http://127.0.0.1:9", None, "chat", "m");
         assert!(!r.ok && r.status.is_none());
+    }
+
+    /// Local server answering `n` requests with `reply(request)`; each request's head is sent on the channel.
+    fn serve_with(n: usize, reply: impl Fn(&str) -> Vec<u8> + Send + 'static) -> (u16, std::sync::mpsc::Receiver<String>) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for s in l.incoming().take(n).flatten() {
+                let mut s = s;
+                let head = read_request(&mut s);
+                let _ = s.write_all(&reply(&head));
+                let _ = tx.send(head);
+            }
+        });
+        (port, rx)
+    }
+
+    /// Reads one request, headers and body (by content-length), as text.
+    fn read_request(s: &mut std::net::TcpStream) -> String {
+        let mut got = Vec::new();
+        let mut buf = [0u8; 8192];
+        loop {
+            let len = s.read(&mut buf).unwrap_or(0);
+            got.extend_from_slice(&buf[..len]);
+            let text = String::from_utf8_lossy(&got).to_string();
+            let Some(end) = text.find("\r\n\r\n") else {
+                if len == 0 { return text; }
+                continue;
+            };
+            let want = text[..end]
+                .lines()
+                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                .unwrap_or(0);
+            if len == 0 || got.len() >= end + 4 + want {
+                return text;
+            }
+        }
+    }
+
+    #[test]
+    fn test_call_turns_thinking_off_and_falls_back() {
+        // Server that rejects the no-thinking fields: the plain request is sent next.
+        let (port, seen) = serve_with(3, |req| {
+            if req.contains("\"thinking\"") || req.contains("\"reasoning\"") {
+                http("400 Bad Request", "", r#"{"error":{"message":"unknown field"}}"#)
+            } else {
+                http("200 OK", "", r#"{"choices":[{"message":{"content":"pong"}}]}"#)
+            }
+        });
+        let r = test_call(&format!("http://127.0.0.1:{port}/v1"), Some("k"), "chat", "m");
+        assert!(r.ok && r.status == Some(200) && r.reply.as_deref() == Some("pong"), "{r:?}");
+        let first = seen.recv().unwrap();
+        assert!(first.contains(r#""thinking":{"type":"disabled"}"#) && first.contains(r#""enable_thinking":false"#), "{first}");
+        assert!(!seen.recv().unwrap().contains("thinking"));
+
+        // Responses: "none", then "minimal", then plain; the last error is the one reported.
+        let (port, seen) = serve_with(3, |_| http("400 Bad Request", "", r#"{"error":{"message":"no such model"}}"#));
+        let r = test_call(&format!("http://127.0.0.1:{port}/v1"), None, "responses", "m");
+        assert!(!r.ok && r.status == Some(400) && r.error.as_deref().unwrap().contains("no such model"), "{r:?}");
+        assert!(seen.recv().unwrap().contains(r#""effort":"none""#));
+        assert!(seen.recv().unwrap().contains(r#""effort":"minimal""#));
+        assert!(!seen.recv().unwrap().contains("reasoning"));
+
+        // Other errors are not retried.
+        let (port, seen) = serve_with(2, |_| http("401 Unauthorized", "", "{}"));
+        let r = test_call(&format!("http://127.0.0.1:{port}/v1"), Some("k"), "anthropic", "m");
+        assert!(!r.ok && r.status == Some(401));
+        assert!(seen.recv().unwrap().contains(r#""thinking":{"type":"disabled"}"#));
+        assert!(seen.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    fn http(status: &str, extra: &str, body: &str) -> Vec<u8> {
+        format!("HTTP/1.1 {status}\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).into_bytes()
+    }
+
+    #[test]
+    fn list_models_shapes() {
+        let ok = |body: &'static str| list_models(&serve(200, body), Some("k"), "chat");
+        assert_eq!(ok(r#"{"data":[{"id":"b"},{"id":"a"},{"id":"a"},{"object":"x"}]}"#).unwrap(), ["a", "b"]);
+        assert_eq!(ok(r#"{"models":[{"name":"x"}]}"#).unwrap(), ["x"]);
+        assert_eq!(ok(r#"{"data":[]}"#).unwrap(), Vec::<String>::new());
+        assert!(ok(r#"{"data":{}}"#).unwrap_err().contains("没有模型列表"));
+        assert!(ok("<html>").unwrap_err().contains("不是 JSON"));
+        assert!(list_models(&serve(404, "{}"), None, "chat").unwrap_err().contains("404"));
+        assert!(list_models(&serve(403, "{}"), None, "chat").unwrap_err().contains("密钥无效"));
+        assert!(list_models(&serve(500, "{}"), None, "chat").unwrap_err().contains("500"));
+    }
+
+    #[test]
+    fn keys_never_follow_a_redirect_to_another_host() {
+        let (other, seen) = serve_with(1, |_| http("200 OK", "", r#"{"data":[{"id":"stolen"}]}"#));
+        let (port, first) = serve_with(1, move |_| http("307 Temporary Redirect", &format!("location: http://localhost:{other}/v1/models\r\n"), ""));
+        let err = list_models(&format!("http://127.0.0.1:{port}/v1"), Some("sk-secret"), "anthropic").unwrap_err();
+        assert!(err.contains("307") && err.contains(&format!("localhost:{other}")), "{err}");
+        assert!(first.recv().unwrap().contains("x-api-key: sk-secret"));
+        assert!(seen.recv_timeout(Duration::from_millis(300)).is_err(), "the other host was contacted");
+    }
+
+    #[test]
+    fn redirects_within_one_origin_are_followed() {
+        let (port, seen) = serve_with(2, |head| {
+            if head.starts_with("GET /v1/models") {
+                http("301 Moved Permanently", "location: /v2/models\r\n", "")
+            } else {
+                http("200 OK", "", r#"{"data":[{"id":"m"}]}"#)
+            }
+        });
+        assert_eq!(list_models(&format!("http://127.0.0.1:{port}/v1"), Some("k"), "anthropic").unwrap(), ["m"]);
+        seen.recv().unwrap();
+        let second = seen.recv().unwrap();
+        assert!(second.starts_with("GET /v2/models") && second.contains("x-api-key: k"), "{second}");
+    }
+
+    #[test]
+    fn redirects_to_another_port_are_not_followed() {
+        let (other, seen) = serve_with(1, |_| http("200 OK", "", r#"{"data":[]}"#));
+        let (port, _) = serve_with(1, move |_| http("308 Permanent Redirect", &format!("location: http://127.0.0.1:{other}/v1/models\r\n"), ""));
+        let r = test_call(&format!("http://127.0.0.1:{port}/v1"), Some("k"), "anthropic", "m");
+        assert!(!r.ok && r.status == Some(308) && r.error.as_deref().unwrap().contains("重定向"), "{:?}", r.error);
+        assert!(seen.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    #[test]
+    fn oversized_bodies_are_refused() {
+        let big = "a".repeat((MAX_TEST_BODY + 10) as usize);
+        let (port, _) = serve_with(1, move |_| http("200 OK", "", &big));
+        let r = test_call(&format!("http://127.0.0.1:{port}/v1"), None, "chat", "m");
+        assert!(!r.ok && r.error.as_deref().unwrap().contains("响应太大"), "{:?}", r.error);
+    }
+
+    #[test]
+    fn stream_replies_to_a_non_stream_test_are_read() {
+        let sse = |body: &str| {
+            let body = body.to_string();
+            let (port, _) = serve_with(1, move |_| http("200 OK", "content-type: text/event-stream
+", &body));
+            format!("http://127.0.0.1:{port}/v1")
+        };
+        // Responses: text from the deltas, usage from response.completed (CRLF lines).
+        let base = sse(concat!(
+            "event: response.created
+data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"output\":[]}}
+
+",
+            "event: response.output_text.delta
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"po\"}
+
+",
+            "event: response.output_text.delta
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"ng\"}
+
+",
+            "event: response.completed
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":2}}}
+
+",
+        ));
+        let r = test_call(&base, Some("k"), "responses", "m");
+        assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((12, 2)), "{r:?}");
+        // Chat: deltas plus the usage chunk, then [DONE].
+        let base = sse(concat!(
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}
+
+",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}
+
+",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1}}
+
+",
+            "data: [DONE]
+
+",
+        ));
+        let r = test_call(&base, None, "chat", "m");
+        assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((9, 1)), "{r:?}");
+        // Anthropic: input from message_start, output from message_delta.
+        let base = sse(concat!(
+            "event: message_start
+data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":1}}}
+
+",
+            "event: content_block_delta
+data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}
+
+",
+            "event: message_delta
+data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}
+
+",
+        ));
+        let r = test_call(&base, Some("k"), "anthropic", "m");
+        assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((7, 3)), "{r:?}");
+        // An error inside the stream fails the test with its message.
+        let base = sse("event: response.failed
+data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model overloaded\"}}}
+
+");
+        let r = test_call(&base, Some("k"), "responses", "m");
+        assert!(!r.ok && r.error.as_deref().unwrap().contains("model overloaded"), "{r:?}");
+        // Plain text is still reported as not JSON.
+        let r = test_call(&sse("hello"), None, "chat", "m");
+        assert!(!r.ok && r.error.as_deref().unwrap().contains("不是 JSON"), "{r:?}");
+    }
+
+    #[test]
+    fn short_counts_characters() {
+        assert_eq!(short("  密钥密钥密钥  ", 2), "密钥…");
+        assert_eq!(short("abc", 3), "abc");
+        assert_eq!(short("", 3), "");
     }
 }

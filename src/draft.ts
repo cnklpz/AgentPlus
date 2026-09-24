@@ -1,5 +1,5 @@
 // Pending edits per agent, keyed so a toggle back to the original drops the op.
-import type { AgentState, Model, ModelFieldValue, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
+import type { AgentState, ApiKind, Model, ModelFieldValue, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
 import { t } from "./i18n";
 
 export type Draft = Record<string, Op>;
@@ -25,6 +25,16 @@ export function withOp(d: Draft, key: string, op: Op | null): Draft {
   if (op) next[key] = op;
   else delete next[key];
   return next;
+}
+
+/**
+ * What is left of a draft once `sent` (a snapshot of it) has been written: only the changes
+ * made while the write was running (keys added or edited since; ops are replaced on edit).
+ */
+export function draftAfterWrite(now: Draft, sent: Draft): Draft {
+  const out: Draft = {};
+  for (const [k, op] of Object.entries(now)) if (sent[k] !== op) out[k] = op;
+  return out;
 }
 
 export function currentProvider(st: AgentState, d: Draft): string | null {
@@ -72,7 +82,11 @@ export interface ViewModel extends Model {
   isDeleted?: boolean;
 }
 
-const API_LABEL: Record<string, string> = { responses: "Responses", chat: "Chat", anthropic: "Anthropic" };
+// Some agents keep protocols AgentPlus doesn't model (e.g. pi's "bedrock-converse"); show those as-is.
+export const API_LABEL: Record<ApiKind, string> = new Proxy(
+  { responses: "Responses", chat: "Chat", anthropic: "Anthropic", gemini: "Gemini" } as Record<string, string>,
+  { get: (t, k) => (typeof k === "string" ? t[k] ?? k : undefined) },
+);
 
 function hostOf(url: string): string {
   try {
@@ -108,7 +122,7 @@ export function viewProviders(st: AgentState, d: Draft, withImports = false): Vi
     if (withImports && op.op === "import_provider") {
       const api = op.api ?? "chat";
       out.push({
-        id: k, draftKey: k, name: op.name ?? op.provider, baseUrl: null, host: t("draft.copiedFrom", { from: op.label ?? op.fromAgent }), apis: [API_LABEL[api] ?? api],
+        id: k, draftKey: k, name: op.name ?? op.provider, baseUrl: null, host: t("draft.copiedFrom", { from: op.label ?? op.fromAgent }), apis: [API_LABEL[api]],
         builtin: false, enabled: true, compatible: true, reason: null, models: [], details: [], editable: false, api, hasKey: true, keyFp: null, keyHint: null, officialAuth: false, isNew: true,
       });
       continue;
@@ -170,9 +184,10 @@ export function upsertModel(d: Draft, pid: string, input: ModelInput): Draft {
 
 /** 131072 -> "131K", 1048576 -> "1M" */
 export function fmtCtx(n: number): string {
-  if (n >= 1_000_000) {
+  // From 999.5K up, "K" would round to "1000K".
+  if (n >= 999_500) {
     const m = n % 1_048_576 === 0 ? n / 1_048_576 : n / 1_000_000;
-    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+    return `${Math.round(m * 10) / 10}M`;
   }
   if (n >= 1000) return `${Math.round(n / 1000)}K`;
   return String(n);

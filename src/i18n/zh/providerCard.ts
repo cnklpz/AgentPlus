@@ -8,6 +8,7 @@ export default {
   tagDeleting: "将删除",
   tagNew: "新 · 未应用",
   tagCurrent: "当前",
+  tagSwitching: "待切换",
   tagBuiltin: "内置",
   ariaDetails: "{name} 详情",
   edited: "已修改",
@@ -19,5 +20,6 @@ export default {
   afterApply: "应用后生效",
   deleteOnApply: "应用后删除",
   inUse: "正在使用",
+  switchOnApply: "写入后切换",
   setCurrent: "设为当前",
 };

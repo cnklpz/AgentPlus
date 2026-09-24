@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { type BackupDetail, type BackupEntry, type BackupFileDetail, api } from "../api";
 import { type TKey, t, tn, tx, useLang } from "../i18n";
 import { Icon } from "./icons";
+import { fmtSize as size } from "../format";
+import { scrub } from "../privacy";
 
 /** Product names stay as-is; AgentPlus's own maintenance jobs are translated. */
 const AGENT_NAME: Record<string, string | { key: TKey }> = {
@@ -17,10 +19,6 @@ function agentName(id: string): string {
 function fmtStamp(s: string): string {
   const m = s.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : s;
-}
-
-function size(b: number): string {
-  return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
 export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boolean) => void; onChanged: () => void }) {
@@ -52,7 +50,7 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
 
   const picked = list?.find((b) => b.id === sel) ?? null;
   const rollback = (b: BackupEntry, small: boolean) => !b.restorable ? (
-    <span className="tiny muted" title={b.blocked ?? undefined}>{t(b.blockedMissing ? "historyPage.fileGone" : "historyPage.noAutoRollback")}</span>
+    <span className="tiny muted" title={scrub(b.blocked) ?? undefined}>{t(b.blockedMissing ? "historyPage.fileGone" : "historyPage.noAutoRollback")}</span>
   ) : confirm === b.id ? (
     <>
       <button className={`btn${small ? " small" : ""}`} disabled={busy} onClick={() => setConfirm(null)}>{t("common.cancel")}</button>
@@ -87,7 +85,7 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
                     <div className="row gap6">
                       <span className="strong small">{fmtStamp(b.stamp)}</span>
                       <span className="ptag tag-soft">{agentName(b.agent)}</span>
-                      <span className="tiny muted">{b.reason}</span>
+                      <span className="tiny muted">{scrub(b.reason)}</span>
                     </div>
                     <div className="mono tiny muted ellipsis">{b.files.map((f) => f.name).join(t("historyPage.listSep"))} · {size(b.bytes)}</div>
                   </div>
@@ -136,13 +134,13 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
             <h2>{fmtStamp(b.stamp)}</h2>
             <div className="row gap6">
               <span className="ptag tag-soft">{agentName(b.agent)}</span>
-              <span className="tiny muted">{b.reason}</span>
+              <span className="tiny muted">{scrub(b.reason)}</span>
             </div>
           </div>
           <button className="icon-btn" aria-label={t("historyPage.closeDetail")} onClick={onClose}><Icon.close /></button>
         </div>
         <div className="kv">
-          <div className="kv-row"><span className="tiny muted">{t("historyPage.backupLocation")}</span><span className="mono tiny ellipsis" title={typeof d === "object" && d ? d.dir : undefined}>{typeof d === "object" && d ? d.dir : "…"}</span></div>
+          <div className="kv-row"><span className="tiny muted">{t("historyPage.backupLocation")}</span><span className="mono tiny ellipsis" title={typeof d === "object" && d ? scrub(d.dir) : undefined}>{typeof d === "object" && d ? scrub(d.dir) : "…"}</span></div>
           <div className="kv-row"><span className="tiny muted">{t("historyPage.files")}</span><span className="tiny">{tn("historyPage.filesValue", b.files.length, { size: size(b.bytes) })}</span></div>
           <div className="kv-row">
             <span className="tiny muted">{t("historyPage.vsNow")}</span>
@@ -183,7 +181,7 @@ function FileDiff({ f }: { f: BackupFileDetail }) {
           <span className="mono strong ellipsis">{f.name}</span>
           <span className={`tiny ${f.same ? "muted" : f.currentBytes == null ? "warn-text" : ""}`}>{status}</span>
         </div>
-        {f.path && <span className="mono tiny muted ellipsis" title={f.path}>{f.path}</span>}
+        {f.path && <span className="mono tiny muted ellipsis" title={scrub(f.path)}>{scrub(f.path)}</span>}
         <span className="tiny muted">
           {t("historyPage.backupSize", { size: size(f.backupBytes) })}
           {f.currentBytes != null && t("historyPage.nowSize", { size: size(f.currentBytes) })}
@@ -193,12 +191,12 @@ function FileDiff({ f }: { f: BackupFileDetail }) {
       {f.diff.length > 0 && (
         <div className="hd-lines">
           {f.diff.map((r, i) => r.kind === "…" ? (
-            <div key={i} className="hd-fold tiny muted">⋯ {r.text}</div>
+            <div key={i} className="hd-fold tiny muted">⋯ {scrub(r.text)}</div>
           ) : (
             <div key={i} className={`hd-line mono${r.kind === "+" ? " add" : r.kind === "-" ? " del" : ""}`}>
               <span className="hd-no">{r.kind === "-" ? r.old : r.new}</span>
               <span className="hd-sign">{r.kind === " " ? "" : r.kind === "-" ? "−" : "+"}</span>
-              <span className="hd-text">{r.text || " "}</span>
+              <span className="hd-text">{scrub(r.text) || " "}</span>
             </div>
           ))}
           {f.truncated && <div className="hd-fold tiny muted">{t("historyPage.truncated")}</div>}

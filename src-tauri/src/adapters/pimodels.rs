@@ -8,6 +8,7 @@
 //! untouched. Unknown fields are always kept; only documented fields are ever added.
 
 
+use super::Endpoint;
 use crate::model::*;
 use crate::store;
 use crate::util::*;
@@ -318,10 +319,10 @@ impl Fmt {
         let context = def.get("contextWindow").and_then(|x| x.as_u64());
         let mut tags = vec![];
         if def.get("reasoning").and_then(|x| x.as_bool()) == Some(true) {
-            tags.push(l("推理", "Reasoning").to_string());
+            tags.push(Tag::new("cap:reasoning", l("推理", "Reasoning")));
         }
         if def.get("input").and_then(|x| x.as_array()).map(|a| a.iter().any(|i| i.as_str() == Some("image"))).unwrap_or(false) {
-            tags.push(l("图片", "Images").to_string());
+            tags.push(Tag::new("cap:image", l("图片", "Images")));
         }
         Some(Model {
             id,
@@ -409,7 +410,7 @@ impl Fmt {
     }
 
     /// Base URL, key and api of a provider (auth.json wins over the config, as in pi).
-    pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<(String, Option<String>, String)> {
+    pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<Endpoint> {
         let def = self.providers_of(cfg).and_then(|p| p.get(id)).cloned().or_else(|| self.parked(root).get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
         let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl（沿用内置地址）", "Provider {id} has no baseUrl (uses the built-in URL)")))?.to_string();
         let auth = self.load_auth().map(|a| a.0);

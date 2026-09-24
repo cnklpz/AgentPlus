@@ -14,9 +14,8 @@
 //! re-emitted (in Hermes' own PyYAML style); everything else stays byte-for-byte. A changed
 //! block that contains comments or anchors is refused.
 
-// Not wired into adapters::mod dispatch yet (integrator); drop this once it is.
 
-
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -311,7 +310,7 @@ fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<String> {
             None => appended.extend(new_lines),
         }
     }
-    edits.sort_by(|a, b| b.0.cmp(&a.0));
+    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
     let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
     for (s, e, new) in edits {
         out.splice(s..e, new);
@@ -457,7 +456,7 @@ fn env_line_key(l: &str) -> Option<&str> {
 }
 
 fn env_get(text: &str, key: &str) -> Option<String> {
-    text.lines().filter(|l| env_line_key(l) == Some(key)).last().and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
+    text.lines().rfind(|l| env_line_key(l) == Some(key)).and_then(|l| l.split_once('=')).map(|(_, v)| env_unquote(v)).filter(|v| !v.is_empty())
 }
 
 /// Sets (or removes, value None) `key` in .env text, keeping every other line.
@@ -487,7 +486,7 @@ fn env_set(text: &str, key: &str, value: Option<&str>) -> String {
 }
 
 fn load_env() -> (String, TextMeta) {
-    read_text(&env_path()).unwrap_or_else(|_| (String::new(), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }))
+    read_text_or_new(&env_path()).unwrap_or((String::new(), TextMeta::NEW))
 }
 
 fn env_key(env: &str, var: &str) -> Option<String> {
@@ -813,10 +812,10 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
     }
     for m in models.iter_mut() {
         if dflt.as_deref() == Some(m.id.as_str()) {
-            m.tags.push(l("默认", "Default").into());
+            m.tags.push(Tag::default_model());
         }
         if cur == Some(m.id.as_str()) {
-            m.tags.push(l("当前", "Current").into());
+            m.tags.push(Tag::current());
         }
     }
     let key_env = key_env_of(&def);
@@ -877,6 +876,7 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
 }
 
 /// The inline (bare `custom`) provider: from `model` when active, else from the stash.
+#[allow(clippy::type_complexity)]
 fn inline_values(cfg: &Y, root: &J, active: bool) -> Option<(String, Option<String>, Option<String>, Option<String>)> {
     if active {
         let m = cfg.get("model")?;
@@ -916,7 +916,7 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
         enabled: true,
         compatible: api.is_some(),
         reason: api.is_none().then(|| tr!("api_mode = {}，AgentPlus 只能查看", "api_mode = {}; AgentPlus can only view it", mode.clone().unwrap_or_default())),
-        models: dflt.iter().map(|m| Model { id: m.clone(), visible: true, readonly: true, tags: vec![l("默认", "Default").into()], ..Default::default() }).collect(),
+        models: dflt.iter().map(|m| Model { id: m.clone(), visible: true, readonly: true, tags: vec![Tag::default_model()], ..Default::default() }).collect(),
         details,
         editable: true,
         api: api.unwrap_or("chat").into(),
@@ -938,7 +938,7 @@ fn builtin_provider(name: &str, dflt: Option<String>, known: bool) -> Provider {
         enabled: true,
         compatible: known,
         reason: (!known).then(|| l("config.yaml 里找不到这个自定义供应商", "This custom provider isn't in config.yaml").to_string()),
-        models: dflt.iter().map(|m| Model { id: m.clone(), visible: true, readonly: true, tags: vec![l("默认", "Default").into()], ..Default::default() }).collect(),
+        models: dflt.iter().map(|m| Model { id: m.clone(), visible: true, readonly: true, tags: vec![Tag::default_model()], ..Default::default() }).collect(),
         details: vec![
             Kv::mono("model.provider", name.to_string()),
             Kv::text(
@@ -1063,7 +1063,7 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
     let (env, _) = load_env();
     let src = find(&cfg, id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
@@ -1131,11 +1131,12 @@ fn plan_err_readonly(src: &Src) -> Result<()> {
     }
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg0, text, meta) = load()?;
     let mut cfg = cfg0.clone();
     let mut root = store_load();
-    let (env0, env_meta) = load_env();
+    // Unlike the read-only views, a write refuses an .env it can't read (UTF-16, GBK…).
+    let (env0, env_meta) = read_text_or_new(&env_path())?;
     let mut env = env0.clone();
     let mut diff = Diff::default();
     let mut store_dirty = false;
@@ -1807,7 +1808,7 @@ hooks:
         assert_eq!(oc.api, "chat");
         assert_eq!(oc.models.len(), 1);
         assert_eq!(oc.models[0].context, Some(1_000_000));
-        assert!(oc.models[0].tags.contains(&"默认".to_string()));
+        assert!(oc.models[0].tags.contains(&Tag::default_model()));
         assert!(!st.providers[1].has_key);
         let inline = &st.providers[2];
         assert!(inline.has_key && inline.editable);
@@ -1899,6 +1900,19 @@ hooks:
         let (_, v) = read_cfg(&t);
         assert_eq!(v["providers"]["kp"]["models"]["m2"]["context_length"].as_u64(), Some(128000));
         assert!(v["providers"]["kp"]["models"]["m1"].is_mapping());
+    }
+
+    #[test]
+    fn unreadable_dotenv_is_never_rewritten() {
+        let t = setup("model:\n  provider: custom:kp\n  default: m1\nproviders:\n  kp:\n    name: KP\n    base_url: https://kp/v1\n    key_env: KP_API_KEY\n    models: [m1]\n");
+        // UTF-16LE, as PowerShell 5's `echo X=1 > .env` writes it.
+        let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain("OTHER=1\r\nKP_API_KEY=old\r\n".encode_utf16().flat_map(|u| u.to_le_bytes())).collect();
+        fs::write(t.0.join(".env"), &utf16).unwrap();
+        let err = apply(vec![Op::UpsertProvider { provider: pi(Some("kp"), "KP", "https://kp/v1", "chat", Some("sk-new-1111"), &[]) }]).err().expect("must refuse");
+        assert!(err.to_string().contains("UTF-8"), "{err}");
+        assert_eq!(fs::read(t.0.join(".env")).unwrap(), utf16);
+        // Reading state still works and just doesn't see the key.
+        assert_eq!(state(&Install::default()).providers.len(), 1);
     }
 
     #[test]
@@ -2085,7 +2099,7 @@ hooks:
                 p.has_key,
                 p.builtin,
                 p.compatible,
-                p.models.iter().map(|m| format!("{}{}{}", m.id, if m.visible { "" } else { "(hidden)" }, if m.tags.is_empty() { String::new() } else { format!("{:?}", m.tags) })).collect::<Vec<_>>()
+                p.models.iter().map(|m| format!("{}{}{}", m.id, if m.visible { "" } else { "(hidden)" }, if m.tags.is_empty() { String::new() } else { format!("{:?}", m.tags.iter().map(|t| &t.label).collect::<Vec<_>>()) })).collect::<Vec<_>>()
             );
             for d in &p.details {
                 println!("    {}: {}", d.k, d.v);

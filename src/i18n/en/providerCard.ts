@@ -9,6 +9,7 @@ const en: typeof zh = {
   tagDeleting: "To be deleted",
   tagNew: "New · not applied",
   tagCurrent: "Current",
+  tagSwitching: "Switch pending",
   tagBuiltin: "Built-in",
   ariaDetails: "{name} details",
   edited: "Modified",
@@ -20,6 +21,7 @@ const en: typeof zh = {
   afterApply: "Takes effect after apply",
   deleteOnApply: "Deleted on apply",
   inUse: "In use",
+  switchOnApply: "Switches on apply",
   setCurrent: "Use this",
 };
 

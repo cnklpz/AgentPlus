@@ -27,6 +27,7 @@ const en: typeof zh = {
   heroActive: "{n} in progress",
   idleHint: "Once started, it listens only on 127.0.0.1 and can't be reached from other machines or web pages. Each agent calls it with its own gateway key (filled in when written); the gateway then uses the keys from the provider library upstream.",
   port: "Port",
+  portInvalid: "Port must be between 1024 and 65535",
   switchPort: "Switch to new port",
   stop: "Stop gateway",
   start: "Start gateway",

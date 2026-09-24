@@ -8,6 +8,7 @@
 //! Keys live in `options.apiKey`, or in OpenCode's `auth.json` when that is where the
 //! user keeps them.
 
+use super::Endpoint;
 use crate::i18n::l;
 use crate::mfields;
 use crate::model::*;
@@ -114,16 +115,21 @@ impl Fmt {
         }
         let (text, meta) = read_text(&self.path)?;
         let (clean, had) = strip_jsonc(&text);
-        let v = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", self.name())))?;
+        let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", self.name())))?;
+        if !v.is_object() {
+            return Err(anyhow!(tr!("{} 顶层不是对象", "The top level of {} is not an object", self.name())));
+        }
         Ok((v, meta, had))
     }
 
+    /// The credentials file: `{}` when it doesn't exist yet, None when it can't be read or
+    /// parsed (it is then left alone, never rewritten from scratch).
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
         let p = self.auth.as_ref()?;
-        match read_json(p) {
-            Ok(x) => Some(x),
-            Err(_) => Some((json!({}), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 })),
+        if !p.exists() {
+            return Some((json!({}), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }));
         }
+        read_json(p).ok().filter(|(v, _)| v.is_object())
     }
 
     fn stash(&self, root: &Value, key: &str) -> Map<String, Value> {
@@ -227,10 +233,10 @@ impl Fmt {
     }
 
     /// Base URL, key and API kind of a provider.
-    pub fn endpoint(&self, id: &str) -> Result<(String, Option<String>, String)> {
+    pub fn endpoint(&self, id: &str) -> Result<Endpoint> {
         let (cfg, _, _) = self.load(true)?;
         let parked = self.stash(&store::load(), "disabledProviders");
-        let def = cfg.pointer(&format!("/provider/{id}")).cloned().or_else(|| parked.get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(|| parked.get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
         let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseURL", "Provider {id} has no baseURL")))?.to_string();
         let auth = self.load_auth().map(|x| x.0);
         let key = def
@@ -253,20 +259,25 @@ impl Fmt {
 
     /// Edits a model definition wherever it lives (active config or the hidden stash).
     fn model_def_mut<'a>(&self, cfg: &'a mut Value, root: &'a mut Value, pid: &str, mid: &str) -> Option<&'a mut Value> {
-        if cfg.pointer(&format!("/provider/{pid}/models/{mid}")).is_some() {
-            return cfg.pointer_mut(&format!("/provider/{pid}/models/{mid}"));
+        if cfg.pointer(&jptr(&["provider", pid, "models", mid])).is_some() {
+            return cfg.pointer_mut(&jptr(&["provider", pid, "models", mid]));
         }
         store::section(root, self.agent, "hiddenModels").get_mut(&format!("{pid}|{mid}"))
     }
 
-    fn set_key(&self, cfg: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) {
+    fn set_key(&self, cfg: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<()> {
         // Keep the key where the user already keeps it; new ones go to auth.json when there is one.
-        let in_cfg = cfg.pointer(&format!("/provider/{id}/options/apiKey")).and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
+        let in_cfg = cfg.pointer(&jptr(&["provider", id, "options", "apiKey"])).and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
+        // The agent keeps keys in auth.json but it can't be read: never fall back to the config
+        // (a project's opencode.json is usually committed).
+        if let (Some(p), None, false) = (&self.auth, auth.as_ref(), in_cfg) {
+            return Err(anyhow!(tr!("{} 无法读取，没有写入密钥", "{} can't be read, so the API key was not written", display_path(p))));
+        }
         if let (Some((a, _)), false) = (auth.as_mut(), in_cfg) {
             a[id] = json!({ "type": "api", "key": key });
             diff.push(&display_path(self.auth.as_ref().unwrap()), format!("{id}.key = {}", mask_key(key)), true);
             dirty.auth = true;
-        } else if let Some(def) = cfg.pointer_mut(&format!("/provider/{id}")) {
+        } else if let Some(def) = cfg.pointer_mut(&jptr(&["provider", id])) {
             if !def.get("options").map(|o| o.is_object()).unwrap_or(false) {
                 def["options"] = json!({});
             }
@@ -274,6 +285,7 @@ impl Fmt {
             diff.push(&self.file(), format!("provider.{id}.options.apiKey = {}", mask_key(key)), true);
             dirty.cfg = true;
         }
+        Ok(())
     }
 
     /// Applies one provider / model op. Returns false for ops this module does not handle.
@@ -310,13 +322,13 @@ impl Fmt {
                         );
                         dirty.cfg = true;
                         if let Some(k) = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
-                            self.set_key(cfg, auth, &id, k, diff, dirty);
+                            self.set_key(cfg, auth, &id, k, diff, dirty)?;
                         }
                     }
                     Some(id) => {
-                        let in_cfg = cfg.pointer(&format!("/provider/{id}")).is_some();
+                        let in_cfg = cfg.pointer(&jptr(&["provider", id])).is_some();
                         let def = if in_cfg {
-                            cfg.pointer_mut(&format!("/provider/{id}")).unwrap()
+                            cfg.pointer_mut(&jptr(&["provider", id])).unwrap()
                         } else {
                             store::section(root, self.agent, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
                         };
@@ -343,7 +355,7 @@ impl Fmt {
                         }
                         if let Some(k) = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
                             if in_cfg {
-                                self.set_key(cfg, auth, id, k, diff, dirty);
+                                self.set_key(cfg, auth, id, k, diff, dirty)?;
                             } else if let Some(def) = store::section(root, self.agent, "disabledProviders").get_mut(id) {
                                 def["options"]["apiKey"] = json!(k);
                                 diff.push(&ef, format!("provider.{id}.options.apiKey = {}", mask_key(k)), true);
@@ -406,7 +418,7 @@ impl Fmt {
             Op::SetModelVisible { provider, model, visible } => {
                 let key = format!("{provider}|{model}");
                 let models = cfg
-                    .pointer_mut(&format!("/provider/{provider}"))
+                    .pointer_mut(&jptr(&["provider", provider]))
                     .and_then(|p| p.as_object_mut())
                     .ok_or_else(|| anyhow!(tr!("供应商 {provider} 未启用，先启用再调整模型", "Provider {provider} is disabled; enable it before changing its models")))?
                     .entry("models")
@@ -437,7 +449,7 @@ impl Fmt {
                 }
                 if self.model_def_mut(cfg, root, provider, &mid).is_none() {
                     let models = cfg
-                        .pointer_mut(&format!("/provider/{provider}"))
+                        .pointer_mut(&jptr(&["provider", provider]))
                         .and_then(|p| p.as_object_mut())
                         .ok_or_else(|| anyhow!(tr!("供应商 {provider} 未启用，先启用再添加模型", "Provider {provider} is disabled; enable it before adding models")))?
                         .entry("models")
@@ -446,8 +458,8 @@ impl Fmt {
                     diff.push(&ef, format!("provider.{provider}.models + \"{mid}\""), true);
                     dirty.cfg = true;
                 }
-                let in_cfg = cfg.pointer(&format!("/provider/{provider}/models/{mid}")).is_some();
-                let def = self.model_def_mut(cfg, root, provider, &mid).unwrap();
+                let in_cfg = cfg.pointer(&jptr(&["provider", provider, "models", &mid])).is_some();
+                let def = self.model_def_mut(cfg, root, provider, &mid).ok_or_else(|| anyhow!(tr!("找不到模型 {mid}", "Model not found: {mid}")))?;
                 let mut changed = vec![];
                 if let Some(n) = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                     if def.get("name").and_then(|x| x.as_str()) != Some(n) {
@@ -473,7 +485,7 @@ impl Fmt {
             }
             Op::DeleteModel { provider, model } => {
                 let removed = cfg
-                    .pointer_mut(&format!("/provider/{provider}/models"))
+                    .pointer_mut(&jptr(&["provider", provider, "models"]))
                     .and_then(|m| m.as_object_mut())
                     .and_then(|m| m.remove(model))
                     .is_some();

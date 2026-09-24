@@ -63,6 +63,7 @@ export default {
   modelList: "模型列表",
   modelListScope: "· 只作用于 {agent}",
   fetching: "拉取中…",
+  saving: "保存中…",
   fetchFromUrl: "从地址拉取",
   codexNewNote: "Codex 的模型列表按供应商保存：添加后在「编辑」里设置它自己的列表。",
   codexCurrentNote: "这是当前供应商：这里的列表就是 Codex 现在的模型选择器。",

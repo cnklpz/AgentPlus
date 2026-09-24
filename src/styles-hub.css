@@ -425,6 +425,10 @@ button, input, textarea, select { font-family: inherit; }
 /* The gear keeps a fixed width, so expanding its label never shifts the centred search box. */
 .gear-btn, .gear-btn:hover, .gear-btn:focus-visible, .gear-btn[aria-pressed="true"] { width: 74px; padding: 0 9px; justify-content: flex-end; flex-shrink: 0; }
 .env-btn { min-width: 150px; justify-content: space-between; }
+/* 隐私模式: conversation titles and folder names blur; inputs holding addresses or paths
+   blur until focused (typing needs to see them). Masked text is handled in privacy.ts. */
+[data-privacy] .sensitive { filter: blur(6px); user-select: none; }
+[data-privacy] input.sensitive:focus { filter: none; user-select: auto; }
 
 /* Top bar: three columns with equal sides, so the search box stays centred whatever
    the right side (environment name, settings) is doing. */

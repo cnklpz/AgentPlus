@@ -35,6 +35,7 @@ export function ConfirmHost() {
   const [cur, setCur] = useState<Pending | null>(null);
   const [checked, setChecked] = useState(false);
   const okRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     show = (p) => {
@@ -46,7 +47,8 @@ export function ConfirmHost() {
 
   useEffect(() => {
     if (!cur) return;
-    okRef.current?.focus();
+    // Destructive: start on Cancel, so a stray Enter does not delete anything.
+    (cur.danger ? cancelRef : okRef).current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
     };
@@ -82,7 +84,7 @@ export function ConfirmHost() {
         </div>
         <div className="modal-foot">
           <span className="grow" />
-          <button className="btn" onClick={() => done(false)}>{t("common.cancel")}</button>
+          <button ref={cancelRef} className="btn" onClick={() => done(false)}>{t("common.cancel")}</button>
           <button ref={okRef} className={`btn ${cur.danger ? "danger-solid" : "primary"}`} onClick={() => done(true)}>{cur.confirmText ?? (cur.danger ? t("common.delete") : t("common.confirm"))}</button>
         </div>
       </div>

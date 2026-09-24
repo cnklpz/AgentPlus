@@ -5,6 +5,7 @@ import { t, tn, useLang } from "../i18n";
 import { API_LABEL } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { colorFor, initials } from "./ProviderCard";
+import { scrubHost } from "../privacy";
 
 /** One provider that can be copied into a project. */
 interface Source {
@@ -113,7 +114,7 @@ export function CopyProviderDialog({ target, agents, lib, onCopy, onClose }: Pro
                         <span className="strong ellipsis">{s.name}</span>
                         {s.inherited && <span className="ptag tag-soft">{t("copyProviderDialog.inherited")}</span>}
                       </span>
-                      <span className="block mono tiny muted ellipsis">{s.host}</span>
+                      <span className="block mono tiny muted ellipsis">{scrubHost(s.host)}</span>
                     </span>
                     <span className="api-chip">{API_LABEL[s.api]}</span>
                     <span className="tiny muted copy-meta">{tn("copyProviderDialog.modelCount", s.models)}{s.hasKey ? "" : ` · ${t("copyProviderDialog.noKey")}`}</span>

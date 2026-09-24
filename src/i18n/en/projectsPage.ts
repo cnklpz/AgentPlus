@@ -1,11 +1,6 @@
 import type zh from "../zh/projectsPage";
 
 const en: typeof zh = {
-  justNow: "Just now",
-  minutesAgo: "{n} minute ago|{n} minutes ago",
-  hoursAgo: "{n} hour ago|{n} hours ago",
-  yesterday: "Yesterday",
-  daysAgo: "{n} day ago|{n} days ago",
   intro: "Configure OpenCode for a single project folder: the project's opencode.json is merged with the global config, and keys defined in the project take precedence.",
   pickFolder: "Choose folder…",
   or: "or",

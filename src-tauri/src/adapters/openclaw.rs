@@ -11,6 +11,7 @@
 //! baseUrl / apiKey win over openclaw.json, so address / key changes are mirrored there.
 
 
+use super::{Plan, Endpoint};
 use super::pimodels::{self, Dirty, Flavor, Fmt};
 use crate::model::*;
 use crate::process::Install;
@@ -209,12 +210,12 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
     fmt().endpoint(id, &cfg, &pimodels::load_store())
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
     let (mut cfg, meta, readonly) = load()?;
     let cfg0 = cfg.clone();
@@ -288,7 +289,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
                 let Ok((mut g, gm)) = read_json(&path) else { continue };
                 let mut touched = false;
                 for (id, k, v) in &changes {
-                    if let Some(p) = g.pointer_mut(&format!("/providers/{id}")).and_then(|p| p.as_object_mut()) {
+                    if let Some(p) = g.pointer_mut(&crate::util::jptr(&["providers", id])).and_then(|p| p.as_object_mut()) {
                         if p.get(*k) != Some(v) {
                             p.insert(k.to_string(), v.clone());
                             let shown = if *k == "apiKey" { mask_key(v.as_str().unwrap_or("")) } else { v.as_str().unwrap_or("").to_string() };
@@ -579,7 +580,7 @@ mod tests {
         // Disable (dry run first) / enable.
         let before = std::fs::read(config_path()).unwrap();
         let off = Op::SetProviderEnabled { provider: "vault".into(), enabled: false };
-        let (d, w, b) = plan(&[off.clone()], true).unwrap();
+        let (d, w, b) = plan(std::slice::from_ref(&off), true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(std::fs::read(config_path()).unwrap(), before);
         plan(&[off], false).unwrap();

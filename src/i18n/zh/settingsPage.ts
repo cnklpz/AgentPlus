@@ -38,6 +38,14 @@ export default {
   restartDialogHint: "弹窗实时显示关闭、启动、注入等每一步",
   restartToast: "简略提示",
   restartToastHint: "只在底部提示开始和结果",
+  privacy: "隐私模式",
+  privacyHint: "遮挡 API 密钥、服务商地址、路径里的用户名，模糊对话标题和项目名，适合截图或共享屏幕。只影响显示。快捷键 Ctrl+Shift+H",
+  closeAction: "关闭窗口时",
+  closeActionHint: "点右上角 × 或按 Alt+F4 时：{hint}",
+  closeAsk: "每次询问",
+  closeAskHint: "弹窗让你选择最小化到托盘还是退出",
+  closeTrayHint: "隐藏到托盘，后台继续运行，点托盘图标重新打开",
+  closeQuitHint: "直接退出，本地网关随之停止",
 
   dataTitle: "数据与备份",
   dataDir: "AgentPlus 数据目录",
@@ -45,6 +53,7 @@ export default {
   backups: "备份与回滚",
 
   aboutTitle: "关于",
+  aboutVersion: "AgentPlus {version}",
   aboutHint: "管理 Codex、Claude Code、OpenCode、ZCode、MiMo Desktop 等 Agent 的供应商和模型列表",
 
   dirUsed: "已使用这个目录",

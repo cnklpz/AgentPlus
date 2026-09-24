@@ -4,6 +4,7 @@ import { API_LABEL, type Group, type Station, USE_LABEL, writableAgents } from "
 import { AgentIcon, Icon } from "./icons";
 import { Bars, type Latency, colorFor, initials } from "./ProviderCard";
 import { type TKey, t, tn } from "../i18n";
+import { scrubHost } from "../privacy";
 
 interface Props {
   agents: AgentState[];
@@ -104,8 +105,8 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
                 <div className="hcard-head">
                   <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
                   <span className="pcard-title">
-                    <span className="pcard-name"><span className="ellipsis">{s.name}</span></span>
-                    <span className="pcard-host mono ellipsis">{s.host}</span>
+                    <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
+                    <span className="pcard-host mono ellipsis">{scrubHost(s.host)}</span>
                   </span>
                   {s.baseUrl && (
                     <button className={`hlat lat-btn${lat.level >= 2 ? " good" : lat.level === 1 ? " slow" : ""}`} title={t("providersHub.retestTitle")}

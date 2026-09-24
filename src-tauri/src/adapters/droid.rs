@@ -11,6 +11,7 @@
 //! writing and replace only `customModels` and `model` (atomic tmp + rename).
 //! The legacy `~/.factory/config.json` (`custom_models`, snake_case) is shown read-only.
 
+use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
@@ -18,7 +19,7 @@ use crate::store;
 use crate::util::*;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[allow(dead_code)]
 pub const ID: &str = "droid";
@@ -104,34 +105,10 @@ fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
 
 // ---------- detection ----------
 
-#[cfg(windows)]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    use std::os::windows::process::CommandExt;
-    cmd.creation_flags(0x0800_0000)
-}
-#[cfg(not(windows))]
-fn no_window(cmd: &mut std::process::Command) -> &mut std::process::Command {
-    cmd
-}
-
 fn npm_version(pkg: &str) -> Option<String> {
     let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
     let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
     v.get("version").and_then(|x| x.as_str()).map(String::from)
-}
-
-fn on_path(names: &[&str]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).flat_map(|d| names.iter().map(move |n| d.join(n))).find(|p| p.is_file())
-}
-
-fn exe_version(exe: &Path) -> Option<String> {
-    let out = no_window(std::process::Command::new(exe).arg("--version")).output().ok()?;
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .map(|w| w.trim_start_matches('v'))
-        .find(|w| w.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && w.contains('.'))
-        .map(String::from)
 }
 
 /// The `droid` CLI: npm global package, or the native installer's `droid.exe`.
@@ -144,11 +121,11 @@ pub fn detect() -> Install {
     } else {
         let h = dirs::home_dir().unwrap_or_default();
         let native = [h.join(".local").join("bin").join("droid.exe"), h.join("bin").join("droid.exe"), h.join(".factory").join("bin").join("droid.exe")];
-        if let Some(exe) = native.into_iter().find(|p| p.is_file()).or_else(|| on_path(&["droid.exe", "droid.cmd"])) {
+        if let Some(exe) = native.into_iter().find(|p| p.is_file()).or_else(|| crate::process::on_path(&["droid.exe", "droid.cmd"])) {
             inst.installed = true;
             if exe.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
                 static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-                inst.version = V.get_or_init(|| exe_version(&exe)).clone();
+                inst.version = V.get_or_init(|| crate::process::cli_version(&exe)).clone();
             }
         }
     }
@@ -351,7 +328,7 @@ fn model_of(e: &Value, visible: bool, readonly: bool) -> Model {
         id: s(e, "model"),
         visible,
         readonly,
-        tags: out.map(|n| vec![tr!("输出 {}", "Output {}", fmt_ctx(n))]).unwrap_or_default(),
+        tags: out.map(|n| vec![Tag::new("output", tr!("输出 {}", "Output {}", fmt_ctx(n)))]).unwrap_or_default(),
         name: (!d.trim().is_empty() && d != s(e, "model")).then_some(d),
         deletable: !readonly,
         extra: crate::mfields::read(e, crate::mfields::DROID),
@@ -487,7 +464,7 @@ pub fn state(inst: &Install) -> AgentState {
 }
 
 #[allow(dead_code)]
-pub fn provider_endpoint(id: &str) -> Result<(String, Option<String>, String)> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_settings()?;
     let root = load_root();
     let entries = custom_models(&cfg);
@@ -774,7 +751,7 @@ impl Work {
 }
 
 #[allow(dead_code)]
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<PathBuf>)> {
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg, _, had_comments) = load_settings()?;
     let orig_entries = custom_models(&cfg);
     let model0 = cfg.get("model").and_then(|x| x.as_str()).map(String::from);
@@ -841,7 +818,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<(Diff, Vec<PathBuf>, Option<Pat
     if !dry_run {
         if cfg_dirty {
             let path = settings_path();
-            backup_dir = Some(do_backup(&[path.clone()])?);
+            backup_dir = Some(do_backup(std::slice::from_ref(&path))?);
             // Droid may have rewritten the file meanwhile: take the latest copy and replace
             // only our two keys.
             let (mut fresh, meta, had) = load_settings()?;
@@ -986,7 +963,7 @@ mod tests {
         assert!(!st.readonly && st.providers.is_empty());
         assert!(plan(&[upsert(None, "Z", "https://z.example.com/v1", "chat", None, &[])], true).is_err());
         let op = upsert(None, "My Relay", "https://r.example.com/v1/", "responses", Some("sk-new-abcd9876"), &["gpt-5", "gpt-5-mini"]);
-        let (d, w, _) = plan(&[op.clone()], true).unwrap();
+        let (d, w, _) = plan(std::slice::from_ref(&op), true).unwrap();
         assert!(w.is_empty() && !h.0.join(".factory/settings.json").exists());
         let t = diff_text(&d);
         assert!(t.contains("••••9876") && !t.contains("abcd9876"), "{t}");
