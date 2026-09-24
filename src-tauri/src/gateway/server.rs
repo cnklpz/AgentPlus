@@ -1074,8 +1074,8 @@ fn target(root: &Value, route: &Route) -> Result<Target> {
         let fp = fingerprint(proto, &base, t.2.as_deref());
         return Ok(Target { route: route.clone(), proto, base, key: t.2.clone(), fp });
     }
-    let (_, base, key, _, _) = library::endpoint_in(root, &route.library)?;
-    let base: String = base.trim_end_matches('/').into();
+    let library::LibEndpoint { base_url, key, .. } = library::endpoint_in(root, &route.library)?;
+    let base: String = base_url.trim_end_matches('/').into();
     let fp = fingerprint(proto, &base, key.as_deref());
     Ok(Target { route: route.clone(), proto, base, key, fp })
 }
@@ -1251,7 +1251,7 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     if targets.is_empty() {
         let msg = match &only {
             None => l("本地网关还没有启用的转发", "The local gateway has no enabled forwards").to_string(),
-            Some(ids) => tr!("转发 {} 都不存在或已暂停", "Forwards {} don't exist or are paused", ids.join(l("、", ", "))),
+            Some(ids) => tr!("转发 {} 都不存在或已暂停", "Forwards {} don't exist or are paused", crate::i18n::join(ids)),
         };
         return Ok(reply_error(s, log, client_proto(req, rest), 503, &msg));
     }
