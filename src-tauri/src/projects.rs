@@ -58,9 +58,9 @@ fn normalize(path: &str) -> String {
 fn entry(path: &str, last: Option<String>) -> ProjectEntry {
     let dir = crate::env::resolve_path(path);
     let cfg = ocproject::config_path(&dir);
-    let providers = std::fs::read_to_string(&cfg)
+    let providers = crate::util::read_text(&cfg)
         .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&crate::util::strip_jsonc(&t).0).ok())
+        .and_then(|(t, _)| serde_json::from_str::<Value>(&crate::util::strip_jsonc(&t).0).ok())
         .and_then(|v| v.get("provider").and_then(|p| p.as_object()).map(|o| o.len()))
         .unwrap_or(0);
     ProjectEntry {
@@ -167,5 +167,14 @@ mod tests {
         assert!(!same_path("/home/me/Proj", "/home/me/proj"));
         assert!(!same_path("~/Proj", "~/proj"));
         assert!(same_path("/home/me/proj", "/home/me/proj"));
+    }
+
+    #[test]
+    fn counts_providers_of_a_bom_config() {
+        let h = crate::util::TestHome::new("projects-bom");
+        let dir = h.0.join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("opencode.json"), b"\xEF\xBB\xBF{\"provider\":{\"a\":{}}}").unwrap();
+        assert_eq!(entry(&dir.to_string_lossy(), None).providers, 1);
     }
 }

@@ -312,12 +312,13 @@ fn read_env() -> (Vec<String>, TextMeta) {
     read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
-/// An env_key as Codex sees it, and whether it comes from ~/.codex/.env: that file first
-/// (an assignment there wins even when empty), then the process environment. The first
-/// assignment of a key counts, and `set_env` rewrites that same line.
+/// An env_key as Codex sees it, and whether it comes from ~/.codex/.env. Codex sets every
+/// pair of that file into its environment in order, so the file beats the process
+/// environment (an assignment there wins even when empty) and the last assignment of a key
+/// wins.
 fn env_lookup(name: &str) -> Option<(String, bool)> {
     let (lines, _) = read_env();
-    match dotenv::get_first(&lines.join("\n"), name) {
+    match dotenv::get_last(&lines.join("\n"), name) {
         Some(v) => Some((v, true)),
         None => crate::env::agent_var(name).map(|v| (v, false)),
     }
@@ -328,12 +329,10 @@ pub fn env_value(name: &str) -> Option<String> {
     env_lookup(name).map(|(v, _)| v).filter(|v| !v.is_empty())
 }
 
+/// Sets `name` to `val` so Codex reads it back: the value is quoted when it needs to be, and
+/// later duplicates of the key are dropped (they would win over the rewritten line).
 fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
-    let line = format!("{name}={val}");
-    match lines.iter_mut().find(|l| dotenv::line_key(l) == Some(name)) {
-        Some(l) => *l = line,
-        None => lines.push(line),
-    }
+    *lines = dotenv::set(&lines.join("\n"), name, Some(val)).lines().map(String::from).collect();
 }
 
 /// Where the key comes from; agrees with `env_value` (an empty `KEY=` in .env is not a key).
@@ -846,7 +845,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let raw = configured_provider(&doc);
                 let src = store::get_str(&store, ID, "fixedSource");
                 if &raw == provider || (raw == FIXED_ID && src.as_deref() == Some(provider.as_str())) {
-                    return Err(anyhow!(tr!("「{provider}」正在使用，先切换到其他供应商再删除", "\"{provider}\" is in use; switch to another provider before deleting it")));
+                    return Err(msg::in_use(provider));
                 }
                 let removed = doc
                     .get_mut("model_providers")
@@ -1290,16 +1289,55 @@ http_headers = { X = \"1\" }
 
     #[test]
     fn key_status_agrees_with_env_value() {
-        let _h = codex_home_with("codex-keys", "", Some("# SET=commented\nEMPTY=\nSET=sk-1 # note\nSET=sk-2\n"));
-        crate::env::set_test_vars(&[("EMPTY", "sk-env"), ("ENVONLY", "sk-e")]);
-        assert_eq!(env_value("SET").as_deref(), Some("sk-1"), "the first assignment counts, without its comment");
+        let _h = codex_home_with("codex-keys", "", Some("# SET=commented\nEMPTY=\nSET=sk-1\nSET=sk-2 # note\nLATE=sk-x\nLATE=\n"));
+        crate::env::set_test_vars(&[("EMPTY", "sk-env"), ("LATE", "sk-env"), ("SET", "sk-env"), ("ENVONLY", "sk-e")]);
+        // Codex sets every .env pair in order: the last assignment wins, over the environment too.
+        assert_eq!(env_value("SET").as_deref(), Some("sk-2"), "the last assignment counts, without its comment");
         assert_eq!(key_status("SET"), "已在 ~/.codex/.env 配置");
         // An empty assignment in .env shadows the environment, and Codex then has no key.
         assert_eq!(env_value("EMPTY"), None);
         assert_eq!(key_status("EMPTY"), "未找到，请求会失败");
+        assert_eq!(env_value("LATE"), None, "a later empty assignment wins over an earlier key");
+        assert_eq!(key_status("LATE"), "未找到，请求会失败");
         assert_eq!(env_value("ENVONLY").as_deref(), Some("sk-e"));
         assert_eq!(key_status("ENVONLY"), "已在系统环境变量配置");
         assert_eq!(key_status("NONE"), "未找到，请求会失败");
+    }
+
+    #[test]
+    fn set_env_leaves_one_readable_line() {
+        let text = |lines: &[String]| lines.join("\n");
+        let mut lines: Vec<String> = ["# K=old", "K=sk-1", "A=1", "export K=sk-2", ""].map(String::from).to_vec();
+        set_env(&mut lines, "K", "sk-new");
+        assert_eq!(text(&lines), "# K=old\nK=sk-new\nA=1", "later duplicates are dropped");
+        assert_eq!(dotenv::get_last(&text(&lines), "K").as_deref(), Some("sk-new"));
+        let mut lines = vec!["A=1".to_string()];
+        set_env(&mut lines, "K", "a #b");
+        assert_eq!(text(&lines), "A=1\nK=\"a #b\"");
+        assert_eq!(dotenv::get_last(&text(&lines), "K").as_deref(), Some("a #b"), "a value that needs quotes reads back");
+        let mut lines = vec![];
+        set_env(&mut lines, "K", "v");
+        assert_eq!(lines, ["K=v"]);
+    }
+
+    #[test]
+    fn key_edit_rewrites_a_duplicated_env_key() {
+        let cfg = "model_provider = \"relay\"\n\n[model_providers.relay]\nname = \"relay\"\nbase_url = \"https://r/v1\"\nenv_key = \"RELAY_API_KEY\"\n";
+        let _h = codex_home_with("codex-dupkey", cfg, Some("RELAY_API_KEY=sk-old\nA=1\nRELAY_API_KEY=sk-older\n"));
+        assert_eq!(env_value("RELAY_API_KEY").as_deref(), Some("sk-older"));
+        let input = ProviderInput {
+            id: Some("relay".into()),
+            name: "relay".into(),
+            base_url: "https://r/v1".into(),
+            api: "responses".into(),
+            api_key: Some("sk-new".into()),
+            models: vec![],
+            key_from_library: None,
+            official_auth: Some(false),
+        };
+        plan(&[Op::UpsertProvider { provider: input }], false).unwrap();
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "RELAY_API_KEY=sk-new\nA=1\n");
+        assert_eq!(env_value("RELAY_API_KEY").as_deref(), Some("sk-new"));
     }
 
     #[test]
