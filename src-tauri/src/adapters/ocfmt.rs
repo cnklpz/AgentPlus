@@ -15,7 +15,7 @@ use crate::mfields;
 use crate::model::*;
 use crate::store;
 use crate::util::*;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -139,10 +139,11 @@ pub(crate) fn auth_cards(auth: Option<&Value>, known: &[Provider], login: &str, 
 
 /// Writes a credentials file in place (not tmp + rename) so it keeps its owner-only permissions.
 pub(crate) fn write_auth(path: &Path, auth: &Value) -> Result<()> {
+    let failed = || tr!("写入 {} 失败", "Failed to write {}", display_path(path));
     if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
+        std::fs::create_dir_all(d).with_context(failed)?;
     }
-    std::fs::write(path, serde_json::to_string_pretty(auth)? + "\n")?;
+    std::fs::write(path, serde_json::to_string_pretty(auth)? + "\n").with_context(failed)?;
     Ok(())
 }
 
