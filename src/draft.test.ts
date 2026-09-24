@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AgentState, Model, Op, Provider, Setting } from "./api";
 import {
-  type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, keys, mergeExtra, opCount, opsToWrite, parseCtx,
-  pendingTotal, providerModelCount, setModelVisible, setSetting, settingOn, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, importProvider, keys, mergeExtra, opCount, opsToWrite,
+  parseCtx, pendingTotal, providerModelCount, removeProvider, setModelVisible, setProviderEnabled, setSetting, settingOn, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp,
 } from "./draft";
 
@@ -126,6 +126,31 @@ describe("op builders", () => {
     expect(d).toEqual({ [keys.visible("p", "m")]: { op: "set_model_visible", provider: "p", model: "m", visible: false } });
     expect(setModelVisible(d, "p", m, true)).toEqual({});
     expect(setModelVisible({}, "p", m, true)).toEqual({});
+  });
+  it("importProvider uses the import key and keeps only the given fields", () => {
+    const d = importProvider({}, { fromAgent: "library", provider: "e1", api: "chat", name: "Relay" });
+    expect(d).toEqual({ "pi:library:e1": { op: "import_provider", fromAgent: "library", provider: "e1", api: "chat", name: "Relay" } });
+    const labeled = importProvider({}, { fromAgent: "claude", provider: "p", api: "anthropic", name: "P", label: "Claude Code" });
+    expect(labeled[keys.importProvider("claude", "p")]).toEqual({ op: "import_provider", fromAgent: "claude", provider: "p", api: "anthropic", name: "P", label: "Claude Code" });
+  });
+  it("setProviderEnabled drops the op when back to the applied value", () => {
+    const off = provider("p", { enabled: false });
+    expect(setProviderEnabled({}, off, false)).toEqual({});
+    const d = setProviderEnabled({}, provider("p"), false);
+    expect(d).toEqual({ [keys.enabled("p")]: { op: "set_provider_enabled", provider: "p", enabled: false } });
+    expect(setProviderEnabled(d, provider("p"), true)).toEqual({});
+  });
+  it("removeProvider drops a pending new entry instead of deleting its draft key", () => {
+    const st = agent({ providers: [provider("old")] });
+    let d = upsertProvider({}, { id: null, name: "GW", baseUrl: "http://127.0.0.1:1/v1", api: "anthropic", apiKey: "", models: [] }, keys.gatewayProvider("x"));
+    const fresh = viewProviders(st, d).find((p) => p.isNew)!;
+    expect(fresh.id).toBe("pu:gw-x");
+    d = removeProvider(d, fresh);
+    expect(d).toEqual({});
+    expect(Object.values(d).some((op) => op.op === "delete_provider")).toBe(false);
+    // An applied provider gets a pending delete.
+    const old = viewProviders(st, d)[0];
+    expect(removeProvider(d, old)).toEqual(deleteProvider({}, "old"));
   });
   it("key formats", () => {
     expect(keys.importProvider("library", "e1")).toBe("pi:library:e1");

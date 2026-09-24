@@ -106,7 +106,7 @@ const en: typeof zh = {
   showInPicker: "Show in picker",
   deleteModelMenu: "Delete model…",
   addGroupMenu: "Add group…",
-  deleteForwardMenu: "Delete forward…",
+  deleteForwardMenu: "Delete route…",
   copySessionId: "Copy session ID",
   copyTitle: "Copy title",
   showInFolder: "Show in folder",

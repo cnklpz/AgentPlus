@@ -2,17 +2,22 @@ import { useState } from "react";
 import { t } from "../i18n";
 import { toggledIn } from "../util";
 
+/** `pool` plus the ids of `ids` it doesn't list yet (the same array when nothing is new). */
+export function growPool(pool: readonly string[], ids: readonly string[]): string[] {
+  const more = [...new Set(ids)].filter((id) => !pool.includes(id));
+  return more.length ? [...pool, ...more] : (pool as string[]);
+}
+
 /**
  * Models a dialog has listed so far. It only grows: unticking a model (or "select none") must
- * not drop it from the list, or it could only come back by typing it in again.
+ * not drop it from the list, or it could only come back by typing it in again. `reset` starts
+ * over (another vendor template was picked: the previous one's models don't belong to it).
  */
-export function useModelPool(initial: () => string[]): [string[], (ids: readonly string[]) => void] {
-  const [pool, setPool] = useState<string[]>(() => [...new Set(initial())]);
-  const add = (ids: readonly string[]) => setPool((p) => {
-    const more = ids.filter((id) => !p.includes(id));
-    return more.length ? [...p, ...[...new Set(more)]] : p;
-  });
-  return [pool, add];
+export function useModelPool(initial: () => string[]): [string[], (ids: readonly string[]) => void, (ids: readonly string[]) => void] {
+  const [pool, setPool] = useState<string[]>(() => growPool([], initial()));
+  const add = (ids: readonly string[]) => setPool((p) => growPool(p, ids));
+  const reset = (ids: readonly string[]) => setPool(growPool([], ids));
+  return [pool, add, reset];
 }
 
 interface Props {
