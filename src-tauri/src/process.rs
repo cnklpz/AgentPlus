@@ -357,16 +357,26 @@ pub(crate) fn package_version(package_json: &Path) -> Option<String> {
     v.get("version")?.as_str().map(String::from)
 }
 
-/// package.json of a global npm package (`%APPDATA%\npm\node_modules\<pkg>`, `pkg` may be
-/// scoped: "@scope/name").
+/// package.json of npm package `pkg` under the npm prefix `root`
+/// (`<root>\node_modules\<pkg>`, `pkg` may be scoped: "@scope/name").
+pub(crate) fn npm_package_in(root: &Path, pkg: &str) -> PathBuf {
+    pkg.split('/').fold(root.join("node_modules"), |d, part| d.join(part)).join("package.json")
+}
+
+/// package.json of a global npm package (`%APPDATA%\npm\node_modules\<pkg>`).
 pub(crate) fn npm_global_package(pkg: &str) -> Option<PathBuf> {
-    let dir = pkg.split('/').fold(dirs::data_dir()?.join("npm").join("node_modules"), |d, part| d.join(part));
-    Some(dir.join("package.json"))
+    Some(npm_package_in(&dirs::data_dir()?.join("npm"), pkg))
 }
 
 /// Version of a global npm package; None when it isn't installed there.
 pub(crate) fn npm_global_version(pkg: &str) -> Option<String> {
     package_version(&npm_global_package(pkg)?)
+}
+
+/// Version of a global npm package under `%APPDATA%\npm`, else under the folder of `shim`
+/// (the CLI found on PATH, for an npm with another prefix).
+pub(crate) fn npm_version_near(pkg: &str, shim: Option<&Path>) -> Option<String> {
+    npm_global_version(pkg).or_else(|| package_version(&npm_package_in(shim?.parent()?, pkg)))
 }
 
 /// Codex desktop: the MSIX package.
