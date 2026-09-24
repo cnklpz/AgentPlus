@@ -11,6 +11,7 @@
 //! writing and replace only `customModels` and `model` (atomic tmp + rename).
 //! The legacy `~/.factory/config.json` (`custom_models`, snake_case) is shown read-only.
 
+use super::keyref::{self, host, resolve_key, Group, Key};
 use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
@@ -96,20 +97,6 @@ fn provider_for(api: &str) -> Result<&'static str> {
     }
 }
 
-/// `${VAR}` / `$VAR` → the variable name.
-fn env_ref(k: &str) -> Option<&str> {
-    let k = k.trim();
-    k.strip_prefix("${").and_then(|r| r.strip_suffix('}')).or_else(|| k.strip_prefix('$')).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-}
-
-/// The key a request would use: a literal, or the value of the referenced env variable.
-fn resolve_key(k: &str) -> Option<String> {
-    match env_ref(k) {
-        Some(var) => crate::env::agent_var(var).filter(|v| !v.trim().is_empty()),
-        None => Some(k.trim().to_string()).filter(|v| !v.is_empty()),
-    }
-}
-
 /// What Droid shows / selects: displayName, else the model id.
 fn display(e: &Value) -> String {
     let d = str_field(e, "displayName");
@@ -126,8 +113,7 @@ fn entry_id(e: &Value, i: usize) -> String {
     e.get("id").and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(String::from).unwrap_or_else(|| sel_id(e, i))
 }
 
-type Key = (String, String, String);
-
+/// Groups entries by (baseUrl, provider, apiKey).
 fn key_of(e: &Value) -> Key {
     (norm_base(&str_field(e, "baseUrl")), str_field(e, "provider"), str_field(e, "apiKey"))
 }
@@ -137,21 +123,10 @@ fn fp(k: &Key) -> String {
     key_fingerprint(&format!("{}\n{}\n{}", k.0, k.1, k.2))
 }
 
-fn host(base: &str) -> String {
-    url::Url::parse(base).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| host_of(base))
-}
-
 fn strip_markers(e: &mut Value) {
     if let Some(o) = e.as_object_mut() {
         o.retain(|k, _| !k.starts_with("__agentplus_"));
     }
-}
-
-#[derive(Clone, Debug)]
-struct Group {
-    id: String,
-    key: Key,
-    name: String,
 }
 
 /// Groups in order of first appearance (active entries first, then parked ones).
@@ -246,14 +221,6 @@ fn model_of(e: &Value, visible: bool, readonly: bool) -> Model {
     }
 }
 
-fn key_note(k: &str) -> String {
-    match env_ref(k) {
-        Some(var) => if resolve_key(k).is_some() { tr!("环境变量 ${{{var}}}（已设置）", "Environment variable ${{{var}}} (set)") } else { tr!("环境变量 ${{{var}}}（未设置）", "Environment variable ${{{var}}} (not set)") },
-        None if k.trim().is_empty() => l("未填写", "Not set").into(),
-        None => l("明文保存在 settings.json", "Stored in plain text in settings.json").into(),
-    }
-}
-
 fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -> Provider {
     let mine = |e: &Value| key_of(e) == g.key;
     let active: Vec<&Value> = entries.iter().filter(|e| mine(e)).collect();
@@ -285,12 +252,12 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         details: vec![
             Kv::mono("provider", if g.key.1.is_empty() { "-".into() } else { g.key.1.clone() }),
             Kv::text(l("条目", "Entries"), trn!(active.len(), "customModels 里 {n} 个模型条目（每个条目自带地址和密钥）", "{n} model entry in customModels (it carries its own base URL and API key)", "{n} model entries in customModels (each carries its own base URL and API key)")),
-            Kv::text(lbl::api_key(), key_note(&g.key.2)),
+            Kv::text(lbl::api_key(), keyref::key_note(&g.key.2, "settings.json")),
             Kv::text(lbl::status(), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
         ],
         editable: !readonly,
         api: api.into(),
-        has_key: resolve_key(&g.key.2).is_some() || env_ref(&g.key.2).is_some(),
+        has_key: keyref::has_key(&g.key.2),
         ..Default::default()
     }
 }
@@ -385,7 +352,7 @@ impl Work {
     }
 
     fn require_enabled(&self, g: &Group) -> Result<()> {
-        if self.enabled(g) { Ok(()) } else { Err(anyhow!(tr!("供应商「{}」已停用，先启用再调整模型", "Provider \"{}\" is disabled; enable it before changing its models", g.name))) }
+        keyref::require_enabled(g, self.enabled(g))
     }
 
     fn park(&mut self, e: Value, why: &str) {

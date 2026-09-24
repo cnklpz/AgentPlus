@@ -10,6 +10,7 @@
 //! `availableModels` is the native visibility list: hiding removes the id from it and
 //! keeps the entry. Disabled providers are moved out and parked in the AgentPlus store.
 
+use super::keyref::{self, host, resolve_key, Group, Key};
 use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
@@ -120,33 +121,9 @@ fn url_of(base: &str) -> String {
     if t.ends_with(SUFFIX) { t.to_string() } else { format!("{t}{SUFFIX}") }
 }
 
-fn env_ref(k: &str) -> Option<&str> {
-    let k = k.trim();
-    k.strip_prefix("${").and_then(|r| r.strip_suffix('}')).or_else(|| k.strip_prefix('$')).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-}
-
-fn resolve_key(k: &str) -> Option<String> {
-    match env_ref(k) {
-        Some(var) => crate::env::agent_var(var).filter(|v| !v.trim().is_empty()),
-        None => Some(k.trim().to_string()).filter(|v| !v.is_empty()),
-    }
-}
-
-type Key = (String, String, String); // (base, apiKey, vendor)
-
+/// Groups entries by (base URL, apiKey, vendor).
 fn key_of(e: &Value) -> Key {
     (base_of(&str_field(e, "url")), str_field(e, "apiKey"), str_field(e, "vendor"))
-}
-
-fn host(base: &str) -> String {
-    url::Url::parse(base).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| host_of(base))
-}
-
-#[derive(Clone, Debug)]
-struct Group {
-    id: String,
-    key: Key,
-    name: String,
 }
 
 /// Groups in order of first appearance (active entries first, then parked ones).
@@ -216,14 +193,6 @@ fn model_of(e: &Value, visible: bool) -> Model {
     }
 }
 
-fn key_note(k: &str) -> String {
-    match env_ref(k) {
-        Some(var) => if resolve_key(k).is_some() { tr!("环境变量 ${{{var}}}（已设置）", "Environment variable ${{{var}}} (set)") } else { tr!("环境变量 ${{{var}}}（未设置）", "Environment variable ${{{var}}} (not set)") },
-        None if k.trim().is_empty() => l("未填写", "Not set").into(),
-        None => l("明文保存在 models.json", "Stored in plain text in models.json").into(),
-    }
-}
-
 fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Vec<String>>) -> Provider {
     let mine = |e: &Value| key_of(e) == g.key;
     let active: Vec<&Value> = entries.iter().filter(|e| mine(e)).collect();
@@ -248,12 +217,12 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
         details: vec![
             Kv::mono("vendor", if g.key.2.is_empty() { "-".into() } else { g.key.2.clone() }),
             Kv::mono("url", url_of(&g.key.0)),
-            Kv::text(lbl::api_key(), key_note(&g.key.1)),
+            Kv::text(lbl::api_key(), keyref::key_note(&g.key.1, "models.json")),
             Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") }),
         ],
         editable: true,
         api: "chat".into(),
-        has_key: resolve_key(&g.key.1).is_some() || env_ref(&g.key.1).is_some(),
+        has_key: keyref::has_key(&g.key.1),
         ..Default::default()
     }
 }
@@ -331,7 +300,7 @@ impl Work {
     }
 
     fn require_enabled(&self, g: &Group) -> Result<()> {
-        if self.enabled(g) { Ok(()) } else { Err(anyhow!(tr!("供应商「{}」已停用，先启用再调整模型", "Provider \"{}\" is disabled; enable it before changing its models", g.name))) }
+        keyref::require_enabled(g, self.enabled(g))
     }
 
     /// Model ids are global in CodeBuddy (selection and availableModels use them).
