@@ -1324,7 +1324,7 @@ pub fn error_message(v: &Value) -> Option<String> {
 }
 
 /// The message of an upstream error body: from its JSON, else the (shortened) text itself.
-fn extract_error_message(text: &str) -> String {
+pub(crate) fn extract_error_message(text: &str) -> String {
     serde_json::from_str::<Value>(text)
         .ok()
         .and_then(|v| error_message(&v))

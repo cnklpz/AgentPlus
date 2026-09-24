@@ -944,7 +944,10 @@ fn client_proto(req: &Request, rest: &str) -> Proto {
 fn reply_error(s: &mut TcpStream, log: &mut LogEntry, p: Proto, status: u16, msg: &str) -> u16 {
     let body = convert::error_body(p, status, msg);
     write_json(s, status, &body);
-    log.error = body.pointer("/error/message").and_then(Value::as_str).map(String::from);
+    // More of the message than the answer's shortened one (an upstream JSON body's message,
+    // not the JSON): e.g. "every forward failed" lists each forward's reason.
+    let full = serde_json::from_str::<Value>(msg).ok().and_then(|v| convert::error_message(&v)).unwrap_or_else(|| msg.trim().to_string());
+    log.error = if full.is_empty() { body.pointer("/error/message").and_then(Value::as_str).map(String::from) } else { Some(clip(&full, 4000)) };
     status
 }
 
@@ -1014,7 +1017,9 @@ fn handle(mut s: TcpStream) {
         Ok(st) => st,
         Err(e) => {
             let msg = format!("{e:#}");
-            let inbound = Proto::from_api(&log.inbound).unwrap_or(Proto::Chat);
+            // Failed before the request was parsed: answer in the protocol its path and headers show.
+            let inbound = Proto::from_api(&log.inbound)
+                .unwrap_or_else(|| split_path(&req.path).map_or_else(|| models_proto(&req), |(_, rest)| client_proto(&req, &rest)));
             write_json(&mut s, 502, &convert::error_body(inbound, 502, &msg));
             log.error = Some(match log.error.take() {
                 Some(note) => tr!("{msg}（{note}）", "{msg} ({note})"),
@@ -1462,8 +1467,9 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         if can_retry && (status >= 500 || status == 429) {
             return Ok(Attempt::Retry(breaker::describe(status, &text)));
         }
-        // The message, not the raw body: the breaker's reason is made from it.
-        log.error = Some(breaker::brief(&text));
+        // The message, not the raw body: the breaker's reason is made from it (`tracked`
+        // shortens it there; the log keeps more of it for long validation errors).
+        log.error = Some(clip(&convert::extract_error_message(&text), 500));
         if inbound == upstream {
             write_full(s, status, "application/json", text.as_bytes());
         } else {
@@ -1601,7 +1607,8 @@ impl UsageSniff {
 }
 
 /// Reads the start of a body labelled as something other than SSE and tells whether it is
-/// SSE after all. Returns what it read, to be replayed in front of the rest.
+/// SSE after all: it opens with a `data:` / `event:` field or a `:` comment line (which no JSON
+/// document does). Returns what it read, to be replayed in front of the rest.
 fn sniff_sse(r: &mut impl Read) -> std::io::Result<(bool, Vec<u8>)> {
     let mut head = vec![];
     let mut buf = [0u8; 1024];
@@ -1613,7 +1620,7 @@ fn sniff_sse(r: &mut impl Read) -> std::io::Result<(bool, Vec<u8>)> {
         head.extend_from_slice(&buf[..n]);
     }
     let t = head.trim_ascii_start();
-    Ok((t.starts_with(b"data:") || t.starts_with(b"event:"), head))
+    Ok((t.starts_with(b"data:") || t.starts_with(b"event:") || t.starts_with(b":"), head))
 }
 
 /// Passes the upstream's answer through as it arrives; returns its status.
@@ -1937,6 +1944,54 @@ mod tests {
         lock(&TEST_ROUTES).clear();
     }
 
+    /// When every forward is paused, the log keeps each forward's reason, however long the
+    /// list; a passed-through upstream error keeps more of its message than the breaker's reason.
+    #[test]
+    fn failure_logs_keep_the_whole_reason() {
+        let _guard = lock(&TEST_LOCK);
+        let cfg = breaker::Config::default();
+        let ids = ["fa", "fb", "fc"];
+        *lock(&TEST_ROUTES) = ids.iter().map(|id| (test_route(id, "chat", &[("m", "m")]), "http://127.0.0.1:9/v1".into(), None)).collect();
+        for id in ids {
+            breaker::reset(Some(id));
+            for _ in 0..cfg.threshold {
+                breaker::record(&cfg, id, Outcome::Fault("x".repeat(150)), breaker::Ticket::default());
+            }
+        }
+        lock(&MODEL_CACHE).clear();
+        let port = gateway_n(1);
+        let r = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/fa+fb+fc/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","messages":[]}"#)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 503);
+        let e = (0..100)
+            .find_map(|_| {
+                let e = lock(&LOG).iter().find(|l| l.route.contains("fa+fb+fc")).cloned();
+                e.or_else(|| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    None
+                })
+            })
+            .unwrap();
+        let err = e.error.unwrap_or_default();
+        assert!(err.chars().count() > 500 && ids.iter().all(|id| err.contains(&format!("「{id}」"))), "{err}");
+
+        // One forward, a long 400 validation message: logged well past the breaker's 160 chars.
+        let long = "y".repeat(400);
+        one_route("val", "chat", fixed_upstream(400, json!({ "error": { "message": long } }).to_string(), Arc::new(AtomicU64::new(0))));
+        let port = gateway_n(1);
+        let r = reqwest::blocking::Client::new().post(format!("http://127.0.0.1:{port}/val/v1/chat/completions")).bearer_auth(test_key()).body(r#"{"model":"m","messages":[]}"#).send().unwrap();
+        assert_eq!(r.status().as_u16(), 400);
+        assert_eq!(logged("val").error.as_deref(), Some(long.as_str()));
+        for id in ids {
+            breaker::reset(Some(id));
+        }
+        lock(&TEST_ROUTES).clear();
+    }
+
     /// A model the upstream lists as "models/x" (Gemini style) is listed as "x" and a
     /// request for "x" goes to that forward.
     #[test]
@@ -2192,6 +2247,33 @@ mod tests {
         assert_eq!(r.status().as_u16(), 404);
         let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
         assert_eq!((v["error"]["type"].as_str(), v["error"]["code"].as_u64()), (Some("not_found_error"), Some(404)), "{v}");
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// A forward that fails before the request is parsed (here: an invalid protocol) still
+    /// answers its 502 in the client's protocol.
+    #[test]
+    fn failure_before_parsing_answers_in_the_clients_protocol() {
+        let _guard = lock(&TEST_LOCK);
+        one_route("bogus", "bogus", "http://127.0.0.1:9/v1".into());
+        let port = gateway_n(2);
+        let client = reqwest::blocking::Client::new();
+        let r = client
+            .post(format!("http://127.0.0.1:{port}/bogus/v1/messages"))
+            .header("x-api-key", test_key())
+            .header("anthropic-version", "2023-06-01")
+            .body("{}")
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 502);
+        let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
+        assert_eq!(v["type"], "error", "{v}");
+        assert!(v["error"]["message"].as_str().is_some_and(|m| m.contains("bogus")), "{v}");
+        // Chat clients keep the OpenAI shape.
+        let r = client.post(format!("http://127.0.0.1:{port}/bogus/v1/chat/completions")).bearer_auth(test_key()).body("{}").send().unwrap();
+        assert_eq!(r.status().as_u16(), 502);
+        let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
+        assert!(v.get("type").is_none() && v["error"]["message"].is_string(), "{v}");
         lock(&TEST_ROUTES).clear();
     }
 
@@ -2451,6 +2533,8 @@ mod tests {
         assert!(sse && head == b"  \n\nevent: x\n");
         let mut r: &[u8] = b"{\"data\":1}";
         assert!(!sniff_sse(&mut r).unwrap().0);
+        let mut r: &[u8] = b": ping\n\ndata: {}\n";
+        assert!(sniff_sse(&mut r).unwrap().0);
         lock(&TEST_ROUTES).clear();
     }
 
@@ -2472,6 +2556,27 @@ mod tests {
             .unwrap();
         assert_eq!(text, ok);
         assert_eq!(logged("whole").usage, Some((6, 2)));
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// A same-protocol stream mislabelled as text/plain that opens with an SSE comment line:
+    /// still passed through as is, and its tokens are counted.
+    #[test]
+    fn mislabelled_stream_opening_with_a_comment_counts_tokens() {
+        let _guard = lock(&TEST_LOCK);
+        let sse = ": ping\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+        one_route("cmt", "chat", raw_upstream(http_resp("200 OK", "text/plain", sse)));
+        let port = gateway_n(1);
+        let text = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/cmt/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","stream":true,"messages":[]}"#)
+            .send()
+            .unwrap()
+            .text()
+            .unwrap();
+        assert_eq!(text, sse);
+        assert_eq!(logged("cmt").usage, Some((3, 2)));
         lock(&TEST_ROUTES).clear();
     }
 
