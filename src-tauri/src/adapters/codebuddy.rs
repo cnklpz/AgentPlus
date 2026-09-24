@@ -267,8 +267,8 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
         details: vec![
             Kv::mono("vendor", if g.key.2.is_empty() { "-".into() } else { g.key.2.clone() }),
             Kv::mono("url", url_of(&g.key.0)),
-            Kv::text(l("密钥", "API key"), key_note(&g.key.1)),
-            Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") }),
+            Kv::text(lbl::api_key(), key_note(&g.key.1)),
+            Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") }),
         ],
         editable: true,
         api: "chat".into(),
@@ -325,13 +325,13 @@ pub fn state(inst: &Install) -> AgentState {
         st.providers.push(provider_of(&g, &entries, &parked, avail.as_ref()));
     }
     st.current = vec![
-        Kv::mono(l("默认模型", "Default model"), default_model().unwrap_or_else(|| l("-（CodeBuddy 默认）", "- (CodeBuddy default)").into())),
-        Kv::text(l("自定义模型", "Custom models"), tr!("{} 个", "{}", entries.len())),
+        Kv::mono(lbl::default_model(), default_model().unwrap_or_else(|| l("-（CodeBuddy 默认）", "- (CodeBuddy default)").into())),
+        Kv::text(lbl::custom_models(), tr!("{} 个", "{}", entries.len())),
         Kv::text("availableModels", match &avail {
             Some(a) => tr!("{} 个（只显示列出的模型）", "{} (only listed models are shown)", a.len()),
             None => l("未设置（全部显示）", "Not set (all shown)").into(),
         }),
-        Kv::mono(l("配置文件", "Config file"), display_path(&models_path())),
+        Kv::mono(lbl::config_file(), display_path(&models_path())),
     ];
     st.notes.push(l("CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；其他协议可经 AgentPlus 本地网关转换后接入。", "CodeBuddy custom models only support the OpenAI Chat Completions API; other protocols can be converted through the AgentPlus local gateway.").into());
     st.notes.push(l("models.json 改动约 1 秒后自动生效（CLI 与 IDE 共用）。", "Changes to models.json take effect in about a second (shared by the CLI and the IDE).").into());

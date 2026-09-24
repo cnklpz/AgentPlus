@@ -196,14 +196,14 @@ pub fn state(inst: &Install) -> AgentState {
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("自定义供应商", "Custom providers"), if on.is_empty() { l("无", "None").into() } else { on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", ")) }),
-        Kv::mono(l("默认模型", "Default model"), primary.unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::mono(lbl::default_model(), primary.unwrap_or_else(|| "-".into())),
     ];
     if !fallbacks.is_empty() {
         st.current.push(Kv::mono(l("备用模型", "Fallback models"), fallbacks.join(", ")));
     }
-    st.current.push(Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")));
-    st.current.push(Kv::mono(l("配置文件", "Config file"), f.file()));
+    st.current.push(Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")));
+    st.current.push(Kv::mono(lbl::config_file(), f.file()));
     st
 }
 

@@ -132,7 +132,7 @@ pub fn state(inst: &Install) -> AgentState {
                 id: id.clone(),
                 name: id.clone(),
                 base_url: None,
-                host: if oauth { l("账号登录（/login）", "Account login (/login)").into() } else { l("内置供应商 · API Key", "Built-in provider · API Key").into() },
+                host: if oauth { l("账号登录（/login）", "Account sign-in (/login)").into() } else { l("内置供应商 · API Key", "Built-in provider · API key").into() },
                 apis: vec![l("内置", "Built-in").into()],
                 builtin: true,
                 enabled: true,
@@ -140,8 +140,8 @@ pub fn state(inst: &Install) -> AgentState {
                 reason: None,
                 models: vec![],
                 details: vec![
-                    Kv::mono(l("凭据", "Credentials"), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth login") } else { "API Key" })),
-                    Kv::text(l("说明", "About"), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
+                    Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
+                    Kv::text(lbl::note(), l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.")),
                 ],
                 editable: false,
                 api: "chat".into(),
@@ -157,15 +157,15 @@ pub fn state(inst: &Install) -> AgentState {
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled && !p.builtin).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("自定义供应商", "Custom providers"), if on.is_empty() { l("无", "None").into() } else { on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", ")) }),
-        Kv::mono(l("默认模型", "Default model"), match (&dp, &dm) {
+        Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::mono(lbl::default_model(), match (&dp, &dm) {
             (Some(p), Some(m)) => format!("{p}/{m}"),
             (None, Some(m)) => m.clone(),
             (Some(p), None) => tr!("{p}/（未指定）", "{p}/(not set)"),
             _ => "-".into(),
         }),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("配置文件", "Config file"), f.file()),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+        Kv::mono(lbl::config_file(), f.file()),
     ];
     st
 }

@@ -163,9 +163,9 @@ pub fn state(inst: &Install) -> AgentState {
                     reason: None,
                     models: vec![],
                     details: vec![
-                        Kv::mono(l("凭据", "Credentials"), format!("auth.json · {id} · {}", if kind == "oauth" { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
+                        Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if kind == "oauth" { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
                         Kv::text(
-                            l("说明", "Note"),
+                            lbl::note(),
                             l(
                                 "Kilo Code 内置的供应商，模型列表来自 models.dev / Kilo 网关，在 Kilo 里用 /models 选择",
                                 "A provider built into Kilo Code; its model list comes from models.dev / the Kilo gateway. Pick a model with /models in Kilo",
@@ -204,13 +204,13 @@ pub fn state(inst: &Install) -> AgentState {
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
         Kv::text(
-            l("自定义供应商", "Custom providers"),
-            if on.is_empty() { l("无", "None").into() } else { on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", ")) },
+            lbl::custom_providers(),
+            lbl::names_or_none(on.iter().map(|p| &p.name)),
         ),
-        Kv::mono(l("默认模型", "Default model"), get_s("model").unwrap_or_else(|| "-".into())),
-        Kv::mono(l("小模型", "Small model"), get_s("small_model").unwrap_or_else(|| "-".into())),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("配置文件", "Config file"), f.file()),
+        Kv::mono(lbl::default_model(), get_s("model").unwrap_or_else(|| "-".into())),
+        Kv::mono(lbl::small_model(), get_s("small_model").unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+        Kv::mono(lbl::config_file(), f.file()),
     ];
     st.notes.push(
         l(

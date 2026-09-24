@@ -152,7 +152,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let mut own = f.providers(&cfg, &root);
     for p in own.iter_mut() {
         p.enabled = !off.contains(&p.id);
-        p.details.push(Kv::text(l("来源", "Source"), l("项目配置", "Project config")));
+        p.details.push(Kv::text(lbl::source(), l("项目配置", "Project config")));
         if global_ids.contains(&p.id) {
             p.details.push(Kv::text(l("注意", "Note"), l("全局配置里也有同名供应商，OpenCode 会把两份合并（项目的优先）", "The global config has a provider with the same id. OpenCode merges the two (the project wins).")));
         }
@@ -168,8 +168,8 @@ pub fn state(agent: &str) -> Result<AgentState> {
             m.readonly = true;
             m.deletable = false;
         }
-        g.details.retain(|kv| kv.k != l("状态", "Status"));
-        g.details.push(Kv::text(l("来源", "Source"), l("全局配置（继承）：项目里只能启用或停用；要单独改地址或模型，先复制到项目", "Global config (inherited): the project can only enable or disable it. To change its base URL or models, copy it to the project first.")));
+        g.details.retain(|kv| kv.k != lbl::status());
+        g.details.push(Kv::text(lbl::source(), l("全局配置（继承）：项目里只能启用或停用；要单独改地址或模型，先复制到项目", "Global config (inherited): the project can only enable or disable it. To change its base URL or models, copy it to the project first.")));
     }
     let mut all = own;
     all.append(&mut inherited);
@@ -191,8 +191,8 @@ pub fn state(agent: &str) -> Result<AgentState> {
     st.current = vec![
         Kv::mono(l("项目配置", "Project config"), if exists { f.file() } else { tr!("{}（还没有，应用时创建）", "{} (not created yet, will be created on apply)", f.file()) }),
         Kv::mono(l("全局配置", "Global config"), gf.file()),
-        Kv::text(l("项目供应商", "Project providers"), if own_names.is_empty() { l("无", "None").into() } else { own_names.join(l("、", ", ")) }),
-        Kv::mono(l("默认模型", "Default model"), model.unwrap_or_else(|| "-".into())),
+        Kv::text(l("项目供应商", "Project providers"), lbl::names_or_none(&own_names)),
+        Kv::mono(lbl::default_model(), model.unwrap_or_else(|| "-".into())),
     ];
 
     if !exists {

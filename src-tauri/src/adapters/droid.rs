@@ -304,8 +304,8 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         details: vec![
             Kv::mono("provider", if g.key.1.is_empty() { "-".into() } else { g.key.1.clone() }),
             Kv::text(l("条目", "Entries"), tr!("customModels 里 {} 个模型条目（每个条目自带地址和密钥）", "{} model entries in customModels (each carries its own base URL and API key)", active.len())),
-            Kv::text(l("密钥", "API key"), key_note(&g.key.2)),
-            Kv::text(l("状态", "Status"), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
+            Kv::text(lbl::api_key(), key_note(&g.key.2)),
+            Kv::text(lbl::status(), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
         ],
         editable: !readonly,
         api: api.into(),
@@ -373,7 +373,7 @@ pub fn state(inst: &Install) -> AgentState {
     let model = cfg.get("model").and_then(|x| x.as_str()).map(String::from);
     let selected = model.as_deref().and_then(|m| entries.iter().enumerate().find(|(i, e)| entry_id(e, *i) == m));
     st.current = vec![
-        Kv::mono(l("当前模型", "Current model"), model.clone().unwrap_or_else(|| l("-（Droid 默认）", "- (Droid default)").into())),
+        Kv::mono(lbl::current_model(), model.clone().unwrap_or_else(|| l("-（Droid 默认）", "- (Droid default)").into())),
         Kv::text(
             l("对应条目", "Matching entry"),
             match selected {
@@ -382,8 +382,8 @@ pub fn state(inst: &Install) -> AgentState {
                 None => l("内置模型", "Built-in model").into(),
             },
         ),
-        Kv::text(l("自定义模型", "Custom models"), tr!("{} 个", "{}", entries.len())),
-        Kv::mono(l("配置文件", "Config file"), display_path(&settings_path())),
+        Kv::text(lbl::custom_models(), tr!("{} 个", "{}", entries.len())),
+        Kv::mono(lbl::config_file(), display_path(&settings_path())),
     ];
     st.notes.push(l("Droid 运行时会改写 settings.json；AgentPlus 只改 customModels 和 model，改动对新会话生效。", "Droid rewrites settings.json while running; AgentPlus only changes customModels and model, and changes apply to new sessions.").into());
     st.notes.push(l("自定义模型按列表位置编号（custom:名称-序号）；增删或隐藏条目后 AgentPlus 会同步修正当前选中的 model。", "Custom models are numbered by list position (custom:name-index); after adding, removing or hiding entries AgentPlus fixes up the selected model.").into());

@@ -280,13 +280,13 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
     };
     let known = TYPES.contains(&ty.as_str());
     let mut details = vec![
-        Kv::mono(l("配置 ID", "Config ID"), format!("[providers.{pid}]")),
+        Kv::mono(lbl::config_id(), format!("[providers.{pid}]")),
         Kv::mono("type", format!("\"{ty}\"")),
-        Kv::text(l("密钥", "API key"), key_note),
-        Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
+        Kv::text(lbl::api_key(), key_note),
+        Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
     ];
     if ty == "kimi" {
-        details.push(Kv::text(l("说明", "Note"), l("Kimi 官方接口（按 Chat 处理）；/login 会改写这一段", "Kimi's official API (treated as Chat); /login rewrites this section")));
+        details.push(Kv::text(lbl::note(), l("Kimi 官方接口（按 Chat 处理）；/login 会改写这一段", "Kimi's official API (treated as Chat); /login rewrites this section")));
     }
     Provider {
         id: pid.into(),
@@ -361,9 +361,9 @@ pub fn state(inst: &Install) -> AgentState {
     let vis: usize = st.providers.iter().filter(|p| p.enabled).map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
         Kv::mono("default_model", def.clone().unwrap_or_else(|| "-".into())),
-        Kv::text(l("供应商", "Provider"), def_prov.as_deref().map(|p| st.providers.iter().find(|x| x.id == p).map(|x| x.name.clone()).unwrap_or_else(|| p.to_string())).unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::provider(), def_prov.as_deref().map(|p| st.providers.iter().find(|x| x.id == p).map(|x| x.name.clone()).unwrap_or_else(|| p.to_string())).unwrap_or_else(|| "-".into())),
         Kv::mono(l("上游模型", "Upstream model"), def_item.and_then(|m| get_str(m, "model")).unwrap_or_else(|| "-".into())),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
         Kv::text(l("配置", "Config"), if legacy { l("旧版 Kimi CLI（~/.kimi）", "Legacy Kimi CLI (~/.kimi)") } else { "Kimi Code" }),
     ];
     st.notes.push(l("/login 和 /model 会重写 config.toml 并丢掉注释", "/login and /model rewrite config.toml and drop its comments").into());

@@ -285,13 +285,13 @@ impl Fmt {
         };
         let in_auth = Self::auth_key(auth, id).is_some();
         let mut details = vec![
-            Kv::mono(l("配置 ID", "Config ID"), format!("{}.{id}", self.cfg_prefix())),
+            Kv::mono(lbl::config_id(), format!("{}.{id}", self.cfg_prefix())),
             Kv::mono("api", raw.clone()),
-            Kv::text(l("密钥", "API key"), self.key_desc(key_v, in_auth)),
-            Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
+            Kv::text(lbl::api_key(), self.key_desc(key_v, in_auth)),
+            Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
         ];
         if BUILTIN_PROVIDERS.contains(&id) {
-            details.push(Kv::text(l("说明", "About"), l("与内置供应商同名：这里的设置会合并到内置供应商上", "Same id as a built-in provider: these settings are merged into the built-in one")));
+            details.push(Kv::text(lbl::note(), l("与内置供应商同名：这里的设置会合并到内置供应商上", "Same id as a built-in provider: these settings are merged into the built-in one")));
         }
         if let Some(h) = def.get("headers").and_then(|x| x.as_object()).filter(|h| !h.is_empty()) {
             details.push(Kv::mono("headers", h.keys().cloned().collect::<Vec<_>>().join(", ")));

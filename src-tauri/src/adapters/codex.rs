@@ -306,9 +306,9 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
         reason: None,
         models: vec![],
         details: vec![
-            Kv::text(l("认证方式", "Authentication"), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
+            Kv::text(lbl::auth(), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
             Kv::text("Fast", l("账号登录时 Codex 原生显示", "Shown natively by Codex when signed in with an account")),
-            Kv::mono(l("配置 ID", "Config ID"), l("openai（内置）", "openai (built-in)")),
+            Kv::mono(lbl::config_id(), l("openai（内置）", "openai (built-in)")),
         ],
         editable: false,
         api: "responses".into(),
@@ -330,15 +330,15 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
             let env_key = get("env_key");
             let official_auth = item.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut details = vec![
-                Kv::mono(l("配置 ID", "Config ID"), format!("[model_providers.{id}]")),
+                Kv::mono(lbl::config_id(), format!("[model_providers.{id}]")),
                 Kv::mono("wire_api", format!("\"{wire}\"")),
             ];
             if official_auth {
                 details.push(Kv::text(l("官方登录混用", "Official sign-in mix"), l("已开启 · Codex 用 ChatGPT 账号登录，对话请求发往此供应商并使用它的密钥", "On · Codex stays signed in with ChatGPT; requests go to this provider with its own API key")));
             }
             match &env_key {
-                Some(k) => details.push(Kv::text(l("密钥", "API key"), tr!("环境变量 {k} · {}", "Environment variable {k} · {}", key_status(k)))),
-                None => details.push(Kv::text(l("密钥", "API key"), l("未设置 env_key", "env_key not set"))),
+                Some(k) => details.push(Kv::text(lbl::api_key(), tr!("环境变量 {k} · {}", "Environment variable {k} · {}", key_status(k)))),
+                None => details.push(Kv::text(lbl::api_key(), l("未设置 env_key", "env_key not set"))),
             }
             details.push(Kv::text("Fast", l("Codex 默认隐藏（可在「其他设置」注入显示）", "Hidden by Codex by default (can be shown via injection in \"Other settings\")")));
             out.push(Provider {
