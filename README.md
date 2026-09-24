@@ -41,19 +41,32 @@ AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维�
 
 ## 主要功能
 
-| | |
-|---|---|
-| 🗂️ **供应商库** | 所有供应商集中维护，一键推送到选中的 Agent。内置 19 个厂商和编程套餐模板（火山方舟、智谱、Kimi、DeepSeek、百炼、MiniMax、OpenRouter……），只需填 API Key |
-| 📋 **模型列表** | 按 Agent 管理选择器里显示哪些模型，可以直接拉取供应商的模型列表，支持上下文窗口等字段 |
-| 🔍 **先预览、后应用** | 改动先进入待应用列表，逐条查看 diff 再写入；写完可以一键重启对应的 Agent |
-| ⏪ **历史与回滚** | 每次写入前把原文件备份到 `~/.agentplus/backups/`，一键回滚 |
-| 🔀 **本地网关** | `127.0.0.1` 上的 HTTP 服务，在 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 之间实时转换（含流式和工具调用），带出错熔断 |
-| ⚡ **测速与测试** | 测延迟，或发一个真实的小请求，验证地址、密钥和模型是否可用 |
-| 🐧 **WSL** | 目标环境可以在 Windows 和 WSL 发行版之间切换，供应商库共用 |
-| 🙈 **隐私模式** | `Ctrl+Shift+H` 遮挡密钥、地址、用户名，模糊对话标题，适合截图和共享屏幕 |
-| ⌨️ **命令面板** | `Ctrl+K` 搜索供应商、模型、设置和会话 |
-| 🔄 **应用内更新** | 从 GitHub Releases 检查新版本，下载后校验签名再安装 |
-| 🌐 **中英双语** | 界面支持简体中文和英文，默认跟随系统 |
+<table>
+  <tr>
+    <td width="50%" valign="top">🗂️ <b>供应商库</b><br>所有供应商集中维护，一键推送到选中的 Agent。内置 19 个厂商和编程套餐模板，只需填 API Key</td>
+    <td width="50%" valign="top">📋 <b>模型列表</b><br>按 Agent 管理选择器里显示哪些模型，可以直接拉取供应商的模型列表，支持上下文窗口等字段</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🔍 <b>先预览、后应用</b><br>改动先进入待应用列表，逐条查看 diff 再写入；写完可以一键重启对应的 Agent</td>
+    <td width="50%" valign="top">⏪ <b>历史与回滚</b><br>每次写入前把原文件备份到 <code>~/.agentplus/backups/</code>，一键回滚</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🔀 <b>本地网关</b><br>在 OpenAI Chat、OpenAI Responses、Anthropic Messages 之间实时转换，含流式和工具调用，带出错熔断</td>
+    <td width="50%" valign="top">⚡ <b>测速与测试</b><br>测延迟，或发一个真实的小请求，验证地址、密钥和模型是否可用</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🐧 <b>WSL</b><br>目标环境可以在 Windows 和 WSL 发行版之间切换，供应商库共用</td>
+    <td width="50%" valign="top">🙈 <b>隐私模式</b><br><code>Ctrl+Shift+H</code> 遮挡密钥、地址、用户名，模糊对话标题，适合截图和共享屏幕</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">⌨️ <b>命令面板</b><br><code>Ctrl+K</code> 搜索供应商、模型、设置和会话</td>
+    <td width="50%" valign="top">📌 <b>托盘常驻</b><br>关闭窗口可以最小化到托盘，本地网关在后台继续运行</td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">🔄 <b>应用内更新</b><br>从 GitHub Releases 检查新版本，下载后校验签名再安装</td>
+    <td width="50%" valign="top">🌐 <b>中英双语</b><br>界面支持简体中文和英文，默认跟随系统</td>
+  </tr>
+</table>
 
 ## 支持的系统
 
