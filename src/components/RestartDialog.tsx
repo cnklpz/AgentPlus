@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentId, RestartProgress, RestartStatus, RestartStep } from "../api";
-import { type TKey, t } from "../i18n";
-import { fmtSecs } from "../format";
+import { type TKey, locale, t } from "../i18n";
 import { useEscape } from "../hooks";
 import { AgentIcon, Icon } from "./icons";
 import { scrub } from "../privacy";
@@ -59,6 +58,8 @@ const LABEL: Record<RestartStep, TKey> = {
   patch: "restartDialog.stepPatch",
 };
 
+const secs = (ms: number) => (ms / 1000).toLocaleString(locale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
 function StepIcon({ status }: { status: RunStep["status"] }) {
   switch (status) {
     case "active": return <span className="rs-ring" />;
@@ -109,7 +110,7 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
           <AgentIcon id={run.agent} size={36} />
           <div className="grow minw0">
             <div className="confirm-title">{title}</div>
-            <div className="tiny muted" aria-live="off">{t(result ? "restartDialog.took" : "restartDialog.elapsed", { s: fmtSecs(total) })}</div>
+            <div className="tiny muted" aria-live="off">{t(result ? "restartDialog.took" : "restartDialog.elapsed", { s: secs(total) })}</div>
           </div>
         </div>
         <ol className="rs-steps" aria-live="polite">
@@ -125,7 +126,7 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
                   <div className="small strong">{t(LABEL[s.id], vars)}</div>
                   {detail && <div className="tiny muted rs-detail">{scrub(detail)}</div>}
                 </div>
-                {s.start !== null && s.status !== "skip" && <span className="tiny muted mono noshrink">{fmtSecs((s.end ?? now) - s.start)}s</span>}
+                {s.start !== null && s.status !== "skip" && <span className="tiny muted mono noshrink">{secs((s.end ?? now) - s.start)}s</span>}
               </li>
             );
           })}

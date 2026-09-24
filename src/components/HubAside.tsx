@@ -1,11 +1,12 @@
-import { type ReactNode, useEffect, useState } from "react";
-import { type AgentId, type AgentState, type DiffGroup, api } from "../api";
-import { type Draft, opsToWrite } from "../draft";
+import type { ReactNode } from "react";
+import type { AgentId, AgentState } from "../api";
+import type { Draft } from "../draft";
+import { usePreviews } from "../hooks";
+import { DiffGroups, UpToDate } from "./Aside";
+import { ErrorBox } from "./controls";
 import type { Station } from "../services";
-import { AgentIcon, Icon } from "./icons";
-import { t, tn, useLang } from "../i18n";
-import { scrub } from "../privacy";
-import { errText } from "../util";
+import { AgentIcon } from "./icons";
+import { t, tn } from "../i18n";
 
 interface Props {
   agents: AgentState[];
@@ -21,19 +22,7 @@ interface Props {
 export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, onApplyAll }: Props) {
   const withOps = agents.filter((a) => Object.keys(drafts[a.id] ?? {}).length > 0);
   const total = withOps.reduce((n, a) => n + Object.keys(drafts[a.id]).length, 0);
-  const [diffs, setDiffs] = useState<Record<string, DiffGroup[] | string>>({});
-  // Diffs and errors are rendered by the backend in the current language.
-  const lang = useLang();
-
-  useEffect(() => {
-    let alive = true;
-    for (const a of withOps) {
-      api.preview(a.id, opsToWrite(a, drafts[a.id]))
-        .then((d) => alive && setDiffs((m) => ({ ...m, [a.id]: d })))
-        .catch((e) => alive && setDiffs((m) => ({ ...m, [a.id]: errText(e) })));
-    }
-    return () => { alive = false; };
-  }, [drafts, agents, lang]);
+  const diffs = usePreviews(agents, drafts);
 
   const api_ = stations.filter((s) => !s.builtin);
   const groups = api_.reduce((n, s) => n + s.groups.length, 0);
@@ -71,23 +60,12 @@ export function HubAside({ agents, drafts, stations, detail, busy, onDiscard, on
                 <span className="tiny muted">{tn("hubAside.itemCount", Object.keys(drafts[a.id]).length)}</span>
                 <button className="link" onClick={() => onDiscard(a.id)}>{t("hubAside.discard")}</button>
               </div>
-              {typeof d === "string" && <div className="err">{scrub(d)}</div>}
-              {Array.isArray(d) && d.map((g) => (
-                <div key={g.file} className="dgroup">
-                  <div className="dfile mono ellipsis">{scrub(g.file)}</div>
-                  {g.lines.map((l, i) => <div key={i} className={`dline mono ${l.add ? "add" : "del"}`}>{scrub(l.text)}</div>)}
-                </div>
-              ))}
+              {typeof d === "string" && <ErrorBox text={d} />}
+              {Array.isArray(d) && <DiffGroups groups={d} />}
             </div>
           );
         })}
-        {total === 0 && (
-          <div className="dempty">
-            <Icon.check size={20} color="#16A34A" />
-            <strong>{t("hubAside.upToDate")}</strong>
-            <span className="muted small">{t("hubAside.emptyHint")}</span>
-          </div>
-        )}
+        {total === 0 && <UpToDate hint={t("hubAside.emptyHint")} />}
       </section>
 
       <div className="aside-foot">

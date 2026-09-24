@@ -52,7 +52,8 @@ export function ContextMenu({ build }: Props) {
   const onKey = useLatest((e: KeyboardEvent) => {
     if (nav.onKey(e)) return;
     const it = items[nav.hi];
-    if (e.key === "Enter" && it && it !== "sep") {
+    // Disabled items can be highlighted by hovering (WebView2 sends them mouse events), not run.
+    if (e.key === "Enter" && it && it !== "sep" && !it.disabled) {
       e.preventDefault();
       close();
       it.action();
@@ -72,7 +73,7 @@ export function ContextMenu({ build }: Props) {
       {menu.items.map((it, i) =>
         it === "sep" ? <div key={i} className="ctx-sep" role="separator" /> : (
           <button key={i} role="menuitem" className={`ctx-item${i === nav.hi ? " hi" : ""}${it.danger ? " danger" : ""}`} disabled={it.disabled}
-            onMouseEnter={() => nav.setHi(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); it.action(); }}>
+            onMouseEnter={() => { if (!it.disabled) nav.setHi(i); }} onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); it.action(); }}>
             <span className="ctx-icon">{it.icon}</span>
             <span className="grow">{it.label}</span>
             {it.hint && <span className="ctx-hint">{it.hint}</span>}

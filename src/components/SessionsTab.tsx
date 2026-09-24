@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { type SessionList, type SessionRow, api } from "../api";
+import { type SessionRow, api } from "../api";
 import { type TKey, t, tn, useLang } from "../i18n";
 import { fmtAgo, fmtSize } from "../format";
 import { Dropdown } from "./Dropdown";
+import { Seg } from "./controls";
+import { Icon } from "./icons";
+import { useLoad } from "../hooks";
 import { scrub } from "../privacy";
 import { copyText, errText, type Flash, toggled } from "../util";
 
@@ -19,15 +22,7 @@ const KIND_LABEL: Record<SessionRow["kind"], TKey> = {
   review: "sessionsTab.kindReview", exec: "sessionsTab.kindExec", agent: "sessionsTab.kindAgent",
 };
 
-const Warn = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
-  </svg>
-);
-
 export function SessionsTab({ target, flash, initialQuery }: Props) {
-  const [data, setData] = useState<SessionList | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [provider, setProvider] = useState<string>("all");
   const [allKinds, setAllKinds] = useState(!!initialQuery);
   const [showArchived, setShowArchived] = useState(!!initialQuery);
@@ -41,13 +36,10 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
 
   useEffect(() => { if (initialQuery) { setQ(initialQuery); setAllKinds(true); setShowArchived(true); } }, [initialQuery]);
 
-  const load = () => {
-    setError(null);
-    api.codexSessions().then((d) => { setData(d); setPicked(new Set()); }).catch((e) => setError(errText(e)));
-  };
   // Backend notes and hidden-reasons are rendered in the UI language: reload on switch.
   const lang = useLang();
-  useEffect(load, [lang]);
+  const { data, error, reload } = useLoad(() => api.codexSessions().then((d) => { setPicked(new Set()); return d; }), [lang]);
+  const load = () => { void reload(); };
   useEffect(() => { setRepairTarget(target); setMoveTarget(target); }, [target]);
 
   const targetOptions = useMemo(() => {
@@ -109,7 +101,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
     <div className="stack12">
       {misplacedBy.length > 0 && (
         <section className="card repair2">
-          <div className="repair2-icon" aria-hidden="true"><Warn /></div>
+          <div className="repair2-icon" aria-hidden="true"><Icon.warn /></div>
           <div className="grow minw0 stack8">
             <div>
               <div className="strong">{tn("sessionsTab.misplacedTitle", misplacedBy.reduce((n, [, c]) => n + c, 0))}</div>
@@ -156,20 +148,18 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
       {data.note && <div className="notes"><span>{scrub(data.note)}</span></div>}
 
       <div className="toolbar">
-        <div className="seg">
-          <button className={provider === "all" ? "on" : ""} onClick={() => setProvider("all")}>{t("sessionsTab.all")} <b>{data.sessions.length}</b></button>
-          {data.providers.map(([p, n]) => (
-            <button key={p} className={provider === p ? "on" : ""} onClick={() => setProvider(p)}>{p || t("sessionsTab.emptyProvider")} <b>{n}</b></button>
-          ))}
-        </div>
+        <Seg value={provider} onChange={setProvider} label={t("common.provider")} options={[
+          { value: "all", label: <>{t("sessionsTab.all")} <b>{data.sessions.length}</b></> },
+          ...data.providers.map(([p, n]) => ({ value: p, label: <>{p || t("sessionsTab.emptyProvider")} <b>{n}</b></> })),
+        ]} />
         <label className="toggle"><input type="checkbox" checked={allKinds} onChange={(e) => setAllKinds(e.target.checked)} /><span>{t("sessionsTab.subagentsReviews")}</span></label>
         <label className="toggle"><input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} /><span>{t("sessionsTab.archived")}</span></label>
         <div className="search-box">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+          <Icon.search size={14} />
           <input placeholder={t("sessionsTab.searchPlaceholder")} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <button className="icon-btn" title={t("common.refresh")} aria-label={t("common.refresh")} onClick={load}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></svg>
+          <Icon.refresh size={13} />
         </button>
       </div>
 
@@ -209,7 +199,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
                   {s.archived && <span className="mtag">{t("sessionsTab.archived")}</span>}
                 </div>
                 <div className="mono tiny muted ellipsis sensitive">{scrub(s.cwd)}</div>
-                {s.hidden.length > 0 && <div className="why2"><Warn />{s.hidden.join(t("sessionsTab.hiddenSep"))}</div>}
+                {s.hidden.length > 0 && <div className="why2"><Icon.warn />{s.hidden.join(t("sessionsTab.hiddenSep"))}</div>}
               </div>
               <span className={`ptag ${misplaced ? "tag-warn" : "tag-soft"}`}>{s.provider || "—"}</span>
               <span className="meta2">
@@ -229,10 +219,10 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
                 )}
                 <button className="icon-btn sm" title={t("sessionsTab.copyResumeTitle", { cmd: `codex resume ${s.id}` })} aria-label={t("sessionsTab.copyResume")}
                   onClick={() => copyText(`codex resume ${s.id}`, flash, t("sessionsTab.resumeCopied"))}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                  <Icon.copy size={12} />
                 </button>
                 <button className="icon-btn sm" title={t("sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => { api.revealPath(s.rolloutPath).catch((e) => flash(errText(e), true)); }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
+                  <Icon.folder size={12} />
                 </button>
               </span>
             </div>

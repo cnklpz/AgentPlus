@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { AgentState } from "../api";
 import { API_LABEL, type Group, type Station, USE_LABEL, writableAgents } from "../services";
 import { AgentIcon, Icon } from "./icons";
-import { Bars, type Latency, colorFor, initials } from "./ProviderCard";
+import { Avatar, Bars, type Latency, latencyText, latencyTone, stationColor } from "./ProviderCard";
 import { type TKey, t, tn } from "../i18n";
 import { scrubHost } from "../privacy";
 import { onActivateKey } from "../util";
@@ -21,20 +21,10 @@ interface Props {
 
 type Filter = "all" | "used" | "idle";
 
-export function latencyText(l: Latency): { text: string; level: number } {
-  if (l === "pending") return { text: t("providersHub.testing"), level: 0 };
-  if (typeof l === "number") return { text: `${l} ms`, level: l < 200 ? 3 : l < 400 ? 2 : 1 };
-  return { text: l ? t("providersHub.unreachable") : t("providersHub.untested"), level: 0 };
-}
-
 const FILTERS: [Filter, TKey][] = [["all", "providersHub.filterAll"], ["used", "providersHub.filterUsed"], ["idle", "providersHub.filterIdle"]];
 
 const liveUses = (g: Group) => g.uses.filter((u) => u.state !== "removing");
 const used = (s: Station) => s.groups.some((g) => liveUses(g).length > 0);
-
-export function stationColor(s: Station): string {
-  return s.builtin ? "var(--avatar-builtin)" : colorFor({ baseUrl: s.baseUrl, host: s.host, builtin: false, id: s.key } as never);
-}
 
 /** Every provider in one place, by station (host) and its groups. Address and key live here; model lists live in each agent. */
 export function ProvidersHub({ agents, stations, latency, selected, onSelect, onAdd, onTestAll, onTestOne, envLabel }: Props) {
@@ -104,13 +94,13 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
                 onKeyDown={onActivateKey(() => onSelect(selected === s.key ? null : s.key))}
               >
                 <div className="hcard-head">
-                  <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
+                  <Avatar name={s.name} color={stationColor(s)} />
                   <span className="pcard-title">
                     <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
                     <span className="pcard-host mono ellipsis">{scrubHost(s.host)}</span>
                   </span>
                   {s.baseUrl && (
-                    <button className={`hlat lat-btn${lat.level >= 2 ? " good" : lat.level === 1 ? " slow" : ""}`} title={t("providersHub.retestTitle")}
+                    <button className={`hlat lat-btn${lat.level ? ` ${latencyTone(lat.level)}` : ""}`} title={t("providersHub.retestTitle")}
                       disabled={latency[s.baseUrl] === "pending"}
                       onClick={(e) => { e.stopPropagation(); onTestOne(s.baseUrl!); }}>
                       <Bars level={lat.level} />{lat.text}<span className="lat-re" aria-hidden="true">↻</span>

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { fmtAgo, fmtNum, fmtSecs, fmtSize, joinList } from "./format";
+import { fmtAgo, fmtSize, joinList } from "./format";
 import { setLang } from "./i18n";
 
 describe("fmtSize", () => {
@@ -18,20 +18,6 @@ describe("fmtSize", () => {
     [1024 ** 3, "1.0 GB"],
     [5.5 * 1024 ** 4, "5,632.0 GB"],
   ])("%d → %s", (b, s) => expect(fmtSize(b)).toBe(s));
-});
-
-describe("fmtNum / fmtSecs", () => {
-  it("formats with a fixed number of decimals and grouping", () => {
-    expect(fmtNum(1234.56, 1)).toBe("1,234.6");
-    expect(fmtNum(0.5, 0)).toBe("1");
-    expect(fmtNum(99.5, 1)).toBe("99.5");
-  });
-  it("turns milliseconds into seconds", () => {
-    expect(fmtSecs(1234)).toBe("1.2");
-    expect(fmtSecs(1234, 2)).toBe("1.23");
-    expect(fmtSecs(12_600, 0)).toBe("13");
-    expect(fmtSecs(0, 2)).toBe("0.00");
-  });
 });
 
 describe("joinList", () => {

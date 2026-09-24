@@ -1,8 +1,5 @@
 // src/components/ProvidersHub.tsx
 export default {
-  testing: "测速中…",
-  unreachable: "不可达",
-  untested: "未测速",
   intro: "按服务地址归成中转站，一个中转站可以有多个分组（不同协议、路径或密钥）。地址和密钥在这里维护，模型在各 Agent 的「模型列表」里设置。当前环境：{env}",
   testLatency: "测试延迟",
   addProvider: "添加供应商",

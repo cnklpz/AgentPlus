@@ -6,6 +6,7 @@ const en: typeof zh = {
   accountLogin: "Account sign-in",
   testing: "Testing…",
   untested: "Not tested",
+  unreachable: "Unreachable",
   tagDeleting: "To be deleted",
   tagNew: "New · not applied",
   tagCurrent: "Current",

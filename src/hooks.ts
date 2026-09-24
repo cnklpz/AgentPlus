@@ -2,7 +2,7 @@ import { type CSSProperties, type DependencyList, type RefObject, useCallback, u
 import { type AgentState, type DiffGroup, api } from "./api";
 import { type Draft, opsToWrite } from "./draft";
 import { useLang } from "./i18n";
-import { type Flash, errText } from "./util";
+import { errText } from "./util";
 
 /** A ref that always holds the latest `value` (for listeners that are registered once). */
 export function useLatest<T>(value: T) {
@@ -241,8 +241,8 @@ export function useFloatingMenu(
 /**
  * Loads data for a component and reloads it when `deps` change (the backend's text follows
  * the UI language: put `lang` in them). Only the latest request counts, so a slow older
- * answer never replaces a newer one. A failure clears `data` and sets `error`; `clear`
- * also empties `data` while a (re)load runs, so a loading placeholder shows.
+ * answer never replaces a newer one. A failure sets `error` (the last data stays); `clear`
+ * empties `data` while a (re)load runs, so the loading placeholder shows.
  */
 export function useLoad<T>(fetch: () => Promise<T>, deps: DependencyList, opts: { clear?: boolean } = {}) {
   const [data, setData] = useState<T | null>(null);
@@ -256,7 +256,7 @@ export function useLoad<T>(fetch: () => Promise<T>, deps: DependencyList, opts: 
     if (clear) setData(null);
     return fetchRef.current().then(
       (v) => { if (n === seq.current) setData(v); },
-      (e) => { if (n === seq.current) { setData(null); setError(errText(e)); } },
+      (e) => { if (n === seq.current) setError(errText(e)); },
     );
   }, [clearDefault]);
   useEffect(() => {
@@ -268,43 +268,25 @@ export function useLoad<T>(fetch: () => Promise<T>, deps: DependencyList, opts: 
 }
 
 /**
- * Runs one action at a time with a busy flag: a returned text is shown as a notice, an
- * error as an error notice. Resolves true when it succeeded.
- */
-export function useAction(flash: Flash) {
-  const [busy, setBusy] = useState(false);
-  const run = async (fn: () => Promise<string | void>): Promise<boolean> => {
-    setBusy(true);
-    try {
-      const msg = await fn();
-      if (msg) flash(msg);
-      return true;
-    } catch (e) {
-      flash(errText(e), true);
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-  return { busy, run };
-}
-
-/**
  * The diff each agent's pending changes would write, by agent id (an error text when the
  * preview failed). Re-read when the drafts change, and in the new language after a switch.
  */
 export function usePreviews(agents: AgentState[], drafts: Record<string, Draft>): Record<string, DiffGroup[] | string> {
   const [diffs, setDiffs] = useState<Record<string, DiffGroup[] | string>>({});
   const lang = useLang();
+  // Callers may build the list on every render: only a different set of states counts.
+  const seen = useRef(agents);
+  if (seen.current.length !== agents.length || seen.current.some((a, i) => a !== agents[i])) seen.current = agents;
+  const list = seen.current;
   useEffect(() => {
     let alive = true;
-    for (const a of agents) {
+    for (const a of list) {
       if (!Object.keys(drafts[a.id] ?? {}).length) continue;
       api.preview(a.id, opsToWrite(a, drafts[a.id]))
         .then((d) => { if (alive) setDiffs((m) => ({ ...m, [a.id]: d })); })
         .catch((e) => { if (alive) setDiffs((m) => ({ ...m, [a.id]: errText(e) })); });
     }
     return () => { alive = false; };
-  }, [agents, drafts, lang]);
+  }, [list, drafts, lang]);
   return diffs;
 }

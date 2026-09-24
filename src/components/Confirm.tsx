@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
+import { ConfirmFrame } from "./Modal";
 import { t } from "../i18n";
 
 export interface ConfirmOptions {
@@ -32,62 +33,50 @@ export function askCheck(opts: ConfirmOptions & { check: NonNullable<ConfirmOpti
 
 /** Renders the confirm dialog requested through ask(). Mount once, near the app root. */
 export function ConfirmHost() {
-  const [cur, setCur] = useState<Pending | null>(null);
-  const [checked, setChecked] = useState(false);
-  const okRef = useRef<HTMLButtonElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
+  const [cur, setCur] = useState<{ p: Pending; n: number } | null>(null);
+  const pending = useRef<Pending | null>(null);
 
   useEffect(() => {
+    let n = 0;
     show = (p) => {
-      setChecked(p.check?.value ?? false);
-      setCur(p);
+      // A second question replaces the first: the first one counts as dismissed.
+      pending.current?.resolve(false, false);
+      pending.current = p;
+      setCur({ p, n: ++n });
     };
     return () => { show = null; };
   }, []);
 
-  useEffect(() => {
-    if (!cur) return;
-    // Destructive: start on Cancel, so a stray Enter does not delete anything.
-    (cur.danger ? cancelRef : okRef).current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
-  }, [cur]);
-
-  const done = (ok: boolean) => {
-    cur?.resolve(ok, checked);
+  const done = (p: Pending, ok: boolean, checked: boolean) => {
+    if (pending.current !== p) return;
+    pending.current = null;
+    p.resolve(ok, checked);
     setCur(null);
   };
 
-  if (!cur) return null;
+  return cur && <ConfirmDialog key={cur.n} p={cur.p} onDone={(ok, checked) => done(cur.p, ok, checked)} />;
+}
+
+function ConfirmDialog({ p, onDone }: { p: Pending; onDone: (ok: boolean, checked: boolean) => void }) {
+  const [checked, setChecked] = useState(p.check?.value ?? false);
+  const okRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // Destructive: start on Cancel, so a stray Enter does not delete anything.
+  useEffect(() => { (p.danger ? cancelRef : okRef).current?.focus(); }, []);
+
   return (
-    <div className="modal-bg confirm-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) done(false); }}>
-      <div className="modal confirm" role="alertdialog" aria-modal="true" aria-label={cur.title}>
-        <div className="confirm-body">
-          <span className={`confirm-icon${cur.danger ? " danger" : ""}`}>{cur.danger ? <Icon.trash size={16} /> : <Icon.check size={16} />}</span>
-          <div className="grow minw0">
-            <div className="confirm-title">{cur.title}</div>
-            {cur.message && <div className="confirm-msg">{cur.message}</div>}
-            {cur.check && (
-              <div className={`gw-toggle confirm-check${checked ? " on" : ""}`}>
-                <div className="grow minw0">
-                  <div className="small strong">{cur.check.label}</div>
-                  {cur.check.hint && <div className="tiny muted">{cur.check.hint}</div>}
-                </div>
-                <button type="button" className={`switch${checked ? " on" : ""}`} role="switch" aria-checked={checked} aria-label={cur.check.label}
-                  onClick={() => setChecked((v) => !v)}><span /></button>
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="modal-foot">
-          <span className="grow" />
-          <button ref={cancelRef} className="btn" onClick={() => done(false)}>{t("common.cancel")}</button>
-          <button ref={okRef} className={`btn ${cur.danger ? "danger-solid" : "primary"}`} onClick={() => done(true)}>{cur.confirmText ?? (cur.danger ? t("common.delete") : t("common.confirm"))}</button>
-        </div>
-      </div>
-    </div>
+    <ConfirmFrame
+      title={p.title}
+      icon={p.danger ? <Icon.trash size={16} /> : <Icon.check size={16} />}
+      danger={p.danger}
+      message={p.message}
+      check={p.check && { label: p.check.label, hint: p.check.hint, on: checked, onChange: setChecked }}
+      onClose={() => onDone(false, checked)}
+      foot={<>
+        <span className="grow" />
+        <button ref={cancelRef} className="btn" onClick={() => onDone(false, checked)}>{t("common.cancel")}</button>
+        <button ref={okRef} className={`btn ${p.danger ? "danger-solid" : "primary"}`} onClick={() => onDone(true, checked)}>{p.confirmText ?? (p.danger ? t("common.delete") : t("common.confirm"))}</button>
+      </>}
+    />
   );
 }

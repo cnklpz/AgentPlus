@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { useEscape } from "../hooks";
 import { type AgentId, type AgentState, type ApiKind, api } from "../api";
 import { AGENT_NAME, API_LABEL, type Group, ONLY_API, type Use, gatewayCapable, writableAgents } from "../services";
 import { AgentIcon, Icon } from "./icons";
+import { Modal } from "./Modal";
+import { ErrorBox, Seg, ToggleRow } from "./controls";
 import { TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t } from "../i18n";
-import { scrub } from "../privacy";
 import { errText, isHttpUrl, toggled, toggledIn } from "../util";
 
 export interface ServiceSave {
@@ -42,13 +42,12 @@ const API_OPTIONS: { v: ApiKind; label: string; hint: TKey }[] = [
 ];
 
 export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props) {
-  const service = group;
-  const isNew = !service;
-  const [name, setName] = useState(service?.name ?? prefill?.name ?? "");
-  const [baseUrl, setBaseUrl] = useState(service?.baseUrl ?? prefill?.baseUrl ?? "");
-  const [kind, setKind] = useState<ApiKind>(service?.api ?? "responses");
+  const isNew = !group;
+  const [name, setName] = useState(group?.name ?? prefill?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(group?.baseUrl ?? prefill?.baseUrl ?? "");
+  const [kind, setKind] = useState<ApiKind>(group?.api ?? "responses");
   const [key, setKey] = useState("");
-  const [models, setModels] = useState<string[]>(service?.lib?.models ?? []);
+  const [models, setModels] = useState<string[]>(group?.lib?.models ?? []);
   const [fetched, setFetched] = useState<string[] | null>(null);
   const [manual, setManual] = useState("");
   const [fetching, setFetching] = useState(false);
@@ -56,10 +55,10 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   const [err, setErr] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
 
-  const editable = (service?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && u.state !== "removing");
+  const editable = (group?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && u.state !== "removing");
   const uid = (u: Use) => `${u.agent.id}:${u.p!.id}`;
   const [sync, setSync] = useState<Set<string>>(new Set(editable.map(uid)));
-  const free = writableAgents(agents).filter((a) => !(service?.uses ?? []).some((u) => u.agent.id === a.id && u.state !== "removing"));
+  const free = writableAgents(agents).filter((a) => !(group?.uses ?? []).some((u) => u.agent.id === a.id && u.state !== "removing"));
   const [addTo, setAddTo] = useState<Set<AgentId>>(new Set());
   const [viaGw, setViaGw] = useState(false);
   const [tpl, setTpl] = useState<Template | null>(null);
@@ -92,13 +91,12 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
 
   // Focus the first field once, when the dialog opens (not on every parent re-render).
   useEffect(() => { first.current?.focus(); }, []);
-  useEscape(onClose);
 
   const url = baseUrl.trim().replace(/\/+$/, "");
   const urlOk = isHttpUrl(url);
-  const changedAddr = !!service && url !== (service.baseUrl ?? "").replace(/\/+$/, "");
+  const changedAddr = !!group && url !== (group.baseUrl ?? "").replace(/\/+$/, "");
   const changedKey = key.trim() !== "";
-  const changedApi = !!service && kind !== service.api;
+  const changedApi = !!group && kind !== group.api;
   const changed = changedAddr || changedKey || changedApi;
   const canSave = name.trim() !== "" && urlOk && !saving && (!tpl || key.trim() !== "");
 
@@ -148,139 +146,119 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
 
   const all = [...new Set([...(fetched ?? []), ...models])];
 
+  const foot = (
+    <>
+      <span className="muted tiny grow">{t("serviceDialog.footNote")}</span>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("serviceDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
+    </>
+  );
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label={isNew ? t("serviceDialog.addProvider") : t("serviceDialog.editProvider")}>
-        <div className="modal-head">
-          <h2>{isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("serviceDialog.addProvider")) : t("serviceDialog.editGroup", { name: service!.name })}</h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
+    <Modal label={isNew ? t("serviceDialog.addProvider") : t("serviceDialog.editProvider")} wide onClose={onClose}
+      title={isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("serviceDialog.addProvider")) : t("serviceDialog.editGroup", { name: group!.name })} foot={foot}>
+      {isNew && !prefill && <TemplatePicker value={tpl} onPick={pickTpl} />}
+      <div className="form2">
+        <label className="field">
+          <span>{t("common.name")}</span>
+          <input ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("serviceDialog.namePlaceholder")} />
+        </label>
+        <label className="field">
+          <span>{t("serviceDialog.baseUrlLabel")}</span>
+          <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+          {baseUrl && !urlOk && <em className="field-err">{t("serviceDialog.urlInvalid")}</em>}
+        </label>
+      </div>
+      <div className="form2">
+        <div className="field">
+          <span>{t("serviceDialog.protocol")}</span>
+          <Seg value={kind} onChange={setProto} label={t("serviceDialog.protocol")}
+            options={API_OPTIONS.map((o) => {
+              const missing = !!tpl && !tpl.endpoints[o.v];
+              return { value: o.v, label: o.label, disabled: missing, title: missing ? t("serviceDialog.protoMissing", { vendor: tpl!.vendor, api: o.label }) : t(o.hint) };
+            })} />
+          <em className="muted tiny">
+            {tpl
+              ? t("serviceDialog.tplProtocols", { list: (Object.keys(tpl.endpoints) as ApiKind[]).map((k) => API_LABEL[k]).join(" / ") })
+              : t("serviceDialog.groupHint")}
+          </em>
         </div>
+        <label className="field">
+          <span>{t("serviceDialog.apiKeyLabel")}</span>
+          <input className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
+            placeholder={group?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("serviceDialog.keyKeepPlaceholder") : "sk-..."} />
+          <em className="muted tiny">
+            {t("serviceDialog.keyStorage")}
+            {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("serviceDialog.getKey", { vendor: tpl.vendor })}</button></>}
+          </em>
+        </label>
+      </div>
 
-        <div className="modal-body">
-          {isNew && !prefill && <TemplatePicker value={tpl} onPick={pickTpl} />}
-          <div className="form2">
-            <label className="field">
-              <span>{t("common.name")}</span>
-              <input ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("serviceDialog.namePlaceholder")} />
-            </label>
-            <label className="field">
-              <span>{t("serviceDialog.baseUrlLabel")}</span>
-              <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-              {baseUrl && !urlOk && <em className="field-err">{t("serviceDialog.urlInvalid")}</em>}
-            </label>
-          </div>
-          <div className="form2">
-            <div className="field">
-              <span>{t("serviceDialog.protocol")}</span>
-              <div className="seg">
-                {API_OPTIONS.map((o) => {
-                  const missing = !!tpl && !tpl.endpoints[o.v];
-                  return (
-                    <button key={o.v} type="button" className={kind === o.v ? "on" : ""} disabled={missing}
-                      title={missing ? t("serviceDialog.protoMissing", { vendor: tpl!.vendor, api: o.label }) : t(o.hint)} onClick={() => setProto(o.v)}>{o.label}</button>
-                  );
-                })}
-              </div>
-              <em className="muted tiny">
-                {tpl
-                  ? t("serviceDialog.tplProtocols", { list: (Object.keys(tpl.endpoints) as ApiKind[]).map((k) => API_LABEL[k]).join(" / ") })
-                  : t("serviceDialog.groupHint")}
-              </em>
-            </div>
-            <label className="field">
-              <span>{t("serviceDialog.apiKeyLabel")}</span>
-              <input className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
-                placeholder={service?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("serviceDialog.keyKeepPlaceholder") : "sk-..."} />
-              <em className="muted tiny">
-                {t("serviceDialog.keyStorage")}
-                {tpl && <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("serviceDialog.getKey", { vendor: tpl.vendor })}</button></>}
-              </em>
-            </label>
-          </div>
-
-          <div className="field">
-            <div className="row between">
-              <span>{t("serviceDialog.commonModels")} <em className="muted tiny">{t("serviceDialog.commonModelsHint")}</em></span>
-              <button type="button" className="btn small" disabled={!urlOk || fetching} onClick={fetchList}>
-                <Icon.refresh size={12} />{fetching ? t("serviceDialog.fetching") : t("serviceDialog.fetchFromUrl")}
-              </button>
-            </div>
-            <div className="pick-list wide">
-              {all.length === 0 && <div className="muted small">{t("serviceDialog.noModels")}</div>}
-              {all.map((m) => (
-                <label key={m} className="pick">
-                  <input type="checkbox" checked={models.includes(m)} onChange={() => toggle(m)} />
-                  <span className="mono small">{m}</span>
-                </label>
-              ))}
-            </div>
-            <div className="row gap6">
-              <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("serviceDialog.manualPlaceholder")} />
-              <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
-            </div>
-          </div>
-
-          {editable.length > 0 && (
-            <div className="field">
-              <span>{t("serviceDialog.syncTo")} {!changed && <em className="muted tiny">{t("serviceDialog.syncHint")}</em>}</span>
-              <div className="agent-picks">
-                {editable.map((u) => (
-                  <label key={uid(u)} className={`apick${sync.has(uid(u)) && changed ? " on" : ""}${!changed ? " dim" : ""}`}>
-                    <input type="checkbox" disabled={!changed} checked={sync.has(uid(u))}
-                      onChange={() => setSync((p) => toggled(p, uid(u)))} />
-                    <AgentIcon id={u.agent.id} size={18} />
-                    <span className="small ellipsis">{u.agent.name} · {u.p!.name}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {free.length > 0 && (
-            <div className="field">
-              <span>{t("serviceDialog.addTo")}</span>
-              <div className={`gw-toggle${viaGw ? " on" : ""}`}>
-                <Icon.gateway size={16} />
-                <div className="grow minw0">
-                  <div className="small strong">{t("serviceDialog.useGateway")}</div>
-                  <div className="tiny muted">
-                    {viaGw ? t("serviceDialog.gatewayOn") : t("serviceDialog.gatewayOff")}
-                  </div>
-                </div>
-                <button type="button" className={`switch${viaGw ? " on" : ""}`} role="switch" aria-checked={viaGw} aria-label={t("serviceDialog.useGateway")}
-                  onClick={() => setViaGw((v) => !v)}><span /></button>
-              </div>
-              <div className="agent-picks">
-                {free.map((a) => {
-                  const why = blockedBy(a.id);
-                  const only = ONLY_API[a.id];
-                  return (
-                    <label key={a.id} className={`apick${addTo.has(a.id) && !why ? " on" : ""}${why ? " dim" : ""}`} title={why ?? undefined}>
-                      <input type="checkbox" disabled={!!why} checked={addTo.has(a.id) && !why}
-                        onChange={() => setAddTo((p) => toggled(p, a.id))} />
-                      <AgentIcon id={a.id} size={18} />
-                      <span className="small">{a.name}</span>
-                      {why && <span className="tiny muted">{t("serviceDialog.needsApi", { api: API_LABEL[only!] })}</span>}
-                      {!why && viaGw && only && only !== kind && <span className="tiny muted">{t("serviceDialog.convertsTo", { api: API_LABEL[only] })}</span>}
-                      {altFor(a.id) && <span className="tiny muted">{t("serviceDialog.usesAltUrl", { api: API_LABEL[only!] })}</span>}
-                    </label>
-                  );
-                })}
-              </div>
-              {isNew && <em className="muted tiny">{t("serviceDialog.noneRequired")}</em>}
-            </div>
-          )}
-
-          {err && <div className="err">{scrub(err)}</div>}
+      <div className="field">
+        <div className="row between">
+          <span>{t("serviceDialog.commonModels")} <em className="muted tiny">{t("serviceDialog.commonModelsHint")}</em></span>
+          <button type="button" className="btn small" disabled={!urlOk || fetching} onClick={fetchList}>
+            <Icon.refresh size={12} />{fetching ? t("serviceDialog.fetching") : t("serviceDialog.fetchFromUrl")}
+          </button>
         </div>
-
-        <div className="modal-foot">
-          <span className="muted tiny grow">{t("serviceDialog.footNote")}</span>
-          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("serviceDialog.saving") : isNew ? t("common.add") : t("common.save")}</button>
+        <div className="pick-list wide">
+          {all.length === 0 && <div className="muted small">{t("serviceDialog.noModels")}</div>}
+          {all.map((m) => (
+            <label key={m} className="pick">
+              <input type="checkbox" checked={models.includes(m)} onChange={() => toggle(m)} />
+              <span className="mono small">{m}</span>
+            </label>
+          ))}
+        </div>
+        <div className="row gap6">
+          <input className="input mono grow" value={manual} onChange={(e) => setManual(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addManual(); } }} placeholder={t("serviceDialog.manualPlaceholder")} />
+          <button type="button" className="btn" disabled={!manual.trim()} onClick={addManual}>{t("common.add")}</button>
         </div>
       </div>
-    </div>
+
+      {editable.length > 0 && (
+        <div className="field">
+          <span>{t("serviceDialog.syncTo")} {!changed && <em className="muted tiny">{t("serviceDialog.syncHint")}</em>}</span>
+          <div className="agent-picks">
+            {editable.map((u) => (
+              <label key={uid(u)} className={`apick${sync.has(uid(u)) && changed ? " on" : ""}${!changed ? " dim" : ""}`}>
+                <input type="checkbox" disabled={!changed} checked={sync.has(uid(u))}
+                  onChange={() => setSync((p) => toggled(p, uid(u)))} />
+                <AgentIcon id={u.agent.id} size={18} />
+                <span className="small ellipsis">{u.agent.name} · {u.p!.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {free.length > 0 && (
+        <div className="field">
+          <span>{t("serviceDialog.addTo")}</span>
+          <ToggleRow on={viaGw} onChange={setViaGw} icon={<Icon.gateway size={16} />} title={t("serviceDialog.useGateway")}
+            hint={viaGw ? t("serviceDialog.gatewayOn") : t("serviceDialog.gatewayOff")} />
+          <div className="agent-picks">
+            {free.map((a) => {
+              const why = blockedBy(a.id);
+              const only = ONLY_API[a.id];
+              return (
+                <label key={a.id} className={`apick${addTo.has(a.id) && !why ? " on" : ""}${why ? " dim" : ""}`} title={why ?? undefined}>
+                  <input type="checkbox" disabled={!!why} checked={addTo.has(a.id) && !why}
+                    onChange={() => setAddTo((p) => toggled(p, a.id))} />
+                  <AgentIcon id={a.id} size={18} />
+                  <span className="small">{a.name}</span>
+                  {why && <span className="tiny muted">{t("serviceDialog.needsApi", { api: API_LABEL[only!] })}</span>}
+                  {!why && viaGw && only && only !== kind && <span className="tiny muted">{t("serviceDialog.convertsTo", { api: API_LABEL[only] })}</span>}
+                  {altFor(a.id) && <span className="tiny muted">{t("serviceDialog.usesAltUrl", { api: API_LABEL[only!] })}</span>}
+                </label>
+              );
+            })}
+          </div>
+          {isNew && <em className="muted tiny">{t("serviceDialog.noneRequired")}</em>}
+        </div>
+      )}
+
+      {err && <ErrorBox text={err} />}
+    </Modal>
   );
 }

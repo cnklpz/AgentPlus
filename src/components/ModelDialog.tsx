@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { useEscape } from "../hooks";
 import type { ModelField, ModelFieldValue, ModelInput } from "../api";
 import { type ViewModel, fmtCtx, parseCtx } from "../draft";
 import { Dropdown } from "./Dropdown";
-import { Icon } from "./icons";
+import { Modal } from "./Modal";
+import { Seg } from "./controls";
+import { OptCheck } from "./icons";
 import { locale, t, tx } from "../i18n";
 import { toggledIn } from "../util";
 
@@ -40,7 +41,6 @@ export function ModelDialog({ agentName, hasNames, hasContext, fields, initial, 
   );
   const first = useRef<HTMLInputElement>(null);
   useEffect(() => { first.current?.focus(); }, []);
-  useEscape(onClose);
 
   const ctxVal = parseCtx(ctx);
   const ctxBad = ctx.trim() !== "" && ctxVal === null;
@@ -67,61 +67,54 @@ export function ModelDialog({ agentName, hasNames, hasContext, fields, initial, 
 
   const groups = [...new Set(fields.map((f) => f.group))];
 
+  const foot = (
+    <>
+      <span className="muted tiny grow">{t("modelDialog.pendingNote")}</span>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={!canSave} onClick={save}>{initial ? t("common.save") : t("common.add")}</button>
+    </>
+  );
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`modal${fields.length ? " wide" : ""}`} role="dialog" aria-modal="true" aria-label={initial ? t("modelDialog.editTitle") : t("modelDialog.addTitle")}
-        onKeyDown={(e) => { if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") { e.preventDefault(); save(); } }}>
-        <div className="modal-head">
-          <h2>{initial ? tx("modelDialog.editHead", { id: <span className="mono">{initial.id}</span> }) : t("modelDialog.addHead", { agent: agentName })}</h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
-        </div>
-
-        <div className="modal-body">
-          <div className="field">
-            <label htmlFor="md-id">{t("modelDialog.modelId")}</label>
-            <input id="md-id" ref={initial ? undefined : first} className="input mono" value={id} disabled={!!initial}
-              onChange={(e) => setId(e.target.value)} placeholder={t("modelDialog.modelIdPlaceholder")} />
-            {initial && <em className="muted tiny">{t("modelDialog.idLocked")}</em>}
-          </div>
-          {(hasNames || hasContext) && (
-            <div className={hasNames && hasContext ? "form2" : ""}>
-              {hasNames && (
-                <div className="field">
-                  <label htmlFor="md-name">{t("modelDialog.displayName")}</label>
-                  <input id="md-name" ref={initial ? first : undefined} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("modelDialog.displayNamePlaceholder")} />
-                </div>
-              )}
-              {hasContext && (
-                <div className="field">
-                  <label htmlFor="md-ctx">{t("modelDialog.context")}</label>
-                  <input id="md-ctx" ref={initial && !hasNames ? first : undefined} className={`input mono${ctxBad ? " bad" : ""}`} value={ctx}
-                    onChange={(e) => setCtx(e.target.value)} placeholder={t("modelDialog.contextPlaceholder")} />
-                  {ctxBad ? <em className="field-err">{t("modelDialog.contextBad")}</em> : ctxVal ? <em className="muted tiny">{t("modelDialog.contextTokens", { n: ctxVal.toLocaleString(locale()), short: fmtCtx(ctxVal) })}</em> : null}
-                </div>
-              )}
+    <Modal label={initial ? t("modelDialog.editTitle") : t("modelDialog.addTitle")} wide={fields.length > 0} onClose={onClose}
+      title={initial ? tx("modelDialog.editHead", { id: <span className="mono">{initial.id}</span> }) : t("modelDialog.addHead", { agent: agentName })}
+      onKeyDown={(e) => { if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") { e.preventDefault(); save(); } }} foot={foot}>
+      <div className="field">
+        <label htmlFor="md-id">{t("modelDialog.modelId")}</label>
+        <input id="md-id" ref={initial ? undefined : first} className="input mono" value={id} disabled={!!initial}
+          onChange={(e) => setId(e.target.value)} placeholder={t("modelDialog.modelIdPlaceholder")} />
+        {initial && <em className="muted tiny">{t("modelDialog.idLocked")}</em>}
+      </div>
+      {(hasNames || hasContext) && (
+        <div className={hasNames && hasContext ? "form2" : ""}>
+          {hasNames && (
+            <div className="field">
+              <label htmlFor="md-name">{t("modelDialog.displayName")}</label>
+              <input id="md-name" ref={initial ? first : undefined} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("modelDialog.displayNamePlaceholder")} />
             </div>
           )}
+          {hasContext && (
+            <div className="field">
+              <label htmlFor="md-ctx">{t("modelDialog.context")}</label>
+              <input id="md-ctx" ref={initial && !hasNames ? first : undefined} className={`input mono${ctxBad ? " bad" : ""}`} value={ctx}
+                onChange={(e) => setCtx(e.target.value)} placeholder={t("modelDialog.contextPlaceholder")} />
+              {ctxBad ? <em className="field-err">{t("modelDialog.contextBad")}</em> : ctxVal ? <em className="muted tiny">{t("modelDialog.contextTokens", { n: ctxVal.toLocaleString(locale()), short: fmtCtx(ctxVal) })}</em> : null}
+            </div>
+          )}
+        </div>
+      )}
 
-          {groups.map((g) => (
-            <section key={g} className="mf-group">
-              <div className="mf-title">{g}</div>
-              {fields.filter((f) => f.group === g).map((f) => (
-                <FieldRow key={f.key} f={f} value={vals[f.key]} text={nums[f.key] ?? ""} bad={badNums.includes(f.key)}
-                  changed={f.kind === "number" ? (nums[f.key] ?? "") !== (typeof initial?.extra?.[f.key] === "number" ? String(initial.extra[f.key]) : "") : !same(vals[f.key], initial?.extra?.[f.key])}
-                  onChange={(v) => set(f.key, v)} onText={(s) => setNums((x) => ({ ...x, [f.key]: s }))} />
-              ))}
-            </section>
+      {groups.map((g) => (
+        <section key={g} className="mf-group">
+          <div className="mf-title">{g}</div>
+          {fields.filter((f) => f.group === g).map((f) => (
+            <FieldRow key={f.key} f={f} value={vals[f.key]} text={nums[f.key] ?? ""} bad={badNums.includes(f.key)}
+              changed={f.kind === "number" ? (nums[f.key] ?? "") !== (typeof initial?.extra?.[f.key] === "number" ? String(initial.extra[f.key]) : "") : !same(vals[f.key], initial?.extra?.[f.key])}
+              onChange={(v) => set(f.key, v)} onText={(s) => setNums((x) => ({ ...x, [f.key]: s }))} />
           ))}
-          {fields.length > 0 && <em className="muted tiny">{t("modelDialog.defaultNote", { agent: agentName })}</em>}
-        </div>
-
-        <div className="modal-foot">
-          <span className="muted tiny grow">{t("modelDialog.pendingNote")}</span>
-          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!canSave} onClick={save}>{initial ? t("common.save") : t("common.add")}</button>
-        </div>
-      </div>
-    </div>
+        </section>
+      ))}
+      {fields.length > 0 && <em className="muted tiny">{t("modelDialog.defaultNote", { agent: agentName })}</em>}
+    </Modal>
   );
 }
 
@@ -141,12 +134,8 @@ function FieldRow({ f, value, text, bad, changed, onChange, onText }: {
     return (
       <div className="mf-row">
         {head}
-        <div className="seg sm" role="radiogroup" aria-label={f.label}>
-          {([["", t("modelDialog.default")], ["on", t("common.yes")], ["off", t("common.no")]] as const).map(([k, l]) => (
-            <button key={k} type="button" role="radio" aria-checked={cur === k} className={cur === k ? "on" : ""}
-              onClick={() => onChange(k === "" ? undefined : k === "on")}>{l}</button>
-          ))}
-        </div>
+        <Seg className="sm" value={cur} label={f.label} onChange={(k) => onChange(k === "" ? undefined : k === "on")}
+          options={[{ value: "", label: t("modelDialog.default") }, { value: "on", label: t("common.yes") }, { value: "off", label: t("common.no") }]} />
       </div>
     );
   }
@@ -197,9 +186,7 @@ function FieldRow({ f, value, text, bad, changed, onChange, onText }: {
                 const next = toggledIn(start, o);
                 onChange(next.length ? next : undefined);
               }}>
-              <span className="opt-check" aria-hidden="true">
-                {on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
-              </span>
+              <OptCheck on={on} />
               <span>{i >= 0 ? f.hints[i] || o : o}</span>
               {i >= 0 && f.hints[i] && f.hints[i] !== o && <span className="mono tiny muted">{o}</span>}
             </button>

@@ -3,10 +3,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { type AgentDetect, type AgentId, type EnvInfo, api } from "../api";
 import { inTauri } from "../tauri";
 import type { CloseAction, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
-import { LANGS, type TKey, locale, t, useLang } from "../i18n";
-import { useEscape, usePageEscape } from "../hooks";
+import { LANGS, type LangPref, type TKey, locale, t, useLang } from "../i18n";
+import { useLoad, usePageEscape } from "../hooks";
 import { AGENT_NAME } from "../services";
-import { AgentIcon, Icon } from "./icons";
+import { AgentIcon, EnvIcon, Icon } from "./icons";
+import { Modal } from "./Modal";
+import { ErrorBox, Seg, SettingRow, Switch } from "./controls";
 import { TabBar, useSlideDir } from "./TabBar";
 import { scrub } from "../privacy";
 import { fmtSize } from "../format";
@@ -99,7 +101,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
           <div className="env-cards row-cards">
             {envs.map((e) => (
               <button key={e.id} className={`env-card${e.current ? " on" : ""}`} disabled={switching} onClick={() => !e.current && onEnv(e.id)}>
-                <span className="env-ico">{e.id.startsWith("wsl:") ? <Icon.terminal /> : <Icon.monitor />}</span>
+                <span className="env-ico"><EnvIcon id={e.id} /></span>
                 <span className="grow minw0">
                   <span className="block small strong">{e.label}</span>
                   <span className="block tiny muted ellipsis">{scrub(e.detail)}</span>
@@ -114,109 +116,51 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
 
       <section className="sgroup">
         <h2>{t("settingsPage.uiTitle")}</h2>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.theme")}</div>
-            <div className="muted small">{t("settingsPage.themeHint")}</div>
-          </div>
-          <div className="seg">
-            {THEMES.map((m) => (
-              <button key={m.v} className={prefs.theme === m.v ? "on" : ""} onClick={() => setPrefs({ ...prefs, theme: m.v })}>{m.icon}{t(m.label)}</button>
-            ))}
-          </div>
-        </div>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.language")}</div>
-            <div className="muted small">{t("settingsPage.languageHint")}</div>
-          </div>
-          <div className="seg">
-            <button className={prefs.lang === "auto" ? "on" : ""} onClick={() => setPrefs({ ...prefs, lang: "auto" })}>{t("settingsPage.langAuto")}</button>
-            {LANGS.map((l) => (
-              <button key={l.id} lang={l.id} className={prefs.lang === l.id ? "on" : ""} onClick={() => setPrefs({ ...prefs, lang: l.id })}>{l.label}</button>
-            ))}
-          </div>
-        </div>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.motion")}</div>
-            <div className="muted small">{t("settingsPage.motionHint", { hint: t(MOTION.find((m) => m.v === prefs.motion)?.hint ?? "settingsPage.motionFullHint") })}</div>
-          </div>
-          <div className="seg">
-            {MOTION.map((m) => (
-              <button key={m.v} className={prefs.motion === m.v ? "on" : ""} title={t(m.hint)} onClick={() => setPrefs({ ...prefs, motion: m.v })}>{t(m.label)}</button>
-            ))}
-          </div>
-        </div>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.autoLatency")}</div>
-            <div className="muted small">{t("settingsPage.autoLatencyHint")}</div>
-          </div>
-          <button className={`switch${prefs.autoLatency ? " on" : ""}`} role="switch" aria-checked={prefs.autoLatency} aria-label={t("settingsPage.autoLatency")}
-            onClick={() => setPrefs({ ...prefs, autoLatency: !prefs.autoLatency })}><span /></button>
-        </div>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.restartProgress")}</div>
-            <div className="muted small">{t("settingsPage.restartProgressHint", { hint: t(RESTART_PROGRESS.find((m) => m.v === prefs.restartProgress)?.hint ?? "settingsPage.restartDialogHint") })}</div>
-          </div>
-          <div className="seg">
-            {RESTART_PROGRESS.map((m) => (
-              <button key={m.v} className={prefs.restartProgress === m.v ? "on" : ""} onClick={() => setPrefs({ ...prefs, restartProgress: m.v })}>{t(m.label)}</button>
-            ))}
-          </div>
-        </div>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.privacy")}</div>
-            <div className="muted small">{t("settingsPage.privacyHint")}</div>
-          </div>
-          <button className={`switch${prefs.privacy ? " on" : ""}`} role="switch" aria-checked={prefs.privacy} aria-label={t("settingsPage.privacy")}
-            onClick={() => setPrefs({ ...prefs, privacy: !prefs.privacy })}><span /></button>
-        </div>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.closeAction")}</div>
-            <div className="muted small">{t("settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}</div>
-          </div>
-          <div className="seg">
-            {CLOSE_ACTIONS.map((m) => (
-              <button key={m.v} className={prefs.closeAction === m.v ? "on" : ""} onClick={() => setPrefs({ ...prefs, closeAction: m.v })}>{t(m.label)}</button>
-            ))}
-          </div>
-        </div>
+        <SettingRow label={t("settingsPage.theme")} desc={t("settingsPage.themeHint")}>
+          <Seg value={prefs.theme} onChange={(v) => setPrefs({ ...prefs, theme: v })} label={t("settingsPage.theme")}
+            options={THEMES.map((m) => ({ value: m.v, label: <>{m.icon}{t(m.label)}</> }))} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.language")} desc={t("settingsPage.languageHint")}>
+          <Seg value={prefs.lang} onChange={(v) => setPrefs({ ...prefs, lang: v })} label={t("settingsPage.language")}
+            options={[{ value: "auto" as LangPref, label: t("settingsPage.langAuto") }, ...LANGS.map((l) => ({ value: l.id, label: l.label, lang: l.id }))]} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.motion")} desc={t("settingsPage.motionHint", { hint: t(MOTION.find((m) => m.v === prefs.motion)?.hint ?? "settingsPage.motionFullHint") })}>
+          <Seg value={prefs.motion} onChange={(v) => setPrefs({ ...prefs, motion: v })} label={t("settingsPage.motion")}
+            options={MOTION.map((m) => ({ value: m.v, label: t(m.label), title: t(m.hint) }))} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.autoLatency")} desc={t("settingsPage.autoLatencyHint")}>
+          <Switch on={prefs.autoLatency} onChange={(v) => setPrefs({ ...prefs, autoLatency: v })} label={t("settingsPage.autoLatency")} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.restartProgress")}
+          desc={t("settingsPage.restartProgressHint", { hint: t(RESTART_PROGRESS.find((m) => m.v === prefs.restartProgress)?.hint ?? "settingsPage.restartDialogHint") })}>
+          <Seg value={prefs.restartProgress} onChange={(v) => setPrefs({ ...prefs, restartProgress: v })} label={t("settingsPage.restartProgress")}
+            options={RESTART_PROGRESS.map((m) => ({ value: m.v, label: t(m.label) }))} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.privacy")} desc={t("settingsPage.privacyHint")}>
+          <Switch on={prefs.privacy} onChange={(v) => setPrefs({ ...prefs, privacy: v })} label={t("settingsPage.privacy")} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.closeAction")}
+          desc={t("settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}>
+          <Seg value={prefs.closeAction} onChange={(v) => setPrefs({ ...prefs, closeAction: v })} label={t("settingsPage.closeAction")}
+            options={CLOSE_ACTIONS.map((m) => ({ value: m.v, label: t(m.label) }))} />
+        </SettingRow>
       </section>
 
       <section className="sgroup">
         <h2>{t("settingsPage.dataTitle")}</h2>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.dataDir")}</div>
-            <div className="muted small mono">{t("settingsPage.dataDirHint")}</div>
-          </div>
+        <SettingRow label={t("settingsPage.dataDir")} desc={t("settingsPage.dataDirHint")} descClassName="mono">
           <button className="btn" onClick={() => api.openDataDir().catch((e) => flash(errText(e), true))}><Icon.folder />{t("common.open")}</button>
           <button className="btn" onClick={onHistory}><Icon.history size={14} />{t("settingsPage.backups")}</button>
-        </div>
+        </SettingRow>
       </section>
 
       <section className="sgroup">
         <h2>{t("settingsPage.aboutTitle")}</h2>
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{version ? t("settingsPage.aboutVersion", { version }) : "AgentPlus"}</div>
-            <div className="muted small">{t("settingsPage.aboutHint")}</div>
-          </div>
-        </div>
+        <SettingRow label={version ? t("settingsPage.aboutVersion", { version }) : "AgentPlus"} desc={t("settingsPage.aboutHint")} />
         <UpdateRow flash={flash} />
-        <div className="srow">
-          <div className="grow minw0">
-            <div className="slabel">{t("settingsPage.autoUpdate")}</div>
-            <div className="muted small">{t("settingsPage.autoUpdateHint")}</div>
-          </div>
-          <button className={`switch${prefs.autoUpdate ? " on" : ""}`} role="switch" aria-checked={prefs.autoUpdate} aria-label={t("settingsPage.autoUpdate")}
-            onClick={() => setPrefs({ ...prefs, autoUpdate: !prefs.autoUpdate })}><span /></button>
-        </div>
+        <SettingRow label={t("settingsPage.autoUpdate")} desc={t("settingsPage.autoUpdateHint")}>
+          <Switch on={prefs.autoUpdate} onChange={(v) => setPrefs({ ...prefs, autoUpdate: v })} label={t("settingsPage.autoUpdate")} />
+        </SettingRow>
       </section>
     </div>
   );
@@ -246,7 +190,7 @@ function UpdateRow({ flash }: { flash: Flash }) {
           </div>
           {date && !Number.isNaN(date.getTime()) && <div className="muted small">{t("settingsPage.updateDate", { date: date.toLocaleDateString(locale()) })}</div>}
           {status && <div className="muted small" role="status">{status}</div>}
-          {u.kind === "error" && <div className="err" role="alert">{u.error}</div>}
+          {u.kind === "error" && <ErrorBox text={u.error} alert />}
         </div>
         {info && <button className="btn" onClick={openRelease}><Icon.external size={13} />{t("settingsPage.viewRelease")}</button>}
         {info
@@ -270,7 +214,6 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
 }) {
   const hidden = new Set(prefs.hiddenAgents);
   const toggleShown = (id: string) => setPrefs({ ...prefs, hiddenAgents: [...toggled(hidden, id)] });
-  const [list, setList] = useState<AgentDetect[] | null>(null);
   const [edit, setEdit] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -278,11 +221,11 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
   // Shown in the sidebar first, then detected (hidden, or detect-only), then not found.
   // Sorted when loaded, so flipping a switch doesn't make the card jump away.
   const rank = (d: AgentDetect) => (d.enabled && !hidden.has(d.id) ? 0 : d.enabled || d.manual ? 1 : 2);
-  const load = () => api.detectAgents()
-    .then((l) => setList(l.map((d, i) => [d, i] as const).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([d]) => d)))
-    .catch((e) => flash(errText(e), true));
   const lang = useLang();
-  useEffect(() => { load(); }, [envLabel, lang]);
+  const { data: list, error, reload: load } = useLoad(
+    () => api.detectAgents().then((l) => l.map((d, i) => [d, i] as const).sort(([a, i], [b, j]) => rank(a) - rank(b) || i - j).map(([d]) => d)),
+    [envLabel, lang],
+  );
 
   const save = async (id: AgentId, path: string | null) => {
     setSaving(id);
@@ -305,11 +248,12 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
         <span className="muted small">{t("settingsPage.detectIntro", { env: envLabel })}</span>
         <span className="row gap6 noshrink">
           <button className="btn small" onClick={() => setShowAll(true)}><Icon.layers size={12} />{t("settingsPage.supportedAgents")}</button>
-          <button className="btn small" onClick={() => { setList(null); load(); }}><Icon.refresh size={12} />{t("settingsPage.redetect")}</button>
+          <button className="btn small" onClick={() => { void load(true); }}><Icon.refresh size={12} />{t("settingsPage.redetect")}</button>
         </span>
       </div>
       {showAll && <SupportedAgents found={new Set(list?.filter((d) => d.enabled || d.manual).map((d) => d.id))} onClose={() => setShowAll(false)} />}
-      {!list && <div className="empty">{t("settingsPage.detecting")}</div>}
+      {error && (list ? <ErrorBox text={error} /> : <div className="empty">{scrub(error)}</div>)}
+      {!list && !error && <div className="empty">{t("settingsPage.detecting")}</div>}
       <div className="detect-grid">
       {list?.map((d) => {
         const draft = edit[d.id];
@@ -332,8 +276,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
                   <span className="small strong">{t("settingsPage.showInSidebar")}</span>
                   <span className="block tiny muted">{t("settingsPage.showInSidebarHint")}</span>
                 </span>
-                <button type="button" className={`switch${hidden.has(d.id) ? "" : " on"}`} role="switch" aria-checked={!hidden.has(d.id)} aria-label={t("settingsPage.showInSidebarAria", { name: d.name })}
-                  onClick={() => toggleShown(d.id)}><span /></button>
+                <Switch on={!hidden.has(d.id)} onChange={() => toggleShown(d.id)} label={t("settingsPage.showInSidebarAria", { name: d.name })} />
               </label>
             )}
             {d.note && <div className="detect-note tiny">{scrub(d.note)}</div>}
@@ -389,30 +332,22 @@ const SUPPORTED: { id: AgentId; kind: TKey }[] = [
 ];
 
 function SupportedAgents({ found, onClose }: { found: Set<AgentId>; onClose: () => void }) {
-  useEscape(onClose);
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal wide" role="dialog" aria-modal="true" aria-label={t("settingsPage.supportedAgents")}>
-        <div className="modal-head">
-          <h2>{t("settingsPage.supportedAgents")} <span className="muted small">{t("settingsPage.supportedCount", { n: SUPPORTED.length })}</span></h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
-        </div>
-        <div className="modal-body">
-          <div className="agent-wall">
-            {SUPPORTED.map((a) => (
-              <div key={a.id} className="agent-tile" title={found.has(a.id) ? t("settingsPage.detectedHere") : undefined}>
-                <span className="agent-tile-icon">
-                  <AgentIcon id={a.id} size={44} />
-                  {found.has(a.id) && <span className="agent-tile-dot" />}
-                </span>
-                <span className="small strong ellipsis">{AGENT_NAME[a.id]}</span>
-                <span className="tiny muted ellipsis">{t(a.kind)}</span>
-              </div>
-            ))}
+    <Modal label={t("settingsPage.supportedAgents")} wide onClose={onClose}
+      title={<>{t("settingsPage.supportedAgents")} <span className="muted small">{t("settingsPage.supportedCount", { n: SUPPORTED.length })}</span></>}>
+      <div className="agent-wall">
+        {SUPPORTED.map((a) => (
+          <div key={a.id} className="agent-tile" title={found.has(a.id) ? t("settingsPage.detectedHere") : undefined}>
+            <span className="agent-tile-icon">
+              <AgentIcon id={a.id} size={44} />
+              {found.has(a.id) && <span className="agent-tile-dot" />}
+            </span>
+            <span className="small strong ellipsis">{AGENT_NAME[a.id]}</span>
+            <span className="tiny muted ellipsis">{t(a.kind)}</span>
           </div>
-          <span className="tiny muted">{t("settingsPage.supportedHint")}</span>
-        </div>
+        ))}
       </div>
-    </div>
+      <span className="tiny muted">{t("settingsPage.supportedHint")}</span>
+    </Modal>
   );
 }

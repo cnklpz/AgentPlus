@@ -4,7 +4,7 @@ import {
   CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, isEnabled, isVisible, keys, mergeExtra,
   setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, withOp,
 } from "../draft";
-import { AgentIcon, Icon } from "./icons";
+import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
 import { type Latency, ProviderCard } from "./ProviderCard";
 import { SessionsTab } from "./SessionsTab";
@@ -14,6 +14,7 @@ import { ask } from "./Confirm";
 import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { ModelDialog } from "./ModelDialog";
+import { Switch } from "./controls";
 import { t, tn } from "../i18n";
 import { scrub } from "../privacy";
 import { errText, type Flash, toggled, toggledIn } from "../util";
@@ -437,7 +438,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
               ) : (
                 <>
                   <button className="icon-btn sm" aria-label={t("agentPage.editModel", { id: m.id })} title={t("common.edit")} disabled={readonly} onClick={() => setEditing(m.id)}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                    <Icon.edit size={12} />
                   </button>
                   {(m.deletable || m.isNew) && (
                     <button className="icon-btn sm" aria-label={t("agentPage.deleteModel", { id: m.id })} title={t("common.delete")} disabled={readonly}
@@ -446,10 +447,10 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                         if (!(await ask({ title: t("agentPage.deleteConfirm", { id: m.id }), message: t("agentPage.deleteConfirmMsg"), danger: true }))) return;
                         setDraft(withOp(draft, keys.deleteModel(pid, m.id), { op: "delete_model", provider: pid, model: m.id }));
                       }}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+                      <Icon.trash size={12} />
                     </button>
                   )}
-                  {!m.isNew && <Switch on={on} disabled={readonly} label={t(on ? "agentPage.hideModel" : "agentPage.showModel", { id: m.id })} onClick={() => onToggle(pid, m)} />}
+                  {!m.isNew && <Switch on={on} disabled={readonly} label={t(on ? "agentPage.hideModel" : "agentPage.showModel", { id: m.id })} onChange={() => onToggle(pid, m)} />}
                 </>
               )}
             </span>
@@ -488,7 +489,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
               return (
                 <div key={s.key} className="srow" id={`setting-${s.key}`}>
                   {head}
-                  <Switch on={v === true} disabled={readonly} fast={s.key.startsWith("fast")} label={s.label} onClick={() => onChange(s, !(v === true))} />
+                  <Switch on={v === true} disabled={readonly} fast={s.key.startsWith("fast")} label={s.label} onChange={(x) => onChange(s, x)} />
                 </div>
               );
             }
@@ -534,9 +535,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
                     return (
                       <button key={o} className={`opt${on ? " on" : ""}`} aria-pressed={on} disabled={readonly}
                         onClick={() => onChange(s, toggledIn(arr, o))}>
-                        <span className="opt-check" aria-hidden="true">
-                          {on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
-                        </span>
+                        <OptCheck on={on} />
                         <span className="minw0">
                           <span className="opt-name">{o}</span>
                           {s.hints[i] && <span className="opt-hint">{s.hints[i]}</span>}
@@ -582,13 +581,5 @@ function ListSetting({ value, label, disabled, onCommit }: { value: string[]; la
     <textarea className="input mono slist" rows={Math.min(8, Math.max(2, value.length + 1))} value={text} aria-label={label} disabled={disabled}
       placeholder={t("agentPage.onePerLine")} onChange={(e) => setText(e.target.value)}
       onBlur={() => { const next = lines(text); if (next.join("\n") !== joined) onCommit(next); }} />
-  );
-}
-
-export function Switch({ on, disabled, fast, label, onClick }: { on: boolean; disabled?: boolean; fast?: boolean; label: string; onClick: () => void }) {
-  return (
-    <button className={`switch${on ? " on" : ""}${fast ? " fast" : ""}`} aria-pressed={on} aria-label={label} disabled={disabled} onClick={onClick}>
-      <span />
-    </button>
   );
 }

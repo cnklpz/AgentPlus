@@ -1,7 +1,11 @@
 import type { AgentId, AgentState, ApiKind, GatewayRouteView } from "../api";
 import { type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, viewModels } from "../draft";
 import { AgentIcon, Icon } from "./icons";
-import { Bars, type Latency, colorFor, initials, latencyView, serviceKey } from "./ProviderCard";
+import { Avatar, Bars, type Latency, colorFor, latencyTone, latencyView, serviceKey } from "./ProviderCard";
+import { ProviderTest } from "./ProviderTest";
+import { API_LABEL } from "../services";
+import { t } from "../i18n";
+import { scrub, scrubHost } from "../privacy";
 
 interface Props {
   st: AgentState;
@@ -20,11 +24,6 @@ interface Props {
   /** Gateway state of this provider: undefined = direct; null = points at a route that no longer exists. */
   gatewayRoute: GatewayRouteView | null | undefined;
 }
-
-import { ProviderTest } from "./ProviderTest";
-import { API_LABEL } from "../services";
-import { t } from "../i18n";
-import { scrub, scrubHost } from "../privacy";
 
 export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest, onAction, onModels, onCopy, onEdit, onDelete, onUndo, gatewayRoute }: Props) {
   const enabled = p.isNew || isEnabled(p, draft);
@@ -56,20 +55,20 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
   return (
     <section className="pdetail">
       <div className="pdetail-head">
-        <span className="pavatar" style={{ background: colorFor(p) }}>{initials(p.name)}</span>
+        <Avatar name={p.name} color={colorFor(p)} />
         <div className="grow minw0">
           <div className="strong ellipsis">{p.name}</div>
           <div className="muted tiny">{status}</div>
         </div>
         <button className="icon-btn" aria-label={t("providerDetail.closeDetails")} onClick={onClose}>
-          <svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M1 1l10 10M11 1 1 11" /></svg>
+          <Icon.close />
         </button>
       </div>
 
       {!p.isNew && (
         <div className="pdetail-lat">
           <Bars level={lat.level} />
-          <span className={`lat${lat.live ? (lat.level >= 2 ? " good" : " slow") : ""}`}>{lat.text}</span>
+          <span className={`lat${lat.live ? ` ${latencyTone(lat.level)}` : ""}`}>{lat.text}</span>
           {p.baseUrl && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />{t("providerDetail.retest")}</button>}
         </div>
       )}

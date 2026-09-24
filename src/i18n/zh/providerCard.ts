@@ -5,6 +5,7 @@ export default {
   accountLogin: "账号登录",
   testing: "测速中…",
   untested: "未测速",
+  unreachable: "不可达",
   tagDeleting: "将删除",
   tagNew: "新 · 未应用",
   tagCurrent: "当前",
