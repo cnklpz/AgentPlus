@@ -80,23 +80,23 @@ Open Settings → General → About to read the release notes and click "Downloa
 
 Agents that aren't installed are hidden. For agents installed in a non-default location, set the config folder in Settings → Agent detection.
 
-| Agent | Configuration it writes | Where the API key goes |
-|---|---|---|
-| **Codex** (desktop + CLI) | `~/.codex/config.toml`, `models.json` | `~/.codex/.env` (the config only names the variable) |
-| **Claude Code** | `env` in `~/.claude/settings.json` | `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` in the same place |
-| **OpenCode** | `~/.config/opencode/opencode.json(c)`, plus `opencode.json` in projects | `~/.local/share/opencode/auth.json` |
-| **MiMo Desktop** | `~/.config/mimocode/mimocode.jsonc` | Same file |
-| **ZCode** | `~/.zcode/v2/provider_config.json` | Same file |
-| **Gemini CLI** | `~/.gemini/settings.json` | `~/.gemini/.env` |
-| **Qwen Code** | `~/.qwen/settings.json` | The `env` block of the same file |
-| **Kimi Code** | `~/.kimi-code/config.toml` | Same file (providers using `api_key_env` are left alone) |
-| **Kilo Code** | `~/.config/kilo/kilo.json(c)` | `~/.local/share/kilo/auth.json` |
-| **CodeBuddy** | `~/.codebuddy/models.json` | Same file |
-| **Droid** (Factory) | `~/.factory/settings.json` | Same file |
-| **Hermes** | `config.yaml` under HERMES_HOME | `.env` or `config.yaml` |
-| **pi** | `~/.pi/agent/models.json` | `auth.json` (if already used) or `models.json` |
-| **OpenClaw** | `~/.openclaw/openclaw.json` | Same file |
-| **Trae** | Detection only | Custom models live in the account's cloud storage; AgentPlus shows the manual steps |
+| Agent | Configuration it manages |
+|---|---|
+| **Codex** (desktop + CLI) | `~/.codex/config.toml`, `models.json` |
+| **Claude Code** | `env` in `~/.claude/settings.json` |
+| **OpenCode** | `~/.config/opencode/opencode.json(c)`, plus `opencode.json` in projects |
+| **MiMo Desktop** | `~/.config/mimocode/mimocode.jsonc` |
+| **ZCode** | `~/.zcode/v2/provider_config.json` |
+| **Gemini CLI** | `~/.gemini/settings.json` |
+| **Qwen Code** | `~/.qwen/settings.json` |
+| **Kimi Code** | `~/.kimi-code/config.toml` |
+| **Kilo Code** | `~/.config/kilo/kilo.json(c)` |
+| **CodeBuddy** | `~/.codebuddy/models.json` |
+| **Droid** (Factory) | `~/.factory/settings.json` |
+| **Hermes** | `config.yaml` under HERMES_HOME |
+| **pi** | `~/.pi/agent/models.json` |
+| **OpenClaw** | `~/.openclaw/openclaw.json` |
+| **Trae** | Detection only: custom models live in the account's cloud storage; AgentPlus shows the manual steps |
 
 ### What's special for each agent
 
@@ -153,21 +153,6 @@ Agents that aren't installed are hidden. For agents installed in a non-default l
 - Existing environment-variable references (`$VAR`, `${VAR}`, `env_key`…) are kept as they are
 
 </details>
-
-## How API keys are stored
-
-AgentPlus **does not encrypt keys** and does not use the system credential store. Instead it keeps as few copies as it can, never sends keys anywhere they don't belong, and never shows them in the UI.
-
-- **Where keys live**
-  - The provider library, Claude Code / Gemini CLI profiles and gateway keys: `~/.agentplus/store.json`, **in plain text**
-  - After pushing to an agent: that agent's own config files (see the table above), in plain text, just as if you had set them up by hand
-  - Backups taken before each write: `~/.agentplus/backups/` holds full copies of the original files, **keys included**, and they are not cleaned up automatically
-- **The UI never gets the full key**: the backend only sends whether a key exists, its last 4 characters and a fingerprint. Copying a provider between agents happens entirely in the backend, and keys in diff previews are masked
-- **The local gateway doesn't hand out upstream keys**: it listens on `127.0.0.1` only and refuses requests from web pages or with a non-local Host. Each agent gets its own random gateway key (`agp-…`); the real upstream key is only used when the gateway forwards a request
-- **No telemetry**: AgentPlus only talks to the provider URLs you configure (fetching models, latency, test requests, gateway forwarding) and to GitHub (update check). Redirects to another host are not followed, so a key is never sent elsewhere
-- **Multi-device sync** (not available yet) exports no keys at all
-
-> Tip: don't put `~/.agentplus` in a cloud-synced folder, and turn on privacy mode (`Ctrl+Shift+H`) before taking screenshots or sharing your screen.
 
 ## Development
 

@@ -77,23 +77,23 @@ AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维�
 
 未检测到安装的 Agent 会自动隐藏；装在非默认位置的，可以在「设置 → Agent 识别」里手动指定配置目录。
 
-| Agent | 写入的配置 | 密钥写在哪里 |
-|---|---|---|
-| **Codex**（桌面版 + CLI） | `~/.codex/config.toml`、`models.json` | `~/.codex/.env`（config 里只引用变量名） |
-| **Claude Code** | `~/.claude/settings.json` 的 `env` | 同一处的 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` |
-| **OpenCode** | `~/.config/opencode/opencode.json(c)`，以及项目里的 `opencode.json` | `~/.local/share/opencode/auth.json` |
-| **MiMo Desktop** | `~/.config/mimocode/mimocode.jsonc` | 同一文件 |
-| **ZCode** | `~/.zcode/v2/provider_config.json` | 同一文件 |
-| **Gemini CLI** | `~/.gemini/settings.json` | `~/.gemini/.env` |
-| **Qwen Code** | `~/.qwen/settings.json` | 同一文件的 `env` 块 |
-| **Kimi Code** | `~/.kimi-code/config.toml` | 同一文件（用 `api_key_env` 的保持不动） |
-| **Kilo Code** | `~/.config/kilo/kilo.json(c)` | `~/.local/share/kilo/auth.json` |
-| **CodeBuddy** | `~/.codebuddy/models.json` | 同一文件 |
-| **Droid**（Factory） | `~/.factory/settings.json` | 同一文件 |
-| **Hermes** | HERMES_HOME 下的 `config.yaml` | `.env` 或 `config.yaml` |
-| **pi** | `~/.pi/agent/models.json` | `auth.json`（已有时）或 `models.json` |
-| **OpenClaw** | `~/.openclaw/openclaw.json` | 同一文件 |
-| **Trae** | 仅识别 | 自定义模型存在账号云端，AgentPlus 给出手动添加的步骤 |
+| Agent | 管理的配置 |
+|---|---|
+| **Codex**（桌面版 + CLI） | `~/.codex/config.toml`、`models.json` |
+| **Claude Code** | `~/.claude/settings.json` 的 `env` |
+| **OpenCode** | `~/.config/opencode/opencode.json(c)`，以及项目里的 `opencode.json` |
+| **MiMo Desktop** | `~/.config/mimocode/mimocode.jsonc` |
+| **ZCode** | `~/.zcode/v2/provider_config.json` |
+| **Gemini CLI** | `~/.gemini/settings.json` |
+| **Qwen Code** | `~/.qwen/settings.json` |
+| **Kimi Code** | `~/.kimi-code/config.toml` |
+| **Kilo Code** | `~/.config/kilo/kilo.json(c)` |
+| **CodeBuddy** | `~/.codebuddy/models.json` |
+| **Droid**（Factory） | `~/.factory/settings.json` |
+| **Hermes** | HERMES_HOME 下的 `config.yaml` |
+| **pi** | `~/.pi/agent/models.json` |
+| **OpenClaw** | `~/.openclaw/openclaw.json` |
+| **Trae** | 仅识别：自定义模型存在账号云端，AgentPlus 给出手动添加的步骤 |
 
 ### 各 Agent 的特色功能
 
@@ -150,21 +150,6 @@ AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维�
 - 已有的环境变量引用（`$VAR`、`${VAR}`、`env_key` 等）会原样保留
 
 </details>
-
-## 密钥怎么存
-
-AgentPlus **不加密密钥**，也不使用系统的凭据管理器。它的原则是：不多存、不外传、界面上不显示。
-
-- **存在哪里**
-  - 供应商库、Claude Code / Gemini CLI 的配置档、网关密钥：`~/.agentplus/store.json`，**明文**
-  - 推送到各 Agent 后：写进该 Agent 自己的配置文件（位置见上表），和手动配置时一样是明文
-  - 写入前的备份：`~/.agentplus/backups/` 里是原文件的完整副本，**同样包含密钥**，不会自动清理
-- **界面拿不到完整密钥**：后端只把「是否有密钥」、末 4 位和一个指纹传给界面；在 Agent 之间复制供应商时，密钥只在后端流转；diff 预览里的密钥都打了码
-- **本地网关不暴露上游密钥**：只监听 `127.0.0.1`，拒绝来自网页和非本机 Host 的请求；每个 Agent 拿到的是自己独立的随机网关密钥（`agp-…`），真正的上游密钥只在网关转发时使用
-- **没有遥测**：AgentPlus 只访问你配置的供应商地址（拉取模型、测延迟、测试请求、网关转发）和 GitHub（检查更新）；访问供应商时不跟随跨主机的重定向，密钥不会被带到别处
-- **多设备同步**（暂未开放）导出的文件不含任何密钥
-
-> 建议：不要把 `~/.agentplus` 放进网盘同步目录；截图或共享屏幕前打开隐私模式（`Ctrl+Shift+H`）。
 
 ## 开发
 
