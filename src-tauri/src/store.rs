@@ -57,7 +57,7 @@ fn lock() -> Option<std::sync::MutexGuard<'static, ()>> {
     if HELD.with(|h| h.get()) {
         return None;
     }
-    Some(WRITE.lock().unwrap_or_else(|e| e.into_inner()))
+    Some(crate::util::lock(&WRITE))
 }
 
 /// Runs `f` holding the write lock, so a `load` … `save` inside it can't lose a change
