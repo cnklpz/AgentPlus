@@ -166,8 +166,8 @@ fn provider_of(id: &str, p: &Value, _is_current: bool) -> Provider {
     let roles = roles_of(p);
     let key = str_field(p, "apiKey");
     let mut details = vec![
-        Kv::mono(l("地址", "Base URL"), base.clone()),
-        Kv::text(l("密钥", "API key"), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{} · {}", if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN }, mask_key(&key)) }),
+        Kv::mono(lbl::base_url(), base.clone()),
+        Kv::text(lbl::api_key(), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{} · {}", if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN }, mask_key(&key)) }),
     ];
     for (role, _, (zh, en)) in ROLES {
         if let Some(m) = roles.get(role) {
@@ -246,8 +246,8 @@ pub fn state(inst: &Install) -> AgentState {
         reason: None,
         models: vec![],
         details: vec![
-            Kv::text(l("认证方式", "Authentication"), l("claude 登录（~/.claude/.credentials.json）", "claude sign-in (~/.claude/.credentials.json)")),
-            Kv::text(l("说明", "Note"), l("不设置 ANTHROPIC_BASE_URL 等环境变量，用官方账号和官方模型", "Leaves ANTHROPIC_BASE_URL and related variables unset; uses the official account and official models")),
+            Kv::text(lbl::auth(), l("claude 登录（~/.claude/.credentials.json）", "claude sign-in (~/.claude/.credentials.json)")),
+            Kv::text(lbl::note(), l("不设置 ANTHROPIC_BASE_URL 等环境变量，用官方账号和官方模型", "Leaves ANTHROPIC_BASE_URL and related variables unset; uses the official account and official models")),
         ],
         editable: false,
         api: "anthropic".into(),
@@ -275,7 +275,7 @@ pub fn state(inst: &Install) -> AgentState {
             "roles": roles,
         });
         let mut prov = provider_of(UNMANAGED, &p, true);
-        prov.details.push(Kv::text(l("说明", "Note"), l("不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
+        prov.details.push(Kv::text(lbl::note(), l("不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
         st.providers.push(prov);
         st.notes.push(l("settings.json 里有手动设置的 ANTHROPIC_BASE_URL，已显示为「settings.json 里的配置」；编辑保存一次即可由 AgentPlus 管理。", "settings.json has a hand-set ANTHROPIC_BASE_URL, shown as \"Config in settings.json\". Edit and save it once to let AgentPlus manage it.").into());
     }
@@ -286,7 +286,7 @@ pub fn state(inst: &Install) -> AgentState {
     ];
     let cur_name = st.providers.iter().find(|p| p.id == cur).map(|p| p.name.clone()).unwrap_or_default();
     st.current = vec![
-        Kv::text(l("供应商", "Provider"), cur_name),
+        Kv::text(lbl::provider(), cur_name),
         Kv::mono(BASE, env_str(&env, BASE).unwrap_or_else(|| l("-（官方）", "- (official)").into())),
     ];
     for (_, k, (zh, en)) in ROLES {

@@ -99,9 +99,9 @@ pub fn state(inst: &Install) -> AgentState {
             reason: None,
             models,
             details: vec![
-                Kv::text(l("认证方式", "Authentication"), l("小米账号登录", "Xiaomi account sign-in")),
-                Kv::mono(l("来源", "Source"), "model-catalog.json"),
-                Kv::text(l("说明", "Note"), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
+                Kv::text(lbl::auth(), l("小米账号登录", "Xiaomi account sign-in")),
+                Kv::mono(lbl::source(), "model-catalog.json"),
+                Kv::text(lbl::note(), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
             ],
             editable: false,
             api: "chat".into(),
@@ -152,9 +152,9 @@ pub fn state(inst: &Install) -> AgentState {
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("供应商", "Providers"), on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", "))),
-        Kv::mono(l("默认模型", "Default model"), prefs.get("model").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
+        Kv::text(l("供应商", "Providers"), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::mono(lbl::default_model(), prefs.get("model").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
         Kv::mono(l("技能兼容", "Skill compatibility"), if skills.is_empty() { l("无", "None").into() } else { skills.join(" ") }),
         Kv::text(l("托盘图标", "Tray icon"), if get_b("trayEnabled") { l("开", "On") } else { l("关", "Off") }),
     ];

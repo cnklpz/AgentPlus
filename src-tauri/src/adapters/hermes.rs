@@ -725,17 +725,17 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
     };
     let enabled = def.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
     let mut details = vec![
-        Kv::mono(l("配置位置", "Config location"), place),
-        Kv::mono(l("地址", "Base URL"), base.clone().unwrap_or_else(|| "-".into())),
+        Kv::mono(lbl::config_location(), place),
+        Kv::mono(lbl::base_url(), base.clone().unwrap_or_else(|| "-".into())),
         Kv::mono("api_mode", mode.clone().unwrap_or_else(|| l("（自动，按地址判断）", "(auto, based on the URL)").into())),
-        Kv::text(l("密钥", "API key"), key_note),
+        Kv::text(lbl::api_key(), key_note),
     ];
     if let Some(d) = &dflt {
-        details.push(Kv::mono(l("默认模型", "Default model"), d.clone()));
+        details.push(Kv::mono(lbl::default_model(), d.clone()));
     }
     if !enabled {
         details.push(Kv::text(
-            l("状态", "Status"),
+            lbl::status(),
             l("enabled: false（Hermes 忽略它；设为当前时会重新启用）", "enabled: false (Hermes ignores it; making it current re-enables it)"),
         ));
     }
@@ -788,15 +788,15 @@ fn inline_provider(vals: &(String, Option<String>, Option<String>, Option<String
     let api = api_of(mode.as_deref());
     let mut details = vec![
         Kv::mono(
-            l("配置位置", "Config location"),
+            lbl::config_location(),
             l("model.provider: custom（model.base_url / model.api_key）", "model.provider: custom (model.base_url / model.api_key)"),
         ),
-        Kv::mono(l("地址", "Base URL"), base.clone()),
+        Kv::mono(lbl::base_url(), base.clone()),
         Kv::mono("api_mode", mode.clone().unwrap_or_else(|| l("（自动，按地址判断）", "(auto, based on the URL)").into())),
-        Kv::text(l("密钥", "API key"), key.as_deref().map(|k| format!("model.api_key · {}", mask_key(k))).unwrap_or_else(|| l("未填写", "Not set").into())),
+        Kv::text(lbl::api_key(), key.as_deref().map(|k| format!("model.api_key · {}", mask_key(k))).unwrap_or_else(|| l("未填写", "Not set").into())),
     ];
     if let Some(n) = same_as {
-        details.push(Kv::text(l("说明", "Note"), tr!("地址和「{n}」相同；密钥写在 model 里", "Same base URL as \"{n}\"; the API key is in model")));
+        details.push(Kv::text(lbl::note(), tr!("地址和「{n}」相同；密钥写在 model 里", "Same base URL as \"{n}\"; the API key is in model")));
     }
     Provider {
         id: INLINE.into(),
@@ -834,7 +834,7 @@ fn builtin_provider(name: &str, dflt: Option<String>, known: bool) -> Provider {
         details: vec![
             Kv::mono("model.provider", name.to_string()),
             Kv::text(
-                l("说明", "Note"),
+                lbl::note(),
                 l(
                     "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
                     "A provider built into Hermes (credentials live in .env / auth.json; manage them with hermes model / hermes auth)",
@@ -937,7 +937,7 @@ pub fn state(inst: &Install) -> AgentState {
     let cur_name = st.providers.iter().find(|p| p.id == cur_id).map(|p| p.name.clone()).unwrap_or_default();
     let m = cfg.get("model");
     st.current = vec![
-        Kv::text(l("供应商", "Provider"), cur_name),
+        Kv::text(lbl::provider(), cur_name),
         Kv::mono("model.provider", model_provider(&cfg)),
         Kv::mono(l("模型", "Model"), cur_model.unwrap_or_else(|| "-".into())),
     ];
@@ -947,7 +947,7 @@ pub fn state(inst: &Install) -> AgentState {
         Src::Builtin(_) => None,
     };
     if let Some(b) = base {
-        st.current.push(Kv::mono(l("地址", "Base URL"), b));
+        st.current.push(Kv::mono(lbl::base_url(), b));
     }
     if let Some(mode) = m.and_then(|m| ystr(m, "api_mode")) {
         st.current.push(Kv::mono("api_mode", mode));

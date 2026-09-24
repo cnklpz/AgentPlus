@@ -188,10 +188,10 @@ impl Fmt {
             reason: None,
             models,
             details: vec![
-                Kv::mono(l("配置 ID", "Config ID"), format!("provider.{id}")),
+                Kv::mono(lbl::config_id(), format!("provider.{id}")),
                 Kv::mono("npm", if npm.is_empty() { "-".into() } else { npm.to_string() }),
-                Kv::text(l("密钥", "API key"), key_note),
-                Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { parked }),
+                Kv::text(lbl::api_key(), key_note),
+                Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { parked }),
             ],
             editable: true,
             api: api.into(),

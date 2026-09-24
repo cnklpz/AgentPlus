@@ -135,6 +135,69 @@ impl Kv {
     }
 }
 
+/// Labels of `Kv` rows several adapters show, so each reads the same everywhere.
+pub(crate) mod lbl {
+    use crate::i18n::l;
+
+    pub fn api_key() -> &'static str {
+        l("密钥", "API key")
+    }
+    pub fn auth() -> &'static str {
+        l("认证方式", "Authentication")
+    }
+    pub fn base_url() -> &'static str {
+        l("地址", "Base URL")
+    }
+    pub fn config_file() -> &'static str {
+        l("配置文件", "Config file")
+    }
+    pub fn config_id() -> &'static str {
+        l("配置 ID", "Config ID")
+    }
+    pub fn config_location() -> &'static str {
+        l("配置位置", "Config location")
+    }
+    pub fn credentials() -> &'static str {
+        l("凭据", "Credentials")
+    }
+    pub fn current_model() -> &'static str {
+        l("当前模型", "Current model")
+    }
+    pub fn custom_models() -> &'static str {
+        l("自定义模型", "Custom models")
+    }
+    pub fn custom_providers() -> &'static str {
+        l("自定义供应商", "Custom providers")
+    }
+    pub fn default_model() -> &'static str {
+        l("默认模型", "Default model")
+    }
+    pub fn note() -> &'static str {
+        l("说明", "Note")
+    }
+    pub fn provider() -> &'static str {
+        l("供应商", "Provider")
+    }
+    pub fn small_model() -> &'static str {
+        l("小模型", "Small model")
+    }
+    pub fn source() -> &'static str {
+        l("来源", "Source")
+    }
+    pub fn status() -> &'static str {
+        l("状态", "Status")
+    }
+    pub fn visible_models() -> &'static str {
+        l("可见模型", "Visible models")
+    }
+
+    /// A summary row's list of names ("A、B" / "A, B"), or "None".
+    pub fn names_or_none<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> String {
+        let names: Vec<String> = names.into_iter().map(|s| s.as_ref().to_string()).collect();
+        if names.is_empty() { l("无", "None").into() } else { names.join(l("、", ", ")) }
+    }
+}
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
@@ -374,6 +437,12 @@ mod tests {
         assert_eq!(clean_ids(&[" b ", "", "a", "b", "  ", "a ", "c"]), vec!["b", "a", "c"]);
         assert!(clean_ids::<String>(&[]).is_empty());
         assert_eq!(clean_ids(&["m1".to_string(), "m1".to_string()]), vec!["m1"]);
+    }
+
+    #[test]
+    fn names_or_none() {
+        assert_eq!(super::lbl::names_or_none(["a", "b"]), "a、b");
+        assert_eq!(super::lbl::names_or_none(Vec::<String>::new()), "无");
     }
 
     #[test]

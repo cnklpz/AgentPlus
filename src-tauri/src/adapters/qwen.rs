@@ -386,10 +386,10 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         _ => l("未设置", "Not set").into(),
     };
     let mut details = vec![
-        Kv::mono(l("配置位置", "Config location"), tr!("modelProviders.{}（{} 个条目）", "modelProviders.{} ({} entries)", g.key, g.live.len())),
+        Kv::mono(lbl::config_location(), tr!("modelProviders.{}（{} 个条目）", "modelProviders.{} ({} entries)", g.key, g.live.len())),
         Kv::mono("envKey", g.env_key.clone().unwrap_or_else(|| tr!("-（默认 {}）", "- (default {})", var.clone().unwrap_or_default()))),
-        Kv::text(l("密钥", "API key"), key_note),
-        Kv::text(l("状态", "Status"), if g.enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries kept in AgentPlus") }),
+        Kv::text(lbl::api_key(), key_note),
+        Kv::text(lbl::status(), if g.enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries kept in AgentPlus") }),
     ];
     if g.proto.as_deref().is_some_and(|p| p != g.key) {
         details.push(Kv::mono("providerProtocol", format!("{} → {}", g.key, g.proto.as_deref().unwrap_or(""))));
@@ -462,7 +462,7 @@ pub fn state(inst: &Install) -> AgentState {
             id: OAUTH.into(),
             name: l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into(),
             base_url: None,
-            host: l("Qwen OAuth 登录", "Qwen OAuth login").into(),
+            host: l("Qwen OAuth 登录", "Qwen OAuth sign-in").into(),
             apis: vec![l("账号", "Account").into()],
             builtin: true,
             enabled: true,
@@ -470,8 +470,8 @@ pub fn state(inst: &Install) -> AgentState {
             reason: None,
             models: vec![],
             details: vec![
-                Kv::text(l("认证方式", "Auth type"), l("qwen-oauth（~/.qwen/oauth_creds.json）", "qwen-oauth (~/.qwen/oauth_creds.json)")),
-                Kv::text(l("说明", "About"), l("Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换", "Qwen Code's built-in account login. Models are managed by Qwen Code; switch with /auth.")),
+                Kv::text(lbl::auth(), l("qwen-oauth（~/.qwen/oauth_creds.json）", "qwen-oauth (~/.qwen/oauth_creds.json)")),
+                Kv::text(lbl::note(), l("Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换", "Qwen Code's built-in account sign-in. Models are managed by Qwen Code; switch with /auth.")),
             ],
             editable: false,
             api: "chat".into(),
@@ -503,11 +503,11 @@ pub fn state(inst: &Install) -> AgentState {
     let cur_name = cur.and_then(|g| st.providers.iter().find(|p| p.id == g.id)).map(|p| p.name.clone());
     let vis: usize = st.providers.iter().filter(|p| p.enabled && !p.builtin).map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::mono(l("认证方式", "Auth type"), sel.auth.clone().unwrap_or_else(|| l("-（未选择）", "- (not selected)").into())),
-        Kv::mono(l("当前模型", "Current model"), sel.model.clone().unwrap_or_else(|| "-".into())),
-        Kv::text(l("供应商", "Provider"), cur_name.unwrap_or_else(|| if sel.auth.as_deref() == Some(OAUTH) { l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into() } else { "-".into() })),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("配置文件", "Config file"), display_path(&settings_path())),
+        Kv::mono(lbl::auth(), sel.auth.clone().unwrap_or_else(|| l("-（未选择）", "- (not selected)").into())),
+        Kv::mono(lbl::current_model(), sel.model.clone().unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::provider(), cur_name.unwrap_or_else(|| if sel.auth.as_deref() == Some(OAUTH) { l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into() } else { "-".into() })),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+        Kv::mono(lbl::config_file(), display_path(&settings_path())),
     ];
     st.notes.push(l("Qwen Code 会热加载 modelProviders；在 Qwen Code 里用 /model 选择模型。", "Qwen Code hot-reloads modelProviders; pick models with /model in Qwen Code.").into());
     st.notes.push(l("密钥写入 settings.json 的 env 块（按 envKey 命名的变量），不会写进模型条目。", "API keys are written to the env block of settings.json (in the variable named by envKey), never into model entries.").into());
@@ -1051,13 +1051,13 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
                 match p.id.as_deref() {
                     None => cx.create_provider(p)?,
-                    Some(OAUTH) => return Err(anyhow!(l("Qwen 账号登录不能编辑", "The Qwen account login can't be edited"))),
+                    Some(OAUTH) => return Err(anyhow!(l("Qwen 账号登录不能编辑", "The Qwen account sign-in can't be edited"))),
                     Some(id) => cx.edit_provider(id, p)?,
                 }
             }
             Op::DeleteProvider { provider } => {
                 if provider == OAUTH {
-                    return Err(anyhow!(l("Qwen 账号登录不能删除，在 Qwen Code 里用 /auth 切换", "The Qwen account login can't be deleted; switch with /auth in Qwen Code")));
+                    return Err(anyhow!(l("Qwen 账号登录不能删除，在 Qwen Code 里用 /auth 切换", "The Qwen account sign-in can't be deleted; switch with /auth in Qwen Code")));
                 }
                 cx.delete_provider(provider)?
             }

@@ -134,7 +134,7 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
                 id: key.into(),
                 name: b.get("name").and_then(|x| x.as_str()).unwrap_or("Z.ai").to_string(),
                 base_url: None,
-                host: if oauth { l("Z.ai 账号登录", "Z.ai account login").into() } else { "Z.ai API Key".into() },
+                host: if oauth { l("Z.ai 账号登录", "Z.ai account sign-in").into() } else { "Z.ai API Key".into() },
                 apis: vec![l("套餐", "Plan").into()],
                 builtin: true,
                 enabled: true,
@@ -142,9 +142,9 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
                 reason: None,
                 models: models.into_iter().map(|id| Model { id, visible: true, readonly: true, ..Default::default() }).collect(),
                 details: vec![
-                    Kv::text(l("认证方式", "Auth type"), if oauth { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)") } else { "Z.ai API Key" }),
-                    Kv::mono(l("配置 ID", "Config ID"), key),
-                    Kv::text(l("说明", "About"), l("ZCode 内置，模型列表由 ZCode 管理", "Built into ZCode; its model list is managed by ZCode")),
+                    Kv::text(lbl::auth(), if oauth { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)") } else { "Z.ai API Key" }),
+                    Kv::mono(lbl::config_id(), key),
+                    Kv::text(lbl::note(), l("ZCode 内置，模型列表由 ZCode 管理", "Built into ZCode; its model list is managed by ZCode")),
                 ],
                 editable: false,
                 api: "chat".into(),
@@ -170,11 +170,11 @@ fn provider_list(pc: &Value, legacy: Option<&Value>, setting: Option<&Value>) ->
         let access = r.pointer("/config/access/type").and_then(|x| x.as_str()).unwrap_or("-");
         let has_key = r.pointer("/config/access/apiKey").and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
         let details = vec![
-            Kv::mono(l("配置 ID", "Config ID"), pid.clone()),
+            Kv::mono(lbl::config_id(), pid.clone()),
             Kv::mono("api.type", if atype.is_empty() { "-".into() } else { atype.to_string() }),
-            Kv::text(l("密钥", "API key"), match (access, has_key) {
-                ("api-key", true) => l("API Key · 明文保存在 provider_config.json", "API Key · stored in plain text in provider_config.json").to_string(),
-                ("api-key", false) => l("API Key · 未填写", "API Key · not set").to_string(),
+            Kv::text(lbl::api_key(), match (access, has_key) {
+                ("api-key", true) => l("API Key · 明文保存在 provider_config.json", "API key · stored in plain text in provider_config.json").to_string(),
+                ("api-key", false) => l("API Key · 未填写", "API key · not set").to_string(),
                 (other, _) => other.to_string(),
             }),
             Kv::mono(l("分组", "Group"), r.pointer("/config/group").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
@@ -247,10 +247,10 @@ pub fn state(inst: &Install) -> AgentState {
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     let mode = setting.as_ref().and_then(|s| s.pointer("/modelProviderFamilyModes/zai")).and_then(|x| x.as_str()).unwrap_or("-");
     st.current = vec![
-        Kv::text(l("登录方式", "Login method"), if mode == "oauth" { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)").to_string() } else { mode.to_string() }),
+        Kv::text(l("登录方式", "Sign-in method"), if mode == "oauth" { l("Z.ai 账号（OAuth）", "Z.ai account (OAuth)").to_string() } else { mode.to_string() }),
         Kv::text(l("启用供应商", "Enabled providers"), tr!("{} 个", "{}", on.len())),
-        Kv::text(l("停用供应商", "Disabled providers"), if off.is_empty() { l("无", "None").into() } else { off.join(l("、", ", ")) }),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
+        Kv::text(l("停用供应商", "Disabled providers"), lbl::names_or_none(&off)),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
         Kv::text(l("记忆", "Memory"), if get_b("memoryEnabled") { l("开", "On") } else { l("关", "Off") }),
         Kv::text(l("最小化到托盘", "Minimize to tray"), if get_b("closeToTrayOnWindows") { l("开", "On") } else { l("关", "Off") }),
     ];

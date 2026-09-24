@@ -193,11 +193,11 @@ fn provider_of(id: &str, p: &Value) -> Provider {
         .map(|(mid, visible)| Model { tags: if dflt.as_deref() == Some(mid.as_str()) { vec![Tag::default_model()] } else { vec![] }, id: mid, visible, deletable: true, ..Default::default() })
         .collect();
     let mut details = vec![
-        Kv::mono(l("地址", "Base URL"), if base.is_empty() { l("（Gemini 官方 API）", "(Gemini official API)").into() } else { base.clone() }),
-        Kv::text(l("密钥", "API key"), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{KEY} · {}", mask_key(&key)) }),
+        Kv::mono(lbl::base_url(), if base.is_empty() { l("（Gemini 官方 API）", "(Gemini official API)").into() } else { base.clone() }),
+        Kv::text(lbl::api_key(), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{KEY} · {}", mask_key(&key)) }),
     ];
     if let Some(d) = &dflt {
-        details.push(Kv::mono(l("默认模型", "Default model"), d.clone()));
+        details.push(Kv::mono(lbl::default_model(), d.clone()));
     }
     details.push(Kv::text(stored_in_label(), l("AgentPlus 配置档（切换时写入 ~/.gemini/.env 和 settings.json）", "AgentPlus profile (written to ~/.gemini/.env and settings.json on switch)")));
     Provider {
@@ -298,12 +298,12 @@ pub fn state(inst: &Install) -> AgentState {
         l("Google 账号登录", "Google account sign-in"),
         l("Google 账号（oauth-personal）", "Google account (oauth-personal)"),
         vec![
-            Kv::text(l("认证方式", "Authentication"), l("security.auth.selectedType = oauth-personal（凭据在 ~/.gemini/oauth_creds.json）", "security.auth.selectedType = oauth-personal (credentials in ~/.gemini/oauth_creds.json)")),
-            Kv::text(l("说明", "Note"), l("不设置 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，用 Google 账号和官方模型", "Leaves GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY unset; uses the Google account and official models")),
+            Kv::text(lbl::auth(), l("security.auth.selectedType = oauth-personal（凭据在 ~/.gemini/oauth_creds.json）", "security.auth.selectedType = oauth-personal (credentials in ~/.gemini/oauth_creds.json)")),
+            Kv::text(lbl::note(), l("不设置 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，用 Google 账号和官方模型", "Leaves GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY unset; uses the Google account and official models")),
         ],
     ));
     if let Some(t) = cur.strip_prefix(AUTH) {
-        st.providers.push(builtin(&cur, auth_label(t), l("其他认证方式", "Other auth method"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(l("说明", "Note"), l("在 Gemini CLI 里用 /auth 管理", "Manage it with /auth in Gemini CLI"))]));
+        st.providers.push(builtin(&cur, auth_label(t), l("其他认证方式", "Other auth method"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(lbl::note(), l("在 Gemini CLI 里用 /auth 管理", "Manage it with /auth in Gemini CLI"))]));
     }
     for (id, p) in &profs {
         st.providers.push(provider_of(id, p));
@@ -314,7 +314,7 @@ pub fn state(inst: &Install) -> AgentState {
         let mut prov = provider_of(UNMANAGED, &unmanaged_profile(&env));
         let stored = stored_in_label();
         prov.details.retain(|d| d.k != stored);
-        prov.details.push(Kv::text(l("说明", "Note"), l("~/.gemini/.env 里的设置，不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Set in ~/.gemini/.env, not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
+        prov.details.push(Kv::text(lbl::note(), l("~/.gemini/.env 里的设置，不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Set in ~/.gemini/.env, not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
         st.providers.push(prov);
         if cur != UNMANAGED {
             st.notes.push(l("~/.gemini/.env 里设置了 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，但当前用的是 Google 账号登录（settings.json 的 selectedType 优先）。", "~/.gemini/.env sets GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY, but Google account sign-in is in use (selectedType in settings.json takes precedence).").into());
@@ -333,7 +333,7 @@ pub fn state(inst: &Install) -> AgentState {
     ];
     let cur_name = st.providers.iter().find(|p| p.id == cur).map(|p| p.name.clone()).unwrap_or_default();
     st.current = vec![
-        Kv::text(l("供应商", "Provider"), cur_name),
+        Kv::text(lbl::provider(), cur_name),
         Kv::mono("selectedType", auth_type(&cfg).unwrap_or_else(|| l("-（未设置）", "- (not set)").into())),
         Kv::mono(BASE, dotenv::get(&env, BASE).unwrap_or_else(|| "-".into())),
         Kv::mono("model.name", model_name(&cfg).unwrap_or_else(|| l("-（默认）", "- (default)").into())),
