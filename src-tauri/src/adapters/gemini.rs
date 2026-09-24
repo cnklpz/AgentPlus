@@ -74,19 +74,11 @@ pub fn detect() -> Install {
 
 /// (settings, meta, had_comments). A missing file is `{}`.
 fn load() -> Result<(Value, TextMeta, bool)> {
-    let p = settings_path();
-    if !p.exists() {
-        return Ok((json!({}), TextMeta::NEW, false));
-    }
-    let (text, meta) = read_text(&p)?;
+    let (text, meta) = read_text_or_new(&settings_path())?;
     if text.trim().is_empty() {
         return Ok((json!({}), meta, false));
     }
-    let (clean, had) = strip_jsonc(&text);
-    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("settings.json 解析失败：{e}", "Couldn't parse settings.json: {e}")))?;
-    if !v.is_object() {
-        return Err(anyhow!(l("settings.json 顶层不是对象", "settings.json: top level is not an object")));
-    }
+    let (v, had) = parse_jsonc_object(&text, "settings.json")?;
     Ok((v, meta, had))
 }
 

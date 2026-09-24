@@ -103,15 +103,11 @@ impl Fmt {
 
     /// Returns (config, meta, has_comments). A missing file reads as `{}` when `allow_missing`.
     pub fn load(&self, allow_missing: bool) -> Result<(Value, TextMeta, bool)> {
-        if allow_missing && !self.path.exists() {
-            return Ok((json!({ "$schema": "https://opencode.ai/config.json" }), TextMeta::NEW, false));
+        if allow_missing {
+            return read_jsonc_object_or(&self.path, json!({ "$schema": "https://opencode.ai/config.json" }));
         }
         let (text, meta) = read_text(&self.path)?;
-        let (clean, had) = strip_jsonc(&text);
-        let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", self.name())))?;
-        if !v.is_object() {
-            return Err(anyhow!(tr!("{} 顶层不是对象", "The top level of {} is not an object", self.name())));
-        }
+        let (v, had) = parse_jsonc_object(&text, &self.name())?;
         Ok((v, meta, had))
     }
 

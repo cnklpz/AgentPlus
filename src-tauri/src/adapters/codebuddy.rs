@@ -175,17 +175,7 @@ fn parked_of(root: &Value) -> Vec<Value> {
 
 /// (models.json, meta, had_comments); a missing file reads as `{"models": []}`.
 fn load_models() -> Result<(Value, TextMeta, bool)> {
-    let p = models_path();
-    if !p.exists() {
-        return Ok((json!({ "models": [] }), TextMeta::NEW, false));
-    }
-    let (text, meta) = read_text(&p)?;
-    let (clean, had) = strip_jsonc(&text);
-    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("models.json 解析失败：{e}", "Couldn't parse models.json: {e}")))?;
-    if !v.is_object() {
-        return Err(anyhow!(l("models.json 顶层不是对象", "models.json: top level is not an object")));
-    }
-    Ok((v, meta, had))
+    read_jsonc_object_or(&models_path(), json!({ "models": [] }))
 }
 
 fn entries_of(cfg: &Value) -> Vec<Value> {
