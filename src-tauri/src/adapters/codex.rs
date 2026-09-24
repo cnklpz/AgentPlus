@@ -14,7 +14,7 @@ use crate::util::*;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use std::path::PathBuf;
-use toml_edit::{value, Array, DocumentMut, Item, Table};
+use toml_edit::{value, Array, DocumentMut, Item, Table, TableLike};
 
 pub const ID: &str = "codex";
 pub const NAME: &str = "Codex";
@@ -22,6 +22,48 @@ const EFFORTS: [&str; 7] = ["low", "medium", "high", "xhigh", "persistent", "ult
 
 fn inject_file() -> &'static str {
     l("AgentPlus · Codex 界面注入", "AgentPlus · Codex UI injection")
+}
+
+/// A UI injection AgentPlus applies when it restarts the desktop app: the setting key,
+/// the store flag, and the (zh, en) diff lines for turning it on and off.
+pub struct Injection {
+    pub key: &'static str,
+    flag: &'static str,
+    on: (&'static str, &'static str),
+    off: (&'static str, &'static str),
+}
+
+/// Fast display, full model names, send after the quota runs out, hidden usage banners.
+pub const INJECTIONS: [Injection; 4] = [
+    Injection {
+        key: "fast_inject",
+        flag: "fastInject",
+        on: ("+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable Fast display injection (takes effect after restarting Codex via AgentPlus)"),
+        off: ("- 停用 Fast 显示注入", "- Disable Fast display injection"),
+    },
+    Injection {
+        key: "full_names",
+        flag: "fullModelNames",
+        on: ("+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)"),
+        off: ("- 停用完整模型名注入", "- Disable full model name injection"),
+    },
+    Injection {
+        key: "quota_unlock",
+        flag: "quotaUnlock",
+        on: ("+ 启用额度用完仍可发送注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable send-after-quota injection (takes effect after restarting Codex via AgentPlus)"),
+        off: ("- 停用额度用完仍可发送注入", "- Disable send-after-quota injection"),
+    },
+    Injection {
+        key: "hide_usage_banner",
+        flag: "hideUsageBanner",
+        on: ("+ 启用隐藏用量提示横幅注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable hide-usage-banner injection (takes effect after restarting Codex via AgentPlus)"),
+        off: ("- 停用隐藏用量提示横幅注入", "- Disable hide-usage-banner injection"),
+    },
+];
+
+/// Which injections are on, in `INJECTIONS` order.
+fn injections_on(store: &Value) -> [bool; 4] {
+    INJECTIONS.map(|i| store::get_flag(store, ID, i.flag))
 }
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
 const FAST_TIER: &str = "priority";
@@ -108,6 +150,36 @@ fn provider_str(doc: &DocumentMut, id: &str, key: &str) -> Option<String> {
     provider_item(doc, id).and_then(|t| t.get(key)).and_then(|v| v.as_str()).map(String::from)
 }
 
+/// The protocol a provider speaks: "chat" for `wire_api = "chat"`, else Codex's default "responses".
+fn wire_api(item: &Item) -> &'static str {
+    if item.get("wire_api").and_then(|v| v.as_str()) == Some("chat") { "chat" } else { "responses" }
+}
+
+fn provider_mut<'a>(doc: &'a mut DocumentMut, id: &str) -> Result<&'a mut dyn TableLike> {
+    doc.get_mut("model_providers")
+        .and_then(|t| t.get_mut(id))
+        .and_then(|t| t.as_table_like_mut())
+        .ok_or_else(|| msg::no_provider(id))
+}
+
+fn not_a_table(name: &str) -> anyhow::Error {
+    anyhow!(tr!("config.toml 里的 {name} 不是表", "{name} in config.toml is not a table"))
+}
+
+/// A top-level section (`[tui]`, `[desktop]`) to edit: an existing table or inline table as
+/// it is, a new `[name]` table when missing. Anything else is an error (indexing would panic).
+fn section_mut<'a>(doc: &'a mut DocumentMut, name: &str) -> Result<&'a mut dyn TableLike> {
+    if doc.get(name).is_none() {
+        doc.insert(name, Item::Table(Table::new()));
+    }
+    doc.get_mut(name).and_then(|i| i.as_table_like_mut()).ok_or_else(|| not_a_table(name))
+}
+
+/// `t[key] = item`: an existing key keeps its place and formatting (`insert` would reset it).
+fn set_key(t: &mut dyn TableLike, key: &str, item: Item) {
+    *t.entry(key).or_insert(Item::None) = item;
+}
+
 /// Sets `model_providers.<id>`, in the style the file already uses: a `[model_providers.x]`
 /// table, or an entry of an inline `model_providers = { … }` (where a table item would be
 /// silently dropped by toml_edit).
@@ -132,7 +204,7 @@ fn put_provider(doc: &mut DocumentMut, id: &str, item: Item) -> Result<()> {
             };
             it.insert(id, v);
         }
-        _ => return Err(anyhow!(l("config.toml 里的 model_providers 不是表", "model_providers in config.toml is not a table"))),
+        _ => return Err(not_a_table("model_providers")),
     }
     Ok(())
 }
@@ -240,16 +312,20 @@ fn read_env() -> (Vec<String>, TextMeta) {
     read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
-/// Value of an env_key: ~/.codex/.env first (an assignment there wins even when empty),
-/// then the process environment. The first assignment of a key counts, and `set_env`
-/// rewrites that same line.
-pub fn env_value(name: &str) -> Option<String> {
+/// An env_key as Codex sees it, and whether it comes from ~/.codex/.env: that file first
+/// (an assignment there wins even when empty), then the process environment. The first
+/// assignment of a key counts, and `set_env` rewrites that same line.
+fn env_lookup(name: &str) -> Option<(String, bool)> {
     let (lines, _) = read_env();
     match dotenv::get_first(&lines.join("\n"), name) {
-        Some(v) => Some(v),
-        None => crate::env::agent_var(name),
+        Some(v) => Some((v, true)),
+        None => crate::env::agent_var(name).map(|v| (v, false)),
     }
-    .filter(|v| !v.is_empty())
+}
+
+/// Value of an env_key (see `env_lookup`); None when unset or empty.
+pub fn env_value(name: &str) -> Option<String> {
+    env_lookup(name).map(|(v, _)| v).filter(|v| !v.is_empty())
 }
 
 fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
@@ -260,14 +336,17 @@ fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
     }
 }
 
+/// Where the key comes from; agrees with `env_value` (an empty `KEY=` in .env is not a key).
 fn key_status(name: &str) -> &'static str {
-    let (lines, _) = read_env();
-    if lines.iter().any(|l| dotenv::line_key(l) == Some(name)) {
-        l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
-    } else if crate::env::agent_var(name).is_some() {
-        l("已在系统环境变量配置", "set in system environment variables")
-    } else {
-        l("未找到，请求会失败", "not found; requests will fail")
+    match env_lookup(name) {
+        Some((v, from_file)) if !v.is_empty() => {
+            if from_file {
+                l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
+            } else {
+                l("已在系统环境变量配置", "set in system environment variables")
+            }
+        }
+        _ => l("未找到，请求会失败", "not found; requests will fail"),
     }
 }
 
@@ -333,8 +412,8 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
             let get = |k: &str| item.get(k).and_then(|v| v.as_str()).map(String::from);
             let wire = get("wire_api").unwrap_or_else(|| "responses".into());
             let base = get("base_url");
-            let chat = wire == "chat";
-            let api = if chat { "chat" } else { "responses" };
+            let api = wire_api(item);
+            let chat = api == "chat";
             let env_key = get("env_key");
             let official_auth = item.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
             let mut details = vec![
@@ -420,7 +499,7 @@ fn visible_slugs(v: &Value) -> Vec<String> {
 /// Adds a user model to the catalog, cloning an existing entry so Codex gets every field.
 fn add_custom_model(v: &mut Value, store: &mut Value, id: &str, name: Option<&str>, context: Option<u64>) -> Result<String> {
     let models = v.get_mut("models").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!(l("模型目录格式不对", "The model catalog has an unexpected format")))?;
-    let mut entry = models.first().cloned().ok_or_else(|| anyhow!(l("模型目录是空的，没有可参照的条目", "The model catalog is empty; no entry to copy from")))?;
+    let mut entry = models.iter().find(|m| m.is_object()).cloned().ok_or_else(|| anyhow!(l("模型目录是空的，没有可参照的条目", "The model catalog is empty; no entry to copy from")))?;
     let prio = models.iter().filter_map(|x| x.get("priority").and_then(|p| p.as_i64())).max().unwrap_or(0) + 1;
     let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(id).to_string();
     entry["slug"] = Value::from(id);
@@ -545,10 +624,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.notes.push(l("config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。", "config.toml has no model_catalog_json, so Codex fetches the model list online and it can't be edited here.").into());
     }
 
-    let inject = store::get_flag(&store, ID, "fastInject");
-    let full_names = store::get_flag(&store, ID, "fullModelNames");
-    let quota = store::get_flag(&store, ID, "quotaUnlock");
-    let hide_banner = store::get_flag(&store, ID, "hideUsageBanner");
+    let [inject, full_names, quota, hide_banner] = injections_on(&store);
     let tier = service_tier(&doc);
     let sl = status_line(&doc);
     let effs = efforts(&doc);
@@ -638,7 +714,8 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load_doc()?;
     let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
     let key = provider_str(&doc, id, "env_key").and_then(|k| env_value(&k));
-    Ok((base, key, "responses".into()))
+    let api = provider_item(&doc, id).map(wire_api).unwrap_or("responses");
+    Ok((base, key, api.into()))
 }
 
 // ---------------------------------------------------------------- write
@@ -652,11 +729,7 @@ fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> 
     if on && provider_str(doc, id, "name").as_deref() == Some("OpenAI") {
         return Err(anyhow!(l("开启官方登录混用时，供应商名称不能是 OpenAI（Codex 会把它当成官方后端），请换个名称", "With official sign-in mix on, the provider can't be named OpenAI (Codex treats that name as its own backend); pick another name")));
     }
-    let t = doc
-        .get_mut("model_providers")
-        .and_then(|t| t.get_mut(id))
-        .and_then(|t| t.as_table_like_mut())
-        .ok_or_else(|| msg::no_provider(id))?;
+    let t = provider_mut(doc, id)?;
     let old = t.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
     if old == on {
         return Ok(false);
@@ -732,21 +805,25 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     t.insert("env_key", value(env_key.as_str()));
                     put_provider(&mut doc, &id, Item::Table(t))?;
                     diff.push(&cfg_file, format!("+ [model_providers.{id}] name = \"{}\", base_url = \"{}\"", p.name.trim(), p.base_url.trim()), true);
+                    cfg_dirty = true;
                 } else {
                     for (k, v) in [("name", p.name.trim()), ("base_url", p.base_url.trim())] {
                         let old = provider_str(&doc, &id, k).unwrap_or_default();
                         if old != v {
-                            doc["model_providers"][id.as_str()][k] = value(v);
+                            set_key(provider_mut(&mut doc, &id)?, k, value(v));
                             diff.push(&cfg_file, format!("[model_providers.{id}] {k} = \"{v}\""), true);
+                            cfg_dirty = true;
                         }
                     }
                     if provider_str(&doc, &id, "env_key").is_none() {
-                        doc["model_providers"][id.as_str()]["env_key"] = value(env_key.as_str());
+                        set_key(provider_mut(&mut doc, &id)?, "env_key", value(env_key.as_str()));
                         diff.push(&cfg_file, format!("[model_providers.{id}] env_key = \"{env_key}\""), true);
+                        cfg_dirty = true;
                     }
                 }
                 if let Some(on) = p.official_auth {
                     if set_official_auth(&mut doc, &id, on)? {
+                        cfg_dirty = true;
                         if on {
                             diff.push(&cfg_file, tr!("[model_providers.{id}] requires_openai_auth = true（官方登录混用：保留 ChatGPT 登录，请求发往此供应商）", "[model_providers.{id}] requires_openai_auth = true (official sign-in mix: keep the ChatGPT sign-in, send requests to this provider)"), true);
                         } else {
@@ -754,7 +831,6 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         }
                     }
                 }
-                cfg_dirty = true;
                 if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
                     set_env(&mut env_lines, &env_key, k.trim());
                     diff.push(&env_file, format!("{env_key} = {}", mask_key(k.trim())), true);
@@ -814,7 +890,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetModelVisible { model, visible, .. } => {
-                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
+                let v = catalog_mut(&mut catalog)?;
                 let entry = catalog_entry(v, model).ok_or_else(|| anyhow!(tr!("模型目录里没有 {model}", "{model} is not in the model catalog")))?;
                 let want = if *visible { "list" } else { "hide" };
                 let old = entry.get("visibility").and_then(|s| s.as_str()).unwrap_or("list").to_string();
@@ -825,7 +901,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::UpsertModel { model: m, .. } => {
-                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
+                let v = catalog_mut(&mut catalog)?;
                 let id = m.id.trim().to_string();
                 if id.is_empty() {
                     return Err(msg::model_id_required());
@@ -866,7 +942,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 if !custom.contains(model) {
                     return Err(anyhow!(tr!("{model} 是 Codex 自带的模型，只能隐藏不能删除", "{model} is a built-in Codex model; it can be hidden but not deleted")));
                 }
-                let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
+                let v = catalog_mut(&mut catalog)?;
                 if let Some(models) = v.get_mut("models").and_then(|x| x.as_array_mut()) {
                     models.retain(|m| m.get("slug").and_then(|s| s.as_str()) != Some(model));
                 }
@@ -890,38 +966,6 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         cfg_dirty = true;
                     }
                 }
-                "fast_inject" => {
-                    let on = v.as_bool().unwrap_or(false);
-                    if store::get_flag(&store, ID, "fastInject") != on {
-                        store::set_flag(&mut store, ID, "fastInject", on);
-                        diff.push(inject_file(), if on { l("+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable Fast display injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用 Fast 显示注入", "- Disable Fast display injection") }, on);
-                        store_dirty = true;
-                    }
-                }
-                "full_names" => {
-                    let on = v.as_bool().unwrap_or(false);
-                    if store::get_flag(&store, ID, "fullModelNames") != on {
-                        store::set_flag(&mut store, ID, "fullModelNames", on);
-                        diff.push(inject_file(), if on { l("+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用完整模型名注入", "- Disable full model name injection") }, on);
-                        store_dirty = true;
-                    }
-                }
-                "quota_unlock" => {
-                    let on = v.as_bool().unwrap_or(false);
-                    if store::get_flag(&store, ID, "quotaUnlock") != on {
-                        store::set_flag(&mut store, ID, "quotaUnlock", on);
-                        diff.push(inject_file(), if on { l("+ 启用额度用完仍可发送注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable send-after-quota injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用额度用完仍可发送注入", "- Disable send-after-quota injection") }, on);
-                        store_dirty = true;
-                    }
-                }
-                "hide_usage_banner" => {
-                    let on = v.as_bool().unwrap_or(false);
-                    if store::get_flag(&store, ID, "hideUsageBanner") != on {
-                        store::set_flag(&mut store, ID, "hideUsageBanner", on);
-                        diff.push(inject_file(), if on { l("+ 启用隐藏用量提示横幅注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable hide-usage-banner injection (takes effect after restarting Codex via AgentPlus)") } else { l("- 停用隐藏用量提示横幅注入", "- Disable hide-usage-banner injection") }, on);
-                        store_dirty = true;
-                    }
-                }
                 "fast_default" => {
                     let on = v.as_bool().unwrap_or(false);
                     let old = service_tier(&doc);
@@ -940,7 +984,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     let has = list.iter().any(|x| x == "fast-mode");
                     if has != on {
                         if on { list.push("fast-mode".into()) } else { list.retain(|x| x != "fast-mode") }
-                        doc["tui"]["status_line"] = value(list.iter().collect::<Array>());
+                        set_key(section_mut(&mut doc, "tui")?, "status_line", value(list.iter().collect::<Array>()));
                         diff.push(&cfg_file, format!("[tui] status_line {} \"fast-mode\"", if on { "+" } else { "-" }), on);
                         cfg_dirty = true;
                     }
@@ -956,7 +1000,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         }
                     }
                     if ordered.len() != old.len() || !ordered.iter().all(|e| old.iter().any(|o| o == e)) {
-                        doc["desktop"]["enabled-reasoning-efforts"] = value(ordered.into_iter().collect::<Array>());
+                        set_key(section_mut(&mut doc, "desktop")?, "enabled-reasoning-efforts", value(ordered.into_iter().collect::<Array>()));
                         cfg_dirty = true;
                     }
                 }
@@ -964,19 +1008,28 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     let k = if key == "ctx_usage" { "show-context-window-usage" } else { "composerPlainTextMode" };
                     let on = v.as_bool().unwrap_or(false);
                     if desktop_bool(&doc, k, key == "ctx_usage") != on {
-                        doc["desktop"][k] = value(on);
+                        set_key(section_mut(&mut doc, "desktop")?, k, value(on));
                         diff.push(&cfg_file, format!("[desktop] {k} = {on}"), on);
                         cfg_dirty = true;
                     }
                 }
-                other => return Err(msg::unknown_setting(other)),
+                other => {
+                    let inj = INJECTIONS.iter().find(|i| i.key == other).ok_or_else(|| msg::unknown_setting(other))?;
+                    let on = v.as_bool().unwrap_or(false);
+                    if store::get_flag(&store, ID, inj.flag) != on {
+                        store::set_flag(&mut store, ID, inj.flag, on);
+                        let (zh, en) = if on { inj.on } else { inj.off };
+                        diff.push(inject_file(), l(zh, en), on);
+                        store_dirty = true;
+                    }
+                }
             },
             Op::SetProviderModels { provider, models } => {
                 let list = clean_ids(models);
                 let cur = switched.clone().unwrap_or_else(|| before.clone());
                 if provider == &cur {
                     // The active provider's list *is* the catalog.
-                    let (_, v, _) = catalog.as_mut().ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))?;
+                    let v = catalog_mut(&mut catalog)?;
                     if apply_list(v, &mut store, &list, &mut diff, &cat_file, provider)? {
                         cat_dirty = true;
                         store_dirty = true;
@@ -1040,6 +1093,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     Ok((diff, written, backup_dir))
 }
 
+fn catalog_mut(c: &mut Option<(PathBuf, Value, TextMeta)>) -> Result<&mut Value> {
+    c.as_mut().map(|(_, v, _)| v).ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))
+}
+
 fn catalog_entry<'a>(v: &'a mut Value, slug: &str) -> Option<&'a mut Value> {
     v.get_mut("models")
         .and_then(|m| m.as_array_mut())
@@ -1055,13 +1112,8 @@ pub fn dismiss_fixed_prompt() -> Result<()> {
 
 /// UI patches to apply when AgentPlus restarts Codex.
 pub fn ui_patches() -> crate::cdp::Patches {
-    let s = store::load();
-    crate::cdp::Patches {
-        fast: store::get_flag(&s, ID, "fastInject"),
-        full_names: store::get_flag(&s, ID, "fullModelNames"),
-        quota: store::get_flag(&s, ID, "quotaUnlock"),
-        usage_banner: store::get_flag(&s, ID, "hideUsageBanner"),
-    }
+    let [fast, full_names, quota, usage_banner] = injections_on(&store::load());
+    crate::cdp::Patches { fast, full_names, quota, usage_banner }
 }
 
 #[cfg(test)]
@@ -1177,6 +1229,124 @@ http_headers = { X = \"1\" }
         let mut doc = "model_providers = 3\n".parse::<DocumentMut>().unwrap();
         assert!(put_provider(&mut doc, "n", table()).is_err());
         assert_eq!(doc.to_string(), "model_providers = 3\n");
+    }
+
+    fn setting(key: &str, on: bool) -> Op {
+        Op::SetSetting { key: key.into(), value: json!(on) }
+    }
+
+    fn diff_lines(d: &Diff) -> Vec<(String, String)> {
+        d.groups.iter().flat_map(|g| g.lines.iter().map(|l| (g.file.clone(), l.text.clone()))).collect()
+    }
+
+    /// A temp home with ~/.codex/config.toml (and .env when given).
+    fn codex_home_with(tag: &str, config: &str, env: Option<&str>) -> crate::util::TestHome {
+        let h = crate::util::TestHome::new(tag);
+        let dir = h.0.join(".codex");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), config).unwrap();
+        if let Some(e) = env {
+            std::fs::write(dir.join(".env"), e).unwrap();
+        }
+        h
+    }
+
+    #[test]
+    fn section_edits_keep_style_and_refuse_scalars() {
+        let src = "model = \"m\"\n\n[desktop]\n# effort levels\nenabled-reasoning-efforts = [\"low\"]\ncomposerPlainTextMode = false\n";
+        let mut doc = src.parse::<DocumentMut>().unwrap();
+        set_key(section_mut(&mut doc, "desktop").unwrap(), "enabled-reasoning-efforts", value(["high"].into_iter().collect::<Array>()));
+        assert_eq!(doc.to_string(), src.replace("[\"low\"]", "[\"high\"]"), "the key keeps its place and comment");
+        // A missing section becomes a [tui] table, not an inline `tui = { … }`.
+        set_key(section_mut(&mut doc, "tui").unwrap(), "status_line", value(["fast-mode"].into_iter().collect::<Array>()));
+        assert!(doc.to_string().ends_with("\n[tui]\nstatus_line = [\"fast-mode\"]\n"), "{doc}");
+        // An inline section stays inline.
+        let mut doc = "desktop = { composerPlainTextMode = false }\n".parse::<DocumentMut>().unwrap();
+        set_key(section_mut(&mut doc, "desktop").unwrap(), "composerPlainTextMode", value(true));
+        assert_eq!(doc.to_string(), "desktop = { composerPlainTextMode = true }\n");
+        // A scalar is an error, not a panic, and the document is left alone.
+        let mut doc = "tui = 1\n".parse::<DocumentMut>().unwrap();
+        assert_eq!(section_mut(&mut doc, "tui").err().unwrap().to_string(), "config.toml 里的 tui 不是表");
+        assert_eq!(doc.to_string(), "tui = 1\n");
+    }
+
+    #[test]
+    fn scalar_section_fails_the_plan_instead_of_panicking() {
+        let _h = codex_home_with("codex-scalar", "tui = 1\ndesktop = \"x\"\n", None);
+        assert!(plan(&[setting("fast_cli", true)], true).is_err());
+        assert!(plan(&[setting("plain", true)], true).is_err());
+    }
+
+    #[test]
+    fn chat_wire_providers_report_the_chat_api() {
+        let cfg = "[model_providers.old]\nname = \"Old\"\nbase_url = \"https://o/v1\"\nwire_api = \"chat\"\n\n[model_providers.new]\nname = \"New\"\nbase_url = \"https://n/v1\"\n";
+        let _h = codex_home_with("codex-wire", cfg, None);
+        let doc = cfg.parse::<DocumentMut>().unwrap();
+        let apis: Vec<_> = providers(&doc).into_iter().map(|p| (p.id, p.api, p.compatible)).collect();
+        assert_eq!(apis[1..], [("old".into(), "chat".into(), false), ("new".into(), "responses".into(), true)]);
+        assert_eq!(provider_endpoint("old").unwrap().2, "chat");
+        assert_eq!(provider_endpoint("new").unwrap().2, "responses");
+    }
+
+    #[test]
+    fn key_status_agrees_with_env_value() {
+        let _h = codex_home_with("codex-keys", "", Some("# SET=commented\nEMPTY=\nSET=sk-1 # note\nSET=sk-2\n"));
+        crate::env::set_test_vars(&[("EMPTY", "sk-env"), ("ENVONLY", "sk-e")]);
+        assert_eq!(env_value("SET").as_deref(), Some("sk-1"), "the first assignment counts, without its comment");
+        assert_eq!(key_status("SET"), "已在 ~/.codex/.env 配置");
+        // An empty assignment in .env shadows the environment, and Codex then has no key.
+        assert_eq!(env_value("EMPTY"), None);
+        assert_eq!(key_status("EMPTY"), "未找到，请求会失败");
+        assert_eq!(env_value("ENVONLY").as_deref(), Some("sk-e"));
+        assert_eq!(key_status("ENVONLY"), "已在系统环境变量配置");
+        assert_eq!(key_status("NONE"), "未找到，请求会失败");
+    }
+
+    #[test]
+    fn key_only_edit_leaves_config_toml_alone() {
+        let cfg = "model_provider = \"relay\"\n\n[model_providers.relay]\nname = \"relay\"\nbase_url = \"https://r/v1\"\nenv_key = \"RELAY_API_KEY\"\n";
+        let h = codex_home_with("codex-keyonly", cfg, None);
+        let input = |key: Option<&str>| ProviderInput {
+            id: Some("relay".into()),
+            name: "relay".into(),
+            base_url: "https://r/v1".into(),
+            api: "responses".into(),
+            api_key: key.map(String::from),
+            models: vec![],
+            key_from_library: None,
+            official_auth: Some(false),
+        };
+        let (diff, written, _) = plan(&[Op::UpsertProvider { provider: input(Some("sk-new")) }], false).unwrap();
+        assert_eq!(written, [h.0.join(".codex").join(".env")]);
+        assert_eq!(diff_lines(&diff), [("~/.codex/.env".to_string(), format!("RELAY_API_KEY = {}", mask_key("sk-new")))]);
+        assert_eq!(std::fs::read_to_string(config_path()).unwrap(), cfg);
+        // Nothing to change at all: nothing is written.
+        let (diff, written, backup) = plan(&[Op::UpsertProvider { provider: input(None) }], false).unwrap();
+        assert!(diff.groups.is_empty() && written.is_empty() && backup.is_none());
+        // A real field change still rewrites config.toml.
+        let (_, written, _) = plan(&[Op::UpsertProvider { provider: ProviderInput { base_url: "https://r2/v1".into(), ..input(None) } }], false).unwrap();
+        assert_eq!(written, [config_path()]);
+        assert!(std::fs::read_to_string(config_path()).unwrap().contains("base_url = \"https://r2/v1\""));
+    }
+
+    #[test]
+    fn injection_settings_toggle_their_store_flags() {
+        let _h = codex_home_with("codex-inject", "", None);
+        for (i, inj) in INJECTIONS.iter().enumerate() {
+            let (diff, _, _) = plan(&[setting(inj.key, true)], false).unwrap();
+            assert_eq!(diff_lines(&diff), [("AgentPlus · Codex 界面注入".to_string(), inj.on.0.to_string())]);
+            let mut want = [false; 4];
+            want[..=i].fill(true);
+            assert_eq!(injections_on(&store::load()), want);
+            // Already on: no change.
+            assert!(plan(&[setting(inj.key, true)], false).unwrap().0.groups.is_empty());
+        }
+        let p = ui_patches();
+        assert!(p.fast && p.full_names && p.quota && p.usage_banner);
+        let (diff, _, _) = plan(&[setting("quota_unlock", false)], false).unwrap();
+        assert_eq!(diff_lines(&diff)[0].1, "- 停用额度用完仍可发送注入");
+        assert!(!ui_patches().quota);
+        assert!(plan(&[setting("nope", true)], true).is_err());
     }
 
     #[test]
