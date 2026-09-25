@@ -74,18 +74,15 @@ pub fn set(text: &str, key: &str, value: Option<&str>) -> String {
 }
 
 /// `set` for a file read by dotenvy (Codex), which also substitutes `$VAR` / `${VAR}` in
-/// unquoted and double-quoted values and reads `\` as an escape outside single quotes. A
-/// value with `$` or `\` is single-quoted (read literally) when it has no `'`, else
+/// unquoted and double-quoted values and reads `\` as an escape. A value with `$` or `\` is
 /// double-quoted with `\`, `"` and `$` escaped; any other value is written as `set` does.
+/// (Not single quotes: dotenvy's line splitter treats `\'` as an escape even there, so a
+/// value ending in `\` would leave the quote open and hide every later line from Codex.)
 pub fn set_dotenvy(text: &str, key: &str, value: &str) -> String {
     if !value.contains(['$', '\\']) {
         return set(text, key, Some(value));
     }
-    let line = if value.contains('\'') {
-        format!("{key}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$"))
-    } else {
-        format!("{key}='{value}'")
-    };
+    let line = format!("{key}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$"));
     replace_line(text, key, Some(line))
 }
 
@@ -210,7 +207,7 @@ mod tests {
 
     #[test]
     fn set_dotenvy_reads_back_in_dotenvy_and_here() {
-        let cases = ["plain", "sk-abc_123", "a b", "x#y", "it's", "a\"b", "sk-$abc", "${HOME}x", "a\\b", "\\", "a\\nb", "it's $5", "o'k\\x", "a \"$b\" c"];
+        let cases = ["plain", "sk-abc_123", "a b", "x#y", "it's", "a\"b", "sk-$abc", "${HOME}x", "a\\b", "\\", "ab\\", "a\\\\\\", "a\\nb", "it's $5", "o'k\\x", "a \"$b\" c"];
         for v in cases {
             for base in ["", "# head\nK=old\nZ=1\nK=dup\n"] {
                 let text = set_dotenvy(base, "K", v);
@@ -224,7 +221,10 @@ mod tests {
         for v in ["plain", "a b", "x#y", "it's", "a\"b"] {
             assert_eq!(set_dotenvy("A=1\n", "K", v), set("A=1\n", "K", Some(v)));
         }
-        assert_eq!(set_dotenvy("", "K", "sk-$x\\y"), "K='sk-$x\\y'\n");
+        assert_eq!(set_dotenvy("", "K", "sk-$x\\y"), "K=\"sk-\\$x\\\\y\"\n");
+        // Never single-quoted: dotenvy's line splitter reads `\'` as an escape even inside
+        // single quotes, so `K='ab\'` would swallow every later line.
+        assert_eq!(set_dotenvy("", "K", "ab\\"), "K=\"ab\\\\\"\n");
         assert_eq!(set_dotenvy("", "K", "it's $5"), "K=\"it's \\$5\"\n");
         // The plain writer's output is what dotenvy misreads.
         assert_eq!(dotenvy_value(set("", "K", Some("sk-$x")).split_once('=').unwrap().1.trim()), None);

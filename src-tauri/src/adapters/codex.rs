@@ -1410,7 +1410,7 @@ http_headers = { X = \"1\" }
         plan(&[Op::UpsertProvider { provider: relay_input(None, "Codex Relay", "sk-$new") }], false).unwrap();
         let doc = load_doc().unwrap().0;
         assert_eq!(provider_str(&doc, "codex-relay", "env_key").as_deref(), Some("AGENTPLUS_CODEX_RELAY_API_KEY"));
-        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "AGENTPLUS_CODEX_RELAY_API_KEY='sk-$new'\n", "a `$` is single-quoted for dotenvy");
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "AGENTPLUS_CODEX_RELAY_API_KEY=\"sk-\\$new\"\n", "a `$` is escaped for dotenvy");
         assert_eq!(env_value("AGENTPLUS_CODEX_RELAY_API_KEY").as_deref(), Some("sk-$new"));
     }
 
