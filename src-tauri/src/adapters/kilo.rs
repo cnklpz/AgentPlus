@@ -92,7 +92,8 @@ pub fn detect() -> Install {
         inst.installed = true;
         inst.version = Some(v);
     }
-    inst.running = inst.installed && crate::process::any_process(|name, _| name.eq_ignore_ascii_case("kilo.exe"));
+    let name = crate::process::exe("kilo");
+    inst.running = inst.installed && crate::process::any_process(|n, _| n.eq_ignore_ascii_case(&name));
     inst
 }
 

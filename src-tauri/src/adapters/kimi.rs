@@ -72,12 +72,13 @@ fn is_legacy() -> bool {
 
 // ---------------------------------------------------------------- detection
 
-/// Native binary `~/.kimi-code/bin/kimi.exe`, npm `@moonshot-ai/kimi-code`, or the legacy
-/// PyPI `kimi-cli` (`~/.local/bin/kimi.exe` / PATH). A CLI: `exe` stays None.
+/// Native binary `~/.kimi-code/bin/kimi[.exe]`, npm `@moonshot-ai/kimi-code`, or the legacy
+/// PyPI `kimi-cli` (`~/.local/bin/kimi[.exe]` / PATH). A CLI: `exe` stays None.
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let home = dirs::home_dir().unwrap_or_default();
-    let native = home.join(".kimi-code").join("bin").join("kimi.exe");
+    let name = crate::process::exe("kimi");
+    let native = home.join(".kimi-code").join("bin").join(&name);
     let on_path = crate::process::on_path(&["kimi.exe", "kimi.cmd", "kimi"]);
     if native.exists() {
         inst.installed = true;
@@ -86,12 +87,12 @@ pub fn detect() -> Install {
     } else if let Some(v) = crate::process::npm_version_near("@moonshot-ai/kimi-code", on_path.as_deref()) {
         inst.installed = true;
         inst.version = Some(v);
-    } else if let Some(p) = Some(home.join(".local").join("bin").join("kimi.exe")).filter(|p| p.exists()).or(on_path) {
+    } else if let Some(p) = Some(home.join(".local").join("bin").join(&name)).filter(|p| p.exists()).or(on_path) {
         inst.installed = true;
         inst.version = crate::process::cli_version(&p);
     }
     if inst.installed {
-        inst.running = crate::process::any_process(|name, _| name.eq_ignore_ascii_case("kimi.exe"));
+        inst.running = crate::process::any_process(|n, _| n.eq_ignore_ascii_case(&name));
     }
     inst
 }

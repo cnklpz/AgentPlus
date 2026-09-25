@@ -49,7 +49,7 @@ export default {
   queuedAgents: "已加入 {n} 个 Agent 的待写入，逐个确认后应用",
   reloaded: "已重新读取配置",
   urlCopied: "已复制地址",
-  clipboardReadFailed: "读取剪贴板失败，请用 Ctrl+V 粘贴",
+  clipboardReadFailed: "读取剪贴板失败，请用 {keys} 粘贴",
   discardedAll: "已放弃全部改动",
 
   // Generated names

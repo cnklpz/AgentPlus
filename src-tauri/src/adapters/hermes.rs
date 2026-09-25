@@ -110,8 +110,9 @@ fn pyproject_version(p: &Path) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// Windows: `<HERMES_HOME>\hermes-agent\venv\Scripts\hermes.exe`; version from pyproject.toml
-/// (no Python start-up). A CLI, so `exe` stays None.
+/// `<HERMES_HOME>/hermes-agent` and its venv (`venv\Scripts\hermes.exe` on Windows,
+/// `venv/bin/hermes` elsewhere); version from pyproject.toml (no Python start-up). A CLI,
+/// so `exe` stays None.
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let mut roots = vec![default_dir()];
@@ -120,7 +121,8 @@ pub fn detect() -> Install {
     }
     for root in roots {
         let agent = root.join("hermes-agent");
-        let exe = agent.join("venv").join("Scripts").join("hermes.exe");
+        let venv = agent.join("venv");
+        let exe = if cfg!(windows) { venv.join("Scripts").join("hermes.exe") } else { venv.join("bin").join("hermes") };
         if exe.exists() || agent.join("pyproject.toml").exists() {
             inst.installed = true;
             inst.version = pyproject_version(&agent.join("pyproject.toml"));
@@ -130,7 +132,7 @@ pub fn detect() -> Install {
     }
     if inst.installed {
         inst.running = crate::process::any_process(|name, path| {
-            name.eq_ignore_ascii_case("hermes.exe") || path.to_lowercase().contains("\\hermes-agent\\venv\\")
+            name.eq_ignore_ascii_case(&crate::process::exe("hermes")) || path.replace('\\', "/").to_lowercase().contains("/hermes-agent/venv/")
         });
     }
     inst

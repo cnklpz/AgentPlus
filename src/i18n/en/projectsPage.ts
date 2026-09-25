@@ -12,6 +12,7 @@ const en: typeof zh = {
   folderMissing: "Folder not found",
   notConfigured: "Not configured · uses global",
   revealTitle: "Show in Explorer",
+  revealTitleMac: "Show in Finder",
   revealLabel: "Open the {name} folder",
   forgetTitle: "Remove from list (files are kept)",
   forgetLabel: "Remove {name} from the list",

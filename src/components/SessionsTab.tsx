@@ -8,6 +8,7 @@ import { Icon } from "./icons";
 import { useLoad } from "../hooks";
 import { scrub } from "../privacy";
 import { copyText, errText, type Flash, toggled } from "../util";
+import { isMac } from "../platform";
 
 interface Props {
   /** Default target: the fixed id when on, else the configured provider. */
@@ -221,7 +222,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
                   onClick={() => copyText(`codex resume ${s.id}`, flash, t("sessionsTab.resumeCopied"))}>
                   <Icon.copy size={12} />
                 </button>
-                <button className="icon-btn sm" title={t("sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => { api.revealPath(s.rolloutPath).catch((e) => flash(errText(e), true)); }}>
+                <button className="icon-btn sm" title={t(isMac ? "sessionsTab.revealTitleMac" : "sessionsTab.revealTitle")} aria-label={t("sessionsTab.reveal")} disabled={!s.rolloutExists} onClick={() => { api.revealPath(s.rolloutPath).catch((e) => flash(errText(e), true)); }}>
                   <Icon.folder size={12} />
                 </button>
               </span>

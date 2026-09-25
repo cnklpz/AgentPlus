@@ -143,7 +143,38 @@ pub fn pick_folder(owner: isize, start: Option<&str>) -> Result<Option<String>> 
     }
 }
 
-#[cfg(not(windows))]
+/// Native "choose folder" dialog (AppleScript's `choose folder`). None when cancelled.
+#[cfg(target_os = "macos")]
+pub fn pick_folder(_owner: isize, start: Option<&str>) -> Result<Option<String>> {
+    // Arguments go in through `argv`, never pasted into the script.
+    const SCRIPT: &str = "on run argv
+  activate
+  try
+    if (count of argv) > 1 then
+      set f to choose folder with prompt (item 1 of argv) default location (POSIX file (item 2 of argv))
+    else
+      set f to choose folder with prompt (item 1 of argv)
+    end if
+    return POSIX path of f
+  on error number -128
+    return \"\"
+  end try
+end run";
+    let mut cmd = std::process::Command::new("osascript");
+    cmd.args(["-e", SCRIPT, crate::i18n::l("选择项目文件夹", "Choose project folder")]);
+    if let Some(s) = start.map(crate::env::resolve_path).filter(|p| p.is_dir()) {
+        cmd.arg(s);
+    }
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Err(anyhow!("{}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // "/Users/me/proj/" → "/Users/me/proj" (the root stays "/").
+    Ok((!p.is_empty()).then(|| if p.len() > 1 { p.trim_end_matches('/').to_string() } else { p }))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn pick_folder(_owner: isize, _start: Option<&str>) -> Result<Option<String>> {
     Err(anyhow!(crate::i18n::l("当前系统不支持选择文件夹，请直接输入路径", "Folder picking isn't supported on this system. Enter the path directly")))
 }

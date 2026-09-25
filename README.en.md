@@ -8,7 +8,7 @@
 
 Codex · Claude Code · OpenCode · ZCode · MiMo Desktop · Gemini CLI · Qwen Code · Kimi Code and 7 more
 
-[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?label=download&color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?label=download&color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white) ![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
 [简体中文](README.md) | English
 
@@ -77,14 +77,15 @@ Every change is previewed as a diff and backed up before it is written, so you c
 | Windows 11 (x64) | ✅ Supported | Main platform |
 | Windows 10 (x64) | ✅ Supported | Needs WebView2; the installer adds it |
 | WSL distros | ✅ Supported | As a target: manage Codex CLI, OpenCode and others inside WSL |
-| macOS | ⏳ Not yet | Compiles, but detection and restarts are Windows-only for now |
-| Linux | ⏳ Not yet | Same as macOS |
+| macOS 11+ (Apple silicon / Intel) | 🧪 Experimental | Finds desktop apps in /Applications and CLIs on PATH, and restarts desktop apps. Not yet tested much on real Macs; feedback welcome |
+| Linux | ⏳ Not yet | Compiles, but isn't packaged |
 
 ## Download
 
-Get `AgentPlus_<version>_x64-setup.exe` from [Releases](https://github.com/cnklpz/AgentPlus/releases/latest) and run it.
+Get it from [Releases](https://github.com/cnklpz/AgentPlus/releases/latest):
 
-The installer is not code-signed, so SmartScreen may say "Windows protected your PC" on first run. Click "More info → Run anyway".
+- **Windows**: `AgentPlus_<version>_x64-setup.exe`. Run it to install. The installer is not code-signed, so SmartScreen may say "Windows protected your PC" on first run. Click "More info → Run anyway".
+- **macOS**: `AgentPlus_<version>_universal.dmg`. Open it and drag AgentPlus into Applications. The app isn't notarized by Apple, so macOS blocks the first launch: click "Open Anyway" in System Settings → Privacy & Security. If it says the app is damaged, run `xattr -cr /Applications/AgentPlus.app` in Terminal and open it again.
 
 **Updates**: AgentPlus checks for a new version at startup; when there is one, a small dot appears on the Settings button in the top-right corner.
 Open Settings → General → About to read the release notes and click "Download and install". AgentPlus verifies the signature, installs the update and reopens. You can turn off the startup check in the same place.
@@ -171,7 +172,7 @@ Agents that aren't installed are hidden. For agents installed in a non-default l
 
 Stack: [Tauri 2](https://tauri.app) (Rust, `src-tauri/`) + React 18 + TypeScript (`src/`) + Vite.
 
-You need Node.js 18+, Rust 1.88+ and [Tauri's system dependencies](https://tauri.app/start/prerequisites/) (WebView2 and the MSVC build tools on Windows).
+You need Node.js 18+, Rust 1.88+ and [Tauri's system dependencies](https://tauri.app/start/prerequisites/) (WebView2 and the MSVC build tools on Windows, the Xcode command line tools on macOS).
 
 ```bash
 npm install

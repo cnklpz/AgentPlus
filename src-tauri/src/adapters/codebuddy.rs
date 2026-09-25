@@ -54,10 +54,16 @@ fn settings_path() -> PathBuf {
 
 // ---------- detection ----------
 
-/// The desktop IDE (registry uninstall entry "CodeBuddy …"), else the npm CLI.
+/// The desktop IDE (registry uninstall entry "CodeBuddy …" on Windows, its app bundle on
+/// macOS), else the npm CLI.
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some(e) = crate::process::uninstall_entry("CodeBuddy") {
+    if let Some(c) = crate::process::app_bundles(&["CodeBuddy.app", "CodeBuddy CN.app"]).first() {
+        inst.installed = true;
+        inst.version = c.version.clone();
+        inst.dir = crate::process::app_dir(&c.exe);
+        inst.exe = Some(c.exe.clone());
+    } else if let Some(e) = crate::process::uninstall_entry("CodeBuddy") {
         let exe = e
             .icon
             .and_then(|i| crate::process::unquote_exe(&i))

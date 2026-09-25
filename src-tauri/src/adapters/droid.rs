@@ -53,7 +53,7 @@ fn legacy_path() -> PathBuf {
 
 // ---------- detection ----------
 
-/// The `droid` CLI: npm global package, or the native installer's `droid.exe`.
+/// The `droid` CLI: npm global package, or the native installer's `droid[.exe]`.
 pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some(v) = crate::process::npm_global_version("droid").or_else(|| crate::process::npm_global_version("@factory/cli")) {
@@ -61,7 +61,8 @@ pub fn detect() -> Install {
         inst.version = Some(v);
     } else {
         let h = dirs::home_dir().unwrap_or_default();
-        let native = [h.join(".local").join("bin").join("droid.exe"), h.join("bin").join("droid.exe"), h.join(".factory").join("bin").join("droid.exe")];
+        let name = crate::process::exe("droid");
+        let native = [h.join(".local").join("bin").join(&name), h.join("bin").join(&name), h.join(".factory").join("bin").join(&name)];
         if let Some(exe) = native.into_iter().find(|p| p.is_file()).or_else(|| crate::process::on_path(&["droid.exe", "droid.cmd"])) {
             inst.installed = true;
             if crate::process::is_exe(&exe) {
@@ -69,7 +70,8 @@ pub fn detect() -> Install {
             }
         }
     }
-    inst.running = inst.installed && crate::process::any_process(|name, _| name.eq_ignore_ascii_case("droid.exe"));
+    let name = crate::process::exe("droid");
+    inst.running = inst.installed && crate::process::any_process(|n, _| n.eq_ignore_ascii_case(&name));
     inst
 }
 

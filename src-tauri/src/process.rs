@@ -1,12 +1,14 @@
-//! Install detection, running state and restart for each agent (Windows).
+//! Install detection, running state and restart for each agent (Windows and macOS).
 
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use sysinfo::{Pid, ProcessesToUpdate, System};
+use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
 
 #[derive(Clone, Debug, Default)]
 pub struct Install {
@@ -47,6 +49,10 @@ pub(crate) fn no_window(cmd: &mut Command) -> &mut Command {
 /// hung CLI or a WSL distro that won't start must not hang the caller.
 pub(crate) fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::process::Output> {
     use std::process::Stdio;
+    // An npm CLI is a `#!/usr/bin/env node` script: it needs the PATH that has node.
+    if let Some(p) = LOGIN_PATH.get() {
+        cmd.env("PATH", p);
+    }
     let mut child = no_window(cmd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     // Read on a thread so a chatty child can't fill the pipe and stall.
     let mut out = child.stdout.take()?;
@@ -75,10 +81,62 @@ pub(crate) fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::p
     }
 }
 
-/// First of `names` found in a PATH folder.
+/// `base` as the file name of a program on this system: `codex.exe` on Windows, `codex` elsewhere.
+pub(crate) fn exe(base: &str) -> String {
+    format!("{base}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// A CLI file name written the Windows way (`x.exe`, `x.cmd`) as it is named here: the
+/// same on Windows, without the extension elsewhere.
+fn native_name(name: &str) -> &str {
+    if cfg!(windows) {
+        name
+    } else {
+        name.strip_suffix(".exe").or_else(|| name.strip_suffix(".cmd")).unwrap_or(name)
+    }
+}
+
+/// First of `names` found in a PATH folder (see [`search_path`]). Names are written the
+/// Windows way; elsewhere `x.exe` and `x.cmd` both mean `x`.
 pub(crate) fn on_path(names: &[&str]) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
+    let path = search_path();
+    std::env::split_paths(&path).find_map(|d| names.iter().map(|n| d.join(native_name(n))).find(|p| p.is_file()))
+}
+
+/// The login shell's PATH merged in front of this process's, once asked (macOS).
+static LOGIN_PATH: OnceLock<OsString> = OnceLock::new();
+
+/// The PATH to find and run CLIs with. On macOS an app started from the Dock or Finder
+/// gets only the system folders, not what the login shell adds (Homebrew, npm, nvm,
+/// ~/.local/bin), so the login shell is asked once; callers meanwhile wait for it.
+pub(crate) fn search_path() -> OsString {
+    let own = std::env::var_os("PATH").unwrap_or_default();
+    if !cfg!(target_os = "macos") || cfg!(test) {
+        return own;
+    }
+    LOGIN_PATH
+        .get_or_init(|| {
+            let Some(login) = login_shell_path() else { return own.clone() };
+            let mut dirs: Vec<PathBuf> = std::env::split_paths(&login).collect();
+            for d in std::env::split_paths(&own) {
+                if !dirs.contains(&d) {
+                    dirs.push(d);
+                }
+            }
+            std::env::join_paths(dirs).unwrap_or_else(|_| own.clone())
+        })
+        .clone()
+}
+
+/// PATH as an interactive login shell sets it; None when the shell fails or takes over 5 s.
+fn login_shell_path() -> Option<OsString> {
+    const MARK: &str = "__AGENTPLUS_PATH__";
+    let shell = std::env::var("SHELL").ok().filter(|s| s.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
+    // printenv prints PATH colon-separated in any shell (fish keeps it as a list); the mark
+    // skips whatever the shell's startup files print first.
+    let out = output_within(Command::new(shell).args(["-ilc", &format!("echo {MARK}; /usr/bin/printenv PATH")]), Duration::from_secs(5))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.rsplit_once(MARK)?.1.lines().map(str::trim).find(|l| !l.is_empty()).map(OsString::from)
 }
 
 /// (install dir, version, package family name, main executable) of the Codex MSIX package.
@@ -168,9 +226,75 @@ pub(crate) fn unquote_exe(s: &str) -> Option<PathBuf> {
     Some(PathBuf::from(s.trim())).filter(|p| p.is_absolute())
 }
 
-/// Whether `p` names a Windows executable (`.exe`, any case).
+/// Whether `p` is a program to run directly: an `.exe` (any case) on Windows, not a `.cmd`
+/// shim; elsewhere a file with an execute bit.
+#[cfg(windows)]
 pub(crate) fn is_exe(p: &Path) -> bool {
     p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))
+}
+#[cfg(unix)]
+pub(crate) fn is_exe(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// The main executable and version (CFBundleShortVersionString) of a macOS app bundle, from
+/// its Info.plist.
+pub(crate) fn bundle_info(bundle: &Path) -> Option<(PathBuf, Option<String>)> {
+    let contents = bundle.join("Contents");
+    let v = plist::Value::from_file(contents.join("Info.plist")).ok()?;
+    let d = v.as_dictionary()?;
+    let s = |k: &str| d.get(k).and_then(plist::Value::as_string).map(str::trim).filter(|x| !x.is_empty()).map(String::from);
+    let exe = contents.join("MacOS").join(s("CFBundleExecutable")?);
+    Some((exe, s("CFBundleShortVersionString").or_else(|| s("CFBundleVersion"))))
+}
+
+/// Folders apps are installed in on macOS.
+fn app_folders() -> Vec<PathBuf> {
+    let mut v = vec![PathBuf::from("/Applications")];
+    v.extend(dirs::home_dir().map(|h| h.join("Applications")));
+    v
+}
+
+/// Installed copies of a macOS app, by bundle name (`Codex.app`), each with an executable
+/// that exists. Empty on other systems.
+pub(crate) fn app_bundles(names: &[&str]) -> Vec<DesktopCopy> {
+    if !cfg!(target_os = "macos") {
+        return vec![];
+    }
+    bundles_in(&app_folders(), names)
+}
+
+fn bundles_in(folders: &[PathBuf], names: &[&str]) -> Vec<DesktopCopy> {
+    let mut out = vec![];
+    for dir in folders {
+        for n in names {
+            let Some((exe, version)) = bundle_info(&dir.join(n)) else { continue };
+            if exe.is_file() {
+                out.push(DesktopCopy { exe, version, running: false });
+            }
+        }
+    }
+    out
+}
+
+/// The app bundle (`…/X.app`) an executable lives in, if any.
+pub(crate) fn bundle_of(exe: &Path) -> Option<&Path> {
+    exe.ancestors().skip(1).find(|d| d.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")))
+}
+
+/// The folder a desktop app's processes live under: its bundle on macOS (helpers sit in
+/// Contents/Frameworks), else the executable's folder.
+pub(crate) fn app_dir(exe: &Path) -> Option<PathBuf> {
+    bundle_of(exe).or_else(|| exe.parent()).map(Path::to_path_buf)
+}
+
+/// `inst` found as the desktop copy `c`.
+fn use_copy(inst: &mut Install, c: &DesktopCopy) {
+    inst.installed = true;
+    inst.version = c.version.clone();
+    inst.dir = app_dir(&c.exe);
+    inst.exe = Some(c.exe.clone());
 }
 
 fn norm_dir(p: &str) -> String {
@@ -187,10 +311,13 @@ fn scope(dir: &Path) -> Option<String> {
         return None;
     }
     let d = norm_dir(&dir.to_string_lossy());
-    let shared = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData", "USERPROFILE", "APPDATA", "LOCALAPPDATA"];
+    let shared = ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOME"];
     let mut broad: Vec<String> = shared.iter().filter_map(|v| std::env::var(v).ok()).map(|p| norm_dir(&p)).collect();
     if let Ok(l) = std::env::var("LOCALAPPDATA") {
         broad.push(norm_dir(&format!("{l}\\Programs")));
+    }
+    for d in app_folders().iter().chain(&["/System/Applications".into(), "/usr".into(), "/usr/local".into(), "/opt/homebrew".into()]) {
+        broad.push(norm_dir(&d.to_string_lossy()));
     }
     if broad.contains(&d) {
         return None;
@@ -277,13 +404,14 @@ pub(crate) fn set_app_running(inst: &mut Install) {
 }
 
 /// Executable names of the CLI that an agent with a desktop app also has.
-fn cli_names(agent: &str) -> &'static [&'static str] {
+fn cli_names(agent: &str) -> Vec<String> {
     use crate::adapters::{codex, opencode};
-    match agent {
-        codex::ID => &["codex.exe"],
-        opencode::ID => &["opencode.exe", "opencode-cli.exe"],
+    let bases: &[&str] = match agent {
+        codex::ID => &["codex"],
+        opencode::ID => &["opencode", "opencode-cli"],
         _ => &[],
-    }
+    };
+    bases.iter().map(|b| exe(b)).collect()
 }
 
 /// The agent's CLI running outside its desktop app (`app`): sessions in terminals, which a
@@ -346,6 +474,8 @@ pub(crate) fn cli_version(exe: &Path) -> Option<String> {
     if let Some((_, v)) = cache().iter().find(|(p, _)| p == exe) {
         return v.clone();
     }
+    // Lets `output_within` pass on the login PATH (macOS) that an npm script needs.
+    search_path();
     let v = output_within(Command::new(exe).arg("--version"), Duration::from_secs(5)).and_then(|o| version_in(&String::from_utf8_lossy(&o.stdout)));
     cache().push((exe.to_path_buf(), v.clone()));
     v
@@ -363,9 +493,38 @@ pub(crate) fn npm_package_in(root: &Path, pkg: &str) -> PathBuf {
     pkg.split('/').fold(root.join("node_modules"), |d, part| d.join(part)).join("package.json")
 }
 
-/// package.json of a global npm package (`%APPDATA%\npm\node_modules\<pkg>`).
+/// Folders whose `node_modules` holds global npm packages: `%APPDATA%\npm` on Windows;
+/// elsewhere `<prefix>/lib` of the prefixes npm commonly uses (a configured one, ~/.npm-global,
+/// the one of the `node` on PATH, Homebrew, /usr/local).
+fn npm_roots() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        return dirs::data_dir().map(|d| d.join("npm")).into_iter().collect();
+    }
+    let mut prefixes: Vec<PathBuf> = vec![];
+    prefixes.extend(std::env::var_os("NPM_CONFIG_PREFIX").map(PathBuf::from));
+    prefixes.extend(dirs::home_dir().map(|h| h.join(".npm-global")));
+    if let Some(node) = on_path(&["node"]) {
+        // `<prefix>/bin/node`; a Homebrew node links into its Cellar, a version manager's
+        // (nvm, fnm) is a real file in its own prefix: both count.
+        prefixes.extend(node.parent().and_then(Path::parent).map(Path::to_path_buf));
+        if let Ok(real) = std::fs::canonicalize(&node) {
+            prefixes.extend(real.parent().and_then(Path::parent).map(Path::to_path_buf));
+        }
+    }
+    prefixes.extend(["/opt/homebrew", "/usr/local"].map(PathBuf::from));
+    let mut out: Vec<PathBuf> = vec![];
+    for lib in prefixes.into_iter().map(|p| p.join("lib")) {
+        if !out.contains(&lib) {
+            out.push(lib);
+        }
+    }
+    out
+}
+
+/// package.json of a global npm package (`%APPDATA%\npm\node_modules\<pkg>` on Windows);
+/// None when it isn't installed.
 pub(crate) fn npm_global_package(pkg: &str) -> Option<PathBuf> {
-    Some(npm_package_in(&dirs::data_dir()?.join("npm"), pkg))
+    npm_roots().iter().map(|r| npm_package_in(r, pkg)).find(|p| p.is_file())
 }
 
 /// Version of a global npm package; None when it isn't installed there.
@@ -373,16 +532,55 @@ pub(crate) fn npm_global_version(pkg: &str) -> Option<String> {
     package_version(&npm_global_package(pkg)?)
 }
 
-/// Version of a global npm package under `%APPDATA%\npm`, else under the folder of `shim`
-/// (the CLI found on PATH, for an npm with another prefix).
+/// Version of a global npm package in the usual places, else next to `shim` (the CLI found on
+/// PATH, for an npm with another prefix): `<shim dir>\node_modules` on Windows; elsewhere the
+/// package the shim links into (`bin/x -> ../lib/node_modules/<pkg>/…`), or `<shim dir>/../lib`.
 pub(crate) fn npm_version_near(pkg: &str, shim: Option<&Path>) -> Option<String> {
-    npm_global_version(pkg).or_else(|| package_version(&npm_package_in(shim?.parent()?, pkg)))
+    npm_global_version(pkg).or_else(|| {
+        let shim = shim?;
+        let dir = shim.parent()?;
+        if cfg!(windows) {
+            return package_version(&npm_package_in(dir, pkg));
+        }
+        let named = |p: &Path| -> bool {
+            let v: Option<serde_json::Value> = std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok());
+            v.as_ref().and_then(|v| v.get("name")).and_then(|n| n.as_str()) == Some(pkg)
+        };
+        std::fs::canonicalize(shim)
+            .ok()
+            .and_then(|real| real.ancestors().skip(1).take(6).map(|d| d.join("package.json")).find(|p| named(p)))
+            .and_then(|p| package_version(&p))
+            .or_else(|| package_version(&npm_package_in(&dir.parent()?.join("lib"), pkg)))
+    })
 }
 
-/// Codex desktop: the MSIX package.
+/// A CLI on PATH (`names`, see [`on_path`]): its version from npm package `pkg`, else from
+/// `--version`. `dir` and `exe` stay None: nothing to restart.
+fn detect_cli(names: &[&str], pkg: &str) -> Install {
+    let mut inst = Install::default();
+    let shim = on_path(names);
+    if let Some(v) = npm_version_near(pkg, shim.as_deref()) {
+        inst.installed = true;
+        inst.version = Some(v);
+    } else if let Some(p) = shim {
+        inst.installed = true;
+        inst.version = cli_version(&p);
+    }
+    inst
+}
+
+/// Codex desktop: the MSIX package on Windows, Codex.app on macOS. Without the app on
+/// macOS, the CLI: configured the same way, but there is nothing to restart.
 pub(crate) fn detect_codex() -> Install {
     let mut inst = Install::default();
-    if let Some((dir, ver, pfn, main)) = codex_package() {
+    if let Some(c) = app_bundles(&["Codex.app"]).first() {
+        use_copy(&mut inst, c);
+    } else if cfg!(target_os = "macos") {
+        let mut cli = detect_cli(&["codex"], "@openai/codex");
+        let name = exe("codex");
+        cli.running = cli.installed && any_process(|n, _| n == name);
+        return cli;
+    } else if let Some((dir, ver, pfn, main)) = codex_package() {
         inst.installed = true;
         inst.version = Some(ver);
         inst.aumid = Some(format!("{pfn}!App"));
@@ -393,10 +591,12 @@ pub(crate) fn detect_codex() -> Install {
     inst
 }
 
-/// ZCode desktop: its uninstall entry names the install folder.
+/// ZCode desktop: ZCode.app on macOS; on Windows its uninstall entry names the install folder.
 pub(crate) fn detect_zcode() -> Install {
     let mut inst = Install::default();
-    if let Some(e) = uninstall_entry("ZCode") {
+    if let Some(c) = app_bundles(&["ZCode.app"]).first() {
+        use_copy(&mut inst, c);
+    } else if let Some(e) = uninstall_entry("ZCode") {
         let dir = e.uninstall.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(Path::to_path_buf));
         inst.installed = dir.is_some();
         inst.version = e.version;
@@ -407,10 +607,12 @@ pub(crate) fn detect_zcode() -> Install {
     inst
 }
 
-/// MiMo Desktop: its uninstall entry's icon is the app.
+/// MiMo Desktop: its app bundle on macOS; on Windows its uninstall entry's icon is the app.
 pub(crate) fn detect_mimo() -> Install {
     let mut inst = Install::default();
-    if let Some(e) = uninstall_entry("Xiaomi MiMo") {
+    if let Some(c) = app_bundles(&["Xiaomi MiMo.app", "MiMo.app"]).first() {
+        use_copy(&mut inst, c);
+    } else if let Some(e) = uninstall_entry("Xiaomi MiMo") {
         let exe = e.icon.and_then(|i| unquote_exe(&i));
         inst.installed = exe.is_some();
         inst.version = e.version;
@@ -421,20 +623,21 @@ pub(crate) fn detect_mimo() -> Install {
     inst
 }
 
-/// Claude Code: npm global install or the native installer (~/.local/bin/claude.exe). A CLI:
-/// `dir` stays None.
+/// Claude Code: npm global install, the native installer (~/.local/bin/claude[.exe]) or a
+/// `claude` on PATH (Homebrew). A CLI: `dir` stays None.
 pub(crate) fn detect_claude() -> Install {
     let mut inst = Install::default();
-    let native = dirs::home_dir().map(|h| h.join(".local").join("bin").join("claude.exe"));
-    if let Some(pkg) = npm_global_package("@anthropic-ai/claude-code").filter(|p| p.is_file()) {
+    let name = exe("claude");
+    let native = dirs::home_dir().map(|h| h.join(".local").join("bin").join(&name)).filter(|p| p.exists());
+    if let Some(pkg) = npm_global_package("@anthropic-ai/claude-code") {
         inst.installed = true;
         inst.version = package_version(&pkg);
-    } else if let Some(exe) = native.filter(|p| p.exists()) {
+    } else if let Some(exe) = native.or_else(|| on_path(&["claude.exe"])) {
         inst.installed = true;
         inst.version = cli_version(&exe);
     }
-    // An npm install runs under node.exe, so this only sees the native build.
-    inst.running = any_process(|name, _| name.eq_ignore_ascii_case("claude.exe"));
+    // An npm install runs under node, so this only sees the native build.
+    inst.running = any_process(|n, _| n.eq_ignore_ascii_case(&name));
     inst
 }
 
@@ -476,42 +679,43 @@ fn choose_copy(copies: &[DesktopCopy], preferred: Option<&str>) -> usize {
 /// Store key of the desktop copy picked by hand (absent or empty = automatic).
 pub const DESKTOP_EXE_STORE_KEY: &str = "desktopExe";
 
-/// OpenCode: the desktop app (registry) or the CLI.
+/// OpenCode: the desktop app (registry on Windows, OpenCode.app on macOS) or the CLI.
 pub(crate) fn detect_opencode() -> Install {
     let mut inst = Install::default();
     let mut copies = desktop_copies("OpenCode", "OpenCode.exe");
+    copies.extend(app_bundles(&["OpenCode.app"]));
     if !copies.is_empty() {
         let sys = processes();
         for c in &mut copies {
-            c.running = c.exe.parent().is_some_and(|d| !app_processes(&sys, d, Some(&c.exe)).is_empty());
+            c.running = app_dir(&c.exe).is_some_and(|d| !app_processes(&sys, &d, Some(&c.exe)).is_empty());
         }
         let preferred = crate::store::get_str(&crate::store::load(), crate::adapters::opencode::ID, DESKTOP_EXE_STORE_KEY).filter(|s| !s.is_empty());
         let c = &copies[choose_copy(&copies, preferred.as_deref())];
-        inst.installed = true;
-        inst.version = c.version.clone();
-        inst.dir = c.exe.parent().map(Path::to_path_buf);
-        inst.exe = Some(c.exe.clone());
+        use_copy(&mut inst, c);
         // Counted just above, the same way `set_app_running` would.
         inst.running = c.running;
         inst.copies = copies;
         return inst;
     }
     let home = dirs::home_dir().unwrap_or_default();
-    let candidates = [home.join(".opencode").join("bin").join("opencode.exe"), dirs::data_dir().unwrap_or_default().join("npm").join("opencode.cmd")];
-    if let Some(exe) = candidates.iter().find(|p| p.exists()) {
+    let candidates = [home.join(".opencode").join("bin").join(exe("opencode")), dirs::data_dir().unwrap_or_default().join("npm").join("opencode.cmd")];
+    if let Some(p) = candidates.into_iter().find(|p| p.exists()).or_else(|| on_path(&["opencode.exe", "opencode.cmd"])) {
         inst.installed = true;
-        if is_exe(exe) {
-            inst.version = cli_version(exe);
+        if is_exe(&p) {
+            inst.version = cli_version(&p);
         }
     }
-    inst.running = any_process(|name, _| name.eq_ignore_ascii_case("opencode.exe"));
+    let name = exe("opencode");
+    inst.running = any_process(|n, _| n.eq_ignore_ascii_case(&name));
     inst
 }
 
 /** Trae (international or CN build); detection only. */
 pub fn detect_trae() -> Install {
     let mut inst = Install::default();
-    if let Some(e) = uninstall_entry("Trae (User)").or_else(|| uninstall_entry("TraeCode")).or_else(|| uninstall_entry("Trae")) {
+    if let Some(c) = app_bundles(&["Trae.app", "Trae CN.app"]).first() {
+        use_copy(&mut inst, c);
+    } else if let Some(e) = uninstall_entry("Trae (User)").or_else(|| uninstall_entry("TraeCode")).or_else(|| uninstall_entry("Trae")) {
         let exe = e.icon.and_then(|i| unquote_exe(&i));
         inst.installed = exe.as_ref().map(|x| x.exists()).unwrap_or(false);
         inst.version = e.version;
@@ -583,20 +787,34 @@ pub fn pause(d: Duration) -> Result<()> {
     }
 }
 
-/// Kills the desktop app's processes and waits for them to exit.
-fn stop(inst: &Install, on: &dyn Fn(Progress)) -> Result<()> {
+/// Ends the desktop app's processes: asked to quit (SIGTERM) where the system has that
+/// (macOS), killed otherwise (Windows) or when `force`.
+fn end_app(inst: &Install, force: bool) {
     let sys = processes();
     for pid in app_of(&sys, inst) {
         if let Some(p) = sys.process(pid) {
-            p.kill();
+            if force || p.kill_with(Signal::Term) != Some(true) {
+                p.kill();
+            }
         }
     }
+}
+
+/// Ends the desktop app's processes and waits for them to exit; whatever is left after 5 s
+/// is killed.
+fn stop(inst: &Install, on: &dyn Fn(Progress)) -> Result<()> {
+    end_app(inst, false);
     let t0 = Instant::now();
     let mut left_seen = usize::MAX;
+    let mut forced = false;
     loop {
         let left = app_of(&processes(), inst).len();
         if left == 0 {
             return Ok(());
+        }
+        if !forced && t0.elapsed() > Duration::from_secs(5) {
+            forced = true;
+            end_app(inst, true);
         }
         if left != left_seen {
             left_seen = left;
@@ -669,11 +887,7 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     if let Some(aumid) = &inst.aumid {
         activate(aumid, args)?;
     } else if let Some(exe) = &inst.exe {
-        let mut cmd = Command::new(exe);
-        if !args.is_empty() {
-            cmd.args(args.split_whitespace());
-        }
-        cmd.spawn().map_err(|e| anyhow!(tr!("启动失败：{e}", "Failed to start: {e}")))?;
+        start_exe(exe, args).map_err(|e| anyhow!(tr!("启动失败：{e}", "Failed to start: {e}")))?;
     }
     // Wait until its process shows up, so "done" means it is actually up.
     if inst.dir.is_some() {
@@ -696,15 +910,59 @@ pub fn running(agent: &str) -> bool {
     detect(agent).running
 }
 
-pub fn open_dir(dir: &str) -> Result<()> {
-    Command::new("explorer.exe").arg(dir).spawn()?;
+/// Starts a desktop app. A macOS app bundle goes through LaunchServices (`open`), as from
+/// the Dock; `-n` because the old instance was just ended and `open` would otherwise only
+/// activate it and drop `args`.
+fn start_exe(exe: &Path, args: &str) -> Result<()> {
+    if let Some(bundle) = bundle_of(exe).filter(|_| cfg!(target_os = "macos")) {
+        let mut cmd = Command::new("open");
+        cmd.arg("-n").arg(bundle);
+        if !args.is_empty() {
+            cmd.arg("--args").args(args.split_whitespace());
+        }
+        let out = cmd.output()?;
+        if !out.status.success() {
+            return Err(anyhow!("{}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        return Ok(());
+    }
+    let mut cmd = Command::new(exe);
+    if !args.is_empty() {
+        cmd.args(args.split_whitespace());
+    }
+    cmd.spawn()?;
     Ok(())
 }
 
-/// Opens Explorer with the file selected.
-pub fn reveal(path: &str) -> Result<()> {
-    Command::new("explorer.exe").arg(format!("/select,{path}")).spawn()?;
+/// Starts `cmd` and reaps it in the background (a finished child would linger as a zombie on
+/// Unix until AgentPlus exits).
+fn spawn_detached(cmd: &mut Command) -> Result<()> {
+    let mut child = cmd.spawn()?;
+    std::thread::spawn(move || child.wait());
     Ok(())
+}
+
+/// Opens a folder in the file manager (Explorer, Finder).
+pub fn open_dir(dir: &str) -> Result<()> {
+    let opener = if cfg!(windows) {
+        "explorer.exe"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    spawn_detached(Command::new(opener).arg(dir))
+}
+
+/// Opens the file manager with the file selected (Linux: its folder).
+pub fn reveal(path: &str) -> Result<()> {
+    if cfg!(windows) {
+        spawn_detached(Command::new("explorer.exe").arg(format!("/select,{path}")))
+    } else if cfg!(target_os = "macos") {
+        spawn_detached(Command::new("open").arg("-R").arg(path))
+    } else {
+        open_dir(&Path::new(path).parent().unwrap_or(Path::new(path)).to_string_lossy())
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -916,11 +1174,118 @@ mod any_os_tests {
         assert!(!inst.installed && inst.dir.is_none());
     }
 
+    #[cfg(windows)]
     #[test]
     fn is_exe_ignores_case() {
         assert!(is_exe(Path::new("a/b/OpenCode.EXE")));
         assert!(is_exe(Path::new("droid.exe")));
         assert!(!is_exe(Path::new("opencode.cmd")));
         assert!(!is_exe(Path::new("exe")));
+    }
+
+    fn plist(dir: &Path, exe: Option<&str>, version: Option<&str>) {
+        let mut body = String::new();
+        if let Some(e) = exe {
+            body += &format!("<key>CFBundleExecutable</key><string>{e}</string>");
+        }
+        if let Some(v) = version {
+            body += &format!("<key>CFBundleShortVersionString</key><string>{v}</string>");
+        }
+        std::fs::create_dir_all(dir.join("Contents").join("MacOS")).unwrap();
+        std::fs::write(
+            dir.join("Contents").join("Info.plist"),
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>{body}<key>CFBundleVersion</key><string>9</string></dict></plist>"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reads_app_bundles() {
+        let h = crate::util::TestHome::new("bundles");
+        let apps = h.0.join("Applications");
+        let codex = apps.join("Codex.app");
+        plist(&codex, Some("Codex"), Some("26.917.1"));
+        std::fs::write(codex.join("Contents").join("MacOS").join("Codex"), b"").unwrap();
+        // No executable on disk / none named: not a usable copy.
+        plist(&apps.join("ZCode.app"), Some("ZCode"), None);
+        plist(&apps.join("Broken.app"), None, Some("1.0"));
+
+        let (exe, ver) = bundle_info(&codex).unwrap();
+        assert_eq!(exe, codex.join("Contents").join("MacOS").join("Codex"));
+        assert_eq!(ver.as_deref(), Some("26.917.1"));
+        // CFBundleVersion stands in for a missing short version.
+        assert_eq!(bundle_info(&apps.join("ZCode.app")).unwrap().1.as_deref(), Some("9"));
+        assert!(bundle_info(&apps.join("Broken.app")).is_none());
+        assert!(bundle_info(&apps.join("Missing.app")).is_none());
+
+        let found = bundles_in(&[apps.clone(), h.0.join("nowhere")], &["Codex.app", "ZCode.app", "Broken.app", "Missing.app"]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].exe, exe);
+
+        let mut inst = Install::default();
+        use_copy(&mut inst, &found[0]);
+        assert!(inst.installed);
+        // The bundle, where the helper processes live too.
+        assert_eq!(inst.dir.as_deref(), Some(codex.as_path()));
+        assert_eq!(bundle_of(&exe), Some(codex.as_path()));
+    }
+
+    #[test]
+    fn app_dir_is_the_bundle_or_the_folder() {
+        let bundled = Path::new("/Applications/OpenCode.app/Contents/MacOS/OpenCode");
+        assert_eq!(app_dir(bundled), Some(PathBuf::from("/Applications/OpenCode.app")));
+        assert_eq!(app_dir(Path::new("/opt/x/bin/tool")), Some(PathBuf::from("/opt/x/bin")));
+        assert_eq!(bundle_of(Path::new("/opt/x/bin/tool")), None);
+    }
+
+    #[test]
+    fn cli_names_follow_the_system() {
+        if cfg!(windows) {
+            assert_eq!(exe("codex"), "codex.exe");
+            assert_eq!(native_name("kimi.cmd"), "kimi.cmd");
+        } else {
+            assert_eq!(exe("codex"), "codex");
+            assert_eq!(native_name("kimi.exe"), "kimi");
+            assert_eq!(native_name("kimi.cmd"), "kimi");
+            assert_eq!(native_name("kimi"), "kimi");
+        }
+    }
+
+    #[test]
+    fn broad_folders_are_no_scope() {
+        assert!(scope(Path::new("/Applications")).is_none());
+        assert!(scope(Path::new("/usr/local")).is_none());
+        assert!(scope(Path::new("/")).is_none());
+        #[cfg(unix)]
+        assert_eq!(scope(Path::new("/Applications/Codex.app")).as_deref(), Some("\\applications\\codex.app\\"));
+    }
+
+    /// Unix npm layout: `<prefix>/bin/x` links to `<prefix>/lib/node_modules/<pkg>/…`.
+    #[cfg(unix)]
+    #[test]
+    fn npm_version_follows_the_shim_link() {
+        let h = crate::util::TestHome::new("npm-shim");
+        let pkg_dir = h.0.join("lib").join("node_modules").join("@scope").join("tool");
+        std::fs::create_dir_all(pkg_dir.join("bin")).unwrap();
+        std::fs::write(pkg_dir.join("package.json"), r#"{"name":"@scope/tool","version":"1.2.3"}"#).unwrap();
+        std::fs::write(pkg_dir.join("bin").join("cli.js"), "").unwrap();
+        std::fs::create_dir_all(h.0.join("bin")).unwrap();
+        let shim = h.0.join("bin").join("tool");
+        std::os::unix::fs::symlink(pkg_dir.join("bin").join("cli.js"), &shim).unwrap();
+        assert_eq!(npm_version_near("@scope/tool", Some(&shim)).as_deref(), Some("1.2.3"));
+        assert_eq!(npm_version_near("@scope/other", Some(&shim)), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_exe_needs_the_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = crate::util::TestHome::new("exec-bit");
+        let f = h.0.join("tool");
+        std::fs::write(&f, "#!/bin/sh\n").unwrap();
+        assert!(!is_exe(&f));
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(is_exe(&f));
+        assert!(!is_exe(&h.0));
     }
 }

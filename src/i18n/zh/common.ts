@@ -34,6 +34,7 @@ export default {
   copyFailed: "复制失败",
   listSep: "、",
   localWindows: "本机 · Windows",
+  localMac: "本机 · macOS",
   gatewayStarted: "本地网关已开启",
   gatewayStopped: "本地网关已关闭",
   pauseRoute: "暂停转发",

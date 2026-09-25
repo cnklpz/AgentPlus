@@ -6,6 +6,7 @@ import { t, tn, tx } from "../i18n";
 import { fmtAgo } from "../format";
 import { scrub } from "../privacy";
 import { onActivateKey } from "../util";
+import { isMac } from "../platform";
 
 interface ListProps {
   projects: ProjectEntry[];
@@ -58,7 +59,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
                   <span className="tiny muted">{fmtAgo(p.lastOpened)}</span>
                 </span>
                 <span className="row gap6" onClick={(e) => e.stopPropagation()}>
-                  {p.exists && <button className="icon-btn sm" title={t("projectsPage.revealTitle")} aria-label={t("projectsPage.revealLabel", { name: p.name })} onClick={() => onReveal(p.path)}><Icon.folder size={12} /></button>}
+                  {p.exists && <button className="icon-btn sm" title={t(isMac ? "projectsPage.revealTitleMac" : "projectsPage.revealTitle")} aria-label={t("projectsPage.revealLabel", { name: p.name })} onClick={() => onReveal(p.path)}><Icon.folder size={12} /></button>}
                   <button className="icon-btn sm" title={t("projectsPage.forgetTitle")} aria-label={t("projectsPage.forgetLabel", { name: p.name })} onClick={() => onForget(p)}><Icon.close size={10} /></button>
                 </span>
               </div>

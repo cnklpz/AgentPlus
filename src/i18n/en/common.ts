@@ -35,6 +35,7 @@ const en: typeof zh = {
   copyFailed: "Copy failed",
   listSep: ", ",
   localWindows: "This PC · Windows",
+  localMac: "This Mac · macOS",
   gatewayStarted: "Local gateway started",
   gatewayStopped: "Local gateway stopped",
   pauseRoute: "Pause route",

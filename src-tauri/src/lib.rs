@@ -432,6 +432,8 @@ pub fn run() {
             tray::setup(app.handle())?;
             // Off the startup path: binding the port and stopping an old listener can wait.
             std::thread::spawn(gateway::server::autostart);
+            // macOS: ask the login shell for PATH now, before the first detection needs it.
+            std::thread::spawn(process::search_path);
             // The window starts hidden and the page shows it after its first render, so the
             // WebView's blank white never flashes. Fallback in case the page never gets there.
             if let Some(w) = app.get_webview_window("main") {
@@ -503,8 +505,15 @@ pub fn run() {
             update::update_check,
             update::update_install
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running AgentPlus");
+        .build(tauri::generate_context!())
+        .expect("error while running AgentPlus")
+        .run(|_app, _event| {
+            // macOS: a click on the Dock icon while the window sits hidden in the menu bar.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = _event {
+                tray::show_main(_app);
+            }
+        });
 }
 
 #[cfg(test)]

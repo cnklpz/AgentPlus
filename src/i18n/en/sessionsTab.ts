@@ -43,6 +43,7 @@ const en: typeof zh = {
   copyResume: "Copy resume command",
   resumeCopied: "Resume command copied",
   revealTitle: "Show session file in Explorer",
+  revealTitleMac: "Show session file in Finder",
   reveal: "Show session file",
   noMatch: "No matching sessions",
   footer: "Showing {shown} of {total} sessions",

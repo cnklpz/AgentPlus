@@ -87,7 +87,8 @@ fn env_path() -> PathBuf {
 
 // ---------------------------------------------------------------- detection
 
-/// npm global install (`%APPDATA%\npm\node_modules\@google\gemini-cli`). A CLI: `exe` stays None.
+/// npm global install (`%APPDATA%\npm\node_modules\@google\gemini-cli` on Windows), else a
+/// `gemini` on PATH (Homebrew, another npm prefix). A CLI: `exe` stays None.
 pub fn detect() -> Install {
     let mut inst = Install::default();
     if let Some(pkg) = crate::process::npm_global_package("@google/gemini-cli").filter(|p| p.is_file()) {
@@ -96,6 +97,9 @@ pub fn detect() -> Install {
     } else if let Some(cmd) = dirs::data_dir().map(|d| d.join("npm").join("gemini.cmd")).filter(|p| p.exists()) {
         inst.installed = true;
         inst.dir = cmd.parent().map(|p| p.to_path_buf());
+    } else if let Some(shim) = crate::process::on_path(&["gemini.cmd"]) {
+        inst.installed = true;
+        inst.version = crate::process::npm_version_near("@google/gemini-cli", Some(&shim)).or_else(|| crate::process::cli_version(&shim));
     }
     inst
 }

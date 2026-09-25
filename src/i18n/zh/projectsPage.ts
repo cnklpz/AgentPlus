@@ -11,6 +11,7 @@ export default {
   folderMissing: "文件夹不存在",
   notConfigured: "未配置 · 沿用全局",
   revealTitle: "在资源管理器中显示",
+  revealTitleMac: "在访达中显示",
   revealLabel: "打开 {name} 文件夹",
   forgetTitle: "从列表移除（不删除文件）",
   forgetLabel: "从列表移除 {name}",

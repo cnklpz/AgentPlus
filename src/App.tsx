@@ -44,10 +44,12 @@ import { inTauri } from "./tauri";
 import { scrub, usePrivacy } from "./privacy";
 import { copyText, errText } from "./util";
 import { joinList } from "./format";
+import { isMac, localEnvLabel, shortcut } from "./platform";
 
-/** Windows-style caption buttons; the system title bar is turned off. */
+/** Windows-style caption buttons; the system title bar is turned off. macOS keeps its own
+ * traffic lights over the top bar (tauri.macos.conf.json). */
 function WindowControls() {
-  if (!inTauri) return null;
+  if (!inTauri || isMac) return null;
   const win = getCurrentWindow();
   const glyph = (d: string) => (
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden="true"><path d={d} /></svg>
@@ -1179,14 +1181,14 @@ export default function App() {
       const ro = ed.readOnly || ed.disabled;
       const secret = ed instanceof HTMLInputElement && ed.type === "password";
       items.push(
-        { label: t("app.cut"), hint: "Ctrl X", disabled: !s || ro || secret, action: () => { navigator.clipboard.writeText(s).then(() => insertText(ed, "")).catch(() => undefined); } },
-        { label: t("common.copy"), hint: "Ctrl C", icon: <Icon.copy size={13} />, disabled: !s || secret, action: () => copy(s) },
-        { label: t("app.paste"), hint: "Ctrl V", disabled: ro, action: () => { navigator.clipboard.readText().then((x) => insertText(ed, x)).catch(() => flash(t("app.clipboardReadFailed"), true)); } },
-        { label: t("common.selectAll"), hint: "Ctrl A", disabled: !ed.value, action: () => { ed.focus(); ed.select(); } },
+        { label: t("app.cut"), hint: shortcut("X"), disabled: !s || ro || secret, action: () => { navigator.clipboard.writeText(s).then(() => insertText(ed, "")).catch(() => undefined); } },
+        { label: t("common.copy"), hint: shortcut("C"), icon: <Icon.copy size={13} />, disabled: !s || secret, action: () => copy(s) },
+        { label: t("app.paste"), hint: shortcut("V"), disabled: ro, action: () => { navigator.clipboard.readText().then((x) => insertText(ed, x)).catch(() => flash(t("app.clipboardReadFailed", { keys: shortcut("V", false, "+") }), true)); } },
+        { label: t("common.selectAll"), hint: shortcut("A"), disabled: !ed.value, action: () => { ed.focus(); ed.select(); } },
         "sep",
       );
     } else if (sel.trim()) {
-      items.push({ label: t("app.copySelection"), hint: "Ctrl C", icon: <Icon.copy size={13} />, action: () => copy(sel) }, "sep");
+      items.push({ label: t("app.copySelection"), hint: shortcut("C"), icon: <Icon.copy size={13} />, action: () => copy(sel) }, "sep");
     }
     items.push(...contextItems(target));
     const url = target.closest("[data-url]")?.getAttribute("data-url");
@@ -1201,7 +1203,7 @@ export default function App() {
     // the app-wide items below are for right-clicking empty space.
     if (items.length) return items;
     items.push(
-      { label: t("app.searchMenu"), hint: "Ctrl K", icon: <Icon.search size={13} />, action: () => setPalette(true) },
+      { label: t("app.searchMenu"), hint: shortcut("K"), icon: <Icon.search size={13} />, action: () => setPalette(true) },
       { label: t("app.reloadConfig"), hint: "F5", icon: <Icon.refresh size={13} />, action: refreshAll },
     );
     if (totalPending) {
@@ -1246,11 +1248,11 @@ export default function App() {
       <header className="topbar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region><Icon.logo /><span data-tauri-drag-region>AgentPlus</span></div>
         <button className="search" onClick={() => setPalette(true)}>
-          <Icon.search /><span>{t("app.searchPlaceholder")}</span><kbd>Ctrl K</kbd>
+          <Icon.search /><span>{t("app.searchPlaceholder")}</span><kbd>{shortcut("K")}</kbd>
         </button>
         <div className="top-end" data-tauri-drag-region>
         <div className="top-right" data-tauri-drag-region>
-          <EnvSwitch envs={envs} current={curEnv} switching={switching} onOpen={reloadEnvs} onPick={switchEnv} />
+          {!isMac && <EnvSwitch envs={envs} current={curEnv} switching={switching} onOpen={reloadEnvs} onPick={switchEnv} />}
           <button className="gear-btn" aria-label={t("app.navSettings")} aria-pressed={page === "settings"} title={update.kind === "available" ? t("app.updateDot") : undefined}
             onClick={() => (page === "settings" ? closeSettings() : openSettings())}>
             <span className="gear-ico"><Icon.gear />{update.kind === "available" && <span className="gear-dot" />}</span><span className="gear-label">{t("app.settings")}</span>
@@ -1273,7 +1275,7 @@ export default function App() {
             onAdd={() => setHubDialog({ group: null })}
             onTestAll={() => testHub(true)}
             onTestOne={testOne}
-            envLabel={curEnv?.label ?? t("common.localWindows")}
+            envLabel={curEnv?.label ?? localEnvLabel()}
           />
         )}
         {page === "providers" && (
