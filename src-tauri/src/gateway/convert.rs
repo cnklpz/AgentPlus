@@ -1353,6 +1353,11 @@ pub fn error_body(to: Proto, status: u16, upstream_text: &str) -> Value {
     }
 }
 
+/// A model id as the gateway lists it: without Gemini's "models/" prefix.
+pub fn bare_model(id: &str) -> &str {
+    id.strip_prefix("models/").unwrap_or(id)
+}
+
 /// (id, display name, owner) of each model in an upstream's list, in any of the shapes
 /// OpenAI, Anthropic and Gemini use, without duplicates. Gemini's "models/" prefix is dropped.
 pub fn model_entries(upstream: &Value) -> Vec<(String, String, String)> {
@@ -1365,10 +1370,9 @@ pub fn model_entries(upstream: &Value) -> Vec<(String, String, String)> {
     let mut models = Vec::new();
     for m in list {
         let (id, display, owner) = match m {
-            Value::String(s) => (s.clone(), s.clone(), String::new()),
+            Value::String(s) => (bare_model(s).to_string(), bare_model(s).to_string(), String::new()),
             Value::Object(_) => {
-                let id = first_str([sget(m, "id"), sget(m, "name"), sget(m, "model"), sget(m, "slug")]);
-                let id = id.strip_prefix("models/").unwrap_or(id).to_string();
+                let id = bare_model(first_str([sget(m, "id"), sget(m, "name"), sget(m, "model"), sget(m, "slug")])).to_string();
                 let display = match first_str([sget(m, "display_name"), sget(m, "displayName")]) {
                     "" => id.clone(),
                     d => d.to_string(),
