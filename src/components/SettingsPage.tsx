@@ -141,11 +141,12 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         <SettingRow label={t("settingsPage.privacy")} desc={t("settingsPage.privacyHint", { keys: shortcut("H", true, "+") })}>
           <Switch on={prefs.privacy} onChange={(v) => setPrefs({ ...prefs, privacy: v })} label={t("settingsPage.privacy")} />
         </SettingRow>
-        <SettingRow label={t("settingsPage.closeAction")}
+        {/* macOS: closing always hides the window and the app stays in the Dock (⌘Q quits). */}
+        {!isMac && <SettingRow label={t("settingsPage.closeAction")}
           desc={t("settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}>
           <Seg value={prefs.closeAction} onChange={(v) => setPrefs({ ...prefs, closeAction: v })} label={t("settingsPage.closeAction")}
             options={CLOSE_ACTIONS.map((m) => ({ value: m.v, label: t(m.label) }))} />
-        </SettingRow>
+        </SettingRow>}
       </section>
 
       <section className="sgroup">

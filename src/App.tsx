@@ -116,6 +116,8 @@ export default function App() {
   // reveal it once the first frame is committed with theme and styles in place.
   useEffect(() => { if (inTauri) getCurrentWindow().show().catch(() => {}); }, []);
   // Closing the window (× or Alt+F4) hides it in the tray or quits, per 设置 › 界面 › 关闭窗口时.
+  // macOS works the Mac way instead: the red button / ⌘W only hides the window, the app
+  // (and its gateway) stays in the Dock, a Dock click brings it back and ⌘Q quits.
   const [closeAsk, setCloseAsk] = useState<((c: CloseChoice | null) => void) | null>(null);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -125,6 +127,10 @@ export default function App() {
     let asking = false;
     const unlisten = win.onCloseRequested(async (e) => {
       e.preventDefault();
+      if (isMac) {
+        await win.hide();
+        return;
+      }
       let action = prefsRef.current.closeAction;
       if (action === "ask") {
         if (asking) return;
@@ -1246,7 +1252,8 @@ export default function App() {
       <ContextMenu build={buildMenu} />
       <ConfirmHost />
       <header className="topbar" data-tauri-drag-region>
-        <div className="brand" data-tauri-drag-region><Icon.logo /><span data-tauri-drag-region>AgentPlus</span></div>
+        {/* macOS shows no app icon in the title bar; the traffic lights sit there. */}
+        <div className="brand" data-tauri-drag-region>{!isMac && <Icon.logo />}<span data-tauri-drag-region>AgentPlus</span></div>
         <button className="search" onClick={() => setPalette(true)}>
           <Icon.search /><span>{t("app.searchPlaceholder")}</span><kbd>{shortcut("K")}</kbd>
         </button>

@@ -16,6 +16,11 @@ struct TrayMenu {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
+    // macOS keeps a closed app in the Dock (a click reopens it, see `lib::run`, and ⌘Q or
+    // the Dock menu quits), so there is no menu bar icon.
+    if cfg!(target_os = "macos") {
+        return Ok(());
+    }
     let show = MenuItem::with_id(app, "show", l(SHOW.0, SHOW.1), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", l(QUIT.0, QUIT.1), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
