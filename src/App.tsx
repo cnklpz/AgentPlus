@@ -1252,8 +1252,9 @@ export default function App() {
       <ContextMenu build={buildMenu} />
       <ConfirmHost />
       <header className="topbar" data-tauri-drag-region>
-        {/* macOS shows no app icon in the title bar; the traffic lights sit there. */}
-        <div className="brand" data-tauri-drag-region>{!isMac && <Icon.logo />}<span data-tauri-drag-region>AgentPlus</span></div>
+        {/* macOS shows neither app icon nor name in the title bar, only the traffic lights;
+            the empty cell keeps the search box where it is and stays draggable. */}
+        <div className="brand" data-tauri-drag-region>{!isMac && <><Icon.logo /><span data-tauri-drag-region>AgentPlus</span></>}</div>
         <button className="search" onClick={() => setPalette(true)}>
           <Icon.search /><span>{t("app.searchPlaceholder")}</span><kbd>{shortcut("K")}</kbd>
         </button>
