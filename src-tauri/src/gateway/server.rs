@@ -1117,10 +1117,14 @@ fn extend_unique(out: &mut Vec<String>, items: impl IntoIterator<Item = String>)
     }
 }
 
-/// What a forward is known to serve, without any network call.
+/// What a forward is known to serve, without any network call. Ids are listed as
+/// /v1/models lists them (without Gemini's "models/" prefix), so the library's "models/x"
+/// and the upstream's cached "x" show as one model.
 fn known_models(root: &Value, r: &Route) -> Vec<String> {
-    let mut out: Vec<String> = library::list_in(root).into_iter().find(|e| e.id == r.library).map(|e| e.models).unwrap_or_default();
-    extend_unique(&mut out, r.model_map.iter().map(|(from, _)| from).filter(|f| *f != "*").cloned());
+    let mut out: Vec<String> = vec![];
+    let lib = library::list_in(root).into_iter().find(|e| e.id == r.library).map(|e| e.models).unwrap_or_default();
+    extend_unique(&mut out, lib.iter().map(|m| convert::bare_model(m).to_string()));
+    extend_unique(&mut out, r.model_map.iter().map(|(from, _)| from.as_str()).filter(|f| *f != "*").map(|f| convert::bare_model(f).to_string()));
     let fp = target(root, r).ok().map(|t| t.fp);
     if let Some((.., cached)) = lock(&MODEL_CACHE).iter().find(|(id, f, ..)| id == &r.id && Some(*f) == fp) {
         extend_unique(&mut out, cached.iter().cloned());
@@ -1285,13 +1289,12 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
 
     // Forwards that list the model; unknown lists count as "maybe" and come after. Ids are
     // compared without Gemini's "models/" prefix, as /v1/models lists them.
-    let bare = |m: &str| m.strip_prefix("models/").unwrap_or(m).to_string();
-    let want = bare(&model);
+    let want = convert::bare_model(&model);
     let (mut sure, mut maybe): (Vec<Target>, Vec<Target>) = (vec![], vec![]);
     for t in targets {
         let list = all_models(root, &t);
         let wildcard = t.route.model_map.iter().any(|(f, _)| f == "*");
-        if wildcard || list.iter().any(|m| bare(m) == want) {
+        if wildcard || list.iter().any(|m| convert::bare_model(m) == want) {
             sure.push(t);
         } else if list.is_empty() {
             maybe.push(t);
@@ -2198,6 +2201,25 @@ mod tests {
         // Saving or deleting a forward drops its cache outright.
         forget_models(&["moved"]);
         assert!(lock(&MODEL_CACHE).iter().all(|(id, ..)| id != "moved"));
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// The gateway page lists each model of a Gemini-style forward once, as /v1/models does:
+    /// the library's "models/x", the model map's "models/x" and the upstream's cached "x"
+    /// are the same model.
+    #[test]
+    fn known_models_list_gemini_ids_once() {
+        let _guard = lock(&TEST_LOCK);
+        let hits = Arc::new(AtomicU64::new(0));
+        let up = fixed_upstream(200, r#"{"models":[{"name":"models/gem-y"},{"name":"models/gem-z"}]}"#, hits);
+        let route = test_route("gemk", "chat", &[("models/gem-z", "models/gem-z"), ("*", "gem-y")]);
+        let root = json!({ "library": [{ "id": "gemk", "models": ["models/gem-y", "gem-w"] }] });
+        lock(&MODEL_CACHE).clear();
+        *lock(&TEST_ROUTES) = vec![(route.clone(), up, None)];
+        assert_eq!(known_models(&root, &route), vec!["gem-y", "gem-w", "gem-z"], "library and model map, before the upstream is asked");
+        let t = target(&root, &route).unwrap();
+        assert_eq!(all_models(&root, &t), vec!["gem-y", "gem-w", "gem-z"], "the upstream's list adds nothing new");
+        assert_eq!(known_models(&root, &route), vec!["gem-y", "gem-w", "gem-z"], "no second spelling once the cache is warm");
         lock(&TEST_ROUTES).clear();
     }
 
