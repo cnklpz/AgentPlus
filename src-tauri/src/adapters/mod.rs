@@ -56,8 +56,8 @@ pub(crate) mod msg {
     }
 
     /// SetModelRoles on an agent without model roles.
-    pub fn roles_claude_only() -> Error {
-        anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))
+    pub fn no_model_roles() -> Error {
+        anyhow!(l("这个 Agent 没有模型角色可分配", "This agent has no model roles to assign"))
     }
 
     /// SetProviderModels on an agent whose providers each keep their own models.

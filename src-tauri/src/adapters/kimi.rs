@@ -835,7 +835,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetProviderModels { provider, models } => cx.set_models(provider, models)?,
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Kimi Code 可以同时配置多个供应商，默认模型在 Kimi 里用 /model 切换", "Kimi Code can have several providers at once; switch the default model with /model in Kimi"))),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }

@@ -1059,7 +1059,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex 同时只能使用一个供应商", "Codex can only use one provider at a time"))),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }

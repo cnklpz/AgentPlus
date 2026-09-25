@@ -164,7 +164,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 )))
             }
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by ocfmt"),
         }

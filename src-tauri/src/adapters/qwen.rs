@@ -1100,7 +1100,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 other => return Err(msg::unknown_setting(other)),
             },
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Qwen Code 可以同时配置多个供应商，在 Qwen Code 里用 /model 选择模型", "Qwen Code can have several providers configured at once; pick models with /model in Qwen Code."))),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }

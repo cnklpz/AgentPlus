@@ -106,7 +106,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenCode 按启用/停用管理供应商，在 OpenCode 里用 /models 选择模型", "OpenCode manages providers by enabling/disabling them. Pick models with /models in OpenCode."))),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by ocfmt"),
         }
