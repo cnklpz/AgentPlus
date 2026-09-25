@@ -1,8 +1,9 @@
 name: Release
 
-# Pushing a tag like v0.2.0 builds the signed Windows installer and puts it, with the
-# updater's latest.json, on a draft GitHub release. Publishing that draft is what makes
-# installed copies see the update (the updater reads releases/latest, which skips drafts).
+# Pushing a tag like v0.2.0 builds the signed Windows installer and the macOS app (universal:
+# Apple silicon + Intel) and puts them, with the updater's latest.json, on a draft GitHub
+# release. Publishing that draft is what makes installed copies see the update (the updater
+# reads releases/latest, which skips drafts).
 on:
   push:
     tags: ["v*"]
@@ -11,13 +12,16 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  # One draft for every platform: each build job below uploads to it and merges its entry
+  # into latest.json (two jobs creating the release themselves would race into two drafts).
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.create.outputs.id }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Tag matches the app version
-        shell: bash
         run: |
           v=$(node -p "require('./src-tauri/tauri.conf.json').version")
           if [ "$GITHUB_REF_NAME" != "v$v" ]; then
@@ -25,15 +29,29 @@ jobs:
             exit 1
           fi
 
-      - name: Release notes from CHANGELOG.md
-        id: notes
-        shell: bash
+      - name: Draft release with notes from CHANGELOG.md
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          {
-            echo "body<<__NOTES__"
-            node scripts/release-notes.mjs "$GITHUB_REF_NAME"
-            echo "__NOTES__"
-          } >> "$GITHUB_OUTPUT"
+          node scripts/release-notes.mjs "$GITHUB_REF_NAME" > notes.md
+          gh release create "$GITHUB_REF_NAME" --draft --title "AgentPlus $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n 1)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ""
+          - os: macos-latest
+            args: --target universal-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
@@ -42,6 +60,8 @@ jobs:
       - run: npm ci
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -49,15 +69,11 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs the installer for the in-app updater; the public key is in tauri.conf.json.
+          # Signs the update packages for the in-app updater; the public key is in tauri.conf.json.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: AgentPlus ${{ github.ref_name }}
-          releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.id }}
           includeUpdaterJson: true
           # Adds the signed updater artifacts; kept out of tauri.conf.json so local builds need no key.
-          args: --config src-tauri/tauri.release.conf.json
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json

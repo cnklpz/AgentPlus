@@ -4,6 +4,7 @@ import type { EnvInfo } from "../api";
 import { EnvIcon, Icon } from "./icons";
 import { t } from "../i18n";
 import { scrub } from "../privacy";
+import { localEnvLabel } from "../platform";
 
 interface Props {
   envs: EnvInfo[];
@@ -32,7 +33,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
         onClick={() => { if (!open) onOpen(); setOpen((o) => !o); }}
       >
         <EnvIcon id={current?.id ?? ""} />
-        <span>{switching ? t("envSwitch.switching") : current?.label ?? t("common.localWindows")}</span>
+        <span>{switching ? t("envSwitch.switching") : current?.label ?? localEnvLabel()}</span>
         <Icon.chevron />
       </button>
       {open && (

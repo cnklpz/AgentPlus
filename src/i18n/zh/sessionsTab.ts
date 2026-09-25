@@ -42,6 +42,7 @@ export default {
   copyResume: "复制恢复命令",
   resumeCopied: "已复制恢复命令",
   revealTitle: "在资源管理器中显示会话文件",
+  revealTitleMac: "在访达中显示会话文件",
   reveal: "显示会话文件",
   noMatch: "没有符合条件的会话",
   footer: "显示 {shown} / {total} 个会话",

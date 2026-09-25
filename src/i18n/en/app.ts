@@ -50,7 +50,7 @@ const en: typeof zh = {
   queuedAgents: "Queued changes for {n} agent; review and apply|Queued changes for {n} agents; review and apply each",
   reloaded: "Configs reloaded",
   urlCopied: "URL copied",
-  clipboardReadFailed: "Couldn't read the clipboard; press Ctrl+V to paste",
+  clipboardReadFailed: "Couldn't read the clipboard; press {keys} to paste",
   discardedAll: "Discarded all changes",
 
   // Generated names

@@ -188,6 +188,8 @@ h1, h2 { margin: 0; }
 .winctl button { width: 46px; border: 0; background: transparent; display: grid; place-items: center; color: var(--ink2); }
 .winctl button:hover { background: var(--tint); }
 .winctl button.close:hover { background: #C42B1C; color: #fff; }
+/* macOS：系统的红绿灯按钮叠在顶栏左侧（tauri.macos.conf.json），给它们留位置；右侧没有 .winctl */
+:root[data-os="mac"] .topbar { padding: 0 12px 0 84px; }
 .brand { display: flex; align-items: center; gap: 9px; width: 212px; font-weight: 700; font-size: 15px; }
 .search { flex-grow: 1; max-width: 460px; margin: 0 auto; display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 12px; border: 1px solid var(--line); background: var(--bg); border-radius: 8px; color: var(--ink4); font-size: 13px; }
 .search span { flex-grow: 1; }

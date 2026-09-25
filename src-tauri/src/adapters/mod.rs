@@ -210,7 +210,7 @@ const DESKTOP_EXE_SETTING: &str = "desktop_exe";
 
 /// Label of a desktop copy in the picker: version, folder, and whether it runs.
 fn copy_label(c: &process::DesktopCopy) -> String {
-    let dir = c.exe.parent().map(crate::util::display_path).unwrap_or_default();
+    let dir = process::app_dir(&c.exe).map(|d| crate::util::display_path(&d)).unwrap_or_default();
     let ver = c.version.as_deref().unwrap_or("?");
     if c.running {
         tr!("{ver} · {dir}（运行中）", "{ver} · {dir} (running)")
@@ -311,7 +311,8 @@ fn detect_manual() -> Vec<Detect> {
         return vec![];
     }
     let trae = process::detect_trae();
-    let dir = std::env::var_os("APPDATA").map(std::path::PathBuf::from).unwrap_or_default().join("Trae");
+    // %APPDATA%\Trae on Windows, ~/Library/Application Support/Trae on macOS.
+    let dir = dirs::config_dir().unwrap_or_default().join("Trae");
     if !trae.installed {
         return vec![];
     }
@@ -446,6 +447,11 @@ pub fn state(agent: &str) -> Result<AgentState> {
         return Ok(st);
     }
     if !st.restartable {
+        // On macOS without Codex.app, detection found the Codex CLI.
+        if agent == codex::ID && inst.installed {
+            st.settings.retain(|s| !codex::INJECTIONS.iter().any(|i| i.key == s.key));
+            st.notes.insert(0, l("没有找到 Codex 桌面版，这里管理的是 Codex CLI：改动写入后，新开的 codex 会话就会读取。", "The Codex desktop app wasn't found, so this is the Codex CLI: new codex sessions pick up changes once they're written.").into());
+        }
         return Ok(st);
     }
     st.settings.extend(desktop_setting(agent, &st.name, &inst));

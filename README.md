@@ -8,7 +8,7 @@
 
 Codex · Claude Code · OpenCode · ZCode · MiMo Desktop · Gemini CLI · Qwen Code · Kimi Code 等 15 个 Agent
 
-[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?label=%E4%B8%8B%E8%BD%BD&color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?label=%E4%B8%8B%E8%BD%BD&color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest) ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white) ![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white) ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
 简体中文 | [English](README.en.md)
 
@@ -75,14 +75,15 @@ AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维�
 | Windows 11（x64） | ✅ 支持 | 主要开发和测试平台 |
 | Windows 10（x64） | ✅ 支持 | 需要 WebView2，安装程序会自动补装 |
 | WSL 发行版 | ✅ 作为目标环境 | AgentPlus 运行在 Windows 上，可以管理 WSL 里的 Codex CLI、OpenCode 等 |
-| macOS | ⏳ 暂不支持 | 代码能编译，但 Agent 识别、重启、打开文件夹等功能还只有 Windows 实现 |
-| Linux | ⏳ 暂不支持 | 同上 |
+| macOS 11+（Apple 芯片 / Intel） | 🧪 实验性支持 | 识别 /Applications 里的桌面版和 PATH 上的 CLI，可重启桌面版；还没在真机上充分测试，欢迎反馈 |
+| Linux | ⏳ 暂不支持 | 代码能编译，但没有打包 |
 
 ## 下载安装
 
-到 [Releases](https://github.com/cnklpz/AgentPlus/releases/latest) 下载 `AgentPlus_<版本>_x64-setup.exe`，双击安装。
+到 [Releases](https://github.com/cnklpz/AgentPlus/releases/latest) 下载：
 
-安装包没有做代码签名，首次运行时 SmartScreen 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」即可。
+- **Windows**：`AgentPlus_<版本>_x64-setup.exe`，双击安装。安装包没有做代码签名，首次运行时 SmartScreen 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」即可。
+- **macOS**：`AgentPlus_<版本>_universal.dmg`，打开后把 AgentPlus 拖进「应用程序」。应用没有经过 Apple 公证，首次打开会被拦下：到「系统设置 → 隐私与安全性」点「仍要打开」；如果提示「已损坏」，在终端运行 `xattr -cr /Applications/AgentPlus.app` 后再打开。
 
 **更新**：AgentPlus 启动时会检查新版本，有新版本时右上角的「设置」按钮会出现小圆点。到「设置 → 通用 → 关于」查看更新说明，点「下载并安装」，AgentPlus 会校验签名、安装并自动重新打开。不想自动检查的，可以在同一处关闭。
 
@@ -168,7 +169,7 @@ AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维�
 
 技术栈：[Tauri 2](https://tauri.app)（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）+ Vite。
 
-需要 Node.js 18+、Rust 1.88+，以及 [Tauri 的系统依赖](https://tauri.app/start/prerequisites/)（Windows 上是 WebView2 和 MSVC 生成工具）。
+需要 Node.js 18+、Rust 1.88+，以及 [Tauri 的系统依赖](https://tauri.app/start/prerequisites/)（Windows 上是 WebView2 和 MSVC 生成工具，macOS 上是 Xcode 命令行工具）。
 
 ```bash
 npm install

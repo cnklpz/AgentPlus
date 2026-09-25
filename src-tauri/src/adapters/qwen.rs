@@ -87,7 +87,7 @@ pub fn detect() -> Install {
     }
     if inst.installed {
         inst.running = crate::process::any_process(|name, path| {
-            name.eq_ignore_ascii_case("qwen.exe") || path.to_lowercase().contains("\\qwen-code\\")
+            name.eq_ignore_ascii_case(&crate::process::exe("qwen")) || path.replace('\\', "/").to_lowercase().contains("/qwen-code/")
         });
     }
     inst

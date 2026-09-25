@@ -1,4 +1,4 @@
-//! Which machine's configs AgentPlus edits: this Windows user, or a WSL distro.
+//! Which machine's configs AgentPlus edits: this user (Windows, macOS), or a WSL distro.
 //! The choice lives in `~/.agentplus/store.json` ("env") on the Windows side.
 
 use anyhow::{anyhow, Result};
@@ -38,8 +38,16 @@ fn wsl_id(distro: &str) -> String {
     format!("{WSL_PREFIX}{distro}")
 }
 
+/// Label of this machine's own environment (its id stays "windows" on every system).
 fn windows_label() -> &'static str {
-    crate::i18n::l("本机 · Windows", "This PC · Windows")
+    use crate::i18n::l;
+    if cfg!(windows) {
+        l("本机 · Windows", "This PC · Windows")
+    } else if cfg!(target_os = "macos") {
+        l("本机 · macOS", "This Mac · macOS")
+    } else {
+        l("本机 · Linux", "This PC · Linux")
+    }
 }
 
 fn wsl_label(distro: &str) -> String {
@@ -141,8 +149,11 @@ pub fn wsl_sh(script: &str) -> Option<String> {
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Installed distros (Docker's internal ones are skipped).
+/// Installed distros (Docker's internal ones are skipped); none outside Windows.
 fn distros() -> Vec<String> {
+    if !cfg!(windows) {
+        return vec![];
+    }
     let Some(out) = output_within(Command::new("wsl.exe").args(["-l", "-q"]), Duration::from_secs(10)) else { return vec![] };
     // wsl.exe prints UTF-16LE.
     let units: Vec<u16> = out.stdout.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes([c[0], c[1]])).collect();

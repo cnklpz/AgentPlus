@@ -14,6 +14,7 @@ import { scrub } from "../privacy";
 import { fmtSize } from "../format";
 import { RELEASES_URL, checkUpdate, installUpdate, updateBusy, useUpdate } from "../updater";
 import { errText, type Flash, toggled } from "../util";
+import { isMac, localEnvLabel, shortcut } from "../platform";
 
 export type SettingsTab = "general" | "agents";
 
@@ -78,7 +79,7 @@ export function SettingsPage(props: Props) {
         <TabBar items={[{ id: "general", label: t("settingsPage.tabGeneral") }, { id: "agents", label: t("settingsPage.tabAgents") }]} value={tab} onChange={setTab} />
       </div>
       <div className={`page-body slide-${slide}`} key={tab}>
-        {tab === "general" ? <General {...props} /> : <Detection envLabel={env?.label ?? t("common.localWindows")} onChanged={props.onAgentsChanged} flash={props.flash} prefs={props.prefs} setPrefs={props.setPrefs} />}
+        {tab === "general" ? <General {...props} /> : <Detection envLabel={env?.label ?? localEnvLabel()} onChanged={props.onAgentsChanged} flash={props.flash} prefs={props.prefs} setPrefs={props.setPrefs} />}
       </div>
     </main>
   );
@@ -95,7 +96,8 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
   }, []);
   return (
     <div className="settings">
-      <section className="sgroup">
+      {/* WSL exists only on Windows: on macOS there is just this Mac to pick. */}
+      {!isMac && <section className="sgroup">
         <h2>{t("settingsPage.envsTitle")}</h2>
         <div className="srow stacked">
           <div className="env-cards row-cards">
@@ -112,7 +114,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
           </div>
           <span className="muted tiny">{t("settingsPage.envsHint")}</span>
         </div>
-      </section>
+      </section>}
 
       <section className="sgroup">
         <h2>{t("settingsPage.uiTitle")}</h2>
@@ -136,7 +138,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
           <Seg value={prefs.restartProgress} onChange={(v) => setPrefs({ ...prefs, restartProgress: v })} label={t("settingsPage.restartProgress")}
             options={RESTART_PROGRESS.map((m) => ({ value: m.v, label: t(m.label) }))} />
         </SettingRow>
-        <SettingRow label={t("settingsPage.privacy")} desc={t("settingsPage.privacyHint")}>
+        <SettingRow label={t("settingsPage.privacy")} desc={t("settingsPage.privacyHint", { keys: shortcut("H", true, "+") })}>
           <Switch on={prefs.privacy} onChange={(v) => setPrefs({ ...prefs, privacy: v })} label={t("settingsPage.privacy")} />
         </SettingRow>
         <SettingRow label={t("settingsPage.closeAction")}
@@ -302,7 +304,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
                   <button className="btn small primary" disabled={!draft.trim() || saving === d.id} onClick={() => save(d.id, draft)}>{t(saving === d.id ? "settingsPage.checking" : "settingsPage.use")}</button>
                 </div>
               )}
-              {draft !== undefined && <span className="tiny muted">{t("settingsPage.dirInputHint", { dir: d.defaultDir })}</span>}
+              {draft !== undefined && <span className="tiny muted">{t(isMac ? "settingsPage.dirInputHintMac" : "settingsPage.dirInputHint", { dir: d.defaultDir })}</span>}
             </div>}
           </section>
         );
