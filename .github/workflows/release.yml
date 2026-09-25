@@ -35,8 +35,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node scripts/release-notes.mjs "$GITHUB_REF_NAME" > notes.md
-          gh release create "$GITHUB_REF_NAME" --draft --title "AgentPlus $GITHUB_REF_NAME" --notes-file notes.md --verify-tag
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n 1)
+          # The id comes from the create call itself: a new draft doesn't show up in the
+          # release list right away, and without an id tauri-action skips every upload.
+          id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$GITHUB_REF_NAME" -f name="AgentPlus $GITHUB_REF_NAME" -F draft=true -F body=@notes.md --jq .id)
+          if [ -z "$id" ]; then
+            echo "::error::Creating the draft release returned no id"
+            exit 1
+          fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
