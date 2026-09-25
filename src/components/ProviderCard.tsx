@@ -41,7 +41,7 @@ export function initials(name: string): string {
 }
 
 /** Signal bars for a measured latency: 3 under 200 ms, 2 under 400 ms, else 1. */
-export const latencyLevel = (ms: number): 1 | 2 | 3 => (ms < 200 ? 3 : ms < 400 ? 2 : 1);
+const latencyLevel = (ms: number): 1 | 2 | 3 => (ms < 200 ? 3 : ms < 400 ? 2 : 1);
 
 /** Color class for a signal level: good (2–3 bars), slow (1), none (not measured). */
 export const latencyTone = (level: number): "good" | "slow" | "" => (level >= 2 ? "good" : level === 1 ? "slow" : "");
