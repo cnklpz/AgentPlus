@@ -13,6 +13,7 @@ Each version gets a `## <version>` section. On release it becomes the GitHub rel
 - 补上 pi、Kilo、Hermes、CodeBuddy 命令行版的安装位置；读不到登录 shell 的 PATH 时也会搜 ~/.local/bin、Homebrew 等常见位置
 - Mac 上只要默认位置有配置文件，就会显示对应的 Agent
 - 窗口：红绿灯按钮在顶栏居中，顶栏不再显示图标和名字；关闭窗口只是隐藏，AgentPlus 留在 Dock 里继续运行（本地网关不中断），点 Dock 图标回来，⌘Q 退出；不再使用菜单栏托盘图标
+- 程序名显示为 AgentPlus（原来是小写的 agentplus）
 
 Fixes Codex, Claude and other agents not being detected on macOS, and makes the window behave the Mac way (experimental).
 
@@ -21,6 +22,7 @@ Fixes Codex, Claude and other agents not being detected on macOS, and makes the 
 - Added the install locations of pi, Kilo, Hermes and the CodeBuddy CLI; when the login shell's PATH can't be read, ~/.local/bin, Homebrew and other common folders are still searched
 - On macOS, an agent shows up whenever its config exists in the default location
 - Window: the traffic lights are centered in the top bar, which no longer shows the icon and name. Closing the window only hides it: AgentPlus stays in the Dock and keeps running (the local gateway included); click the Dock icon to bring it back, press ⌘Q to quit. No menu bar tray icon any more
+- The app's process is now named AgentPlus (was lowercase agentplus)
 
 ## 0.1.1
 
