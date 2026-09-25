@@ -669,11 +669,11 @@ pub(crate) fn detect_zcode() -> Install {
 }
 
 /// MiMo Desktop: its app bundle on macOS (Electron productName "Xiaomi MiMo AI"); on
-/// Windows its uninstall entry's icon is the app. Without the app, the MiMo Code CLI, which
-/// reads the same mimocode.jsonc (installer `~/.mimocode/bin/mimo`, npm, Homebrew).
+/// Windows its uninstall entry's icon is the app. Only the desktop app counts: a bare
+/// `mimo` on PATH or a generic "MiMo.app" can be something else.
 pub(crate) fn detect_mimo() -> Install {
     let mut inst = Install::default();
-    if let Some(c) = app_bundles(&["Xiaomi MiMo AI.app", "Xiaomi MiMo.app", "MiMo.app"]).first() {
+    if let Some(c) = app_bundles(&["Xiaomi MiMo AI.app", "Xiaomi MiMo.app"]).first() {
         use_copy(&mut inst, c);
     } else if let Some(e) = uninstall_entry("Xiaomi MiMo") {
         let exe = e.icon.and_then(|i| unquote_exe(&i));
@@ -681,14 +681,6 @@ pub(crate) fn detect_mimo() -> Install {
         inst.version = e.version;
         inst.dir = exe.as_ref().and_then(|x| x.parent().map(Path::to_path_buf));
         inst.exe = exe;
-    } else {
-        let native = dirs::home_dir().map(|h| h.join(".mimocode").join("bin").join(exe("mimo"))).filter(|p| p.is_file());
-        let mut cli = detect_cli(&["mimo.exe", "mimo.cmd"], "@mimo-ai/cli");
-        if let (false, Some(p)) = (cli.installed, native) {
-            cli.installed = true;
-            cli.version = cli_version(&p);
-        }
-        return cli;
     }
     set_app_running(&mut inst);
     inst
