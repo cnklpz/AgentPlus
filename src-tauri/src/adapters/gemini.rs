@@ -296,7 +296,6 @@ pub fn state(inst: &Install) -> AgentState {
 
     st.settings = BOOL_SETTINGS.iter().map(|s| bool_setting(s.key, NAME, l(s.label.0, s.label.1), l(s.desc.0, s.desc.1), setting_on(&cfg, &s.path))).collect();
     let cur_name = st.providers.iter().find(|p| p.id == cur).map(|p| p.name.clone()).unwrap_or_default();
-    st.current_model = model_name(&cfg);
     st.current = vec![
         Kv::text(lbl::provider(), cur_name),
         Kv::mono("selectedType", auth_type(&cfg).unwrap_or_else(|| l("-（未设置）", "- (not set)").into())),
@@ -664,7 +663,6 @@ mod tests {
         let _t = setup(Some(SETTINGS), Some(ENV));
         let st = state(&Install::default());
         assert!(!st.readonly);
-        assert_eq!(st.current_model, None, "no model.name");
         assert_eq!(st.current_provider.as_deref(), Some(GOOGLE));
         let ids: Vec<&str> = st.providers.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, vec![GOOGLE, UNMANAGED]);
@@ -695,7 +693,7 @@ mod tests {
         assert_eq!(envtext(&t), ENV, ".env already matches the profile");
         let st = state(&Install::default());
         assert_eq!(st.current_provider.as_deref(), Some("relay"));
-        assert_eq!(st.current_model.as_deref(), Some("gemini-2.5-pro"), "model.name, for the test box");
+        assert_eq!(st.current_model, None, "model.name belongs to the active profile, not every provider");
         // Back to Google login: the two variables go, the rest of .env stays.
         apply(vec![Op::SetCurrentProvider { provider: GOOGLE.into() }]).unwrap();
         assert_eq!(envtext(&t), "# gemini env\nOTHER=keep\n");

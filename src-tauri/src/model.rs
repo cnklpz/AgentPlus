@@ -22,8 +22,8 @@ pub struct AgentState {
     pub catalog_file: Option<String>,
     pub settings: Vec<Setting>,
     pub current: Vec<Kv>,
-    /// The model the agent sends requests with, whichever provider is active (Codex `model`,
-    /// Gemini `model.name`); None when unset or when the model belongs to one provider.
+    /// The model the agent sends requests with, whichever provider is active (Codex `model`);
+    /// None when unset or when the model belongs to one provider (e.g. Gemini's profiles).
     pub current_model: Option<String>,
     pub notes: Vec<String>,
     pub readonly: bool,
