@@ -43,7 +43,8 @@ fn engine_path() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir).join(MARKER)
 }
 fn app_dir() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(home).join("Xiaomi MiMo")
+    // Tests: inside the temp home (`test_home` is always None in a real build).
+    test_home().map(|h| h.join(".config")).or_else(dirs::config_dir).unwrap_or_else(home).join("Xiaomi MiMo")
 }
 fn prefs_path() -> PathBuf {
     app_dir().join("preferences.json")
@@ -202,6 +203,11 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if cfg_dirty { targets.push(engine_path()) }
         if prefs_dirty { targets.push(prefs_path()) }
         backup_dir = Some(backup(ID, &targets)?);
+        // The app folder is missing until MiMo Desktop first runs; create it before any write
+        // so a prefs change can't fail after the engine config was already written.
+        if prefs_dirty {
+            std::fs::create_dir_all(app_dir())?;
+        }
         if cfg_dirty {
             write_json(&engine_path(), &cfg, cfg_meta)?;
             written.push(engine_path());
@@ -215,4 +221,22 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prefs_write_creates_the_missing_app_folder() {
+        let _h = TestHome::new("mimo-prefs");
+        std::fs::create_dir_all(default_dir()).unwrap();
+        std::fs::write(engine_path(), "{}\n").unwrap();
+        assert!(!app_dir().exists());
+        let skill = format!("~/.{}", SKILLS[0]);
+        let (_, written, _) = plan(&[Op::SetSetting { key: "skills".into(), value: json!([skill]) }], false).unwrap();
+        assert_eq!(written, [prefs_path()]);
+        let prefs: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(prefs_path()).unwrap()).unwrap();
+        assert_eq!(prefs["skillPathCompat"][SKILLS[0]], true);
+    }
 }
