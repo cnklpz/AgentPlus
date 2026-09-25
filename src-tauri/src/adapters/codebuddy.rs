@@ -577,7 +577,7 @@ impl Work {
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("CodeBuddy 的自定义模型可以同时启用，在 CodeBuddy 里切换模型", "CodeBuddy custom models can all be enabled at once; switch models inside CodeBuddy"))),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }

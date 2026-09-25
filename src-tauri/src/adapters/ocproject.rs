@@ -224,7 +224,7 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenCode 按启用/停用管理供应商，默认模型在「其他设置」里选", "OpenCode manages providers by enabling/disabling them. Choose the default model under \"Other settings\"."))),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             _ => {}
         }
         if !f.apply(op, &mut cfg, &mut root, &mut auth, &mut diff, &mut dirty)? {

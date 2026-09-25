@@ -602,7 +602,7 @@ impl Work {
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Droid 的自定义模型可以同时存在，在 Droid 里用 /model 切换", "Droid custom models can all coexist; switch with /model inside Droid"))),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }

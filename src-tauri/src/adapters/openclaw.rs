@@ -197,7 +197,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         match op {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenClaw 可以同时用多个供应商：按启用/停用管理，默认模型在 OpenClaw 里设置", "OpenClaw can use several providers at once: manage them by enabling/disabling, and set the default model in OpenClaw."))),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by pimodels"),

@@ -189,7 +189,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::UpsertProvider { .. } | Op::DeleteProvider { .. } | Op::SetProviderEnabled { .. } | Op::SetModelVisible { .. } | Op::UpsertModel { .. } | Op::DeleteModel { .. } => unreachable!("handled by ocfmt"),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
-            Op::SetModelRoles { .. } => return Err(msg::roles_claude_only()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
         }
     }
 
