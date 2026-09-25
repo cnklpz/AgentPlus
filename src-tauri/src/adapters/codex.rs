@@ -683,6 +683,7 @@ pub fn state(inst: &Install) -> AgentState {
         Some(SignIn::ApiKey) => st.notes.push(l("当前供应商开启了官方登录混用，但 Codex 现在是 API Key 登录（~/.codex/auth.json），官方账号功能不会解锁：在 Codex 里退出后改用 ChatGPT 账号登录。", "The current provider uses the official sign-in mix, but Codex is signed in with an API key (~/.codex/auth.json), so account features stay locked. Sign out in Codex and sign in with a ChatGPT account.").into()),
         _ => {}
     }
+    st.current_model = doc.get("model").and_then(|v| v.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(String::from);
     st.current = vec![
         Kv::mono("model_provider", format!("\"{raw}\"")),
         Kv::text(
@@ -1358,6 +1359,20 @@ http_headers = { X = \"1\" }
         plan(&[Op::UpsertProvider { provider: input }], false).unwrap();
         assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "RELAY_API_KEY=sk-new\nA=1\n");
         assert_eq!(env_value("RELAY_API_KEY").as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn state_reports_the_configured_model() {
+        let _h = codex_home_with("codex-model", "model = \"gpt-x\"\n", None);
+        assert_eq!(state(&Install::default()).current_model.as_deref(), Some("gpt-x"));
+        for cfg in ["model = \"\"\n", ""] {
+            std::fs::write(config_path(), cfg).unwrap();
+            let st = state(&Install::default());
+            assert_eq!(st.current_model, None, "{cfg:?}");
+            if cfg.is_empty() {
+                assert!(st.current.iter().any(|r| r.k == "model" && r.v == "-"), "the display row keeps its placeholder");
+            }
+        }
     }
 
     fn relay_input(id: Option<&str>, name: &str, key: &str) -> ProviderInput {
