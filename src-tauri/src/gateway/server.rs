@@ -1283,12 +1283,15 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     };
     let model = body.get("model").and_then(|m| m.as_str()).unwrap_or_default().to_string();
 
-    // Forwards that list the model; unknown lists count as "maybe" and come after.
+    // Forwards that list the model; unknown lists count as "maybe" and come after. Ids are
+    // compared without Gemini's "models/" prefix, as /v1/models lists them.
+    let bare = |m: &str| m.strip_prefix("models/").unwrap_or(m).to_string();
+    let want = bare(&model);
     let (mut sure, mut maybe): (Vec<Target>, Vec<Target>) = (vec![], vec![]);
     for t in targets {
         let list = all_models(root, &t);
         let wildcard = t.route.model_map.iter().any(|(f, _)| f == "*");
-        if wildcard || list.iter().any(|m| m == &model) {
+        if wildcard || list.iter().any(|m| bare(m) == want) {
             sure.push(t);
         } else if list.is_empty() {
             maybe.push(t);
@@ -2125,6 +2128,50 @@ mod tests {
         }
         assert_eq!(hits.load(Ordering::SeqCst), 2);
         lock(&TEST_ROUTES).clear();
+    }
+
+    /// The unified entry routes a model it lists without the "models/" prefix even when the
+    /// upstream /models call fails and only the forward's own list has the prefixed id.
+    #[test]
+    fn unified_entry_routes_bare_ids_without_upstream_models() {
+        let _guard = lock(&TEST_LOCK);
+        let hits = Arc::new(AtomicU64::new(0));
+        let ok = r#"{"id":"c","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}"#;
+        let up = mock_upstream(hits.clone(), move |req| if req.method == "GET" { http_resp("404 Not Found", "application/json", "{}") } else { http_resp("200 OK", "application/json", ok) });
+        *lock(&TEST_ROUTES) = vec![(test_route("gemz", "chat", &[("models/gem-z", "models/gem-z")]), up, None)];
+        lock(&MODEL_CACHE).clear();
+        breaker::reset(Some("gemz"));
+        let port = gateway_n(2);
+        let client = reqwest::blocking::Client::new();
+        let v: Value = serde_json::from_str(&client.get(format!("http://127.0.0.1:{port}/v1/models")).bearer_auth(test_key()).send().unwrap().text().unwrap()).unwrap();
+        let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
+        assert_eq!(ids, vec!["gem-z"], "{v}");
+        let r = client.post(format!("http://127.0.0.1:{port}/v1/chat/completions")).bearer_auth(test_key()).body(json!({ "model": "gem-z", "messages": [] }).to_string()).send().unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        lock(&TEST_ROUTES).clear();
+        lock(&MODEL_CACHE).clear();
+    }
+
+    /// A prefixed id the upstream alone lists (its /models answer is kept without the
+    /// prefix) still routes when the client sends it with the prefix.
+    #[test]
+    fn unified_entry_routes_prefixed_ids_the_upstream_lists() {
+        let _guard = lock(&TEST_LOCK);
+        let hits = Arc::new(AtomicU64::new(0));
+        let ok = r#"{"id":"c","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}]}"#;
+        let up = mock_upstream(hits.clone(), move |req| {
+            let body = if req.method == "GET" { r#"{"models":[{"name":"models/gem-w"}]}"# } else { ok };
+            http_resp("200 OK", "application/json", body)
+        });
+        *lock(&TEST_ROUTES) = vec![(test_route("gemw", "chat", &[]), up, None)];
+        lock(&MODEL_CACHE).clear();
+        breaker::reset(Some("gemw"));
+        let port = gateway_n(1);
+        let client = reqwest::blocking::Client::new();
+        let r = client.post(format!("http://127.0.0.1:{port}/v1/chat/completions")).bearer_auth(test_key()).body(json!({ "model": "models/gem-w", "messages": [] }).to_string()).send().unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        lock(&TEST_ROUTES).clear();
+        lock(&MODEL_CACHE).clear();
     }
 
     /// A forward pointed at another upstream (library address or key edited) stops using
