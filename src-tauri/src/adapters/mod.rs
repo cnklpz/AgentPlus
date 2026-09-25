@@ -281,6 +281,14 @@ fn markers(e: &'static Ext) -> &'static [&'static str] {
     }
 }
 
+/// Whether an agent's config in its default folder is enough to list it, app or not. On
+/// macOS: there is no install registry to ask, and apps and CLIs can sit anywhere (a
+/// renamed bundle, Homebrew, nvm, a desktop app that bundles the CLI). Windows keeps
+/// requiring the install, so leftover configs of removed agents stay hidden.
+fn config_counts() -> bool {
+    cfg!(target_os = "macos") && !crate::env::is_wsl()
+}
+
 fn has_marker(dir: &Path, e: &'static Ext) -> bool {
     markers(e).iter().any(|m| m.split('/').fold(dir.to_path_buf(), |d, part| d.join(part)).exists())
 }
@@ -311,8 +319,10 @@ fn detect_manual() -> Vec<Detect> {
         return vec![];
     }
     let trae = process::detect_trae();
-    // %APPDATA%\Trae on Windows, ~/Library/Application Support/Trae on macOS.
-    let dir = dirs::config_dir().unwrap_or_default().join("Trae");
+    // %APPDATA%\Trae on Windows, ~/Library/Application Support/Trae on macOS ("Trae CN" for
+    // the CN build there).
+    let data = dirs::config_dir().unwrap_or_default();
+    let dir = [data.join("Trae"), data.join("Trae CN")].into_iter().find(|d| d.is_dir()).unwrap_or_else(|| data.join("Trae"));
     if !trae.installed {
         return vec![];
     }
@@ -362,7 +372,7 @@ pub fn detect_all() -> Vec<Detect> {
                 version: inst.version,
                 running: inst.running,
                 default_dir: default_dir.to_string_lossy().to_string(),
-                enabled: (inst.installed && !wsl_desktop) || (custom.is_some() && found),
+                enabled: (inst.installed && !wsl_desktop) || ((custom.is_some() || config_counts()) && found),
                 custom_dir: custom,
                 config_dir: dir.to_string_lossy().to_string(),
                 config_found: found,
@@ -418,7 +428,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
     // Only desktop apps can be restarted; CLIs read the new config on their next run.
     st.restartable = !crate::env::is_wsl() && (inst.exe.is_some() || inst.aumid.is_some());
     let custom = dir_override(agent).filter(|d| has_marker(d, e));
-    if custom.is_some() {
+    if custom.is_some() || (config_counts() && has_marker(&(e.default_dir)(), e)) {
         st.installed = true;
     }
     if crate::env::is_wsl() {

@@ -128,8 +128,10 @@ pub fn detect() -> Install {
     }
     let npm = dirs::data_dir().map(|d| d.join("npm"));
     let shims = [npm.map(|d| d.join("openclaw.cmd")), dirs::data_local_dir().map(|d| d.join("pnpm").join("openclaw.cmd"))];
-    // Elsewhere the npm / pnpm / Homebrew shim is found on PATH.
-    inst.installed = shims.iter().flatten().any(|p| p.exists()) || (!cfg!(windows) && crate::process::on_path(&["openclaw"]).is_some());
+    // Elsewhere the npm / pnpm / Homebrew shim is found on PATH; macOS also has an app.
+    inst.installed = shims.iter().flatten().any(|p| p.exists())
+        || (!cfg!(windows) && crate::process::on_path(&["openclaw"]).is_some())
+        || !crate::process::app_bundles(&["ai.openclaw.mac", "bot.molt.mac", "OpenClaw.app"]).is_empty();
     inst
 }
 

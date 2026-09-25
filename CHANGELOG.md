@@ -4,6 +4,22 @@
 
 Each version gets a `## <version>` section. On release it becomes the GitHub release text and is shown in AgentPlus's update prompt, so write it in both languages.
 
+## 0.1.2
+
+修复 macOS 上 Codex、Claude 等 Agent 识别不到的问题（实验性）。
+
+- 按 Bundle ID 识别 App：Codex 现在是 ChatGPT.app（旧的 Codex.app 也认），Claude Desktop（Claude.app）算作已装 Claude Code
+- 更新 ZCode、CodeBuddy、Trae、OpenCode、OpenClaw、MiMo 的 Mac 识别方式；没装 MiMo 桌面版时也认 MiMo Code 命令行版
+- 补上 pi、Kilo、Hermes、CodeBuddy 命令行版的安装位置；读不到登录 shell 的 PATH 时也会搜 ~/.local/bin、Homebrew 等常见位置
+- Mac 上只要默认位置有配置文件，就会显示对应的 Agent
+
+Fixes Codex, Claude and other agents not being detected on macOS (experimental).
+
+- Apps are matched by bundle ID: Codex is now ChatGPT.app (an older Codex.app still counts), and Claude Desktop (Claude.app) counts as Claude Code
+- Updated macOS detection for ZCode, CodeBuddy, Trae, OpenCode, OpenClaw and MiMo; without the MiMo desktop app, the MiMo Code CLI counts
+- Added the install locations of pi, Kilo, Hermes and the CodeBuddy CLI; when the login shell's PATH can't be read, ~/.local/bin, Homebrew and other common folders are still searched
+- On macOS, an agent shows up whenever its config exists in the default location
+
 ## 0.1.1
 
 新增 macOS 版（实验性，Apple 芯片和 Intel 通用）。

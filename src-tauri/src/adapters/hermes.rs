@@ -130,6 +130,13 @@ pub fn detect() -> Install {
             break;
         }
     }
+    // Elsewhere: Homebrew's `hermes-agent` formula, or the installer's ~/.local/bin launcher.
+    if !inst.installed && !cfg!(windows) {
+        if let Some(p) = crate::process::on_path(&["hermes"]) {
+            inst.installed = true;
+            inst.version = crate::process::cli_version(&p);
+        }
+    }
     if inst.installed {
         inst.running = crate::process::any_process(|name, path| {
             name.eq_ignore_ascii_case(&crate::process::exe("hermes")) || path.replace('\\', "/").to_lowercase().contains("/hermes-agent/venv/")

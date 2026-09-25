@@ -58,7 +58,7 @@ fn settings_path() -> PathBuf {
 /// macOS), else the npm CLI.
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some(c) = crate::process::app_bundles(&["CodeBuddy.app", "CodeBuddy CN.app"]).first() {
+    if let Some(c) = crate::process::app_bundles(&["com.tencent.codebuddy", "com.tencent.codebuddycn", "CodeBuddy.app", "CodeBuddy CN.app"]).first() {
         inst.installed = true;
         inst.version = c.version.clone();
         inst.dir = crate::process::app_dir(&c.exe);
@@ -78,9 +78,14 @@ pub fn detect() -> Install {
         }
     }
     if !inst.installed {
-        if let Some(v) = crate::process::npm_global_version("@tencent-ai/codebuddy-code") {
+        // The CLI: npm, or the native installer's binary on PATH (~/.local/bin).
+        let shim = crate::process::on_path(&["codebuddy.exe", "codebuddy.cmd"]);
+        if let Some(v) = crate::process::npm_version_near("@tencent-ai/codebuddy-code", shim.as_deref()) {
             inst.installed = true;
             inst.version = Some(v);
+        } else if let Some(p) = shim {
+            inst.installed = true;
+            inst.version = crate::process::cli_version(&p);
         }
     }
     // The IDE's own processes, the same ones a restart stops.

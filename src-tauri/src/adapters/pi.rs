@@ -65,7 +65,14 @@ pub fn detect() -> Install {
         return inst;
     }
     let npm = dirs::data_dir().map(|d| d.join("npm"));
-    let shims = [npm.map(|d| d.join("pi.cmd")), dirs::data_local_dir().map(|d| d.join("pnpm").join("pi.cmd")), dirs::home_dir().map(|h| h.join(".bun").join("bin").join(crate::process::exe("pi")))];
+    let home = dirs::home_dir();
+    let shims = [
+        npm.map(|d| d.join("pi.cmd")),
+        dirs::data_local_dir().map(|d| d.join("pnpm").join("pi.cmd")),
+        home.as_ref().map(|h| h.join(".bun").join("bin").join(crate::process::exe("pi"))),
+        // pi.dev/install.sh's managed install, when no bin folder on PATH was writable.
+        home.as_ref().map(|h| h.join(".pi").join("agent").join("bin").join(crate::process::exe("pi"))),
+    ];
     // Elsewhere the npm / pnpm / Homebrew shim is found on PATH.
     inst.installed = shims.iter().flatten().any(|p| p.exists()) || (!cfg!(windows) && crate::process::on_path(&["pi"]).is_some());
     inst

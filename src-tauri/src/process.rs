@@ -116,16 +116,30 @@ pub(crate) fn search_path() -> OsString {
     }
     LOGIN_PATH
         .get_or_init(|| {
-            let Some(login) = login_shell_path() else { return own.clone() };
-            let mut dirs: Vec<PathBuf> = std::env::split_paths(&login).collect();
-            for d in std::env::split_paths(&own) {
-                if !dirs.contains(&d) {
-                    dirs.push(d);
-                }
-            }
-            std::env::join_paths(dirs).unwrap_or_else(|_| own.clone())
+            let login = login_shell_path().unwrap_or_default();
+            let home = dirs::home_dir().unwrap_or_default();
+            merge_paths(&[&login, &own], &common_bins(&home))
         })
         .clone()
+}
+
+/// Where installers and package managers put CLIs on macOS: kept in the search even when the
+/// login shell couldn't be asked (it failed, took too long, or leaves them out).
+fn common_bins(home: &Path) -> Vec<PathBuf> {
+    let mut v = vec![home.join(".local").join("bin"), "/opt/homebrew/bin".into(), "/usr/local/bin".into(), home.join("bin")];
+    v.extend([".bun", ".volta", ".npm-global"].map(|d| home.join(d).join("bin")));
+    v
+}
+
+/// `paths` in order, then `extra`, each folder once.
+fn merge_paths(paths: &[&OsString], extra: &[PathBuf]) -> OsString {
+    let mut dirs: Vec<PathBuf> = vec![];
+    for d in paths.iter().flat_map(|p| std::env::split_paths(p)).chain(extra.iter().cloned()) {
+        if !d.as_os_str().is_empty() && !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| paths.first().map(|p| (*p).clone()).unwrap_or_default())
 }
 
 /// PATH as an interactive login shell sets it; None when the shell fails or takes over 5 s.
@@ -238,15 +252,30 @@ pub(crate) fn is_exe(p: &Path) -> bool {
     std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// The main executable and version (CFBundleShortVersionString) of a macOS app bundle, from
-/// its Info.plist.
-pub(crate) fn bundle_info(bundle: &Path) -> Option<(PathBuf, Option<String>)> {
+/// A macOS app bundle, as its Info.plist describes it.
+#[derive(Clone, Debug)]
+pub(crate) struct Bundle {
+    /// `…/X.app`
+    pub path: PathBuf,
+    /// CFBundleIdentifier
+    pub id: Option<String>,
+    /// Contents/MacOS/<CFBundleExecutable>
+    pub exe: PathBuf,
+    /// CFBundleShortVersionString, else CFBundleVersion
+    pub version: Option<String>,
+}
+
+pub(crate) fn bundle_info(bundle: &Path) -> Option<Bundle> {
     let contents = bundle.join("Contents");
     let v = plist::Value::from_file(contents.join("Info.plist")).ok()?;
     let d = v.as_dictionary()?;
     let s = |k: &str| d.get(k).and_then(plist::Value::as_string).map(str::trim).filter(|x| !x.is_empty()).map(String::from);
-    let exe = contents.join("MacOS").join(s("CFBundleExecutable")?);
-    Some((exe, s("CFBundleShortVersionString").or_else(|| s("CFBundleVersion"))))
+    Some(Bundle {
+        path: bundle.to_path_buf(),
+        id: s("CFBundleIdentifier"),
+        exe: contents.join("MacOS").join(s("CFBundleExecutable")?),
+        version: s("CFBundleShortVersionString").or_else(|| s("CFBundleVersion")),
+    })
 }
 
 /// Folders apps are installed in on macOS.
@@ -256,26 +285,53 @@ fn app_folders() -> Vec<PathBuf> {
     v
 }
 
-/// Installed copies of a macOS app, by bundle name (`Codex.app`), each with an executable
-/// that exists. Empty on other systems.
-pub(crate) fn app_bundles(names: &[&str]) -> Vec<DesktopCopy> {
-    if !cfg!(target_os = "macos") {
-        return vec![];
-    }
-    bundles_in(&app_folders(), names)
-}
-
-fn bundles_in(folders: &[PathBuf], names: &[&str]) -> Vec<DesktopCopy> {
+/// Every app bundle directly in `folders` whose executable exists.
+fn bundles_in(folders: &[PathBuf]) -> Vec<Bundle> {
     let mut out = vec![];
     for dir in folders {
-        for n in names {
-            let Some((exe, version)) = bundle_info(&dir.join(n)) else { continue };
-            if exe.is_file() {
-                out.push(DesktopCopy { exe, version, running: false });
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("app")) {
+                out.extend(bundle_info(&p).filter(|b| b.exe.is_file()));
             }
         }
     }
     out
+}
+
+/// The installed macOS apps; one scan serves every agent's detection for a few seconds.
+fn installed_bundles() -> Vec<Bundle> {
+    static CACHE: std::sync::Mutex<Option<(Instant, Vec<Bundle>)>> = std::sync::Mutex::new(None);
+    let mut c = crate::util::lock(&CACHE);
+    if let Some((_, v)) = c.as_ref().filter(|(t, _)| t.elapsed() < Duration::from_secs(3)) {
+        return v.clone();
+    }
+    let v = bundles_in(&app_folders());
+    *c = Some((Instant::now(), v.clone()));
+    v
+}
+
+/// Which of `bundles` are the app: those whose bundle id or file name (`Codex.app`) is in
+/// `keys`. Ids come first, as a renamed bundle keeps its id (Codex became ChatGPT.app);
+/// in key order, the newest version first.
+fn pick_bundles(bundles: &[Bundle], keys: &[&str]) -> Vec<Bundle> {
+    let rank = |b: &Bundle| {
+        let name = b.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        keys.iter().position(|k| b.id.as_deref() == Some(*k) || name.eq_ignore_ascii_case(k))
+    };
+    let mut found: Vec<(usize, Bundle)> = bundles.iter().filter_map(|b| rank(b).map(|r| (r, b.clone()))).collect();
+    found.sort_by(|(ra, a), (rb, b)| ra.cmp(rb).then_with(|| version_key(b.version.as_deref()).cmp(&version_key(a.version.as_deref()))));
+    found.into_iter().map(|(_, b)| b).collect()
+}
+
+/// Installed copies of a macOS app, by bundle id (`com.openai.codex`) or bundle file name
+/// (`ZCode.app`); see [`pick_bundles`]. Empty on other systems.
+pub(crate) fn app_bundles(keys: &[&str]) -> Vec<DesktopCopy> {
+    if !cfg!(target_os = "macos") {
+        return vec![];
+    }
+    pick_bundles(&installed_bundles(), keys).into_iter().map(|b| DesktopCopy { exe: b.exe, version: b.version, running: false }).collect()
 }
 
 /// The app bundle (`…/X.app`) an executable lives in, if any.
@@ -569,11 +625,16 @@ fn detect_cli(names: &[&str], pkg: &str) -> Install {
     inst
 }
 
-/// Codex desktop: the MSIX package on Windows, Codex.app on macOS. Without the app on
-/// macOS, the CLI: configured the same way, but there is nothing to restart.
+/// The Codex desktop app on macOS. Since 2026-07 it ships as ChatGPT.app, keeping Codex's
+/// bundle id; an older copy can still be Codex.app. Not by the name ChatGPT.app: that was
+/// the chat-only app before it became "ChatGPT Classic" (com.openai.chat).
+const CODEX_APP: &[&str] = &["com.openai.codex", "Codex.app"];
+
+/// Codex desktop: the MSIX package on Windows, ChatGPT.app / Codex.app on macOS. Without
+/// the app on macOS, the CLI: configured the same way, but there is nothing to restart.
 pub(crate) fn detect_codex() -> Install {
     let mut inst = Install::default();
-    if let Some(c) = app_bundles(&["Codex.app"]).first() {
+    if let Some(c) = app_bundles(CODEX_APP).first() {
         use_copy(&mut inst, c);
     } else if cfg!(target_os = "macos") {
         let mut cli = detect_cli(&["codex"], "@openai/codex");
@@ -594,7 +655,7 @@ pub(crate) fn detect_codex() -> Install {
 /// ZCode desktop: ZCode.app on macOS; on Windows its uninstall entry names the install folder.
 pub(crate) fn detect_zcode() -> Install {
     let mut inst = Install::default();
-    if let Some(c) = app_bundles(&["ZCode.app"]).first() {
+    if let Some(c) = app_bundles(&["dev.zcode.app", "ZCode.app"]).first() {
         use_copy(&mut inst, c);
     } else if let Some(e) = uninstall_entry("ZCode") {
         let dir = e.uninstall.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(Path::to_path_buf));
@@ -607,10 +668,12 @@ pub(crate) fn detect_zcode() -> Install {
     inst
 }
 
-/// MiMo Desktop: its app bundle on macOS; on Windows its uninstall entry's icon is the app.
+/// MiMo Desktop: its app bundle on macOS (Electron productName "Xiaomi MiMo AI"); on
+/// Windows its uninstall entry's icon is the app. Without the app, the MiMo Code CLI, which
+/// reads the same mimocode.jsonc (installer `~/.mimocode/bin/mimo`, npm, Homebrew).
 pub(crate) fn detect_mimo() -> Install {
     let mut inst = Install::default();
-    if let Some(c) = app_bundles(&["Xiaomi MiMo.app", "MiMo.app"]).first() {
+    if let Some(c) = app_bundles(&["Xiaomi MiMo AI.app", "Xiaomi MiMo.app", "MiMo.app"]).first() {
         use_copy(&mut inst, c);
     } else if let Some(e) = uninstall_entry("Xiaomi MiMo") {
         let exe = e.icon.and_then(|i| unquote_exe(&i));
@@ -618,13 +681,34 @@ pub(crate) fn detect_mimo() -> Install {
         inst.version = e.version;
         inst.dir = exe.as_ref().and_then(|x| x.parent().map(Path::to_path_buf));
         inst.exe = exe;
+    } else {
+        let native = dirs::home_dir().map(|h| h.join(".mimocode").join("bin").join(exe("mimo"))).filter(|p| p.is_file());
+        let mut cli = detect_cli(&["mimo.exe", "mimo.cmd"], "@mimo-ai/cli");
+        if let (false, Some(p)) = (cli.installed, native) {
+            cli.installed = true;
+            cli.version = cli_version(&p);
+        }
+        return cli;
     }
     set_app_running(&mut inst);
     inst
 }
 
+/// Newest version folder of the Claude Code that Claude Desktop keeps for itself
+/// (`<app data>/Claude/claude-code/<version>/`).
+fn desktop_claude_code(app_data: &Path) -> Option<String> {
+    std::fs::read_dir(app_data.join("Claude").join("claude-code"))
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with(|c: char| c.is_ascii_digit()))
+        .max_by_key(|n| version_key(Some(n)))
+}
+
 /// Claude Code: npm global install, the native installer (~/.local/bin/claude[.exe]) or a
-/// `claude` on PATH (Homebrew). A CLI: `dir` stays None.
+/// `claude` on PATH (Homebrew); on macOS also Claude Desktop (Claude.app), which brings its
+/// own Claude Code reading the same ~/.claude. A CLI: `dir` stays None.
 pub(crate) fn detect_claude() -> Install {
     let mut inst = Install::default();
     let name = exe("claude");
@@ -635,9 +719,13 @@ pub(crate) fn detect_claude() -> Install {
     } else if let Some(exe) = native.or_else(|| on_path(&["claude.exe"])) {
         inst.installed = true;
         inst.version = cli_version(&exe);
+    } else if !app_bundles(&["com.anthropic.claudefordesktop", "Claude.app"]).is_empty() {
+        inst.installed = true;
+        inst.version = dirs::config_dir().and_then(|d| desktop_claude_code(&d));
     }
-    // An npm install runs under node, so this only sees the native build.
-    inst.running = any_process(|n, _| n.eq_ignore_ascii_case(&name));
+    // An npm install runs under node, so this only sees the native build. Case matters off
+    // Windows: Claude Desktop's own process is "Claude".
+    inst.running = any_process(|n, _| if cfg!(windows) { n.eq_ignore_ascii_case(&name) } else { n == name });
     inst
 }
 
@@ -683,7 +771,7 @@ pub const DESKTOP_EXE_STORE_KEY: &str = "desktopExe";
 pub(crate) fn detect_opencode() -> Install {
     let mut inst = Install::default();
     let mut copies = desktop_copies("OpenCode", "OpenCode.exe");
-    copies.extend(app_bundles(&["OpenCode.app"]));
+    copies.extend(app_bundles(&["ai.opencode.desktop", "OpenCode.app"]));
     if !copies.is_empty() {
         let sys = processes();
         for c in &mut copies {
@@ -713,7 +801,7 @@ pub(crate) fn detect_opencode() -> Install {
 /** Trae (international or CN build); detection only. */
 pub fn detect_trae() -> Install {
     let mut inst = Install::default();
-    if let Some(c) = app_bundles(&["Trae.app", "Trae CN.app"]).first() {
+    if let Some(c) = app_bundles(&["com.trae.app", "cn.trae.app", "Trae.app", "Trae CN.app"]).first() {
         use_copy(&mut inst, c);
     } else if let Some(e) = uninstall_entry("Trae (User)").or_else(|| uninstall_entry("TraeCode")).or_else(|| uninstall_entry("Trae")) {
         let exe = e.icon.and_then(|i| unquote_exe(&i));
@@ -1183,51 +1271,96 @@ mod any_os_tests {
         assert!(!is_exe(Path::new("exe")));
     }
 
-    fn plist(dir: &Path, exe: Option<&str>, version: Option<&str>) {
+    /// A bundle at `dir` with an Info.plist; `exe` also creates the executable when `real`.
+    fn app(dir: &Path, id: Option<&str>, exe: Option<&str>, version: Option<&str>, real: bool) {
         let mut body = String::new();
+        if let Some(i) = id {
+            body += &format!("<key>CFBundleIdentifier</key><string>{i}</string>");
+        }
         if let Some(e) = exe {
             body += &format!("<key>CFBundleExecutable</key><string>{e}</string>");
         }
         if let Some(v) = version {
             body += &format!("<key>CFBundleShortVersionString</key><string>{v}</string>");
         }
-        std::fs::create_dir_all(dir.join("Contents").join("MacOS")).unwrap();
+        let macos = dir.join("Contents").join("MacOS");
+        std::fs::create_dir_all(&macos).unwrap();
         std::fs::write(
             dir.join("Contents").join("Info.plist"),
             format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>{body}<key>CFBundleVersion</key><string>9</string></dict></plist>"),
         )
         .unwrap();
+        if let (true, Some(e)) = (real, exe) {
+            std::fs::write(macos.join(e), b"").unwrap();
+        }
     }
 
     #[test]
     fn reads_app_bundles() {
         let h = crate::util::TestHome::new("bundles");
-        let apps = h.0.join("Applications");
-        let codex = apps.join("Codex.app");
-        plist(&codex, Some("Codex"), Some("26.917.1"));
-        std::fs::write(codex.join("Contents").join("MacOS").join("Codex"), b"").unwrap();
-        // No executable on disk / none named: not a usable copy.
-        plist(&apps.join("ZCode.app"), Some("ZCode"), None);
-        plist(&apps.join("Broken.app"), None, Some("1.0"));
+        let (apps, user_apps) = (h.0.join("Applications"), h.0.join("home-Applications"));
+        // Codex ships as ChatGPT.app now; an old Codex.app can sit next to it.
+        let chatgpt = apps.join("ChatGPT.app");
+        app(&chatgpt, Some("com.openai.codex"), Some("ChatGPT"), Some("26.920.1"), true);
+        app(&apps.join("Codex.app"), Some("com.openai.codex"), Some("Codex"), Some("26.700.0"), true);
+        // The chat-only app, renamed or (on an old Mac) still under the name ChatGPT.app.
+        app(&apps.join("ChatGPT Classic.app"), Some("com.openai.chat"), Some("ChatGPT"), Some("1.2025"), true);
+        app(&user_apps.join("ChatGPT.app"), Some("com.openai.chat"), Some("ChatGPT"), Some("1.2024"), true);
+        // Found by name only (no id); no executable on disk; no executable named.
+        app(&apps.join("ZCode.app"), None, Some("ZCode"), None, true);
+        app(&apps.join("Ghost.app"), Some("x.ghost"), Some("Ghost"), Some("1"), false);
+        app(&apps.join("Broken.app"), Some("x.broken"), None, Some("1.0"), true);
+        std::fs::write(apps.join("notes.txt"), b"").unwrap();
 
-        let (exe, ver) = bundle_info(&codex).unwrap();
-        assert_eq!(exe, codex.join("Contents").join("MacOS").join("Codex"));
-        assert_eq!(ver.as_deref(), Some("26.917.1"));
+        let b = bundle_info(&chatgpt).unwrap();
+        assert_eq!(b.id.as_deref(), Some("com.openai.codex"));
+        assert_eq!(b.exe, chatgpt.join("Contents").join("MacOS").join("ChatGPT"));
+        assert_eq!(b.version.as_deref(), Some("26.920.1"));
         // CFBundleVersion stands in for a missing short version.
-        assert_eq!(bundle_info(&apps.join("ZCode.app")).unwrap().1.as_deref(), Some("9"));
+        assert_eq!(bundle_info(&apps.join("ZCode.app")).unwrap().version.as_deref(), Some("9"));
         assert!(bundle_info(&apps.join("Broken.app")).is_none());
         assert!(bundle_info(&apps.join("Missing.app")).is_none());
 
-        let found = bundles_in(&[apps.clone(), h.0.join("nowhere")], &["Codex.app", "ZCode.app", "Broken.app", "Missing.app"]);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].exe, exe);
+        let all = bundles_in(&[apps.clone(), user_apps, h.0.join("nowhere")]);
+        let mut names: Vec<String> = all.iter().map(|b| b.path.file_name().unwrap().to_string_lossy().to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["ChatGPT Classic.app", "ChatGPT.app", "ChatGPT.app", "Codex.app", "ZCode.app"]);
+
+        let codex = pick_bundles(&all, CODEX_APP);
+        assert_eq!(codex.iter().map(|b| b.version.as_deref().unwrap()).collect::<Vec<_>>(), ["26.920.1", "26.700.0"], "newest first, never the chat app");
+        assert_eq!(pick_bundles(&all, &["dev.zcode.app", "zcode.app"]).len(), 1, "names match without case");
+        assert!(pick_bundles(&all, &["com.anthropic.claudefordesktop", "Claude.app"]).is_empty());
 
         let mut inst = Install::default();
-        use_copy(&mut inst, &found[0]);
+        use_copy(&mut inst, &DesktopCopy { exe: codex[0].exe.clone(), version: codex[0].version.clone(), running: false });
         assert!(inst.installed);
         // The bundle, where the helper processes live too.
-        assert_eq!(inst.dir.as_deref(), Some(codex.as_path()));
-        assert_eq!(bundle_of(&exe), Some(codex.as_path()));
+        assert_eq!(inst.dir.as_deref(), Some(chatgpt.as_path()));
+        assert_eq!(bundle_of(&codex[0].exe), Some(chatgpt.as_path()));
+    }
+
+    #[test]
+    fn finds_claude_desktops_own_claude_code() {
+        let h = crate::util::TestHome::new("claude-desktop");
+        assert_eq!(desktop_claude_code(&h.0), None);
+        let cc = h.0.join("Claude").join("claude-code");
+        for v in ["2.1.99", "2.1.246", "2.1.3"] {
+            std::fs::create_dir_all(cc.join(v)).unwrap();
+        }
+        std::fs::create_dir_all(cc.join("tmp")).unwrap();
+        std::fs::write(cc.join("9.9.9"), b"").unwrap();
+        assert_eq!(desktop_claude_code(&h.0).as_deref(), Some("2.1.246"));
+    }
+
+    #[test]
+    fn merged_path_keeps_order_and_adds_common_bins() {
+        let a = std::env::join_paths(["/opt/homebrew/bin", "/usr/bin"]).unwrap();
+        let b = std::env::join_paths(["/usr/bin", "/bin"]).unwrap();
+        let merged = merge_paths(&[&a, &b, &OsString::new()], &[PathBuf::from("/Users/me/.local/bin"), PathBuf::from("/bin")]);
+        let got: Vec<PathBuf> = std::env::split_paths(&merged).collect();
+        let want: Vec<PathBuf> = ["/opt/homebrew/bin", "/usr/bin", "/bin", "/Users/me/.local/bin"].map(PathBuf::from).to_vec();
+        assert_eq!(got, want);
+        assert!(common_bins(Path::new("/Users/me")).contains(&PathBuf::from("/Users/me/.local/bin")));
     }
 
     #[test]
