@@ -47,7 +47,7 @@ export function savePrefs(p: Prefs): void {
   }
 }
 
-export function applyMotion(m: Motion): void {
+function applyMotion(m: Motion): void {
   document.documentElement.dataset.motion = m;
 }
 
@@ -60,7 +60,7 @@ const paintTheme = () => {
 // "auto" keeps following the system while the app is open.
 systemDark?.addEventListener("change", () => { if (theme === "auto") paintTheme(); });
 
-export function applyTheme(t: Theme): void {
+function applyTheme(t: Theme): void {
   theme = t;
   paintTheme();
 }

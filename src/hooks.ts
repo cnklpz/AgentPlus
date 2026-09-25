@@ -17,7 +17,7 @@ export function useLatest<T>(value: T) {
 const layers: { current: () => void }[] = [];
 
 /** A dialog or palette is open: page-level Esc handlers (closing a side panel) leave the key to it. */
-export const escapeLayerOpen = () => layers.length > 0;
+const escapeLayerOpen = () => layers.length > 0;
 
 function onEscape(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.defaultPrevented) return;
