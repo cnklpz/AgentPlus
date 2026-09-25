@@ -16,15 +16,15 @@ pub fn line_key(l: &str) -> Option<&str> {
     Some(k.trim())
 }
 
-/// The value part of an assignment (after `=`): a quoted value runs to its closing quote
-/// (`\"` and `\\` are unescaped inside double quotes, whatever follows is ignored); an
-/// unquoted one ends at an inline ` #` comment.
-pub fn unquote(v: &str) -> String {
-    unquote_with(v, &['"', '\\'])
-}
+/// The escapes undone inside double quotes by most loaders: `\"` and `\\`.
+const PLAIN_ESCAPES: &[char] = &['"', '\\'];
+/// The escapes dotenvy (Codex's .env loader) undoes inside double quotes, `\n` aside.
+const DOTENVY_ESCAPES: &[char] = &['"', '\\', '\'', '$', ' '];
 
-/// `unquote` that undoes `\c` inside double quotes for each `c` in `escapes`.
-fn unquote_with(v: &str, escapes: &[char]) -> String {
+/// The value part of an assignment (after `=`): a quoted value runs to its closing quote
+/// (`\c` is unescaped inside double quotes for each `c` in `escapes`, whatever follows the
+/// closing quote is ignored); an unquoted one ends at an inline ` #` comment.
+fn unquote(v: &str, escapes: &[char]) -> String {
     let v = v.trim();
     if let Some(q) = v.chars().next().filter(|c| *c == '"' || *c == '\'') {
         let mut out = String::new();
@@ -47,16 +47,13 @@ fn unquote_with(v: &str, escapes: &[char]) -> String {
 }
 
 fn values<'a>(text: &'a str, key: &'a str, escapes: &'a [char]) -> impl DoubleEndedIterator<Item = String> + 'a {
-    text.lines().filter(move |l| line_key(l) == Some(key)).filter_map(|l| l.split_once('=')).map(move |(_, v)| unquote_with(v, escapes))
+    text.lines().filter(move |l| line_key(l) == Some(key)).filter_map(|l| l.split_once('=')).map(move |(_, v)| unquote(v, escapes))
 }
-
-/// The escapes dotenvy (Codex's .env loader) undoes inside double quotes, `\n` aside.
-const DOTENVY_ESCAPES: &[char] = &['"', '\\', '\'', '$', ' '];
 
 /// The value of `key`; the last assignment wins (python-dotenv, node dotenv). An empty
 /// value is None.
 pub fn get(text: &str, key: &str) -> Option<String> {
-    values(text, key, &['"', '\\']).next_back().filter(|v| !v.is_empty())
+    values(text, key, PLAIN_ESCAPES).next_back().filter(|v| !v.is_empty())
 }
 
 /// The value of the last assignment of `key`, which may be empty: Codex sets every pair of
@@ -145,13 +142,13 @@ mod tests {
 
     #[test]
     fn unquotes_values() {
-        assert_eq!(unquote(" plain # comment"), "plain");
-        assert_eq!(unquote("x#y"), "x#y", "# without a space before it is part of the value");
-        assert_eq!(unquote("\"v\" # c"), "v");
-        assert_eq!(unquote("'a \\\" b'"), "a \\\" b", "no escapes in single quotes");
-        assert_eq!(unquote(r#""a\"b\\c\n""#), "a\"b\\c\\n", "only \\\" and \\\\ are unescaped");
-        assert_eq!(unquote("\"open"), "\"open", "an unclosed quote reads as plain text");
-        assert_eq!(unquote("''"), "");
+        assert_eq!(unquote(" plain # comment", PLAIN_ESCAPES), "plain");
+        assert_eq!(unquote("x#y", PLAIN_ESCAPES), "x#y", "# without a space before it is part of the value");
+        assert_eq!(unquote("\"v\" # c", PLAIN_ESCAPES), "v");
+        assert_eq!(unquote("'a \\\" b'", PLAIN_ESCAPES), "a \\\" b", "no escapes in single quotes");
+        assert_eq!(unquote(r#""a\"b\\c\n""#, PLAIN_ESCAPES), "a\"b\\c\\n", "only \\\" and \\\\ are unescaped");
+        assert_eq!(unquote("\"open", PLAIN_ESCAPES), "\"open", "an unclosed quote reads as plain text");
+        assert_eq!(unquote("''", PLAIN_ESCAPES), "");
         assert_eq!(get("K=\"v\" # c", "K").as_deref(), Some("v"));
     }
 
