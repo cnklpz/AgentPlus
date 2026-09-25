@@ -15,6 +15,10 @@ export const keys = {
   deleteModel: (pid: string, mid: string) => `md:${pid}|${mid}`,
   providerModels: (pid: string) => `pm:${pid}`,
   roles: (pid: string) => `pr:${pid}`,
+  /** A pending copy of provider `pid` from `from` (another agent, or "library"). */
+  importProvider: (from: string, pid: string) => `pi:${from}:${pid}`,
+  /** A new entry pointing at gateway forward `routeId`. */
+  gatewayProvider: (routeId: string) => `pu:gw-${routeId}`,
 };
 
 /** Codex has one global catalog; its models use provider "*". */
@@ -57,13 +61,45 @@ export function settingValue(s: Setting, d: Draft): SettingValue {
   return op && op.op === "set_setting" ? op.value : s.value;
 }
 
-function sameValue(a: SettingValue, b: SettingValue): boolean {
-  if (Array.isArray(a) && Array.isArray(b)) return [...a].sort().join("|") === [...b].sort().join("|");
+/** An agent's switch setting as applied (not the draft). */
+export function settingOn(st: AgentState, key: string): boolean {
+  return st.settings.find((s) => s.key === key)?.value === true;
+}
+
+/**
+ * After writing `ops`: restart the agent (its auto_restart setting), unless it isn't running or
+ * the only change was that setting itself (nothing the agent reads changed then).
+ */
+export function shouldAutoRestart(st: AgentState, ops: Op[]): boolean {
+  return settingOn(st, "auto_restart") && st.running && ops.some((o) => !(o.op === "set_setting" && o.key === "auto_restart"));
+}
+
+/** A "list" setting (one entry per line) keeps its order; chips compare as sets. */
+function sameValue(a: SettingValue, b: SettingValue, ordered: boolean): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (ordered) return a.length === b.length && a.every((x, i) => x === b[i]);
+    return [...a].sort().join("|") === [...b].sort().join("|");
+  }
   return a === b;
 }
 
 export function setSetting(d: Draft, s: Setting, value: SettingValue): Draft {
-  return withOp(d, keys.setting(s.key), sameValue(value, s.value) ? null : { op: "set_setting", key: s.key, value });
+  return withOp(d, keys.setting(s.key), sameValue(value, s.value, s.kind === "list") ? null : { op: "set_setting", key: s.key, value });
+}
+
+/** Number of pending changes in a draft. */
+export function opCount(d: Draft | undefined): number {
+  return d ? Object.keys(d).length : 0;
+}
+
+/** Pending changes over all agents. */
+export function pendingTotal(drafts: Record<string, Draft>): number {
+  return Object.values(drafts).reduce((n, d) => n + opCount(d), 0);
+}
+
+/** The agents that have pending changes. */
+export function agentsWithOps<T extends { id: string }>(agents: T[], drafts: Record<string, Draft>): T[] {
+  return agents.filter((a) => opCount(drafts[a.id]) > 0);
 }
 
 // ---------------------------------------------------------------- provider / model edits
@@ -85,7 +121,7 @@ export interface ViewModel extends Model {
 // Some agents keep protocols AgentPlus doesn't model (e.g. pi's "bedrock-converse"); show those as-is.
 export const API_LABEL: Record<ApiKind, string> = new Proxy(
   { responses: "Responses", chat: "Chat", anthropic: "Anthropic", gemini: "Gemini" } as Record<string, string>,
-  { get: (t, k) => (typeof k === "string" ? t[k] ?? k : undefined) },
+  { get: (o, k) => (typeof k === "string" ? o[k] ?? k : undefined) },
 );
 
 function hostOf(url: string): string {
@@ -182,6 +218,37 @@ export function upsertModel(d: Draft, pid: string, input: ModelInput): Draft {
   return withOp(d, keys.upsertModel(pid, input.id), { op: "upsert_model", provider: pid, model: input });
 }
 
+export function deleteProvider(d: Draft, pid: string): Draft {
+  return withOp(d, keys.deleteProvider(pid), { op: "delete_provider", provider: pid });
+}
+
+/**
+ * Removes a provider card: a pending new one (not written yet, its id is a draft key) is just
+ * dropped from the draft; an existing one gets a pending delete.
+ */
+export function removeProvider(d: Draft, p: ViewProvider): Draft {
+  return p.isNew && p.draftKey ? withOp(d, p.draftKey, null) : deleteProvider(d, p.id);
+}
+
+/** A pending copy of provider `src.provider` from `src.fromAgent` (another agent, or "library"). */
+export function importProvider(d: Draft, src: { fromAgent: string; provider: string; api: ApiKind; name: string; label?: string }): Draft {
+  return withOp(d, keys.importProvider(src.fromAgent, src.provider), { op: "import_provider", ...src });
+}
+
+/** Turns a provider on / off; back to how it is applied = no pending change. */
+export function setProviderEnabled(d: Draft, p: Pick<Provider, "id" | "enabled">, enabled: boolean): Draft {
+  return withOp(d, keys.enabled(p.id), enabled === p.enabled ? null : { op: "set_provider_enabled", provider: p.id, enabled });
+}
+
+export function deleteModel(d: Draft, pid: string, mid: string): Draft {
+  return withOp(d, keys.deleteModel(pid, mid), { op: "delete_model", provider: pid, model: mid });
+}
+
+/** Shows / hides a model in the agent's picker; back to how it is applied = no pending change. */
+export function setModelVisible(d: Draft, pid: string, m: Model, visible: boolean): Draft {
+  return withOp(d, keys.visible(pid, m.id), visible === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible });
+}
+
 /** 131072 -> "131K", 1048576 -> "1M" */
 export function fmtCtx(n: number): string {
   // From 999.5K up, "K" would round to "1000K".
@@ -195,19 +262,29 @@ export function fmtCtx(n: number): string {
 
 /** "128k" -> 128000, "1m" -> 1000000, "200000" -> 200000 */
 export function parseCtx(s: string): number | null {
-  const t = s.trim().toLowerCase().replace(/,/g, "");
-  if (!t) return null;
-  const m = t.match(/^(\d+(?:\.\d+)?)\s*([km]?)$/);
+  const v = s.trim().toLowerCase().replace(/,/g, "");
+  if (!v) return null;
+  const m = v.match(/^(\d+(?:\.\d+)?)\s*([km]?)$/);
   if (!m) return null;
   const n = parseFloat(m[1]) * (m[2] === "k" ? 1000 : m[2] === "m" ? 1_000_000 : 1);
   return Math.round(n);
 }
 
+/** Models of `pid` the agent will offer after the draft: not being deleted, not hidden. */
+export function visibleModelCount(pid: string, models: Model[], d: Draft): number {
+  return viewModels(pid, models, d).filter((m) => !m.isDeleted && isVisible(pid, m, d)).length;
+}
+
+/** `visibleModelCount` of a provider card; a new one offers every model it lists. */
+export function providerModelCount(p: ViewProvider, d: Draft): number {
+  return p.isNew ? p.models.length : visibleModelCount(p.id, p.models, d);
+}
+
 export function visibleCount(st: AgentState, d: Draft): number {
-  if (st.catalog) return viewModels(CATALOG, st.catalog, d).filter((m) => !m.isDeleted && isVisible(CATALOG, m, d)).length;
+  if (st.catalog) return visibleModelCount(CATALOG, st.catalog, d);
   return viewProviders(st, d)
     .filter((p) => !p.isDeleted && (p.isNew || isEnabled(p, d)))
-    .reduce((n, p) => n + (p.isNew ? p.models.length : viewModels(p.id, p.models, d).filter((m) => !m.isDeleted && isVisible(p.id, m, d)).length), 0);
+    .reduce((n, p) => n + providerModelCount(p, d), 0);
 }
 
 /**

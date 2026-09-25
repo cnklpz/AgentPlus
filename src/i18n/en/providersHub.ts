@@ -1,18 +1,12 @@
 import type zh from "../zh/providersHub";
 
 const en: typeof zh = {
-  testing: "Testing…",
-  unreachable: "Unreachable",
-  untested: "Not tested",
   intro: "Providers are grouped into relays by service URL; a relay can have several groups (different protocols, paths or API keys). Manage URLs and API keys here, and set models in each agent's \"Model list\". Current environment: {env}",
   testLatency: "Test latency",
-  addProvider: "Add provider",
-  filter: "Filter",
   filterAll: "All",
   filterUsed: "In use",
   filterIdle: "Unused",
   searchPlaceholder: "Search by name, URL or group",
-  retestTitle: "Click to test again",
   notAdded: "Not added",
   agentState: "{agent}: {state}",
   moreGroups: "{n} more group|{n} more groups",

@@ -1,19 +1,23 @@
-import { useEffect, useState } from "react";
-import { type BackupDetail, type BackupEntry, type BackupFileDetail, api } from "../api";
+import { useState } from "react";
+import { type BackupEntry, type BackupFileDetail, api } from "../api";
 import { type TKey, t, tn, tx, useLang } from "../i18n";
 import { Icon } from "./icons";
-import { fmtSize as size } from "../format";
+import { fmtSize, joinList } from "../format";
 import { scrub } from "../privacy";
+import { useLoad } from "../hooks";
+import { ErrorBox } from "./controls";
+import { errText, type Flash, onActivateKey } from "../util";
+import { agentLabel } from "../services";
 
-/** Product names stay as-is; AgentPlus's own maintenance jobs are translated. */
-const AGENT_NAME: Record<string, string | { key: TKey }> = {
-  codex: "Codex", zcode: "ZCode", mimo: "MiMo Desktop",
-  "codex-cleanup": { key: "historyPage.agentCodexCleanup" }, "codex-repair": { key: "historyPage.agentCodexRepair" },
+/** AgentPlus's own maintenance jobs (translated); backups of agents show the product name. */
+const JOBS: Record<string, TKey> = {
+  "codex-cleanup": "historyPage.agentCodexCleanup",
+  "codex-repair": "historyPage.agentCodexRepair",
 };
 
 function agentName(id: string): string {
-  const n = AGENT_NAME[id];
-  return n == null ? id : typeof n === "string" ? n : t(n.key);
+  const k = JOBS[id];
+  return k ? t(k) : agentLabel(id);
 }
 
 function fmtStamp(s: string): string {
@@ -21,17 +25,16 @@ function fmtStamp(s: string): string {
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : s;
 }
 
-export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boolean) => void; onChanged: () => void }) {
-  const [list, setList] = useState<BackupEntry[] | null>(null);
+export function HistoryPage({ flash, onChanged }: { flash: Flash; onChanged: () => void }) {
   const [confirm, setConfirm] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   // Bumped after a rollback so the open detail re-reads the current files.
   const [rev, setRev] = useState(0);
-  const load = () => api.listBackups().then(setList).catch((e) => flash(String(e), true));
   // Reasons and "blocked" texts come from the backend in the UI language: reload on switch.
   const lang = useLang();
-  useEffect(() => { load(); }, [lang]);
+  const { data: list, error, reload } = useLoad(() => api.listBackups(), [lang]);
+  const load = () => { void reload(); };
 
   const restore = async (id: string) => {
     setBusy(true);
@@ -42,7 +45,7 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
       setRev((n) => n + 1);
       onChanged();
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     } finally {
       setBusy(false);
     }
@@ -73,21 +76,22 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
           </div>
         </div>
         <div className="page-body">
-          {!list && <div className="empty">{t("historyPage.reading")}</div>}
+          {error && (list ? <ErrorBox text={error} /> : <div className="empty">{scrub(error)}</div>)}
+          {!list && !error && <div className="empty">{t("common.reading")}</div>}
           {list && list.length === 0 && <div className="empty">{t("historyPage.empty")}</div>}
           {list && list.length > 0 && (
             <div className="stable">
               {list.map((b) => (
                 <div key={b.id} className={`hrow pick${sel === b.id ? " on" : ""}`} role="button" tabIndex={0} aria-pressed={sel === b.id}
                   onClick={() => setSel(sel === b.id ? null : b.id)}
-                  onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSel(sel === b.id ? null : b.id); } }}>
+                  onKeyDown={onActivateKey(() => setSel(sel === b.id ? null : b.id))}>
                   <div className="minw0">
                     <div className="row gap6">
                       <span className="strong small">{fmtStamp(b.stamp)}</span>
                       <span className="ptag tag-soft">{agentName(b.agent)}</span>
                       <span className="tiny muted">{scrub(b.reason)}</span>
                     </div>
-                    <div className="mono tiny muted ellipsis">{b.files.map((f) => f.name).join(t("historyPage.listSep"))} · {size(b.bytes)}</div>
+                    <div className="mono tiny muted ellipsis">{joinList(b.files.map((f) => f.name))} · {fmtSize(b.bytes)}</div>
                   </div>
                   <div className="row gap6" onClick={(e) => e.stopPropagation()}>{rollback(b, true)}</div>
                 </div>
@@ -107,7 +111,7 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
               <div className="hub-stats">
                 <div><b>{list.length}</b><span>{t("historyPage.statRecords")}</span></div>
                 <div><b>{list.filter((b) => b.restorable).length}</b><span>{t("historyPage.statRestorable")}</span></div>
-                <div><b>{size(list.reduce((n, b) => n + b.bytes, 0))}</b><span>{t("historyPage.statSize")}</span></div>
+                <div><b>{fmtSize(list.reduce((n, b) => n + b.bytes, 0))}</b><span>{t("historyPage.statSize")}</span></div>
               </div>
             )}
           </section>
@@ -118,13 +122,8 @@ export function HistoryPage({ flash, onChanged }: { flash: (t: string, e?: boole
 }
 
 function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () => void; actions: React.ReactNode }) {
-  const [d, setD] = useState<BackupDetail | string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    api.backupDetail(b.id).then((x) => alive && setD(x)).catch((e) => alive && setD(String(e)));
-    return () => { alive = false; };
-  }, [b.id]);
-  const changed = typeof d === "object" && d ? d.files.filter((f) => !f.same).length : 0;
+  const { data: d, error } = useLoad(() => api.backupDetail(b.id), [b.id]);
+  const changed = d ? d.files.filter((f) => !f.same).length : 0;
 
   return (
     <>
@@ -137,22 +136,22 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
               <span className="tiny muted">{scrub(b.reason)}</span>
             </div>
           </div>
-          <button className="icon-btn" aria-label={t("historyPage.closeDetail")} onClick={onClose}><Icon.close /></button>
+          <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={onClose}><Icon.close /></button>
         </div>
         <div className="kv">
-          <div className="kv-row"><span className="tiny muted">{t("historyPage.backupLocation")}</span><span className="mono tiny ellipsis" title={typeof d === "object" && d ? scrub(d.dir) : undefined}>{typeof d === "object" && d ? scrub(d.dir) : "…"}</span></div>
-          <div className="kv-row"><span className="tiny muted">{t("historyPage.files")}</span><span className="tiny">{tn("historyPage.filesValue", b.files.length, { size: size(b.bytes) })}</span></div>
+          <div className="kv-row"><span className="tiny muted">{t("historyPage.backupLocation")}</span><span className="mono tiny ellipsis" title={d ? scrub(d.dir) : undefined}>{d ? scrub(d.dir) : "…"}</span></div>
+          <div className="kv-row"><span className="tiny muted">{t("historyPage.files")}</span><span className="tiny">{tn("historyPage.filesValue", b.files.length, { size: fmtSize(b.bytes) })}</span></div>
           <div className="kv-row">
             <span className="tiny muted">{t("historyPage.vsNow")}</span>
-            <span className="tiny">{typeof d === "object" && d ? (changed ? tn("historyPage.changedFiles", changed) : t("historyPage.allSame")) : "…"}</span>
+            <span className="tiny">{d ? (changed ? tn("historyPage.changedFiles", changed) : t("historyPage.allSame")) : "…"}</span>
           </div>
           <div className="kv-row"><span className="tiny muted">{t("historyPage.rollback")}</span><span className="tiny">{b.restorable ? t("historyPage.canRollback") : t("historyPage.cannotRollback", { why: b.blocked ?? t("historyPage.unknownReason") })}</span></div>
         </div>
       </section>
       <section className="aside-diff">
-        {d === null && <span className="muted small">{t("historyPage.reading")}</span>}
-        {typeof d === "string" && <div className="err">{d}</div>}
-        {typeof d === "object" && d && (
+        {!d && !error && <span className="muted small">{t("common.reading")}</span>}
+        {error && <ErrorBox text={error} />}
+        {d && (
           <>
             <span className="tiny muted">{tx("historyPage.diffLegend", {
               red: <span className="hd-key del">{t("historyPage.red")}</span>,
@@ -183,8 +182,8 @@ function FileDiff({ f }: { f: BackupFileDetail }) {
         </div>
         {f.path && <span className="mono tiny muted ellipsis" title={scrub(f.path)}>{scrub(f.path)}</span>}
         <span className="tiny muted">
-          {t("historyPage.backupSize", { size: size(f.backupBytes) })}
-          {f.currentBytes != null && t("historyPage.nowSize", { size: size(f.currentBytes) })}
+          {t("historyPage.backupSize", { size: fmtSize(f.backupBytes) })}
+          {f.currentBytes != null && t("historyPage.nowSize", { size: fmtSize(f.currentBytes) })}
           {f.currentModified && t("historyPage.modifiedAt", { time: f.currentModified })}
         </span>
       </div>

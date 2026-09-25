@@ -6,7 +6,6 @@ export default {
   closeEsc: "关闭（Esc）",
   tabGeneral: "通用",
   tabAgents: "Agent 识别",
-  localWindows: "本机 · Windows",
 
   envsTitle: "管理的环境",
   envsHint: "供应商库在各环境间共用：在 Windows 添加的供应商，切到 WSL 后可以直接加到 Codex CLI。",

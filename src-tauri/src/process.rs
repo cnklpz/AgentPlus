@@ -87,7 +87,7 @@ pub(crate) fn on_path(names: &[&str]) -> Option<PathBuf> {
 fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
     type Pkg = Option<(PathBuf, String, String, Option<PathBuf>)>;
     static CACHE: std::sync::Mutex<Option<Pkg>> = std::sync::Mutex::new(None);
-    if let Some(p) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(p) = crate::util::lock(&CACHE).clone() {
         return p;
     }
     let out = output_within(
@@ -108,12 +108,23 @@ fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
         let main = lines.next().map(|e| dir.join(e.replace('/', "\\")));
         Some((dir, ver, pfn, main))
     })();
-    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(pkg.clone());
+    *crate::util::lock(&CACHE) = Some(pkg.clone());
     pkg
 }
 
-/// (DisplayName, DisplayVersion, DisplayIcon, UninstallString) of an uninstall entry.
-type UninstallEntry = (String, Option<String>, Option<String>, Option<String>);
+/// What an uninstall entry in the registry says about an installed app.
+// Only the Windows registry scan builds one.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) struct UninstallEntry {
+    /// DisplayVersion
+    pub version: Option<String>,
+    /// DisplayIcon
+    pub icon: Option<String>,
+    /// UninstallString
+    pub uninstall: Option<String>,
+    /// InstallLocation
+    pub location: Option<String>,
+}
 
 /// Every uninstall entry whose name starts with `prefix`, current user first.
 #[cfg(windows)]
@@ -128,7 +139,12 @@ fn uninstall_entries(prefix: &str) -> Vec<UninstallEntry> {
             let Ok(k) = root.open_subkey(&name) else { continue };
             let dn: String = k.get_value("DisplayName").unwrap_or_default();
             if dn.starts_with(prefix) {
-                out.push((dn, k.get_value("DisplayVersion").ok(), k.get_value("DisplayIcon").ok(), k.get_value("UninstallString").ok()));
+                out.push(UninstallEntry {
+                    version: k.get_value("DisplayVersion").ok(),
+                    icon: k.get_value("DisplayIcon").ok(),
+                    uninstall: k.get_value("UninstallString").ok(),
+                    location: k.get_value("InstallLocation").ok(),
+                });
             }
         }
     }
@@ -139,7 +155,8 @@ fn uninstall_entries(_: &str) -> Vec<UninstallEntry> {
     vec![]
 }
 
-fn uninstall_entry(prefix: &str) -> Option<UninstallEntry> {
+/// The first uninstall entry whose name starts with `prefix`, current user first.
+pub(crate) fn uninstall_entry(prefix: &str) -> Option<UninstallEntry> {
     uninstall_entries(prefix).into_iter().next()
 }
 
@@ -149,6 +166,11 @@ pub(crate) fn unquote_exe(s: &str) -> Option<PathBuf> {
     let s = s.trim();
     let s = if let Some(rest) = s.strip_prefix('"') { rest.split('"').next().unwrap_or(rest) } else { s.split(',').next().unwrap_or(s) };
     Some(PathBuf::from(s.trim())).filter(|p| p.is_absolute())
+}
+
+/// Whether `p` names a Windows executable (`.exe`, any case).
+pub(crate) fn is_exe(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe"))
 }
 
 fn norm_dir(p: &str) -> String {
@@ -246,11 +268,20 @@ fn app_of(sys: &System, inst: &Install) -> Vec<Pid> {
     inst.dir.as_deref().map(|d| app_processes(sys, d, inst.exe.as_deref())).unwrap_or_default()
 }
 
+/// Sets `running` from the desktop app's processes. An install without a folder (a CLI)
+/// keeps what its detector found.
+pub(crate) fn set_app_running(inst: &mut Install) {
+    if inst.dir.is_some() {
+        inst.running = !app_of(&processes(), inst).is_empty();
+    }
+}
+
 /// Executable names of the CLI that an agent with a desktop app also has.
 fn cli_names(agent: &str) -> &'static [&'static str] {
+    use crate::adapters::{codex, opencode};
     match agent {
-        "codex" => &["codex.exe"],
-        "opencode" => &["opencode.exe", "opencode-cli.exe"],
+        codex::ID => &["codex.exe"],
+        opencode::ID => &["opencode.exe", "opencode-cli.exe"],
         _ => &[],
     }
 }
@@ -278,16 +309,13 @@ fn cli_sessions(sys: &System, agent: &str, app: &[Pid]) -> usize {
 
 /// True if any running process matches `pred(name, exe_path)`.
 pub fn any_process(pred: impl Fn(&str, &str) -> bool) -> bool {
-    let mut sys = System::new();
-    sys.refresh_processes(ProcessesToUpdate::All, true);
-    sys.processes().values().any(|p| {
+    processes().processes().values().any(|p| {
         let name = p.name().to_string_lossy();
         let path = p.exe().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
         pred(&name, &path)
     })
 }
 
-/// Inside WSL only the Codex CLI exists; the desktop apps are Windows-only.
 /// First token that looks like a version ("2.1.226 (Claude Code)" → "2.1.226").
 pub(crate) fn version_in(text: &str) -> Option<String> {
     text.split_whitespace()
@@ -296,24 +324,15 @@ pub(crate) fn version_in(text: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Inside WSL only CLIs exist; the desktop apps are Windows-only.
-fn detect_wsl(agent: &str) -> Install {
+/// Inside WSL only CLIs exist; the desktop apps (no `wsl_script`) are Windows-only.
+fn detect_wsl(e: &crate::adapters::Ext) -> Install {
     let mut inst = Install::default();
-    let (script, marker) = match agent {
-        "codex" => ("codex --version 2>/dev/null; pgrep -x codex >/dev/null && echo @running; true", ".codex"),
-        "claude" => ("claude --version 2>/dev/null; pgrep -x claude >/dev/null && echo @running; true", ".claude/settings.json"),
-        "opencode" => (
-            "(command -v opencode >/dev/null && opencode --version || $HOME/.opencode/bin/opencode --version) 2>/dev/null; pgrep -x opencode >/dev/null && echo @running; true",
-            ".config/opencode",
-        ),
-        _ => match crate::adapters::ext(agent) {
-            Some(e) => (e.wsl_script, e.wsl_marker),
-            None => return inst,
-        },
-    };
-    let out = crate::env::wsl_sh(script).unwrap_or_default();
+    if e.wsl_script.is_empty() {
+        return inst;
+    }
+    let out = crate::env::wsl_sh(e.wsl_script).unwrap_or_default();
     inst.version = out.lines().find(|l| !l.starts_with('@')).and_then(version_in);
-    inst.installed = inst.version.is_some() || crate::util::home().join(marker).exists();
+    inst.installed = inst.version.is_some() || crate::util::home().join(e.wsl_marker).exists();
     inst.running = out.lines().any(|l| l == "@running");
     inst
 }
@@ -323,7 +342,7 @@ fn detect_wsl(agent: &str) -> Install {
 /// quoting (paths with `&` or parentheses) and without AutoRun hooks.
 pub(crate) fn cli_version(exe: &Path) -> Option<String> {
     static CACHE: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
-    let cache = || CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = || crate::util::lock(&CACHE);
     if let Some((_, v)) = cache().iter().find(|(p, _)| p == exe) {
         return v.clone();
     }
@@ -332,22 +351,91 @@ pub(crate) fn cli_version(exe: &Path) -> Option<String> {
     v
 }
 
-/// Claude Code: npm global install or the native installer (~/.local/bin/claude.exe).
-fn detect_claude(inst: &mut Install) {
-    let npm = dirs::data_dir().map(|d| d.join("npm"));
-    if let Some(pkg) = npm.as_ref().map(|d| d.join("node_modules").join("@anthropic-ai").join("claude-code").join("package.json")) {
-        if let Ok(text) = std::fs::read_to_string(&pkg) {
-            inst.installed = true;
-            inst.version = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("version").and_then(|x| x.as_str()).map(String::from));
-            return;
-        }
+/// The `version` field of a package.json.
+pub(crate) fn package_version(package_json: &Path) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(package_json).ok()?).ok()?;
+    v.get("version")?.as_str().map(String::from)
+}
+
+/// package.json of npm package `pkg` under the npm prefix `root`
+/// (`<root>\node_modules\<pkg>`, `pkg` may be scoped: "@scope/name").
+pub(crate) fn npm_package_in(root: &Path, pkg: &str) -> PathBuf {
+    pkg.split('/').fold(root.join("node_modules"), |d, part| d.join(part)).join("package.json")
+}
+
+/// package.json of a global npm package (`%APPDATA%\npm\node_modules\<pkg>`).
+pub(crate) fn npm_global_package(pkg: &str) -> Option<PathBuf> {
+    Some(npm_package_in(&dirs::data_dir()?.join("npm"), pkg))
+}
+
+/// Version of a global npm package; None when it isn't installed there.
+pub(crate) fn npm_global_version(pkg: &str) -> Option<String> {
+    package_version(&npm_global_package(pkg)?)
+}
+
+/// Version of a global npm package under `%APPDATA%\npm`, else under the folder of `shim`
+/// (the CLI found on PATH, for an npm with another prefix).
+pub(crate) fn npm_version_near(pkg: &str, shim: Option<&Path>) -> Option<String> {
+    npm_global_version(pkg).or_else(|| package_version(&npm_package_in(shim?.parent()?, pkg)))
+}
+
+/// Codex desktop: the MSIX package.
+pub(crate) fn detect_codex() -> Install {
+    let mut inst = Install::default();
+    if let Some((dir, ver, pfn, main)) = codex_package() {
+        inst.installed = true;
+        inst.version = Some(ver);
+        inst.aumid = Some(format!("{pfn}!App"));
+        inst.exe = main;
+        inst.dir = Some(dir);
     }
+    set_app_running(&mut inst);
+    inst
+}
+
+/// ZCode desktop: its uninstall entry names the install folder.
+pub(crate) fn detect_zcode() -> Install {
+    let mut inst = Install::default();
+    if let Some(e) = uninstall_entry("ZCode") {
+        let dir = e.uninstall.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(Path::to_path_buf));
+        inst.installed = dir.is_some();
+        inst.version = e.version;
+        inst.exe = dir.as_ref().map(|d| d.join("ZCode.exe"));
+        inst.dir = dir;
+    }
+    set_app_running(&mut inst);
+    inst
+}
+
+/// MiMo Desktop: its uninstall entry's icon is the app.
+pub(crate) fn detect_mimo() -> Install {
+    let mut inst = Install::default();
+    if let Some(e) = uninstall_entry("Xiaomi MiMo") {
+        let exe = e.icon.and_then(|i| unquote_exe(&i));
+        inst.installed = exe.is_some();
+        inst.version = e.version;
+        inst.dir = exe.as_ref().and_then(|x| x.parent().map(Path::to_path_buf));
+        inst.exe = exe;
+    }
+    set_app_running(&mut inst);
+    inst
+}
+
+/// Claude Code: npm global install or the native installer (~/.local/bin/claude.exe). A CLI:
+/// `dir` stays None.
+pub(crate) fn detect_claude() -> Install {
+    let mut inst = Install::default();
     let native = dirs::home_dir().map(|h| h.join(".local").join("bin").join("claude.exe"));
-    if let Some(exe) = native.filter(|p| p.exists()) {
+    if let Some(pkg) = npm_global_package("@anthropic-ai/claude-code").filter(|p| p.is_file()) {
+        inst.installed = true;
+        inst.version = package_version(&pkg);
+    } else if let Some(exe) = native.filter(|p| p.exists()) {
         inst.installed = true;
         inst.version = cli_version(&exe);
     }
+    // An npm install runs under node.exe, so this only sees the native build.
     inst.running = any_process(|name, _| name.eq_ignore_ascii_case("claude.exe"));
+    inst
 }
 
 /// Every installed copy of a desktop app registered as `prefix…` (an old and a new build can
@@ -355,15 +443,15 @@ fn detect_claude(inst: &mut Install) {
 /// icon doesn't.
 fn desktop_copies(prefix: &str, main: &str) -> Vec<DesktopCopy> {
     let mut out: Vec<DesktopCopy> = vec![];
-    for (_, version, icon, uninst) in uninstall_entries(prefix) {
-        let exe = icon
+    for e in uninstall_entries(prefix) {
+        let exe = e
+            .icon
             .and_then(|i| unquote_exe(&i))
-            .filter(|p| p.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false))
-            .filter(|p| p.is_file())
-            .or_else(|| uninst.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(|d| d.join(main))).filter(|p| p.is_file()));
+            .filter(|p| is_exe(p) && p.is_file())
+            .or_else(|| e.uninstall.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(|d| d.join(main))).filter(|p| p.is_file()));
         let Some(exe) = exe else { continue };
         if !out.iter().any(|c| norm_dir(&c.exe.to_string_lossy()) == norm_dir(&exe.to_string_lossy())) {
-            out.push(DesktopCopy { exe, version, running: false });
+            out.push(DesktopCopy { exe, version: e.version, running: false });
         }
     }
     out
@@ -386,44 +474,47 @@ fn choose_copy(copies: &[DesktopCopy], preferred: Option<&str>) -> usize {
 }
 
 /// Store key of the desktop copy picked by hand (absent or empty = automatic).
-pub const DESKTOP_EXE: &str = "desktopExe";
+pub const DESKTOP_EXE_STORE_KEY: &str = "desktopExe";
 
 /// OpenCode: the desktop app (registry) or the CLI.
-fn detect_opencode(inst: &mut Install) {
-    let copies = desktop_copies("OpenCode", "OpenCode.exe");
+pub(crate) fn detect_opencode() -> Install {
+    let mut inst = Install::default();
+    let mut copies = desktop_copies("OpenCode", "OpenCode.exe");
     if !copies.is_empty() {
         let sys = processes();
-        let mut copies = copies;
         for c in &mut copies {
             c.running = c.exe.parent().is_some_and(|d| !app_processes(&sys, d, Some(&c.exe)).is_empty());
         }
-        let preferred = crate::store::get_str(&crate::store::load(), "opencode", DESKTOP_EXE).filter(|s| !s.is_empty());
+        let preferred = crate::store::get_str(&crate::store::load(), crate::adapters::opencode::ID, DESKTOP_EXE_STORE_KEY).filter(|s| !s.is_empty());
         let c = &copies[choose_copy(&copies, preferred.as_deref())];
         inst.installed = true;
         inst.version = c.version.clone();
         inst.dir = c.exe.parent().map(Path::to_path_buf);
         inst.exe = Some(c.exe.clone());
+        // Counted just above, the same way `set_app_running` would.
+        inst.running = c.running;
         inst.copies = copies;
-        return;
+        return inst;
     }
     let home = dirs::home_dir().unwrap_or_default();
     let candidates = [home.join(".opencode").join("bin").join("opencode.exe"), dirs::data_dir().unwrap_or_default().join("npm").join("opencode.cmd")];
     if let Some(exe) = candidates.iter().find(|p| p.exists()) {
         inst.installed = true;
-        if exe.extension().map(|e| e == "exe").unwrap_or(false) {
+        if is_exe(exe) {
             inst.version = cli_version(exe);
         }
     }
     inst.running = any_process(|name, _| name.eq_ignore_ascii_case("opencode.exe"));
+    inst
 }
 
 /** Trae (international or CN build); detection only. */
 pub fn detect_trae() -> Install {
     let mut inst = Install::default();
-    if let Some((_, ver, icon, _)) = uninstall_entry("Trae (User)").or_else(|| uninstall_entry("TraeCode")).or_else(|| uninstall_entry("Trae")) {
-        let exe = icon.and_then(|i| unquote_exe(&i));
-        inst.installed = exe.as_ref().map(|e| e.exists()).unwrap_or(false);
-        inst.version = ver;
+    if let Some(e) = uninstall_entry("Trae (User)").or_else(|| uninstall_entry("TraeCode")).or_else(|| uninstall_entry("Trae")) {
+        let exe = e.icon.and_then(|i| unquote_exe(&i));
+        inst.installed = exe.as_ref().map(|x| x.exists()).unwrap_or(false);
+        inst.version = e.version;
         inst.dir = exe.as_ref().and_then(|e| e.parent().map(Path::to_path_buf));
     }
     if let Some(d) = &inst.dir {
@@ -432,49 +523,14 @@ pub fn detect_trae() -> Install {
     inst
 }
 
+/// What detection finds for `agent` in the current environment (nothing for an unknown id).
 pub fn detect(agent: &str) -> Install {
+    let Some(e) = crate::adapters::ext(agent) else { return Install::default() };
     if crate::env::is_wsl() {
-        return detect_wsl(agent);
+        detect_wsl(e)
+    } else {
+        (e.detect)()
     }
-    let mut inst = Install::default();
-    match agent {
-        "codex" => {
-            if let Some((dir, ver, pfn, main)) = codex_package() {
-                inst.installed = true;
-                inst.version = Some(ver);
-                inst.aumid = Some(format!("{pfn}!App"));
-                inst.exe = main;
-                inst.dir = Some(dir);
-            }
-        }
-        "zcode" => {
-            if let Some((_, ver, _, uninst)) = uninstall_entry("ZCode") {
-                let dir = uninst.and_then(|u| unquote_exe(&u)).and_then(|p| p.parent().map(Path::to_path_buf));
-                inst.installed = dir.is_some();
-                inst.version = ver;
-                inst.exe = dir.as_ref().map(|d| d.join("ZCode.exe"));
-                inst.dir = dir;
-            }
-        }
-        "claude" => detect_claude(&mut inst),
-        "opencode" => detect_opencode(&mut inst),
-        "mimo" => {
-            if let Some((_, ver, icon, _)) = uninstall_entry("Xiaomi MiMo") {
-                let exe = icon.and_then(|i| unquote_exe(&i));
-                inst.installed = exe.is_some();
-                inst.version = ver;
-                inst.dir = exe.as_ref().and_then(|e| e.parent().map(Path::to_path_buf));
-                inst.exe = exe;
-            }
-        }
-        other => {
-            if let Some(e) = crate::adapters::ext(other) {
-                return (e.detect)();
-            }
-        }
-    }
-    inst.running = !app_of(&processes(), &inst).is_empty();
-    inst
 }
 
 /// Progress of a restart, sent to the UI while it runs.
@@ -827,5 +883,44 @@ mod tests {
         assert_eq!(version_in("codex-cli v0.46.0").as_deref(), Some("0.46.0"));
         assert_eq!(version_in("no version here 42"), None);
         assert_eq!(version_in(""), None);
+    }
+}
+
+#[cfg(test)]
+mod any_os_tests {
+    use super::*;
+
+    #[test]
+    fn a_cli_keeps_the_running_state_its_detector_found() {
+        // Claude Code and the OpenCode CLI have no folder: nothing may overwrite what they found.
+        let mut cli = Install { installed: true, running: true, ..Default::default() };
+        set_app_running(&mut cli);
+        assert!(cli.running);
+        let mut idle = Install { installed: true, ..Default::default() };
+        set_app_running(&mut idle);
+        assert!(!idle.running);
+    }
+
+    #[test]
+    fn desktop_only_agents_are_absent_in_wsl() {
+        // No script to run, and an empty marker would name the home folder itself.
+        for a in [crate::adapters::zcode::ID, crate::adapters::mimo::ID] {
+            let inst = detect_wsl(crate::adapters::ext(a).unwrap());
+            assert!(!inst.installed && !inst.running && inst.version.is_none(), "{a}");
+        }
+    }
+
+    #[test]
+    fn unknown_agents_are_not_detected() {
+        let inst = detect("nope");
+        assert!(!inst.installed && inst.dir.is_none());
+    }
+
+    #[test]
+    fn is_exe_ignores_case() {
+        assert!(is_exe(Path::new("a/b/OpenCode.EXE")));
+        assert!(is_exe(Path::new("droid.exe")));
+        assert!(!is_exe(Path::new("opencode.cmd")));
+        assert!(!is_exe(Path::new("exe")));
     }
 }

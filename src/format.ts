@@ -1,4 +1,4 @@
-// Sizes and relative times, shared by the pages that list files, sessions and projects.
+// Sizes, relative times and lists, shared by the pages that list files, sessions and projects.
 import { locale, t, tn } from "./i18n";
 
 const KB = 1024;
@@ -7,6 +7,9 @@ const GB = MB * 1024;
 
 const num = (n: number, digits: number) =>
   n.toLocaleString(locale(), { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+/** "a、b、c" / "a, b, c". */
+export const joinList = (items: readonly string[]) => items.join(t("common.listSep"));
 
 /** "0 KB", "1 KB" (anything from 1 byte up), "12 KB", "3.4 MB", "1.2 GB". */
 export function fmtSize(bytes: number): string {

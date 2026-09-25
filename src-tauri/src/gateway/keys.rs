@@ -17,11 +17,6 @@ pub const PLACEHOLDER: &str = "agentplus-gateway";
 /// Caller of requests that carry `PLACEHOLDER`.
 pub const LEGACY: &str = "legacy";
 
-/// OpenCode project configs ("opencode@<folder>") share their agent's key.
-fn agent_base(agent: &str) -> &str {
-    agent.split('@').next().unwrap_or(agent)
-}
-
 /// Tests bypass the store.
 #[cfg(test)]
 pub static TEST_KEYS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
@@ -51,9 +46,10 @@ fn random_key() -> Result<String> {
     Ok(format!("agp-{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>()))
 }
 
-/// The agent's key, created on first use.
+/// The agent's key, created on first use. OpenCode project configs ("opencode@<folder>")
+/// share their agent's key.
 pub fn for_agent(agent: &str) -> Result<String> {
-    let id = agent_base(agent).to_string();
+    let id = crate::adapters::base_agent(agent).to_string();
     if let Some((_, k)) = stored_in(&store::load()).into_iter().find(|(a, _)| a == &id) {
         return Ok(k);
     }
@@ -106,6 +102,6 @@ mod tests {
     fn stored_keys_resolve() {
         let root = json!({ "gatewayKeys": { "codex": "agp-1", "claude": "agp-2", "bad": 3 } });
         assert_eq!(parse(&root), vec![("codex".into(), "agp-1".into()), ("claude".into(), "agp-2".into())]);
-        assert_eq!(agent_base("opencode@D:/x"), "opencode");
+        assert_eq!(crate::adapters::base_agent("opencode@D:/x"), "opencode");
     }
 }

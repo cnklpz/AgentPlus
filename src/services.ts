@@ -2,8 +2,8 @@
 // several *groups* — different protocols, paths or keys. Each group is edited and added
 // to agents on its own. Built from AgentPlus's library plus every agent's entries (as
 // they will be after the pending drafts).
-import type { AgentId, AgentState, ApiKind, GatewayRoute, GatewayRouteView, LibEntry, Op, SyncSuggestion } from "./api";
-import { API_LABEL, CATALOG, type Draft, type ViewProvider, currentProvider, isEnabled, isVisible, viewModels, viewProviders } from "./draft";
+import type { AgentId, AgentState, ApiKind, GatewayBreakerView, GatewayRoute, GatewayRouteView, LibEntry, Op, ProviderInput, SyncSuggestion } from "./api";
+import { API_LABEL, CATALOG, type Draft, type ViewProvider, currentProvider, isEnabled, keys, providerModelCount, viewProviders, visibleModelCount } from "./draft";
 import { type TKey, t } from "./i18n";
 
 export type UseState = "current" | "on" | "off" | "adding" | "removing" | "new";
@@ -72,12 +72,10 @@ function mostCommon(names: string[]): string {
 
 function modelCount(a: AgentState, p: ViewProvider, d: Draft): number {
   // Codex shares one model catalog across its providers.
-  if (a.catalog) return viewModels(CATALOG, a.catalog, d).filter((m) => !m.isDeleted && isVisible(CATALOG, m, d)).length;
-  if (p.isNew) return p.models.length;
-  return viewModels(p.id, p.models, d).filter((m) => !m.isDeleted && isVisible(p.id, m, d)).length;
+  return a.catalog ? visibleModelCount(CATALOG, a.catalog, d) : providerModelCount(p, d);
 }
 
-function useState(a: AgentState, p: ViewProvider, d: Draft): UseState {
+function stateOfUse(a: AgentState, p: ViewProvider, d: Draft): UseState {
   if (p.isDeleted) return "removing";
   if (p.isNew) return "new";
   if (a.mode === "single") return currentProvider(a, d) === p.id ? "current" : "on";
@@ -89,13 +87,68 @@ export function writableAgents(agents: AgentState[]): AgentState[] {
   return agents.filter((a) => a.installed && !a.readonly);
 }
 
+/** A group's uses that stay (not being removed). */
+export function liveUses(g: Group): Use[] {
+  return g.uses.filter((u) => u.state !== "removing");
+}
+
+/** Stable React key / set member for a use: its agent and provider. */
+export function useKey(u: Use): string {
+  return `${u.agent.id}:${u.p?.id}`;
+}
+
+/** Writable agents the group isn't in yet (or is only being removed from). */
+export function freeAgents(agents: AgentState[], g: Group | null): AgentState[] {
+  const uses = g ? liveUses(g) : [];
+  return writableAgents(agents).filter((a) => !uses.some((u) => u.agent.id === a.id));
+}
+
+/** Stations with an address (relays, shown first) and account logins / built-ins. */
+export function splitStations(stations: Station[]): { relays: Station[]; accounts: Station[] } {
+  return { relays: stations.filter((s) => !s.builtin), accounts: stations.filter((s) => s.builtin) };
+}
+
 /** Key for agent entries that point at the gateway; writing swaps in that agent's own gateway key. */
 export const GATEWAY_KEY = "agentplus-gateway";
+
+/** The gateway's port until the user picks another one. */
+export const DEFAULT_GATEWAY_PORT = 18650;
 
 /** Gateway hosts: the current "127.0.0.1:<port>" first, then earlier ports whose addresses still count as the gateway. */
 export type GatewayHosts = string | readonly string[] | null;
 
-function isGatewayHost(host: string, hosts: GatewayHosts): boolean {
+/** A new agent entry pointing at a gateway address (Codex keeps its shared catalog: no model list). */
+export function gatewayEntry(localBase: string, agent: AgentId, api: ApiKind, name: string, models: string[]): ProviderInput {
+  return { id: null, name, baseUrl: localBase, api, apiKey: GATEWAY_KEY, models: agent === "codex" ? [] : models };
+}
+
+/** Paused by the error breaker (or waiting for its trial request). */
+export function tripped(r: GatewayRouteView): GatewayBreakerView | null {
+  return r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
+}
+
+/** The forward to a library entry at one upstream protocol. */
+export function findRoute<R extends GatewayRoute>(routes: R[], libId: string | null | undefined, upstreamApi: ApiKind): R | undefined {
+  return routes.find((r) => r.library === libId && r.upstreamApi === upstreamApi);
+}
+
+/** Id for a new forward from its name: a lowercase ASCII slug ("route" when none is left), "-2", "-3"… when taken. */
+export function newRouteId(name: string, taken: readonly { id: string }[]): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "route";
+  let id = base;
+  for (let n = 2; taken.some((x) => x.id === id); n++) id = `${base}-${n}`;
+  return id;
+}
+
+/** A forward's list of replaced [agent, provider] entries with `add` appended (each pair once). */
+export function mergeReplaced(prev: readonly [string, string][] | null | undefined, add: readonly [string, string][]): [string, string][] {
+  const out: [string, string][] = [...(prev ?? [])];
+  for (const [a, p] of add) if (!out.some(([x, y]) => x === a && y === p)) out.push([a, p]);
+  return out;
+}
+
+/** Is `host` ("127.0.0.1:18650", or with localhost) one of the gateway's hosts? */
+export function isGatewayHost(host: string, hosts: GatewayHosts): boolean {
   const h = host.toLowerCase().replace("localhost", "127.0.0.1");
   return hosts !== null && (typeof hosts === "string" ? h === hosts : hosts.includes(h));
 }
@@ -162,7 +215,7 @@ export function buildStations(agents: AgentState[], drafts: Record<string, Draft
   for (const a of agents) {
     const d = drafts[a.id] ?? {};
     for (const p of viewProviders(a, d)) {
-      const use: Use = { agent: a, p, state: useState(a, p, d), models: modelCount(a, p, d) };
+      const use: Use = { agent: a, p, state: stateOfUse(a, p, d), models: modelCount(a, p, d) };
       if (!p.baseUrl) {
         // Account login: its own station with a single group.
         const key = `acct:${a.id}:${p.id}`;
@@ -233,6 +286,11 @@ export const AGENT_NAME: Record<AgentId, string> = {
   droid: "Droid", codebuddy: "CodeBuddy", kilo: "Kilo Code", trae: "Trae",
 };
 
+/** Product name of an agent id; anything else (e.g. "codex@wsl") as it is. */
+export function agentLabel(id: string): string {
+  return (AGENT_NAME as Record<string, string>)[id] ?? id;
+}
+
 /** Why a group cannot be added to an agent (null = it can). */
 export function cannotAdd(g: Group, to: AgentId): string | null {
   const only = ONLY_API[to];
@@ -249,12 +307,17 @@ export function importOp(g: Group, to: AgentId): Op | null {
   return { op: "import_provider", ...src, api: g.api, name: g.name };
 }
 
+/** Draft key of `importOp(g, …)` (only meaningful when that is not null). */
 export function importKey(g: Group): string {
   const src = importSource(g);
-  return `pi:${src?.fromAgent}:${src?.provider}`;
+  return src ? keys.importProvider(src.fromAgent, src.provider) : "";
 }
 
 export { API_LABEL };
+
+/** Protocols a provider can be set up with, in the order the dialogs offer them. */
+export const PROTOCOLS = ["responses", "chat", "anthropic"] as const;
+export type Protocol = (typeof PROTOCOLS)[number];
 
 /** A gateway route as saved: the view-only fields the backend adds are left out. */
 export function plainRoute(r: GatewayRouteView): GatewayRoute {
@@ -282,7 +345,7 @@ export function syncSuggestionIds(list: SyncSuggestion[]): string[] {
 const USE_KEY: Record<UseState, TKey> = {
   current: "services.useCurrent",
   on: "services.useOn",
-  off: "services.useOff",
+  off: "common.disabled",
   adding: "services.useAdding",
   removing: "services.useRemoving",
   new: "services.useNew",

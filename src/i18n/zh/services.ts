@@ -7,7 +7,6 @@ export default {
   noSource: "没有可复制的地址和密钥，先编辑补全",
   useCurrent: "当前使用",
   useOn: "已接入",
-  useOff: "已停用",
   useAdding: "待添加",
   useRemoving: "待移除",
   useNew: "新 · 未应用",

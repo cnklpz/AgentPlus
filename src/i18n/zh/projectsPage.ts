@@ -9,7 +9,6 @@ export default {
   empty: "还没有打开过项目。选一个项目文件夹，就能给它单独配置供应商、默认模型和权限。",
   unapplied: "{n} 项未应用",
   folderMissing: "文件夹不存在",
-  providerCount: "{n} 个供应商",
   notConfigured: "未配置 · 沿用全局",
   revealTitle: "在资源管理器中显示",
   revealLabel: "打开 {name} 文件夹",

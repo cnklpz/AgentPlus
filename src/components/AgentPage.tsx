@@ -1,10 +1,10 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
-  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, isEnabled, isVisible, keys, mergeExtra,
-  setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, withOp,
+  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, deleteModel, isEnabled, isVisible, keys, mergeExtra, opCount,
+  providerModelCount, setModelVisible, setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
-import { AgentIcon, Icon } from "./icons";
+import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
 import { type Latency, ProviderCard } from "./ProviderCard";
 import { SessionsTab } from "./SessionsTab";
@@ -14,8 +14,10 @@ import { ask } from "./Confirm";
 import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { ModelDialog } from "./ModelDialog";
+import { Switch } from "./controls";
 import { t, tn } from "../i18n";
 import { scrub } from "../privacy";
+import { errText, type Flash, toggled, toggledIn } from "../util";
 
 export type Tab = "prov" | "models" | "sessions" | "maint" | "projects" | "set";
 
@@ -37,7 +39,7 @@ interface Props {
   onSelectProvider: (id: string) => void;
   onProviderAction: (p: ViewProvider) => void;
   onAddProvider: () => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
   sessionQuery?: string;
   /** Codex: stop turning the fixed id on by default. */
   onDeclineFixed: () => void;
@@ -64,20 +66,17 @@ export function AgentPage(props: Props) {
     ...(props.projectsTab ? ([["projects", t("agentPage.tabProjects"), props.projectsTab.count || null]] as [Tab, string, number | null][]) : []),
     ["set", t("agentPage.tabSettings"), null],
   ];
-  const slide = useSlideDir(tab, tabs.map((t) => t[0]));
+  const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
-    <OfficialFetch pending={Object.keys(draft).length} running={st.running} restartable={st.restartable} restarting={restarting} onRestart={onRestart} onReload={props.onReload} flash={props.flash} />
+    <OfficialFetch pending={opCount(draft)} running={st.running} restartable={st.restartable} restarting={restarting} onRestart={onRestart} onReload={props.onReload} flash={props.flash} />
   ) : null;
   // Sessions should belong to the fixed id when that mode is on, else the configured provider.
   const fixedSetting = st.settings.find((s) => s.key === "fixed_id");
   const fixedOn = fixedSetting?.value === true;
   const sessionTarget = fixedOn ? "agentplus" : st.currentProvider ?? "openai";
 
-  const toggleModel = (pid: string, m: Model) => {
-    const next = !isVisible(pid, m, draft);
-    setDraft(withOp(draft, keys.visible(pid, m.id), next === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible: next }));
-  };
+  const toggleModel = (pid: string, m: Model) => setDraft(setModelVisible(draft, pid, m, !isVisible(pid, m, draft)));
 
   return (
     <main className="page">
@@ -95,13 +94,13 @@ export function AgentPage(props: Props) {
             </div>
             <span className="mono muted small ellipsis">{scrub(st.files.join(" · "))}</span>
           </div>
-          <button className="btn" onClick={onOpenDir}><Icon.folder />{t("agentPage.openDir")}</button>
+          <button className="btn" onClick={onOpenDir}><Icon.folder />{t("common.openConfigDir")}</button>
           {st.restartable && (
             <button className="btn strong" onClick={onRestart} disabled={!st.installed || restarting}>
               {st.running ? <Icon.refresh /> : <Icon.play />}
               {restarting
                 ? t(st.running ? "agentPage.restarting" : "agentPage.starting")
-                : t(st.running ? "agentPage.restartAgent" : "agentPage.startAgent", { name: st.name })}
+                : t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name })}
             </button>
           )}
         </div>}
@@ -117,7 +116,7 @@ export function AgentPage(props: Props) {
             <div className="row between">
               <span className="muted small">
                 {st.mode === "single"
-                  ? t("agentPage.singleNote", { name: st.name }) + (st.id === "codex" ? t("agentPage.codexChatNote") : st.id === "claude" ? t("agentPage.claudeNote") : "")
+                  ? t(st.id === "codex" ? "agentPage.singleNoteCodex" : st.id === "claude" ? "agentPage.singleNoteClaude" : "agentPage.singleNote", { name: st.name })
                   : project ? t("agentPage.projectNote")
                   : t("agentPage.multiNote", { name: st.name })}
                 {st.fixedPending && fixedSetting && settingValue(fixedSetting, draft) !== true && (
@@ -139,7 +138,7 @@ export function AgentPage(props: Props) {
                   switching={st.currentProvider !== p.id}
                   selected={props.selectedProvider === p.id}
                   enabled={p.isNew || isEnabled(p, draft)}
-                  visible={p.isNew ? p.models.length : viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length}
+                  visible={providerModelCount(p, draft)}
                   latency={p.baseUrl ? latency[p.baseUrl] : undefined}
                   readonly={st.readonly}
                   onSelect={() => props.onSelectProvider(p.id)}
@@ -148,7 +147,7 @@ export function AgentPage(props: Props) {
                   onTest={() => p.baseUrl && props.onTestOne(p.baseUrl)}
                 />
               ))}
-              <button className="pcard-add" disabled={st.readonly} onClick={props.onAddProvider}><Icon.plus size={18} />{t("agentPage.addProvider")}</button>
+              <button className="pcard-add" disabled={st.readonly} onClick={props.onAddProvider}><Icon.plus size={18} />{t("common.addProvider")}</button>
               {props.onCopyProvider && (
                 <button className="pcard-add" disabled={st.readonly} onClick={props.onCopyProvider}><Icon.copy size={18} />{t("agentPage.copyProvider")}<span className="tiny">{t("agentPage.copyProviderHint")}</span></button>
               )}
@@ -177,7 +176,7 @@ export function AgentPage(props: Props) {
             </div>
           ) : st.id === "codex" ? (
             <div className="stack12">
-              <div className="empty">{t("agentPage.noCatalog")}{t("agentPage.noCatalogHint")}</div>
+              <div className="empty">{t("agentPage.noCatalog")}</div>
               {official}
             </div>
           ) : (
@@ -195,7 +194,7 @@ export function AgentPage(props: Props) {
                       <button key={p.id} className={`rail-item${p.id === sel.id ? " on" : ""}`} onClick={() => setRailSel(p.id)}>
                         <span className="dot" style={{ background: isEnabled(p, draft) ? "var(--ok-dot)" : "var(--faint2)" }} />
                         <span className="ellipsis grow">{p.name}</span>
-                        <span className="mono muted tiny">{viewModels(p.id, p.models, draft).filter((m) => !m.isDeleted && isVisible(p.id, m, draft)).length}/{p.models.length}</span>
+                        <span className="mono muted tiny">{visibleModelCount(p.id, p.models, draft)}/{p.models.length}</span>
                       </button>
                     ))}
                   </div>
@@ -259,17 +258,14 @@ interface ModelTableProps {
   setDraft: (d: Draft) => void;
   readonly: boolean;
   onToggle: (pid: string, m: Model) => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
 }
 
 /** Backend capability tags (`cap:*`), replaced by the ones below (they would lag behind pending edits). */
 const isCapTag = (g: ModelTag) => g.id.startsWith("cap:");
 
-/** "读取图片" / "Read images" → "图片" / "Images". */
-const capName = (s: string) => {
-  const r = s.replace(/^(读取|Read)\s*/i, "");
-  return r.charAt(0).toUpperCase() + r.slice(1);
-};
+/** A raw config value as a tag ("image_x" → "Image_x"). */
+const rawTag = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Short tags for what a model can read / do, from its field values (pending edits included). */
 function capTags(fields: ModelField[], extra: Model["extra"]): string[] {
@@ -280,11 +276,11 @@ function capTags(fields: ModelField[], extra: Model["extra"]): string[] {
       for (const o of v) {
         if (o === "text") continue;
         const i = f.options.indexOf(o);
-        out.push(capName(i >= 0 ? f.hints[i] || o : o));
+        out.push((i >= 0 && (f.caps[i] || f.hints[i])) || rawTag(o));
       }
     } else if (f.kind === "bool" && v === true) {
       if (/reasoning$/i.test(f.key)) out.push(t("agentPage.capReasoning"));
-      else if (f.gid === "io") out.push(capName(f.label));
+      else if (f.gid === "io" && f.caps[0]) out.push(f.caps[0]);
     }
   }
   return [...new Set(out)];
@@ -320,7 +316,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
       setPick(new Set());
       if (fresh.length === 0) flash(tn("agentPage.allListed", list.length));
     } catch (e) {
-      flash(t("agentPage.fetchFailed", { err: String(e) }), true);
+      flash(t("common.fetchFailed", { err: errText(e) }), true);
     } finally {
       setFetching(false);
     }
@@ -368,9 +364,9 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
           <div className="strong ellipsis">{title}</div>
           <div className="muted small">{note}</div>
         </div>
-        <input className="search-input slim" placeholder={t("agentPage.filter")} value={filter} onChange={(e) => setFilter(e.target.value)} />
+        <input className="search-input slim" placeholder={t("common.filter")} value={filter} onChange={(e) => setFilter(e.target.value)} />
         <button className="btn small" disabled={readonly || !fetchFrom || fetching} onClick={doFetch} title={fetchFrom ? "" : t("agentPage.noFetchUrl")}>
-          <Icon.refresh size={12} />{fetching ? t("agentPage.fetching") : t("agentPage.fetchModels")}
+          <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("agentPage.fetchModels")}
         </button>
         <button className="btn small" disabled={readonly} onClick={() => setEditing("__new")}><Icon.plus size={12} />{t("agentPage.addModel")}</button>
       </div>
@@ -380,7 +376,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
           <div className="row between">
             <span className="small strong">{tn("agentPage.fetchedHead", fetched.length)}</span>
             <span className="row gap6">
-              <button className="link tiny" onClick={() => setPick(new Set(pick.size === fetched.length ? [] : fetched))}>{pick.size === fetched.length ? t("agentPage.selectNone") : t("agentPage.selectAll")}</button>
+              <button className="link tiny" onClick={() => setPick(new Set(pick.size === fetched.length ? [] : fetched))}>{pick.size === fetched.length ? t("common.selectNone") : t("common.selectAll")}</button>
               <button className="btn small" onClick={() => setFetched(null)}>{t("agentPage.collapse")}</button>
               <button className="btn small primary" disabled={pick.size === 0} onClick={addPicked}>{tn("agentPage.addPicked", pick.size)}</button>
             </span>
@@ -388,7 +384,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
           <div className="pick-list wide">
             {fetched.map((m) => (
               <label key={m} className="pick">
-                <input type="checkbox" checked={pick.has(m)} onChange={() => setPick((s) => { const n = new Set(s); if (n.has(m)) n.delete(m); else n.add(m); return n; })} />
+                <input type="checkbox" checked={pick.has(m)} onChange={() => setPick((s) => toggled(s, m))} />
                 <span className="mono small">{m}</span>
               </label>
             ))}
@@ -398,7 +394,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
 
       <div className="mrow mhead"><span /><span>{t("common.model")}</span><span>{t("agentPage.colContext")}</span><span className="right">{t("agentPage.colShown")}</span></div>
       {(editing === "__new" || editingModel) && (
-        <ModelDialog agentName={st.name} hasNames={hasNames} hasContext={hasContext} fields={fields} initial={editingModel}
+        <ModelDialog agentName={st.name} hasNames={hasNames} nameIsUpstream={st.id === "kimi"} hasContext={hasContext} fields={fields} initial={editingModel}
           onClose={() => setEditing(null)}
           onSave={(input) => { if (saveModel(input, editingModel)) setEditing(null); }} />
       )}
@@ -416,8 +412,8 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
             <span className="minw0">
               <span className="row gap6 minw0">
                 <span className={`mono ellipsis${on ? "" : " faint"}${dirty ? " dirty" : ""}`}>{m.id}</span>
-                {m.isNew && <span className="mtag new">{t("agentPage.tagNew")}</span>}
-                {m.isDeleted && <span className="mtag">{t("agentPage.tagDeleting")}</span>}
+                {m.isNew && <span className="mtag new">{t("common.tagNew")}</span>}
+                {m.isDeleted && <span className="mtag">{t("common.tagDeleting")}</span>}
                 {tags.map((g) => <span key={g.id} className={`mtag${g.id === "fast" ? " fast" : ""}`}>{g.label}</span>)}
               </span>
               {((hasNames && m.name && m.name !== m.id) || caps.length > 0) && (
@@ -432,23 +428,23 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
               {m.readonly ? (
                 <span className="muted small">{t("agentPage.builtinReadonly")}</span>
               ) : m.isDeleted ? (
-                <button className="link tiny" onClick={() => setDraft(withOp(draft, keys.deleteModel(pid, m.id), null))}>{t("agentPage.undoDelete")}</button>
+                <button className="link tiny" onClick={() => setDraft(withOp(draft, keys.deleteModel(pid, m.id), null))}>{t("common.undoDelete")}</button>
               ) : (
                 <>
                   <button className="icon-btn sm" aria-label={t("agentPage.editModel", { id: m.id })} title={t("common.edit")} disabled={readonly} onClick={() => setEditing(m.id)}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                    <Icon.edit size={12} />
                   </button>
                   {(m.deletable || m.isNew) && (
                     <button className="icon-btn sm" aria-label={t("agentPage.deleteModel", { id: m.id })} title={t("common.delete")} disabled={readonly}
                       onClick={async () => {
                         if (m.isNew) return setDraft(withOp(draft, keys.upsertModel(pid, m.id), null));
                         if (!(await ask({ title: t("agentPage.deleteConfirm", { id: m.id }), message: t("agentPage.deleteConfirmMsg"), danger: true }))) return;
-                        setDraft(withOp(draft, keys.deleteModel(pid, m.id), { op: "delete_model", provider: pid, model: m.id }));
+                        setDraft(deleteModel(draft, pid, m.id));
                       }}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
+                      <Icon.trash size={12} />
                     </button>
                   )}
-                  {!m.isNew && <Switch on={on} disabled={readonly} label={t(on ? "agentPage.hideModel" : "agentPage.showModel", { id: m.id })} onClick={() => onToggle(pid, m)} />}
+                  {!m.isNew && <Switch on={on} disabled={readonly} label={t(on ? "agentPage.hideModel" : "agentPage.showModel", { id: m.id })} onChange={() => onToggle(pid, m)} />}
                 </>
               )}
             </span>
@@ -487,7 +483,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
               return (
                 <div key={s.key} className="srow" id={`setting-${s.key}`}>
                   {head}
-                  <Switch on={v === true} disabled={readonly} fast={s.key.startsWith("fast")} label={s.label} onClick={() => onChange(s, !(v === true))} />
+                  <Switch on={v === true} disabled={readonly} fast={s.key.startsWith("fast")} label={s.label} onChange={(x) => onChange(s, x)} />
                 </div>
               );
             }
@@ -497,7 +493,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
                   {head}
                   <div className="sctl">
                     <Dropdown value={String(v)} label={s.label} disabled={readonly}
-                      options={s.options.map((o, i) => ({ value: o, label: s.hints[i] || o || t("agentPage.notSet") }))}
+                      options={s.options.map((o, i) => ({ value: o, label: s.hints[i] || o || t("common.notSet") }))}
                       onChange={(x) => onChange(s, x)} />
                   </div>
                 </div>
@@ -532,10 +528,8 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
                     const on = arr.includes(o);
                     return (
                       <button key={o} className={`opt${on ? " on" : ""}`} aria-pressed={on} disabled={readonly}
-                        onClick={() => onChange(s, on ? arr.filter((x) => x !== o) : [...arr, o])}>
-                        <span className="opt-check" aria-hidden="true">
-                          {on && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
-                        </span>
+                        onClick={() => onChange(s, toggledIn(arr, o))}>
+                        <OptCheck on={on} />
                         <span className="minw0">
                           <span className="opt-name">{o}</span>
                           {s.hints[i] && <span className="opt-hint">{s.hints[i]}</span>}
@@ -561,10 +555,10 @@ function TextSetting({ value, options, label, disabled, onCommit }: { value: str
   return (
     <div className="sctl wide" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) commit(); }}>
       {options.length ? (
-        <ComboBox value={text} options={options} label={label} disabled={disabled} placeholder={t("agentPage.notSet")}
+        <ComboBox value={text} options={options} label={label} disabled={disabled} placeholder={t("common.notSet")}
           onChange={(x) => { setText(x); if (options.includes(x)) commit(x); }} onEnter={() => commit()} />
       ) : (
-        <input className="input mono" value={text} aria-label={label} disabled={disabled} placeholder={t("agentPage.notSet")}
+        <input className="input mono" value={text} aria-label={label} disabled={disabled} placeholder={t("common.notSet")}
           onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commit(); }} />
       )}
     </div>
@@ -576,18 +570,10 @@ function ListSetting({ value, label, disabled, onCommit }: { value: string[]; la
   const joined = value.join("\n");
   const [text, setText] = useState(joined);
   useEffect(() => setText(joined), [joined]);
-  const lines = (t: string) => t.split("\n").map((x) => x.trim()).filter(Boolean);
+  const lines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
   return (
     <textarea className="input mono slist" rows={Math.min(8, Math.max(2, value.length + 1))} value={text} aria-label={label} disabled={disabled}
       placeholder={t("agentPage.onePerLine")} onChange={(e) => setText(e.target.value)}
       onBlur={() => { const next = lines(text); if (next.join("\n") !== joined) onCommit(next); }} />
-  );
-}
-
-export function Switch({ on, disabled, fast, label, onClick }: { on: boolean; disabled?: boolean; fast?: boolean; label: string; onClick: () => void }) {
-  return (
-    <button className={`switch${on ? " on" : ""}${fast ? " fast" : ""}`} aria-pressed={on} aria-label={label} disabled={disabled} onClick={onClick}>
-      <span />
-    </button>
   );
 }

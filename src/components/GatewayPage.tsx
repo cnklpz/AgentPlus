@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { useEscape } from "../hooks";
 import { type AgentId, type AgentState, type ApiKind, type GatewayBreaker, type GatewayBreakerView, type GatewayRoute, type GatewayRouteView, type GatewayStatus, type TestResult, api } from "../api";
-import { API_LABEL, type Group, type Station, apiFor, gatewayCapable, gatewayRouteId, plainRoute } from "../services";
+import {
+  API_LABEL, DEFAULT_GATEWAY_PORT, type Group, type Station, apiFor, findRoute, gatewayCapable, gatewayRouteId, isGatewayHost, plainRoute, tripped,
+  writableAgents,
+} from "../services";
 import { ComboBox } from "./ComboBox";
 import { Dropdown } from "./Dropdown";
 import { AgentIcon, Icon } from "./icons";
+import { Modal } from "./Modal";
+import { ErrorBox, Seg, ToggleRow } from "./controls";
+import { TestButton, TestResultView } from "./ProviderTest";
 import { t, tn, tx } from "../i18n";
 import { scrub } from "../privacy";
+import { copyText, errText, type Flash, isHttpUrl, onActivateKey } from "../util";
+import { joinList } from "../format";
 
 interface Props {
   status: GatewayStatus | null;
@@ -28,16 +35,11 @@ interface Props {
   staleKeys: number;
   /** Queue those entries for rewriting with each agent's key (pending changes). */
   onUpdateKeys: () => void;
-  flash: (text: string, error?: boolean) => void;
+  flash: Flash;
 }
 
 const PROTOS: ApiKind[] = ["chat", "responses", "anthropic"];
 const PATHS: Record<ApiKind, string> = { chat: "/chat/completions", responses: "/responses", anthropic: "/messages", gemini: "" };
-
-/** Paused by the error breaker (or waiting for its trial request). */
-export function tripped(r: GatewayRouteView): GatewayBreakerView | null {
-  return r.breaker && r.breaker.state !== "closed" ? r.breaker : null;
-}
 
 function secs(n: number) {
   return n >= 60 ? t("gatewayPage.minSec", { m: Math.floor(n / 60), s: n % 60 }) : t("gatewayPage.sec", { n });
@@ -52,7 +54,7 @@ function breakerWhen(b: GatewayBreakerView) {
 
 /** Local gateway, organised by provider: turn forwarding on for a provider, then plug it into any agent. */
 export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHost, onForward, onDeleteRoute, onAddToAgent, staleKeys, onUpdateKeys, flash }: Props) {
-  const [port, setPort] = useState(String(s?.port ?? 18650));
+  const [port, setPort] = useState(String(s?.port ?? DEFAULT_GATEWAY_PORT));
   const [busy, setBusy] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -62,14 +64,14 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
   };
   useEffect(() => { if (s) setPort(String(s.port)); }, [s?.port]);
 
-  const copy = (text: string) => navigator.clipboard.writeText(text).then(() => flash(t("common.copied"))).catch(() => flash(t("gatewayPage.copyFailed"), true));
+  const copy = (text: string) => copyText(text, flash);
   const paused = s?.routes.filter((r) => tripped(r)) ?? [];
   const resetBreaker = async (id: string | null) => {
     try {
       setStatus(await api.gatewayResetBreaker(id));
       flash(t(id ? "gatewayPage.resumedOne" : "gatewayPage.resumedAll"));
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     }
   };
   const portNum = /^\d+$/.test(port.trim()) ? Number(port.trim()) : NaN;
@@ -80,17 +82,17 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
     setBusy("power");
     try {
       setStatus(await api.gatewaySet(on, portOk ? portNum : null));
-      flash(t(on ? "gatewayPage.gatewayOn" : "gatewayPage.gatewayOff"));
+      flash(t(on ? "common.gatewayStarted" : "common.gatewayStopped"));
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
       api.gatewayStatus().then(setStatus).catch(() => undefined);
     } finally {
       setBusy(null);
     }
   };
 
-  const groups = stations.filter((x) => !x.builtin && !gatewayHost.includes(x.host.replace("localhost", "127.0.0.1"))).flatMap((st) => st.groups.map((g) => ({ st, g })));
-  const routeOf = (g: Group) => s?.routes.find((r) => r.library === g.lib?.id && r.upstreamApi === g.api) ?? null;
+  const groups = stations.filter((x) => !x.builtin && !isGatewayHost(x.host, gatewayHost)).flatMap((st) => st.groups.map((g) => ({ st, g })));
+  const routeOf = (g: Group) => findRoute(s?.routes ?? [], g.lib?.id, g.api) ?? null;
   const forwarded = s?.routes.length ?? 0;
   const portChanged = !!s && String(s.port) !== port.trim();
   const base = s ? `http://127.0.0.1:${s.port}` : "";
@@ -124,11 +126,11 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                 {s?.running ? (
                   <div className="row gap6 minw0">
                     <span className="mono small ellipsis">{base}</span>
-                    <button className="icon-btn sm" aria-label={t("gatewayPage.copyUrl")} onClick={() => copy(base)}><Icon.copy size={12} /></button>
+                    <button className="icon-btn sm" aria-label={t("common.copyUrl")} onClick={() => copy(base)}><Icon.copy size={12} /></button>
                     <span className="tiny muted">· {tn("gatewayPage.heroRequests", s.requests)} · {tn("gatewayPage.heroFailures", s.failures)}{s.active ? ` · ${tn("gatewayPage.heroActive", s.active)}` : ""}</span>
                   </div>
                 ) : (
-                  <div className="small muted">{s?.error ?? t("gatewayPage.idleHint")}</div>
+                  <div className="small muted">{scrub(s?.error) ?? t("gatewayPage.idleHint")}</div>
                 )}
               </div>
               <label className="gw-port-field">
@@ -146,7 +148,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
               )}
             </div>
             {!portOk && <em className="field-err">{t("gatewayPage.portInvalid")}</em>}
-            {s?.running && s.error && <div className="err">{scrub(s.error)}</div>}
+            {s?.running && s.error && <ErrorBox text={s.error} />}
             {s?.running && paused.length > 0 && (
               <div className="gw-trip" role="alert">
                 <div className="row between gap6">
@@ -205,7 +207,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
               return (
                 <div key={r.id} className={`gw-item fwd${expanded ? " open" : ""}`} data-url={r.localBase} data-ctx="route" data-route={r.id}>
                   <div className="gw-item-head" role="button" tabIndex={0} aria-expanded={expanded} onClick={() => setOpen(expanded ? null : r.id)}
-                    onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setOpen(expanded ? null : r.id); } }}>
+                    onKeyDown={onActivateKey(() => setOpen(expanded ? null : r.id))}>
                     <span className={`api-chip api-${r.upstreamApi}`}>{API_LABEL[r.upstreamApi]}</span>
                     <span className="grow minw0">
                       <span className="block small strong ellipsis">{r.name}</span>
@@ -218,11 +220,11 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                       : !r.enabled ? <span className="chip-muted">{t("gatewayPage.chipPaused")}</span>
                       : trip ? <span className="chip-bad" title={breakerWhen(trip)}>{trip.state === "open" ? t("gatewayPage.chipTripped", { wait: secs(trip.remainingSecs) }) : t("gatewayPage.chipProbe")}</span>
                       : <span className="chip-ok">{t("gatewayPage.chipActive")}</span>}
-                    <button className="icon-btn sm" aria-label={t("gatewayPage.copyGatewayUrl")} title={t("gatewayPage.copyUrl")} onClick={(e) => { e.stopPropagation(); copy(r.localBase); }}><Icon.copy size={12} /></button>
+                    <button className="icon-btn sm" aria-label={t("gatewayPage.copyGatewayUrl")} title={t("common.copyUrl")} onClick={(e) => { e.stopPropagation(); copy(r.localBase); }}><Icon.copy size={12} /></button>
                     <button className="icon-btn sm" aria-label={t("gatewayPage.deleteRoute")} title={t("gatewayPage.deleteRoute")} onClick={(e) => { e.stopPropagation(); remove(r.id); }}><Icon.trash size={12} /></button>
                     <span className="gw-chev"><Icon.chevron /></span>
                   </div>
-                  {expanded && <RouteBody r={r} g={g} agents={agents} running={!!s?.running} threshold={s?.breaker.threshold ?? 3} setStatus={setStatus} copy={copy} flash={flash}
+                  {expanded && <RouteBody r={r} g={g} agents={agents} gatewayHost={gatewayHost} running={!!s?.running} threshold={s?.breaker.threshold ?? 3} setStatus={setStatus} copy={copy} flash={flash}
                     onAddToAgent={onAddToAgent} onDelete={() => remove(r.id)} onResetBreaker={() => resetBreaker(r.id)} />}
                 </div>
               );
@@ -241,8 +243,8 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <span className="mono tiny muted">{l.at}</span>
                     <span className="mono small ellipsis">{l.route}</span>
                     <span className="tiny">
-                      {l.inbound ? API_LABEL[l.inbound as ApiKind] ?? l.inbound : l.method}
-                      {l.converted ? <> → {API_LABEL[l.upstream as ApiKind] ?? l.upstream}</> : l.upstream ? t("gatewayPage.passthroughSuffix") : ""}
+                      {l.inbound ? API_LABEL[l.inbound as ApiKind] : l.method}
+                      {l.converted ? <> → {API_LABEL[l.upstream as ApiKind]}</> : l.upstream ? t("gatewayPage.passthroughSuffix") : ""}
                     </span>
                     <span className="mono tiny ellipsis">{l.model}</span>
                     <span className={`mono tiny ${l.status >= 400 ? "warn-text" : "good-ink"}`}>{l.status || "—"}</span>
@@ -266,7 +268,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
 }
 
 /** The unified entry: one address for every forward, routed by model and split by weight. */
-function Unified({ s, copy }: { s: GatewayStatus; copy: (t: string) => void }) {
+function Unified({ s, copy }: { s: GatewayStatus; copy: (text: string) => void }) {
   const live = s.routes.filter((r) => r.enabled && !r.upstreamMissing);
   const byModel = new Map<string, GatewayRouteView[]>();
   for (const r of live) for (const m of r.models) byModel.set(m, [...(byModel.get(m) ?? []), r]);
@@ -274,7 +276,7 @@ function Unified({ s, copy }: { s: GatewayStatus; copy: (t: string) => void }) {
   const unknown = live.filter((r) => r.models.length === 0);
   return (
     <section className="sgroup">
-      <h2 className="row between"><span>{t("gatewayPage.unified")}</span><span className="tiny muted">{tn("gatewayPage.modelCount", rows.length)} · {tn("gatewayPage.routeCount", live.length)}</span></h2>
+      <h2 className="row between"><span>{t("gatewayPage.unified")}</span><span className="tiny muted">{tn("common.modelCount", rows.length)} · {tn("gatewayPage.routeCount", live.length)}</span></h2>
       <div className="srow stacked">
         <div className="gw-base">
           <span className="mono small grow ellipsis">{s.unifiedBase}</span>
@@ -303,7 +305,7 @@ function Unified({ s, copy }: { s: GatewayStatus; copy: (t: string) => void }) {
           </div>
         )}
         {unknown.length > 0 && (
-          <span className="tiny muted">{t("gatewayPage.unknownModels", { names: unknown.map((r) => r.name).join(t("gatewayPage.listSep")) })}</span>
+          <span className="tiny muted">{t("gatewayPage.unknownModels", { names: joinList(unknown.map((r) => r.name)) })}</span>
         )}
       </div>
     </section>
@@ -328,9 +330,7 @@ function AddForward({ groups, onForward, onClose }: {
   /** Custom upstream already saved to the library by an earlier attempt. */
   const savedId = useRef<string | null>(null);
 
-  useEscape(onClose);
-
-  const urlOk = /^https?:\/\/\S+$/.test(url.trim());
+  const urlOk = isHttpUrl(url);
   const can = mode === "pick" ? !!pick : name.trim() !== "" && urlOk;
   const save = async () => {
     setBusy(true);
@@ -347,85 +347,69 @@ function AddForward({ groups, onForward, onClose }: {
         await onForward({ key: `lib:${e.id}`, name: e.name, baseUrl: e.baseUrl, api: e.api, keyFp: e.keyFp, keyHint: e.keyHint, lib: e, uses: [] }, false);
       }
     } catch (e) {
-      setErr(String(e).replace(/^Error: /, ""));
+      setErr(errText(e));
       setBusy(false);
     }
   };
 
+  const foot = (
+    <>
+      <span className="muted tiny grow">{t("gatewayPage.autoStart")}</span>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={!can || busy} onClick={save}>{busy ? t("gatewayPage.adding") : t("common.add")}</button>
+    </>
+  );
   return (
-    <div className="modal-bg" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={t("gatewayPage.addRoute")}>
-        <div className="modal-head">
-          <h2>{t("gatewayPage.addRoute")}</h2>
-          <button className="icon-btn" aria-label={t("common.close")} onClick={onClose}><Icon.close /></button>
+    <Modal label={t("gatewayPage.addRoute")} title={t("gatewayPage.addRoute")} onClose={onClose} foot={foot}>
+      <Seg value={mode} onChange={setMode} options={[
+        { value: "pick", label: t("gatewayPage.pickExisting"), disabled: !groups.length },
+        { value: "custom", label: t("gatewayPage.customUrl") },
+      ]} />
+      {mode === "pick" ? (
+        <div className="field">
+          <span className="field-label">{t("common.provider")}</span>
+          <Dropdown value={pick} label={t("common.provider")} onChange={setPick}
+            options={groups.map(({ st, g }) => ({ value: g.key, label: g.name, hint: `${st.name} · ${API_LABEL[g.api]} · ${g.baseUrl}` }))} />
+          <em className="muted tiny">{t("gatewayPage.pickHint")}</em>
+          {(() => {
+            const users = replaceable(groups.find((x) => x.g.key === pick)?.g);
+            return (
+              <ToggleRow className="af-replace" on={replace} onChange={setReplace} disabled={users.length === 0} title={t("gatewayPage.replaceTitle")}
+                hint={users.length === 0
+                  ? t("gatewayPage.replaceNone")
+                  : replace
+                    ? t("gatewayPage.replaceOn", {
+                        list: joinList(users.map((u) => t("gatewayPage.agentProvider", { agent: u.agent.name, provider: u.p!.name }))),
+                      })
+                    : tn("gatewayPage.replaceOff", users.length)} />
+            );
+          })()}
         </div>
-        <div className="modal-body">
-          <div className="seg">
-            <button className={mode === "pick" ? "on" : ""} disabled={!groups.length} onClick={() => setMode("pick")}>{t("gatewayPage.pickExisting")}</button>
-            <button className={mode === "custom" ? "on" : ""} onClick={() => setMode("custom")}>{t("gatewayPage.customUrl")}</button>
+      ) : (
+        <>
+          <div className="field">
+            <label htmlFor="af-name">{t("common.name")}</label>
+            <input id="af-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("gatewayPage.namePlaceholder")} />
           </div>
-          {mode === "pick" ? (
-            <div className="field">
-              <span className="field-label">{t("common.provider")}</span>
-              <Dropdown value={pick} label={t("common.provider")} onChange={setPick}
-                options={groups.map(({ st, g }) => ({ value: g.key, label: g.name, hint: `${st.name} · ${API_LABEL[g.api]} · ${g.baseUrl}` }))} />
-              <em className="muted tiny">{t("gatewayPage.pickHint")}</em>
-              {(() => {
-                const users = replaceable(groups.find((x) => x.g.key === pick)?.g);
-                return (
-                  <div className={`gw-toggle af-replace${replace ? " on" : ""}`}>
-                    <div className="grow minw0">
-                      <div className="small strong">{t("gatewayPage.replaceTitle")}</div>
-                      <div className="tiny muted">
-                        {users.length === 0
-                          ? t("gatewayPage.replaceNone")
-                          : replace
-                            ? t("gatewayPage.replaceOn", {
-                                list: users.map((u) => t("gatewayPage.agentProvider", { agent: u.agent.name, provider: u.p!.name })).join(t("gatewayPage.listSep")),
-                              })
-                            : tn("gatewayPage.replaceOff", users.length)}
-                      </div>
-                    </div>
-                    <button type="button" className={`switch${replace ? " on" : ""}`} role="switch" aria-checked={replace} aria-label={t("gatewayPage.replaceTitle")}
-                      disabled={users.length === 0} onClick={() => setReplace((v) => !v)}><span /></button>
-                  </div>
-                );
-              })()}
-            </div>
-          ) : (
-            <>
-              <div className="field">
-                <label htmlFor="af-name">{t("common.name")}</label>
-                <input id="af-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("gatewayPage.namePlaceholder")} />
-              </div>
-              <div className="field">
-                <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
-                <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
-                {url && !urlOk && <em className="field-err">{t("gatewayPage.urlInvalid")}</em>}
-              </div>
-              <div className="field">
-                <span className="field-label">{t("gatewayPage.upstreamProto")}</span>
-                <div className="seg">
-                  {PROTOS.map((p) => <button key={p} className={apiKind === p ? "on" : ""} onClick={() => setApiKind(p)}>{API_LABEL[p]}</button>)}
-                </div>
-                <em className="muted tiny">{t("gatewayPage.protoHint")}</em>
-              </div>
-              <div className="field">
-                <label htmlFor="af-key">{t("common.apiKey")}</label>
-                <input id="af-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
-                <em className="muted tiny">{t("gatewayPage.keyHint")}</em>
-              </div>
-            </>
-          )}
-          {err && <div className="err">{err}</div>}
-        </div>
-        <div className="modal-foot">
-          <span className="muted tiny grow">{t("gatewayPage.autoStart")}</span>
-          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="btn primary" disabled={!can || busy} onClick={save}>{busy ? t("gatewayPage.adding") : t("common.add")}</button>
-        </div>
-      </div>
-    </div>
+          <div className="field">
+            <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
+            <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+            {url && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
+          </div>
+          <div className="field">
+            <span className="field-label">{t("gatewayPage.upstreamProto")}</span>
+            <Seg value={apiKind} onChange={setApiKind} label={t("gatewayPage.upstreamProto")} options={PROTOS.map((p) => ({ value: p, label: API_LABEL[p] }))} />
+            <em className="muted tiny">{t("gatewayPage.protoHint")}</em>
+          </div>
+          <div className="field">
+            <label htmlFor="af-key">{t("common.apiKey")}</label>
+            <input id="af-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
+            <em className="muted tiny">{t("gatewayPage.keyHint")}</em>
+          </div>
+        </>
+      )}
+      {err && <ErrorBox text={err} />}
+    </Modal>
   );
 }
 
@@ -434,11 +418,11 @@ function replaceable(g: Group | undefined) {
   return (g?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && !u.p.isDeleted && u.p.baseUrl);
 }
 
-function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, onAddToAgent, onDelete, onResetBreaker }: {
+function RouteBody({ r, g, agents, gatewayHost, running, threshold, setStatus, copy, flash, onAddToAgent, onDelete, onResetBreaker }: {
   onDelete: () => void;
   onResetBreaker: () => void;
-  r: GatewayRouteView; g: Group | null; agents: AgentState[]; running: boolean; threshold: number; setStatus: (s: GatewayStatus) => void;
-  copy: (t: string) => void; flash: Props["flash"]; onAddToAgent: Props["onAddToAgent"];
+  r: GatewayRouteView; g: Group | null; agents: AgentState[]; gatewayHost: readonly string[]; running: boolean; threshold: number;
+  setStatus: (s: GatewayStatus) => void; copy: (text: string) => void; flash: Flash; onAddToAgent: Props["onAddToAgent"];
 }) {
   const [inbound, setInbound] = useState<ApiKind>(r.upstreamApi === "responses" ? "chat" : "responses");
   const models = [...new Set([...(g?.lib?.models ?? []), ...(g?.uses ?? []).flatMap((u) => u.p?.models.map((m) => m.id) ?? [])])];
@@ -449,15 +433,15 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
   const [advanced, setAdvanced] = useState(r.modelMap.length > 0);
   const [weight, setWeight] = useState(String(r.weight));
 
-  // Agents already pointing at this route.
-  const linked = new Set(agents.filter((a) => a.providers.some((p) => gatewayRouteId(p.baseUrl, r.localBase.replace(/^https?:\/\//, "").split("/")[0]) === r.id)).map((a) => a.id));
+  // Agents already pointing at this route (also at an earlier gateway port, which still counts).
+  const linked = new Set(agents.filter((a) => a.providers.some((p) => gatewayRouteId(p.baseUrl, gatewayHost) === r.id)).map((a) => a.id));
 
   const save = async (patch: Partial<GatewayRoute>, msg: string) => {
     try {
       setStatus(await api.gatewaySaveRoute({ ...plainRoute(r), ...patch }, r.id));
       flash(msg);
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     }
   };
   const test = async () => {
@@ -466,7 +450,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
     try {
       setRes(await api.gatewayTest(r.id, inbound, model.trim()));
     } catch (e) {
-      setRes(String(e));
+      setRes(errText(e));
     } finally {
       setTesting(false);
       // A passing test un-pauses a tripped forward.
@@ -506,7 +490,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
       <div className="gw-block">
         <span className="gw-label">{t("gatewayPage.connectAgents")}</span>
         <div className="gw-actions">
-          {agents.filter((a) => a.installed && !a.readonly && gatewayCapable(a.id)).map((a) => {
+          {writableAgents(agents).filter((a) => gatewayCapable(a.id)).map((a) => {
             const via: ApiKind = apiFor(a.id, r.upstreamApi);
             return linked.has(a.id) ? (
               <span key={a.id} className="gw-linked"><AgentIcon id={a.id} size={16} />{t("gatewayPage.linked", { name: a.name })}</span>
@@ -537,26 +521,11 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
       <div className="gw-block">
         <span className="gw-label">{t("common.test")}</span>
         <div className="gw-test">
-          <div className="seg">
-            {PROTOS.map((p) => <button key={p} className={inbound === p ? "on" : ""} onClick={() => setInbound(p)}>{API_LABEL[p]}</button>)}
-          </div>
+          <Seg value={inbound} onChange={setInbound} options={PROTOS.map((p) => ({ value: p, label: API_LABEL[p] }))} />
           <ComboBox value={model} options={models} onChange={setModel} onEnter={() => { if (canTest) test(); }} placeholder={t("gatewayPage.modelId")} label={t("gatewayPage.testModel")} disabled={testing} />
-          <button className="btn small primary" disabled={!canTest} onClick={test} title={t(running ? "gatewayPage.testTitle" : "gatewayPage.startFirst")}>
-            {testing ? <><span className="spin">↻</span>{t("gatewayPage.testing")}</> : <><Icon.pulse size={12} />{t("common.test")}</>}
-          </button>
+          <TestButton className="btn small primary" running={testing} disabled={!canTest} onClick={test} title={t(running ? "gatewayPage.testTitle" : "gatewayPage.startFirst")} />
         </div>
-        {typeof res === "string" && <div className="ptest-res bad"><strong>{t("gatewayPage.testFailed")}</strong><span>{scrub(res)}</span></div>}
-        {res && typeof res !== "string" && (
-          <div className={`ptest-res ${res.ok ? "good" : "bad"}`}>
-            <div className="row gap6">
-              <strong>{t(res.ok ? "gatewayPage.works" : "gatewayPage.notWorking")}</strong>
-              <span className="mono tiny">{(res.ms / 1000).toFixed(2)} s</span>
-              {res.status != null && <span className="mono tiny">HTTP {res.status}</span>}
-              <span className="tiny">{API_LABEL[inbound]} → {API_LABEL[r.upstreamApi]}</span>
-            </div>
-            <span>{res.ok ? (res.reply ? tx("gatewayPage.reply", { reply: <span className="mono">{res.reply}</span> }) : t("gatewayPage.noReply")) : scrub(res.error)}</span>
-          </div>
-        )}
+        {res !== null && <TestResultView result={res} extra={<span className="tiny">{API_LABEL[inbound]} → {API_LABEL[r.upstreamApi]}</span>} />}
       </div>
 
       <div className="gw-block">
@@ -581,7 +550,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
                 modelMap: map.split("\n").map((l) => l.split("=").map((x) => x.trim())).filter((p) => p.length === 2 && p[0] && p[1]) as [string, string][],
               }, t("gatewayPage.modelMapSaved"))}>{t("gatewayPage.saveMap")}</button>
               <span className="grow" />
-              <button className="btn small" onClick={() => save({ enabled: !r.enabled }, t(r.enabled ? "gatewayPage.routePaused" : "gatewayPage.routeResumed"))}>{t(r.enabled ? "gatewayPage.pauseRoute" : "gatewayPage.resumeRoute")}</button>
+              <button className="btn small" onClick={() => save({ enabled: !r.enabled }, t(r.enabled ? "gatewayPage.routePaused" : "gatewayPage.routeResumed"))}>{t(r.enabled ? "common.pauseRoute" : "common.resumeRoute")}</button>
               <button className="btn small danger" onClick={onDelete}>{t("gatewayPage.deleteRoute")}</button>
             </div>
             <span className="tiny muted">{t("gatewayPage.stopHint")}</span>
@@ -593,7 +562,7 @@ function RouteBody({ r, g, agents, running, threshold, setStatus, copy, flash, o
 }
 
 /** Error breaker settings: when to pause a forward that keeps failing, and for how long. */
-function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setStatus: (s: GatewayStatus) => void; flash: Props["flash"] }) {
+function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setStatus: (s: GatewayStatus) => void; flash: Flash }) {
   const [threshold, setThreshold] = useState(String(cfg.threshold));
   const [cooldown, setCooldown] = useState(String(cfg.cooldownSecs));
   useEffect(() => { setThreshold(String(cfg.threshold)); setCooldown(String(cfg.cooldownSecs)); }, [cfg.threshold, cfg.cooldownSecs]);
@@ -603,21 +572,15 @@ function BreakerSettings({ cfg, setStatus, flash }: { cfg: GatewayBreaker; setSt
       setStatus(await api.gatewaySetBreaker(next));
       flash(msg);
     } catch (e) {
-      flash(String(e), true);
+      flash(errText(e), true);
     }
   };
   return (
     <section className="sgroup">
       <h2>{t("gatewayPage.breaker")}</h2>
       <div className="srow stacked">
-        <div className={`gw-toggle${cfg.enabled ? " on" : ""}`}>
-          <div className="grow minw0">
-            <div className="small strong">{t("gatewayPage.breakerToggle")}</div>
-            <div className="tiny muted">{t("gatewayPage.breakerDesc")}</div>
-          </div>
-          <button type="button" className={`switch${cfg.enabled ? " on" : ""}`} role="switch" aria-checked={cfg.enabled} aria-label={t("gatewayPage.breaker")}
-            onClick={() => save({ ...cfg, enabled: !cfg.enabled }, t(cfg.enabled ? "gatewayPage.breakerOff" : "gatewayPage.breakerOn"))}><span /></button>
-        </div>
+        <ToggleRow on={cfg.enabled} title={t("gatewayPage.breakerToggle")} hint={t("gatewayPage.breakerDesc")} label={t("gatewayPage.breaker")}
+          onChange={() => save({ ...cfg, enabled: !cfg.enabled }, t(cfg.enabled ? "gatewayPage.breakerOff" : "gatewayPage.breakerOn"))} />
         {cfg.enabled && (
           <div className="row gap6 gw-breaker-form">
             <span className="small row gap6 gw-breaker-form">

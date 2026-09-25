@@ -1,6 +1,21 @@
 //! Provider network calls: latency and model listing.
 
+use crate::util::clip;
 use std::time::{Duration, Instant};
+
+/// Anthropic API version AgentPlus speaks.
+pub const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// Adds the provider's key: `x-api-key` for Anthropic's API (which always gets
+/// `anthropic-version`, key or not, so keyless local proxies work), a bearer token otherwise.
+pub fn with_key(req: reqwest::blocking::RequestBuilder, anthropic: bool, key: Option<&str>) -> reqwest::blocking::RequestBuilder {
+    match (anthropic, key) {
+        (true, Some(k)) => req.header("x-api-key", k).header("anthropic-version", ANTHROPIC_VERSION),
+        (true, None) => req.header("anthropic-version", ANTHROPIC_VERSION),
+        (false, Some(k)) => req.bearer_auth(k),
+        (false, None) => req,
+    }
+}
 
 fn client() -> Result<reqwest::blocking::Client, String> {
     client_with(Duration::from_secs(12))
@@ -80,14 +95,7 @@ pub fn latency(base_url: &str) -> Result<u64, String> {
 
 /// Lists model ids from `GET <base>/models` (OpenAI and Anthropic shapes).
 pub fn list_models(base_url: &str, key: Option<&str>, api: &str) -> Result<Vec<String>, String> {
-    let mut req = client()?.get(models_url(base_url));
-    if let Some(k) = key {
-        req = if api == "anthropic" {
-            req.header("x-api-key", k).header("anthropic-version", "2023-06-01")
-        } else {
-            req.bearer_auth(k)
-        };
-    }
+    let req = with_key(client()?.get(models_url(base_url)), api == "anthropic", key);
     let resp = req.send().map_err(|e| if e.is_timeout() { crate::i18n::l("请求超时", "Request timed out").to_string() } else { tr!("连接失败：{e}", "Connection failed: {e}") })?;
     let status = resp.status();
     if let Some(to) = moved_to(&resp) {
@@ -128,11 +136,6 @@ pub struct TestResult {
     pub error: Option<String>,
     /// Tokens reported by the server (input, output).
     pub usage: Option<(u64, u64)>,
-}
-
-fn short(s: &str, n: usize) -> String {
-    let t: String = s.trim().chars().take(n).collect();
-    if s.trim().chars().count() > n { format!("{t}…") } else { t }
 }
 
 /// Request bodies for a test call, tried in order. The first ones turn thinking off (the
@@ -236,10 +239,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     let mut bodies = test_bodies(api, model, "Reply with exactly one word: pong").into_iter().peekable();
     let (status, text) = loop {
         let body = bodies.next().expect("test_bodies is never empty");
-        let mut req = client.post(&url).header("content-type", "application/json").body(body.to_string());
-        if let Some(k) = key {
-            req = if api == "anthropic" { req.header("x-api-key", k).header("anthropic-version", "2023-06-01") } else { req.bearer_auth(k) };
-        }
+        let req = with_key(client.post(&url).header("content-type", "application/json").body(body.to_string()), api == "anthropic", key);
         let t0 = Instant::now();
         let resp = match req.send() {
             Ok(x) => x,
@@ -274,11 +274,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     r.status = Some(status.as_u16());
     let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
     if !status.is_success() {
-        let msg = v
-            .as_ref()
-            .and_then(|v| v.pointer("/error/message").or_else(|| v.get("message")).or_else(|| v.get("error")).or_else(|| v.get("detail")))
-            .map(|m| m.as_str().map(String::from).unwrap_or_else(|| m.to_string()))
-            .unwrap_or_else(|| short(&text, 160));
+        let msg = v.as_ref().and_then(crate::gateway::convert::error_message).unwrap_or_else(|| clip(text.trim(), 160));
         let hint = match status.as_u16() {
             401 | 403 => crate::i18n::l("密钥无效或没有权限", "Invalid API key or no permission"),
             404 => crate::i18n::l("地址或接口类型不对，或者没有这个模型", "Wrong base URL or API type, or no such model"),
@@ -287,17 +283,17 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
             s if s >= 500 => crate::i18n::l("服务端出错", "Server error"),
             _ => crate::i18n::l("请求失败", "Request failed"),
         };
-        r.error = Some(if msg.is_empty() { tr!("{hint}（HTTP {status}）", "{hint} (HTTP {status})") } else { tr!("{hint}（HTTP {}）：{}", "{hint} (HTTP {}): {}", status.as_u16(), short(&msg, 200)) });
+        r.error = Some(if msg.is_empty() { tr!("{hint}（HTTP {status}）", "{hint} (HTTP {status})") } else { tr!("{hint}（HTTP {}）：{}", "{hint} (HTTP {}): {}", status.as_u16(), clip(msg.trim(), 200)) });
         return r;
     }
     let v = match v.map(Ok).or_else(|| from_sse(api, &text)) {
         Some(Ok(v)) => v,
         Some(Err(e)) => {
-            r.error = Some(tr!("流式响应中返回了错误：{}", "The stream returned an error: {}", short(&e, 200)));
+            r.error = Some(tr!("流式响应中返回了错误：{}", "The stream returned an error: {}", clip(e.trim(), 200)));
             return r;
         }
         None => {
-            r.error = Some(tr!("返回的不是 JSON：{}", "Response is not JSON: {}", short(&text, 120)));
+            r.error = Some(tr!("返回的不是 JSON：{}", "Response is not JSON: {}", clip(text.trim(), 120)));
             return r;
         }
     };
@@ -315,7 +311,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
             })
         }),
     };
-    r.reply = reply.filter(|s| !s.trim().is_empty()).map(|s| short(&s, 80));
+    r.reply = reply.filter(|s| !s.trim().is_empty()).map(|s| clip(s.trim(), 80));
     let u = v.get("usage");
     let num = |k: &[&str]| k.iter().find_map(|k| u.and_then(|u| u.get(*k)).and_then(|x| x.as_u64()));
     if let (Some(i), Some(o)) = (num(&["input_tokens", "prompt_tokens"]), num(&["output_tokens", "completion_tokens"])) {
@@ -395,6 +391,22 @@ mod tests {
                 return text;
             }
         }
+    }
+
+    /// The error message the provider test shows, picked like the gateway picks it.
+    #[test]
+    fn test_call_error_messages() {
+        let error_of = |status: &'static str, body: &'static str| {
+            let (port, _seen) = serve_with(3, move |_| http(status, "", body));
+            test_call(&format!("http://127.0.0.1:{port}/v1"), Some("k"), "chat", "m").error.unwrap_or_default()
+        };
+        assert_eq!(error_of("400 Bad Request", r#"{"message":"","detail":"bad model"}"#), "请求被拒绝，可能是模型名不对或接口类型不匹配（HTTP 400）：bad model");
+        assert_eq!(error_of("429 Too Many", r#"{"error":"quota exceeded"}"#), "请求太频繁或额度用完（HTTP 429）：quota exceeded");
+        assert_eq!(error_of("500 Oops", r#"{"error":{"message":"boom"}}"#), "服务端出错（HTTP 500）：boom");
+        assert_eq!(error_of("503 Busy", r#"{"message":42}"#), "服务端出错（HTTP 503）：42");
+        // No message field: the (shortened) body itself.
+        assert_eq!(error_of("503 Busy", r#"{"error":{"code":1}}"#), r#"服务端出错（HTTP 503）：{"error":{"code":1}}"#);
+        assert_eq!(error_of("502 Bad", "  "), "服务端出错（HTTP 502 Bad Gateway）");
     }
 
     #[test]
@@ -492,70 +504,37 @@ mod tests {
     fn stream_replies_to_a_non_stream_test_are_read() {
         let sse = |body: &str| {
             let body = body.to_string();
-            let (port, _) = serve_with(1, move |_| http("200 OK", "content-type: text/event-stream
-", &body));
+            let (port, _) = serve_with(1, move |_| http("200 OK", "content-type: text/event-stream\r\n", &body));
             format!("http://127.0.0.1:{port}/v1")
         };
         // Responses: text from the deltas, usage from response.completed (CRLF lines).
         let base = sse(concat!(
-            "event: response.created
-data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"output\":[]}}
-
-",
-            "event: response.output_text.delta
-data: {\"type\":\"response.output_text.delta\",\"delta\":\"po\"}
-
-",
-            "event: response.output_text.delta
-data: {\"type\":\"response.output_text.delta\",\"delta\":\"ng\"}
-
-",
-            "event: response.completed
-data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":2}}}
-
-",
+            "event: response.created\r\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"output\":[]}}\r\n\r\n",
+            "event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"po\"}\r\n\r\n",
+            "event: response.output_text.delta\r\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ng\"}\r\n\r\n",
+            "event: response.completed\r\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":2}}}\r\n\r\n",
         ));
         let r = test_call(&base, Some("k"), "responses", "m");
         assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((12, 2)), "{r:?}");
         // Chat: deltas plus the usage chunk, then [DONE].
         let base = sse(concat!(
-            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}
-
-",
-            "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}
-
-",
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1}}
-
-",
-            "data: [DONE]
-
-",
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n",
         ));
         let r = test_call(&base, None, "chat", "m");
         assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((9, 1)), "{r:?}");
         // Anthropic: input from message_start, output from message_delta.
         let base = sse(concat!(
-            "event: message_start
-data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":1}}}
-
-",
-            "event: content_block_delta
-data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}
-
-",
-            "event: message_delta
-data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}
-
-",
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":1}}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n\n",
         ));
         let r = test_call(&base, Some("k"), "anthropic", "m");
         assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((7, 3)), "{r:?}");
         // An error inside the stream fails the test with its message.
-        let base = sse("event: response.failed
-data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model overloaded\"}}}
-
-");
+        let base = sse("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model overloaded\"}}}\n\n");
         let r = test_call(&base, Some("k"), "responses", "m");
         assert!(!r.ok && r.error.as_deref().unwrap().contains("model overloaded"), "{r:?}");
         // Plain text is still reported as not JSON.
@@ -563,10 +542,28 @@ data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"model
         assert!(!r.ok && r.error.as_deref().unwrap().contains("不是 JSON"), "{r:?}");
     }
 
+    /// A keyless Anthropic-style endpoint (a local proxy) still gets `anthropic-version`,
+    /// for the model list and the test call alike, as it does through the gateway.
     #[test]
-    fn short_counts_characters() {
-        assert_eq!(short("  密钥密钥密钥  ", 2), "密钥…");
-        assert_eq!(short("abc", 3), "abc");
-        assert_eq!(short("", 3), "");
+    fn keyless_anthropic_gets_the_version_header() {
+        let (port, seen) = serve_with(2, |head| {
+            if head.starts_with("GET") {
+                http("200 OK", "", r#"{"data":[{"id":"m"}]}"#)
+            } else {
+                http("200 OK", "", r#"{"content":[{"type":"text","text":"pong"}]}"#)
+            }
+        });
+        let base = format!("http://127.0.0.1:{port}/v1");
+        assert_eq!(list_models(&base, None, "anthropic").unwrap(), ["m"]);
+        assert!(test_call(&base, None, "anthropic", "m").ok);
+        for _ in 0..2 {
+            let head = seen.recv().unwrap().to_ascii_lowercase();
+            assert!(head.contains(&format!("anthropic-version: {ANTHROPIC_VERSION}")) && !head.contains("x-api-key"), "{head}");
+        }
+        // Other protocols get neither.
+        let (port, seen) = serve_with(1, |_| http("200 OK", "", r#"{"data":[]}"#));
+        list_models(&format!("http://127.0.0.1:{port}/v1"), None, "chat").unwrap();
+        let head = seen.recv().unwrap().to_ascii_lowercase();
+        assert!(!head.contains("anthropic-version") && !head.contains("authorization"), "{head}");
     }
 }

@@ -1,12 +1,12 @@
 import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
-import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, gatewayCapable, gatewayRouteId, importSource, writableAgents } from "../services";
+import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, freeAgents, gatewayCapable, gatewayRouteId, importSource, liveUses, useKey } from "../services";
 import { AgentIcon, Icon } from "./icons";
-import { Bars, type Latency, initials } from "./ProviderCard";
-import { latencyText, stationColor } from "./ProvidersHub";
+import { Avatar, Bars, type Latency, latencyText, stationColor } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
 import { t, tn } from "../i18n";
 import { scrub, scrubHost } from "../privacy";
+import { toggled } from "../util";
 
 interface Props {
   s: Station;
@@ -40,25 +40,25 @@ function removable(u: Use): string | null {
 export function ServiceDetail(props: Props) {
   const { s, latency } = props;
   const [open, setOpen] = useState<Set<string>>(() => new Set(s.groups.length <= 2 ? s.groups.map((g) => g.key) : [s.groups[0]?.key]));
-  const toggle = (k: string) => setOpen((o) => { const n = new Set(o); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const toggle = (k: string) => setOpen((o) => toggled(o, k));
   const lat = s.baseUrl ? latencyText(latency[s.baseUrl]) : null;
 
   return (
     <section className="pdetail sdetail" aria-label={t("serviceDetail.detailsAria", { name: s.name })}>
       <div className="pdetail-head">
-        <span className="pavatar" style={{ background: stationColor(s) }}>{initials(s.name)}</span>
+        <Avatar name={s.name} color={stationColor(s)} />
         <span className="pcard-title">
           <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
           <span className="pcard-host mono ellipsis">{s.builtin ? t("serviceDetail.accountLogin") : tn("serviceDetail.hostGroups", s.groups.length, { host: s.host })}</span>
         </span>
-        <button className="icon-btn" aria-label={t("serviceDetail.closeDetails")} onClick={props.onClose}><Icon.close /></button>
+        <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={props.onClose}><Icon.close /></button>
       </div>
 
       {lat && (
         <div className="pdetail-lat">
           <Bars level={lat.level} />
           <span className={`grow small ${lat.level >= 2 ? "mono good-ink" : ""}`}>{lat.text}</span>
-          <button className="link" onClick={() => props.onTest(s.baseUrl!)}>{t("serviceDetail.retest")}</button>
+          <button className="link" onClick={() => props.onTest(s.baseUrl!)}>{t("common.retest")}</button>
         </div>
       )}
 
@@ -78,10 +78,9 @@ export function ServiceDetail(props: Props) {
 function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { g: Group; open: boolean; onToggle: () => void; builtin: boolean }) {
   const [deleting, setDeleting] = useState(false);
   const deletable = g.uses.filter((u) => removable(u) === null);
-  const uid = (u: Use) => `${u.agent.id}:${u.p?.id}`;
-  const [pick, setPick] = useState<Set<string>>(new Set(deletable.map(uid)));
+  const [pick, setPick] = useState<Set<string>>(new Set(deletable.map(useKey)));
   const [fromLib, setFromLib] = useState(true);
-  const free = writableAgents(agents).filter((a) => !g.uses.some((u) => u.agent.id === a.id && u.state !== "removing"));
+  const free = freeAgents(agents, g);
 
   const src = g.lib ? { agent: "library", provider: g.lib.id } : (() => {
     const u = g.uses.find((x) => x.p && !x.p.isNew && x.p.baseUrl);
@@ -97,7 +96,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
       <button className="gpanel-head" onClick={onToggle} aria-expanded={open}>
         <span className={`api-chip api-${g.api}`}>{API_LABEL[g.api]}</span>
         <span className="grow minw0 ellipsis small strong">{g.name}</span>
-        <span className="tiny muted">{tn("serviceDetail.uses", g.uses.filter((u) => u.state !== "removing").length)}</span>
+        <span className="tiny muted">{tn("serviceDetail.uses", liveUses(g).length)}</span>
         <Icon.chevron />
       </button>
       {open && (
@@ -108,12 +107,12 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 <span className="muted small">{t("common.baseUrl")}</span>
                 <span className="row gap6 minw0">
                   <span className="mono small ellipsis grow" title={scrub(g.baseUrl)}>{scrub(g.baseUrl)}</span>
-                  <button className="icon-btn sm" aria-label={t("serviceDetail.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
+                  <button className="icon-btn sm" aria-label={t("common.copyUrl")} onClick={() => props.onCopy(g.baseUrl)}><Icon.copy size={12} /></button>
                 </span>
               </div>
               <div className="kv-row">
                 <span className="muted small">{t("common.apiKey")}</span>
-                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("serviceDetail.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
+                <span className="small">{g.keyHint ? <span className="mono">{scrub(g.keyHint)}</span> : t("common.notSet")}{g.lib ? ` · ${t("serviceDetail.inLibrary")}` : ""}</span>
               </div>
             </div>
           )}
@@ -123,7 +122,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
           {!builtin && !deleting && (
             <div className="grid2">
               <button className="btn small" onClick={() => props.onEditGroup(g)}><Icon.edit size={12} />{t("serviceDetail.editGroup")}</button>
-              <button className="btn small danger" onClick={() => { setPick(new Set(deletable.map(uid))); setDeleting(true); }}><Icon.trash size={12} />{t("serviceDetail.deleteGroup")}</button>
+              <button className="btn small danger" onClick={() => { setPick(new Set(deletable.map(useKey))); setDeleting(true); }}><Icon.trash size={12} />{t("serviceDetail.deleteGroup")}</button>
             </div>
           )}
 
@@ -133,9 +132,9 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
               {g.uses.filter((u) => u.p).map((u) => {
                 const why = removable(u);
                 return (
-                  <label key={uid(u)} className={`pick${why ? " dim" : ""}`} title={why ?? undefined}>
-                    <input type="checkbox" disabled={!!why} checked={pick.has(uid(u))}
-                      onChange={() => setPick((p) => { const n = new Set(p); n.has(uid(u)) ? n.delete(uid(u)) : n.add(uid(u)); return n; })} />
+                  <label key={useKey(u)} className={`pick${why ? " dim" : ""}`} title={why ?? undefined}>
+                    <input type="checkbox" disabled={!!why} checked={pick.has(useKey(u))}
+                      onChange={() => setPick((p) => toggled(p, useKey(u)))} />
                     <AgentIcon id={u.agent.id} size={16} />
                     <span className="small">{u.agent.name} · {u.p!.name}</span>
                     {why && why !== "—" && <span className="tiny muted">{t("serviceDetail.reason", { why })}</span>}
@@ -153,24 +152,24 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
                 <span className="tiny muted grow">{t("serviceDetail.deleteQueued")}</span>
                 <button className="btn small" onClick={() => setDeleting(false)}>{t("common.cancel")}</button>
                 <button className="btn small danger" disabled={pick.size === 0 && !(g.lib && fromLib)}
-                  onClick={() => { props.onDeleteGroup(g, deletable.filter((u) => pick.has(uid(u))), !!g.lib && fromLib); setDeleting(false); }}>{t("common.delete")}</button>
+                  onClick={() => { props.onDeleteGroup(g, deletable.filter((u) => pick.has(useKey(u))), !!g.lib && fromLib); setDeleting(false); }}>{t("common.delete")}</button>
               </div>
             </div>
           )}
 
           <div className="uses">
             {g.uses.map((u) => (
-              <div key={u.importKey ?? uid(u)} className={`use ${u.state}`}>
+              <div key={u.importKey ?? useKey(u)} className={`use ${u.state}`}>
                 <AgentIcon id={u.agent.id} size={22} />
                 <span className="grow minw0">
                   <span className="block small strong ellipsis">{u.agent.name} · {u.p?.name ?? g.name}</span>
                   <span className="block tiny muted ellipsis">
                     <span className={`ustate ${u.state}`}>{USE_LABEL[u.state]}</span>
-                    {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("serviceDetail.nModels", u.models)}`}
+                    {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("common.modelCount", u.models)}`}
                   </span>
                 </span>
                 {(u.state === "adding" || u.state === "removing" || u.state === "new")
-                  ? <button className="btn xs" onClick={() => props.onUndo(u)}>{t("serviceDetail.undo")}</button>
+                  ? <button className="btn xs" onClick={() => props.onUndo(u)}>{t("common.undo")}</button>
                   : <>
                       {u.p && <button className="btn xs" onClick={() => props.onModels(u)}>{t("common.models")}</button>}
                       {u.p && removable(u) === null && <button className="icon-btn sm" aria-label={t("serviceDetail.removeFrom", { agent: u.agent.name })} title={t("serviceDetail.removeFrom", { agent: u.agent.name })} onClick={() => props.onRemove(u)}><Icon.trash size={12} /></button>}

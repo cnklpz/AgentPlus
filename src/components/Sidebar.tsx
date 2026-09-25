@@ -1,5 +1,6 @@
 import type { AgentId, AgentState, GatewayStatus } from "../api";
-import { type Draft, currentProvider, isEnabled, visibleCount } from "../draft";
+import { type Draft, currentProvider, isEnabled, opCount, pendingTotal, settingOn, visibleCount } from "../draft";
+import { tripped } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { type TKey, t, tn } from "../i18n";
 import { scrub } from "../privacy";
@@ -23,14 +24,14 @@ function subline(a: AgentState, d: Draft): string {
   const n = visibleCount(a, d);
   if (a.mode === "single") return tn("sidebar.singleSub", n, { provider: currentProvider(a, d) ?? "-" });
   const on = a.providers.filter((p) => isEnabled(p, d)).length;
-  return `${tn("sidebar.providerCount", on)} · ${tn("sidebar.modelCount", n)}`;
+  return `${tn("common.providerCount", on)} · ${tn("common.modelCount", n)}`;
 }
 
 export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway }: Props) {
   const detected = agents.filter((a) => a.installed).length;
-  const pending = Object.values(drafts).reduce((n, d) => n + Object.keys(d).length, 0);
+  const pending = pendingTotal(drafts);
   const links: [Page, TKey, JSX.Element][] = [
-    ["providers", "sidebar.providers", <Icon.layers key="l" />],
+    ["providers", "common.providers", <Icon.layers key="l" />],
     ["gateway", "sidebar.gateway", <Icon.gateway key="g" />],
     ["history", "sidebar.history", <Icon.history key="h" />],
     ["sync", "sidebar.sync", <Icon.cloud key="c" />],
@@ -40,8 +41,8 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
       <div className="side-label">{t("sidebar.agents")}</div>
       {agents.map((a) => {
         const d = drafts[a.id] ?? {};
-        const fast = a.id === "codex" && a.settings.find((s) => s.key === "fast_inject")?.value === true;
-        const dirty = Object.keys(d).length > 0;
+        const fast = a.id === "codex" && settingOn(a, "fast_inject");
+        const dirty = opCount(d) > 0;
         return (
           <button key={a.id} className={`agent-row${a.id === selected ? " active" : ""}`} data-ctx="agent" data-agent={a.id} onClick={() => onSelect(a.id)}>
             <AgentIcon id={a.id} size={32} />
@@ -66,7 +67,7 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
       })}
 
       {gateway?.enabled && (() => {
-        const paused = gateway.routes.filter((r) => r.breaker && r.breaker.state !== "closed");
+        const paused = gateway.routes.filter((r) => tripped(r));
         return (
           <button className={`gw-foot${gateway.running ? (paused.length ? " warn" : " on") : " bad"}`} onClick={() => onPage("gateway")}
             title={scrub(gateway.error) ?? (paused.length ? paused.map((r) => t("sidebar.pausedRoute", { name: r.name, reason: r.breaker!.reason ?? "" })).join("\n") : t("sidebar.openGateway"))}>

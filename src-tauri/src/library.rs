@@ -2,8 +2,10 @@
 //! models kept by AgentPlus itself, independent of any agent and of the Windows/WSL
 //! target. Lives in `~/.agentplus/store.json` under "library". Keys never leave the backend.
 
-use crate::model::{mask_key, slug};
+use crate::adapters::msg;
+use crate::model::{mask_key, slug, unique_id};
 use crate::store;
+use crate::util::{str_field, str_list};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -44,25 +46,17 @@ fn entries(root: &Value) -> Vec<Value> {
     root.get("library").and_then(|v| v.as_array()).cloned().unwrap_or_default()
 }
 
-fn str_of(v: &Value, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
-
 fn to_entry(v: &Value) -> LibEntry {
-    let key = str_of(v, "apiKey");
+    let key = str_field(v, "apiKey");
     LibEntry {
-        id: str_of(v, "id"),
-        name: str_of(v, "name"),
-        base_url: str_of(v, "baseUrl"),
-        api: str_of(v, "api"),
+        id: str_field(v, "id"),
+        name: str_field(v, "name"),
+        base_url: str_field(v, "baseUrl"),
+        api: str_field(v, "api"),
         has_key: !key.is_empty(),
         key_hint: (!key.is_empty()).then(|| mask_key(&key)),
         key_fp: (!key.is_empty()).then(|| crate::model::key_fingerprint(&key)),
-        models: v
-            .get("models")
-            .and_then(|m| m.as_array())
-            .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
+        models: str_list(v.get("models")).unwrap_or_default(),
     }
 }
 
@@ -79,7 +73,7 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
     let name = input.name.trim();
     let url = input.base_url.trim().trim_end_matches('/');
     if name.is_empty() {
-        return Err(anyhow!(crate::i18n::l("名称不能为空", "Name can't be empty")));
+        return Err(msg::name_required());
     }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(anyhow!(crate::i18n::l("地址需要以 http:// 或 https:// 开头", "Base URL must start with http:// or https://")));
@@ -91,20 +85,11 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
     let adopted = input.adopt_from.as_ref().and_then(|(agent, provider)| crate::adapters::provider_endpoint(agent, provider).ok()).and_then(|(_, k, _)| k);
     let e = store::update(|root| {
         let mut list = entries(root);
-        let pos = input.id.as_ref().and_then(|id| list.iter().position(|e| str_of(e, "id") == *id));
+        let pos = input.id.as_ref().and_then(|id| list.iter().position(|e| str_field(e, "id") == *id));
         if input.id.is_some() && pos.is_none() {
             return Err(anyhow!(crate::i18n::l("供应商库里没有这一项", "This entry is not in the provider library")));
         }
-        let mut e = pos.map(|i| list[i].clone()).unwrap_or_else(|| {
-            let base = slug(name);
-            let mut id = base.clone();
-            let mut n = 2;
-            while list.iter().any(|e| str_of(e, "id") == id) {
-                id = format!("{base}-{n}");
-                n += 1;
-            }
-            json!({ "id": id })
-        });
+        let mut e = pos.map(|i| list[i].clone()).unwrap_or_else(|| json!({ "id": unique_id(&slug(name), |c| list.iter().any(|e| str_field(e, "id") == c)) }));
         e["name"] = json!(name);
         e["baseUrl"] = json!(url);
         e["api"] = json!(input.api);
@@ -113,7 +98,7 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
         }
         match input.api_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
             Some(k) => e["apiKey"] = json!(k),
-            None if str_of(&e, "apiKey").is_empty() => {
+            None if str_field(&e, "apiKey").is_empty() => {
                 if let Some(k) = adopted {
                     e["apiKey"] = json!(k);
                 }
@@ -132,14 +117,20 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
 
 pub fn delete(id: &str) -> Result<()> {
     store::update(|root| {
-        let list: Vec<Value> = entries(root).into_iter().filter(|e| str_of(e, "id") != id).collect();
+        let list: Vec<Value> = entries(root).into_iter().filter(|e| str_field(e, "id") != id).collect();
         root["library"] = Value::Array(list);
         Ok(())
     })
 }
 
-/// (name, base_url, key, api, models) of a library entry, for copying into an agent.
-pub type LibEndpoint = (String, String, Option<String>, String, Vec<String>);
+/// A library entry with its key, for copying into an agent or calling its upstream.
+pub struct LibEndpoint {
+    pub name: String,
+    pub base_url: String,
+    pub key: Option<String>,
+    pub api: String,
+    pub models: Vec<String>,
+}
 
 pub fn endpoint(id: &str) -> Result<LibEndpoint> {
     endpoint_in(&store::load(), id)
@@ -147,8 +138,13 @@ pub fn endpoint(id: &str) -> Result<LibEndpoint> {
 
 /// `endpoint` from an already loaded store.
 pub fn endpoint_in(root: &Value, id: &str) -> Result<LibEndpoint> {
-    let e = entries(root).into_iter().find(|e| str_of(e, "id") == id).ok_or_else(|| anyhow!(tr!("供应商库里没有 {id}", "Not in the provider library: {id}")))?;
-    let key = str_of(&e, "apiKey");
-    let le = to_entry(&e);
-    Ok((le.name, le.base_url, (!key.is_empty()).then_some(key), le.api, le.models))
+    let e = entries(root).into_iter().find(|e| str_field(e, "id") == id).ok_or_else(|| anyhow!(tr!("供应商库里没有 {id}", "Not in the provider library: {id}")))?;
+    let key = str_field(&e, "apiKey");
+    Ok(LibEndpoint {
+        name: str_field(&e, "name"),
+        base_url: str_field(&e, "baseUrl"),
+        key: (!key.is_empty()).then_some(key),
+        api: str_field(&e, "api"),
+        models: str_list(e.get("models")).unwrap_or_default(),
+    })
 }

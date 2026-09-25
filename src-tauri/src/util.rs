@@ -6,24 +6,70 @@ use std::path::{Path, PathBuf};
 
 /// Home of the target environment (Windows user, or a WSL distro over \wsl.localhost).
 pub fn home() -> PathBuf {
+    if let Some(h) = test_home() {
+        return h;
+    }
     crate::env::home()
 }
 
 /// AgentPlus data always stays on the Windows side.
 pub fn agentplus_dir() -> PathBuf {
-    // Tests that run real flows point this at a temp dir so they don't leave backups behind.
+    // Tests keep the store and backups in their temp home; tests that run real flows point
+    // this at a temp dir so they don't leave backups behind.
     #[cfg(test)]
-    if let Some(d) = std::env::var_os("AGENTPLUS_HOME") {
-        return PathBuf::from(d);
+    {
+        if let Some(h) = test_home() {
+            return h.join(".agentplus");
+        }
+        if let Some(d) = std::env::var_os("AGENTPLUS_HOME") {
+            return PathBuf::from(d);
+        }
     }
     dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".agentplus")
 }
 
-pub fn expand_tilde(p: &str) -> PathBuf {
-    if let Some(rest) = p.strip_prefix("~/").or_else(|| p.strip_prefix("~\\")) {
-        home().join(rest)
-    } else {
-        PathBuf::from(p)
+#[cfg(test)]
+thread_local! {
+    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: the temp folder standing in for the home folder on this thread (agent configs,
+/// the AgentPlus store and backups all go inside it). Always None outside tests.
+pub fn test_home() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        TEST_HOME.with(|t| t.borrow().clone())
+    }
+    #[cfg(not(test))]
+    {
+        None
+    }
+}
+
+/// Tests: sets a fresh, empty temp home for this thread; dropping it restores the real one
+/// and deletes the folder. The agent environment is empty meanwhile (`env::set_test_vars`).
+#[cfg(test)]
+pub struct TestHome(pub PathBuf);
+
+#[cfg(test)]
+impl TestHome {
+    pub fn new(tag: &str) -> TestHome {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let d = std::env::temp_dir().join(format!("agentplus-test-{tag}-{}-{nanos}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        TEST_HOME.with(|t| *t.borrow_mut() = Some(d.clone()));
+        crate::env::set_test_vars(&[]);
+        TestHome(d)
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestHome {
+    fn drop(&mut self) {
+        TEST_HOME.with(|t| *t.borrow_mut() = None);
+        crate::env::set_test_vars(&[]);
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -89,33 +135,65 @@ pub fn write_text_atomic(path: &Path, text: &str, meta: TextMeta) -> Result<()> 
     if meta.crlf {
         out = out.replace('\n', "\r\n");
     }
-    // A symlinked config (dotfile managers) is written through, so the link survives.
-    let target = match fs::symlink_metadata(path) {
+    write_bytes_atomic(path, out.as_bytes())
+}
+
+/// Replaces `path` with `bytes` as a whole (temp file + rename), so a reader never sees
+/// half a file. A symlinked config is written through (see `resolve_link`).
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let target = resolve_link(path)?;
+    let tmp = tmp_sibling(&target);
+    fs::write(&tmp, bytes).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    replace_file(&tmp, &target, path)
+}
+
+/// The file a write to `path` should replace: a symlinked config (dotfile managers) is
+/// written through, so the link survives.
+pub fn resolve_link(path: &Path) -> Result<PathBuf> {
+    Ok(match fs::symlink_metadata(path) {
         Ok(m) if m.file_type().is_symlink() => fs::canonicalize(path).with_context(|| tr!("找不到 {} 指向的文件", "Can't resolve the link {}", path.display()))?,
         _ => path.to_path_buf(),
-    };
-    let tmp = target.with_extension(format!(
-        "{}.agentplus-tmp",
-        target.extension().and_then(|e| e.to_str()).unwrap_or("")
-    ));
-    fs::write(&tmp, out.as_bytes()).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
-    // Replacing can fail for a moment while another program (antivirus, an editor) holds the file.
+    })
+}
+
+/// The temp file next to `target` that then replaces it: `config.toml.agentplus-tmp`.
+pub fn tmp_sibling(target: &Path) -> PathBuf {
+    target.with_extension(format!("{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or("")))
+}
+
+/// Renames `tmp` over `target`, retrying for a moment while another program (antivirus,
+/// an editor) holds the file. On failure `tmp` is removed; errors name the file as `shown`.
+pub fn replace_file(tmp: &Path, target: &Path, shown: &Path) -> Result<()> {
     let mut last = None;
     for _ in 0..10 {
-        match fs::rename(&tmp, &target) {
+        match fs::rename(tmp, target) {
             Ok(()) => return Ok(()),
             Err(e) => last = Some(e),
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    let _ = fs::remove_file(&tmp);
-    Err(anyhow::anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", path.display(), last.map(|e| e.to_string()).unwrap_or_default())))
+    let _ = fs::remove_file(tmp);
+    Err(anyhow::anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", shown.display(), last.map(|e| e.to_string()).unwrap_or_default())))
+}
+
+/// Size of a file in bytes; 0 when it is missing or unreadable.
+pub fn file_len(p: &Path) -> u64 {
+    fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+}
+
+/// A folder the user named must exist before anything is done with it.
+pub fn require_dir(p: &Path) -> Result<()> {
+    if !p.is_dir() {
+        anyhow::bail!("{}", tr!("找不到文件夹：{}", "Folder not found: {}", display_path(p)));
+    }
+    Ok(())
 }
 
 /// Copies each file into `~/.agentplus/backups/<time>/<agent>/` before a write,
 /// with a `manifest.json` recording where each file came from (for rollback).
 pub fn backup(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
-    backup_tagged(agent, files, crate::i18n::l("应用配置", "Apply config"))
+    let (zh, en) = crate::history::REASON_APPLY;
+    backup_tagged(agent, files, crate::i18n::l(zh, en))
 }
 
 pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
@@ -193,6 +271,35 @@ pub fn host_of(url: &str) -> String {
             s
         }
         Err(_) => url.to_string(),
+    }
+}
+
+/// A base URL in comparable form: trimmed, without trailing slashes, lowercase.
+pub fn norm_url(u: &str) -> String {
+    u.trim().trim_end_matches('/').to_lowercase()
+}
+
+/// `v[k]` as an owned string; empty when it is missing or not a string.
+pub fn str_field(v: &serde_json::Value, k: &str) -> String {
+    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+}
+
+/// The strings of a JSON array (other items skipped); None when `v` is not an array.
+pub fn str_list(v: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    v.and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+}
+
+/// Locks `m` even when a panic elsewhere poisoned it: shared state (the gateway's, caches)
+/// stays usable, so one failed request can't take every later one (or the status view) down.
+pub fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `s` cut to at most `max` characters, with "…" when something was cut.
+pub fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
     }
 }
 
@@ -295,6 +402,37 @@ pub fn read_json_object(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
     Ok((v, meta))
 }
 
+/// `read_json_object` for a file that may not exist yet: `{}` then.
+pub fn read_json_object_or_new(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
+    if !path.exists() {
+        return Ok((serde_json::json!({}), TextMeta::NEW));
+    }
+    read_json_object(path)
+}
+
+/// Parses a JSONC config that gets edited by key, so its top level must be an object.
+/// Returns (value, had_comments); `name` is how errors refer to the file.
+pub fn parse_jsonc_object(text: &str, name: &str) -> Result<(serde_json::Value, bool)> {
+    let (clean, had) = strip_jsonc(text);
+    let v: serde_json::Value = serde_json::from_str(&clean).map_err(|e| anyhow::anyhow!(tr!("{name} 解析失败：{e}", "Failed to parse {name}: {e}")))?;
+    if !v.is_object() {
+        anyhow::bail!("{}", tr!("{name} 顶层不是对象", "The top level of {name} is not an object"));
+    }
+    Ok((v, had))
+}
+
+/// A JSONC config that may not exist yet: `blank` when it is missing, else the parsed object
+/// (an empty file is an error, like any other unparsable one). Returns (value, meta, had_comments).
+pub fn read_jsonc_object_or(path: &Path, blank: serde_json::Value) -> Result<(serde_json::Value, TextMeta, bool)> {
+    if !path.exists() {
+        return Ok((blank, TextMeta::NEW, false));
+    }
+    let (text, meta) = read_text(path)?;
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| display_path(path));
+    let (v, had) = parse_jsonc_object(&text, &name)?;
+    Ok((v, meta, had))
+}
+
 /// The object at `path` inside `v`, creating missing (or null) levels. Anything else in the
 /// way is an error rather than being overwritten.
 pub fn obj_at<'a>(v: &'a mut serde_json::Value, path: &[&str]) -> Result<&'a mut serde_json::Map<String, serde_json::Value>> {
@@ -337,6 +475,21 @@ mod tests {
     }
 
     #[test]
+    fn clips_characters_and_survives_poison() {
+        assert_eq!(clip("密钥密钥", 2), "密钥…");
+        assert_eq!(clip("abc", 3), "abc");
+        assert_eq!(clip("", 0), "");
+        let m = std::sync::Mutex::new(1);
+        let _ = std::panic::catch_unwind(|| {
+            let _g = m.lock().unwrap();
+            panic!("poison");
+        });
+        assert!(m.is_poisoned());
+        *lock(&m) += 1;
+        assert_eq!(*lock(&m), 2);
+    }
+
+    #[test]
     fn jptr_escapes_segments() {
         assert_eq!(jptr(&["provider", "anthropic/claude-sonnet-4", "models"]), "/provider/anthropic~1claude-sonnet-4/models");
         assert_eq!(jptr(&["a~b", "c/d~1"]), "/a~0b/c~1d~01");
@@ -365,6 +518,26 @@ mod tests {
             fs::write(d.join(name), body).unwrap();
             assert_eq!(read_json_object(&d.join(name)).is_ok(), ok, "{name}");
         }
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn optional_config_files() {
+        let d = tmp("optional");
+        let missing = d.join("missing.json");
+        let (v, meta) = read_json_object_or_new(&missing).unwrap();
+        assert_eq!((v, meta.indent_width, meta.trailing_newline), (serde_json::json!({}), 2, true));
+        assert_eq!(read_jsonc_object_or(&missing, serde_json::json!({ "a": 1 })).unwrap().0, serde_json::json!({ "a": 1 }));
+        fs::write(d.join("c.json"), "{\n  // note\n  \"a\": [1,],\n}\n").unwrap();
+        let (v, _, had) = read_jsonc_object_or(&d.join("c.json"), serde_json::json!({})).unwrap();
+        assert_eq!((v, had), (serde_json::json!({ "a": [1] }), true));
+        for (name, body) in [("arr.json", "[1]"), ("bad.json", "{"), ("empty.json", "")] {
+            fs::write(d.join(name), body).unwrap();
+            let e = read_jsonc_object_or(&d.join(name), serde_json::json!({})).unwrap_err().to_string();
+            assert!(e.starts_with(name), "{e}");
+            assert!(read_json_object_or_new(&d.join(name)).is_err());
+        }
+        assert!(parse_jsonc_object("[]", "x.json").unwrap_err().to_string().contains("x.json 顶层不是对象"));
         let _ = fs::remove_dir_all(&d);
     }
 
@@ -424,6 +597,41 @@ mod tests {
         assert!(read_text(&d.join("missing.json")).is_err());
         // No temp file is left behind.
         assert!(fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A symlinked config (dotfile managers) keeps its link; the file it points at changes.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writes_go_through_symlinks() {
+        let d = tmp("symlink");
+        let (real, link) = (d.join("real.toml"), d.join("link.toml"));
+        fs::write(&real, "a = 1\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        write_bytes_atomic(&link, b"a = 2\n").unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "a = 2\n");
+        write_text_atomic(&link, "a = 3", TextMeta::NEW).unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "a = 3\n");
+        assert!(fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn replace_file_cleans_up_on_failure() {
+        let d = tmp("replace");
+        let tmp_file = d.join("x.agentplus-tmp");
+        fs::write(&tmp_file, "x").unwrap();
+        // A folder with content can't be replaced by a file.
+        fs::create_dir_all(d.join("dir").join("inner")).unwrap();
+        let e = replace_file(&tmp_file, &d.join("dir"), Path::new("shown.json")).unwrap_err().to_string();
+        assert!(e.starts_with("替换 shown.json 失败"), "{e}");
+        assert!(!tmp_file.exists());
+        assert!(require_dir(&d).is_ok());
+        assert!(require_dir(&d.join("nope")).unwrap_err().to_string().starts_with("找不到文件夹："));
+        fs::write(d.join("five"), "12345").unwrap();
+        assert_eq!((file_len(&d.join("nope")), file_len(&d.join("five"))), (0, 5));
         let _ = fs::remove_dir_all(&d);
     }
 

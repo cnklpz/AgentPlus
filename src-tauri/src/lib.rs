@@ -2,6 +2,7 @@
 mod i18n;
 mod adapters;
 mod cdp;
+mod dotenv;
 mod env;
 mod gateway;
 mod history;
@@ -24,6 +25,24 @@ use tauri::Manager;
 
 fn err(e: anyhow::Error) -> String {
     format!("{e:#}")
+}
+
+/// Runs a blocking closure off the UI thread. A command without `async` runs on the main
+/// thread and freezes the window while it waits, so anything that touches the disk (a
+/// `\\wsl.localhost` path can wake a stopped distro), spawns a process or waits goes here.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?.map_err(err)
+}
+
+/// `blocking` inside one store transaction (a load … save that must not interleave).
+async fn blocking_tx<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
+    blocking(move || store::transaction(f)).await
+}
+
+/// A gateway change, then the gateway's new status for the page.
+fn with_status(r: anyhow::Result<()>) -> Result<gateway::server::Status, String> {
+    r.map_err(err)?;
+    Ok(gateway::server::status())
 }
 
 #[tauri::command]
@@ -59,9 +78,7 @@ async fn apply(agent: String, ops: Vec<Op>) -> Result<ApplyResult, String> {
 
 #[tauri::command]
 async fn test_latency(url: String) -> Result<u64, String> {
-    tauri::async_runtime::spawn_blocking(move || net::latency(&url))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || net::latency(&url).map_err(anyhow::Error::msg)).await
 }
 
 /// Restarts an agent (or starts it when it isn't running). For Codex with UI injection on
@@ -70,7 +87,7 @@ async fn test_latency(url: String) -> Result<u64, String> {
 #[tauri::command]
 async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>) -> Result<String, String> {
     process::reset_cancel();
-    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+    blocking(move || {
         let report = |p: process::Progress| {
             let _ = on_progress.send(p);
         };
@@ -82,9 +99,9 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
             steps.extend(["port", "patch"]);
         }
         report(process::Progress::Plan { steps });
-        let r = process::restart(&agent, &args, &report).map_err(err)?;
+        let r = process::restart(&agent, &args, &report)?;
         let mut msg = if inject {
-            cdp::inject(cdp::PORT, patches, &report).map_err(err)?
+            cdp::inject(cdp::PORT, patches, &report)?
         } else if r.was_running {
             i18n::l("已重启", "Restarted").into()
         } else {
@@ -97,7 +114,6 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
         Ok(msg)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Stops the running `restart_agent` at its next wait; it then fails with "Cancelled".
@@ -110,11 +126,6 @@ fn cancel_restart() {
 #[tauri::command]
 async fn agent_running(agent: String) -> Result<bool, String> {
     blocking(move || Ok(process::running(&agent))).await
-}
-
-/// Runs a blocking closure off the UI thread.
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?.map_err(err)
 }
 
 #[tauri::command]
@@ -150,47 +161,33 @@ async fn codex_undo_repair(stamp: String) -> Result<String, String> {
 /// Model ids offered by an existing provider (key resolved in the backend).
 #[tauri::command]
 async fn fetch_models(agent: String, provider: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (base, key, api) = adapters::provider_endpoint(&agent, &provider).map_err(err)?;
-        net::list_models(&base, key.as_deref(), &api)
+    blocking(move || {
+        let (base, key, api) = adapters::provider_endpoint(&agent, &provider)?;
+        net::list_models(&base, key.as_deref(), &api).map_err(anyhow::Error::msg)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Sends one small real request through a provider (agent entry, or "library").
 #[tauri::command]
 async fn test_provider(agent: String, provider: String, model: String) -> Result<net::TestResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (base, key, api) = if agent == library::FROM {
-            let (_, base, key, api, _) = library::endpoint(&provider).map_err(err)?;
-            (base, key, api)
-        } else {
-            adapters::provider_endpoint(&agent, &provider).map_err(err)?
-        };
+    blocking(move || {
+        let (base, key, api) = adapters::provider_endpoint(&agent, &provider)?;
         Ok(net::test_call(&base, key.as_deref(), &api, model.trim()))
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Model ids straight from a library entry's upstream (used while an agent goes through the gateway).
 #[tauri::command]
 async fn fetch_models_lib(id: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let (_, base, key, api, _) = library::endpoint(&id).map_err(err)?;
-        net::list_models(&base, key.as_deref(), &api)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    fetch_models(library::FROM.to_string(), id).await
 }
 
 /// Model ids for a provider being added (key typed in the form).
 #[tauri::command]
 async fn fetch_models_url(base_url: String, api_key: Option<String>, api: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || net::list_models(&base_url, api_key.as_deref(), &api))
-        .await
-        .map_err(|e| e.to_string())?
+    blocking(move || net::list_models(&base_url, api_key.as_deref(), &api).map_err(anyhow::Error::msg)).await
 }
 
 #[tauri::command]
@@ -213,9 +210,11 @@ async fn sync_status() -> Result<sync::SyncStatus, String> {
     blocking(|| Ok(sync::status())).await
 }
 
+/// No outer transaction: set_folder locks the store itself, after checking the folder
+/// (which may be a slow network share).
 #[tauri::command]
-fn sync_set_folder(path: String) -> Result<(), String> {
-    store::transaction(|| sync::set_folder(&path)).map_err(err)
+async fn sync_set_folder(path: String) -> Result<(), String> {
+    blocking(move || sync::set_folder(&path)).await
 }
 
 #[tauri::command]
@@ -240,9 +239,7 @@ fn codex_dismiss_fixed_prompt() -> Result<(), String> {
 async fn open_path(path: String) -> Result<(), String> {
     blocking(move || {
         let p = env::resolve_path(path.trim());
-        if !p.is_dir() {
-            anyhow::bail!("{}", tr!("找不到文件夹：{path}", "Folder not found: {path}"));
-        }
+        util::require_dir(&p)?;
         process::open_dir(&p.to_string_lossy())
     })
     .await
@@ -269,7 +266,7 @@ async fn list_envs() -> Vec<env::EnvInfo> {
 
 #[tauri::command]
 async fn set_env(id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || env::set(&id)).await.map_err(|e| e.to_string())?.map_err(err)
+    blocking(move || env::set(&id)).await
 }
 
 #[tauri::command]
@@ -278,8 +275,8 @@ async fn detect_agents() -> Vec<adapters::Detect> {
 }
 
 #[tauri::command]
-fn set_agent_dir(agent: String, path: Option<String>) -> Result<(), String> {
-    store::transaction(|| adapters::set_dir(&agent, path.as_deref())).map_err(err)
+async fn set_agent_dir(agent: String, path: Option<String>) -> Result<(), String> {
+    blocking_tx(move || adapters::set_dir(&agent, path.as_deref())).await
 }
 
 #[tauri::command]
@@ -287,28 +284,29 @@ fn gateway_status() -> gateway::server::Status {
     gateway::server::status()
 }
 
+/// Stopping the old listener can wait a few seconds.
 #[tauri::command]
-fn gateway_set(enabled: bool, port: Option<u16>) -> Result<gateway::server::Status, String> {
-    gateway::server::set_enabled(enabled, port).map_err(err)?;
-    Ok(gateway::server::status())
+async fn gateway_set(enabled: bool, port: Option<u16>) -> Result<gateway::server::Status, String> {
+    blocking(move || {
+        gateway::server::set_enabled(enabled, port)?;
+        Ok(gateway::server::status())
+    })
+    .await
 }
 
 #[tauri::command]
 fn gateway_save_route(route: gateway::server::Route, old_id: Option<String>) -> Result<gateway::server::Status, String> {
-    gateway::server::save_route(route, old_id).map_err(err)?;
-    Ok(gateway::server::status())
+    with_status(gateway::server::save_route(route, old_id))
 }
 
 #[tauri::command]
 fn gateway_delete_route(id: String) -> Result<gateway::server::Status, String> {
-    gateway::server::delete_route(&id).map_err(err)?;
-    Ok(gateway::server::status())
+    with_status(gateway::server::delete_route(&id))
 }
 
 #[tauri::command]
 fn gateway_set_breaker(breaker: gateway::breaker::Config) -> Result<gateway::server::Status, String> {
-    gateway::server::set_breaker(breaker).map_err(err)?;
-    Ok(gateway::server::status())
+    with_status(gateway::server::set_breaker(breaker))
 }
 
 /// Lets a forward paused by the error breaker (or every one, with no id) work again now.
@@ -322,36 +320,36 @@ fn gateway_reset_breaker(id: Option<String>) -> gateway::server::Status {
 /// even while the forward is paused, and a success un-pauses it.
 #[tauri::command]
 async fn gateway_test(route: String, api: String, model: String) -> Result<net::TestResult, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         let st = gateway::server::status();
         if !st.running {
-            return Err(i18n::l("网关没有运行", "The gateway is not running").to_string());
+            anyhow::bail!("{}", i18n::l("网关没有运行", "The gateway is not running"));
         }
         let base = format!("http://127.0.0.1:{}/{route}/v1", st.port);
         Ok(net::test_call(&base, Some(gateway::server::test_key()), &api, model.trim()))
     })
     .await
-    .map_err(|e| e.to_string())?
+}
+
+/// Polled while the page waits for Codex; reads Codex's files (UNC paths in WSL mode).
+#[tauri::command]
+async fn codex_official_status() -> Result<official::FetchStatus, String> {
+    blocking(|| Ok(official::status())).await
 }
 
 #[tauri::command]
-fn codex_official_status() -> official::FetchStatus {
-    official::status()
+async fn codex_official_start() -> Result<official::FetchStatus, String> {
+    blocking_tx(official::start).await
 }
 
 #[tauri::command]
-fn codex_official_start() -> Result<official::FetchStatus, String> {
-    store::transaction(official::start).map_err(err)
+async fn codex_official_finish() -> Result<Vec<official::FetchModel>, String> {
+    blocking_tx(official::finish).await
 }
 
 #[tauri::command]
-fn codex_official_finish() -> Result<Vec<official::FetchModel>, String> {
-    store::transaction(official::finish).map_err(err)
-}
-
-#[tauri::command]
-fn codex_official_cancel() -> Result<(), String> {
-    store::transaction(official::cancel).map_err(err)
+async fn codex_official_cancel() -> Result<(), String> {
+    blocking_tx(official::cancel).await
 }
 
 #[tauri::command]
@@ -359,14 +357,16 @@ fn library_list() -> Vec<library::LibEntry> {
     library::list()
 }
 
+/// No outer transaction: save reads the adopted key from the agent first (which can wake
+/// WSL), then locks the store itself.
 #[tauri::command]
-fn library_save(input: library::LibInput) -> Result<library::LibEntry, String> {
-    store::transaction(|| library::save(input)).map_err(err)
+async fn library_save(input: library::LibInput) -> Result<library::LibEntry, String> {
+    blocking(move || library::save(input)).await
 }
 
 #[tauri::command]
 fn library_delete(id: String) -> Result<(), String> {
-    store::transaction(|| library::delete(&id)).map_err(err)
+    library::delete(&id).map_err(err)
 }
 
 /// UI language for backend text ("zh" / "en"); the frontend calls this first.
@@ -394,14 +394,15 @@ async fn open_config_dir(agent: String) -> Result<(), String> {
     blocking(move || process::open_dir(&adapters::state(&agent)?.config_dir)).await
 }
 
+/// Checks each project folder and its config (UNC paths in WSL mode).
 #[tauri::command]
-fn projects_list() -> Vec<projects::ProjectEntry> {
-    projects::list()
+async fn projects_list() -> Result<Vec<projects::ProjectEntry>, String> {
+    blocking(|| Ok(projects::list())).await
 }
 
 #[tauri::command]
-fn project_open(path: String) -> Result<projects::ProjectEntry, String> {
-    store::transaction(|| projects::open(&path)).map_err(err)
+async fn project_open(path: String) -> Result<projects::ProjectEntry, String> {
+    blocking_tx(move || projects::open(&path)).await
 }
 
 #[tauri::command]

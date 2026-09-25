@@ -3,7 +3,7 @@
 
 use crate::adapters::ocproject;
 use crate::store;
-use crate::util::display_path;
+use crate::util::{display_path, require_dir};
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -58,9 +58,9 @@ fn normalize(path: &str) -> String {
 fn entry(path: &str, last: Option<String>) -> ProjectEntry {
     let dir = crate::env::resolve_path(path);
     let cfg = ocproject::config_path(&dir);
-    let providers = std::fs::read_to_string(&cfg)
+    let providers = crate::util::read_text(&cfg)
         .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&crate::util::strip_jsonc(&t).0).ok())
+        .and_then(|(t, _)| serde_json::from_str::<Value>(&crate::util::strip_jsonc(&t).0).ok())
         .and_then(|v| v.get("provider").and_then(|p| p.as_object()).map(|o| o.len()))
         .unwrap_or(0);
     ProjectEntry {
@@ -71,7 +71,7 @@ fn entry(path: &str, last: Option<String>) -> ProjectEntry {
         exists: dir.is_dir(),
         config: cfg.exists().then(|| display_path(&cfg)),
         providers,
-        git: dir.ancestors().any(|d| d.join(".git").exists()),
+        git: ocproject::git_root(&dir).is_some(),
     }
 }
 
@@ -88,17 +88,24 @@ pub fn open(path: &str) -> Result<ProjectEntry> {
     if path.is_empty() {
         return Err(anyhow!(crate::i18n::l("请输入文件夹路径", "Enter a folder path")));
     }
-    let dir = crate::env::resolve_path(&path);
-    if !dir.is_dir() {
-        return Err(anyhow!(tr!("找不到文件夹 {}", "Folder not found: {}", dir.display())));
-    }
+    require_dir(&crate::env::resolve_path(&path))?;
     let now = chrono::Local::now().to_rfc3339();
     let mut root = store::load();
-    let mut list: Vec<Value> = load_list(&root).into_iter().filter(|v| v.get("path").and_then(|p| p.as_str()).map(|p| !p.eq_ignore_ascii_case(&path)).unwrap_or(false)).collect();
+    let mut list: Vec<Value> = load_list(&root).into_iter().filter(|v| v.get("path").and_then(|p| p.as_str()).is_some_and(|p| !same_path(p, &path))).collect();
     list.insert(0, json!({ "path": path, "lastOpened": now }));
     list.truncate(MAX);
     save_list(&mut root, list)?;
     Ok(entry(&path, Some(now)))
+}
+
+/// Two history entries name the same folder: Windows paths ignore case, Linux paths
+/// (WSL: `/home/…`, `~/…`) don't.
+fn same_path(a: &str, b: &str) -> bool {
+    if a.starts_with(['/', '~']) || b.starts_with(['/', '~']) {
+        a == b
+    } else {
+        a.eq_ignore_ascii_case(b)
+    }
 }
 
 pub fn forget(path: &str) -> Result<()> {
@@ -151,5 +158,23 @@ mod tests {
         assert_eq!(normalize(r"D:\"), r"D:\");
         assert_eq!(normalize("/home/me/p/"), "/home/me/p");
         assert_eq!(normalize("\"C:\\a b\""), r"C:\a b");
+    }
+
+    #[test]
+    fn path_case_matters_only_on_windows() {
+        assert!(same_path(r"D:\Xm\Proj", r"d:\xm\proj"));
+        assert!(same_path(r"\\srv\Share", r"\\SRV\share"));
+        assert!(!same_path("/home/me/Proj", "/home/me/proj"));
+        assert!(!same_path("~/Proj", "~/proj"));
+        assert!(same_path("/home/me/proj", "/home/me/proj"));
+    }
+
+    #[test]
+    fn counts_providers_of_a_bom_config() {
+        let h = crate::util::TestHome::new("projects-bom");
+        let dir = h.0.join("proj");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("opencode.json"), b"\xEF\xBB\xBF{\"provider\":{\"a\":{}}}").unwrap();
+        assert_eq!(entry(&dir.to_string_lossy(), None).providers, 1);
     }
 }

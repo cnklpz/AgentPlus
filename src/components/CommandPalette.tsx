@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { type AgentId, type AgentState, type SessionRow, api } from "../api";
 import type { Tab } from "./AgentPage";
+import type { SettingsTab } from "./SettingsPage";
+import type { Page } from "./Sidebar";
 import { AgentIcon, Icon } from "./icons";
 import { type TKey, t, useLang } from "../i18n";
-import { useEscape } from "../hooks";
+import { useEscape, useListNav } from "../hooks";
 import { scrubHost, usePrivacy } from "../privacy";
 import { SYNC_ENABLED } from "../features";
 
 export type Target =
   | { kind: "agent"; agent: AgentId; tab?: Tab; provider?: string; setting?: string; query?: string }
-  | { kind: "page"; page: "providers" | "gateway" | "history" | "sync" | "settings"; settingsTab?: "general" | "agents" };
+  | { kind: "page"; page: Page; settingsTab?: SettingsTab };
 
 /** Stable group ids (display labels come from GROUP_LABEL); array order = display order. */
 const GROUPS = ["agent", "page", "provider", "setting", "model", "session"] as const;
@@ -17,9 +19,9 @@ type Group = (typeof GROUPS)[number];
 const GROUP_LABEL: Record<Group, TKey> = {
   agent: "commandPalette.groupAgent",
   page: "commandPalette.groupPage",
-  provider: "commandPalette.groupProvider",
+  provider: "common.provider",
   setting: "commandPalette.groupSetting",
-  model: "commandPalette.groupModel",
+  model: "common.model",
   session: "commandPalette.groupSession",
 };
 
@@ -45,7 +47,6 @@ interface Props {
 /** Ctrl+K: search agents, providers, models, settings, pages and Codex sessions. */
 export function CommandPalette({ agents, onGo, onClose }: Props) {
   const [q, setQ] = useState("");
-  const [sel, setSel] = useState(0);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const lang = useLang();
@@ -60,7 +61,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
     // Haystacks are search terms only (never shown): they keep both Chinese and English
     // words so either language finds the page; the translated label is matched too.
     const out: Item[] = [
-      { label: t("commandPalette.providers"), hint: t("commandPalette.providersHint"), group: "page", icon: <Icon.layers size={14} />, target: { kind: "page", page: "providers" }, haystack: "服务商 供应商 总供应商 模型 providers 添加供应商 add provider library" },
+      { label: t("common.providers"), hint: t("commandPalette.providersHint"), group: "page", icon: <Icon.layers size={14} />, target: { kind: "page", page: "providers" }, haystack: "服务商 供应商 总供应商 模型 providers 添加供应商 add provider library" },
       { label: t("commandPalette.projects"), hint: t("commandPalette.projectsHint"), group: "page", icon: <Icon.folder size={14} />, target: { kind: "agent", agent: "opencode", tab: "projects" }, haystack: "项目 project 文件夹 folder opencode.json 项目级 工作区 workspace" },
       { label: t("commandPalette.gateway"), hint: t("commandPalette.gatewayHint"), group: "page", icon: <Icon.gateway size={14} />, target: { kind: "page", page: "gateway" }, haystack: "网关 gateway 转换 协议 代理 proxy 中转 relay protocol convert" },
       { label: t("commandPalette.history"), hint: t("commandPalette.historyHint"), group: "page", icon: <Icon.history size={14} />, target: { kind: "page", page: "history" }, haystack: "历史 回滚 备份 history backup rollback restore" },
@@ -70,7 +71,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
     ];
     for (const a of agents) {
       out.push({ label: a.name, hint: "Agent", group: "agent", agent: a.id, target: { kind: "agent", agent: a.id }, haystack: a.name });
-      const tabs: [Tab, TKey][] = [["prov", "commandPalette.tabProviders"], ["models", "commandPalette.tabModels"], ["set", "commandPalette.tabSettings"]];
+      const tabs: [Tab, TKey][] = [["prov", "common.providers"], ["models", "commandPalette.tabModels"], ["set", "commandPalette.tabSettings"]];
       if (a.id === "codex") tabs.push(["sessions", "commandPalette.tabSessions"], ["maint", "commandPalette.tabMaint"]);
       for (const [tab, k] of tabs) {
         const l = t(k);
@@ -109,7 +110,8 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
       .slice(0, 60);
   }, [items, q]);
 
-  useEffect(() => setSel(0), [q]);
+  const nav = useListNav(results.length, { selector: ".palette-item.on" });
+  useEffect(() => nav.setHi(0), [q]);
 
   const go = (i: Item | undefined) => { if (i && !i.disabled) { onGo(i.target); onClose(); } };
   // Esc closes only the palette, not a dialog it was opened over.
@@ -125,16 +127,14 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
           placeholder={t("commandPalette.placeholder")}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, results.length - 1)); }
-            else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
-            else if (e.key === "Enter") go(results[sel]);
+            if (!nav.onKey(e) && e.key === "Enter") go(results[nav.hi]);
           }}
         />
-        <div className="palette-list">
+        <div className="palette-list" ref={nav.list}>
           {results.length === 0 && <div className="muted small palette-empty">{t("commandPalette.noResults", { q })}</div>}
           {results.map((r, i) => (
-            <button key={`${r.group}-${r.label}-${r.hint}-${i}`} className={`palette-item${i === sel ? " on" : ""}${r.disabled ? " off" : ""}`} aria-disabled={r.disabled}
-              onMouseEnter={() => setSel(i)} onClick={() => go(r)}>
+            <button key={`${r.group}-${r.label}-${r.hint}-${i}`} className={`palette-item${i === nav.hi ? " on" : ""}${r.disabled ? " off" : ""}`} aria-disabled={r.disabled}
+              onMouseEnter={() => nav.setHi(i)} onClick={() => go(r)}>
               {r.agent ? <AgentIcon id={r.agent} size={18} /> : <span className="palette-dot">{r.icon}</span>}
               <span className="grow minw0">
                 <span className={`ellipsis block small strong${r.group === "session" ? " sensitive" : ""}`}>{r.label}</span>

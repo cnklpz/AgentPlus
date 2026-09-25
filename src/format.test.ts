@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { fmtAgo, fmtSize } from "./format";
+import { fmtAgo, fmtSize, joinList } from "./format";
 import { setLang } from "./i18n";
 
 describe("fmtSize", () => {
@@ -18,6 +18,13 @@ describe("fmtSize", () => {
     [1024 ** 3, "1.0 GB"],
     [5.5 * 1024 ** 4, "5,632.0 GB"],
   ])("%d → %s", (b, s) => expect(fmtSize(b)).toBe(s));
+});
+
+describe("joinList", () => {
+  it("joins with the Chinese list comma", () => {
+    expect(joinList(["Codex", "OpenCode"])).toBe("Codex、OpenCode");
+    expect(joinList([])).toBe("");
+  });
 });
 
 describe("fmtAgo", () => {
@@ -76,6 +83,10 @@ describe("fmtAgo", () => {
       expect(ago(3600)).toBe("1 hour ago");
       expect(ago(86400)).toBe("Yesterday");
       expect(ago(3 * 86400)).toBe("3 days ago");
+    });
+
+    it("joins lists with commas", () => {
+      expect(joinList(["Codex", "OpenCode", "Kilo"])).toBe("Codex, OpenCode, Kilo");
     });
 
     it("formats sizes with English separators", () => {

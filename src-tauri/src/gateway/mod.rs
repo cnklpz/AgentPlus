@@ -5,3 +5,5 @@ pub mod breaker;
 pub mod convert;
 pub mod keys;
 pub mod server;
+
+pub(crate) use crate::util::{clip, lock};

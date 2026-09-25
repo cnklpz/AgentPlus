@@ -1,8 +1,9 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentId, AgentState, GatewayAgentUse, GatewayMinute, GatewayStatus } from "../api";
 import { type TKey, t, tn } from "../i18n";
-import { AGENT_NAME } from "../services";
+import { AGENT_NAME, agentLabel } from "../services";
 import { AgentIcon, Icon } from "./icons";
+import { Seg } from "./controls";
 
 type Range = 15 | 60;
 
@@ -99,8 +100,8 @@ const METRICS: Metric[] = [
   },
 ];
 
-function hhmm(t: number): string {
-  const d = new Date(t * 1000);
+function hhmm(secs: number): string {
+  const d = new Date(secs * 1000);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
@@ -127,11 +128,8 @@ export function GatewayAside({ status: s, agents }: { status: GatewayStatus | nu
       <section className="aside-cur">
         <div className="row between">
           <h2>{t("gatewayAside.traffic")}</h2>
-          <div className="seg gwc-range" role="group" aria-label={t("gatewayAside.ariaRange")}>
-            {([15, 60] as Range[]).map((r) => (
-              <button key={r} className={range === r ? "on" : ""} onClick={() => setRange(r)}>{t(r === 60 ? "gatewayAside.range60" : "gatewayAside.range15")}</button>
-            ))}
-          </div>
+          <Seg className="gwc-range" value={range} onChange={setRange} label={t("gatewayAside.ariaRange")}
+            options={([15, 60] as Range[]).map((r) => ({ value: r, label: t(r === 60 ? "gatewayAside.range60" : "gatewayAside.range15") }))} />
         </div>
         <span className="muted tiny">
           {quiet ? t(range === 60 ? "gatewayAside.quiet60" : "gatewayAside.quiet15") : t("gatewayAside.liveNote")}
@@ -205,7 +203,7 @@ function AgentUsage({ minutes, agents }: { minutes: GatewayMinute[]; agents: Age
           {rows.map(([id, u]) => {
             // Agents that aren't installed here (any more) still get their name and icon.
             const known = id in AGENT_NAME ? (id as AgentId) : null;
-            const name = id === "agentplus" ? t("gatewayAside.agentSelf") : id === "legacy" ? t("gatewayAside.agentLegacy") : agents.find((x) => x.id === id)?.name ?? (known ? AGENT_NAME[known] : id);
+            const name = id === "agentplus" ? t("gatewayAside.agentSelf") : id === "legacy" ? t("gatewayAside.agentLegacy") : agents.find((x) => x.id === id)?.name ?? agentLabel(id);
             const tok = t("gatewayAside.agentTokens", { input: tokens(u.inputTokens), output: tokens(u.outputTokens) });
             const calls = tn("gatewayAside.agentCalls", u.requests);
             return (

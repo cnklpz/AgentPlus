@@ -11,6 +11,8 @@
 //! writing and replace only `customModels` and `model` (atomic tmp + rename).
 //! The legacy `~/.factory/config.json` (`custom_models`, snake_case) is shown read-only.
 
+use super::keyref::{self, host, resolve_key, set_or_remove, Group, Key};
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -21,15 +23,10 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
-#[allow(dead_code)]
 pub const ID: &str = "droid";
-#[allow(dead_code)]
 pub const NAME: &str = "Droid";
-#[allow(dead_code)]
 pub const MARKER: &str = "settings.json";
-#[allow(dead_code)]
 pub const WSL_SCRIPT: &str = "droid --version 2>/dev/null | head -n 1; pgrep -x droid >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".factory/settings.json";
 
 /// Temporary markers carried on entries during a plan (never written).
@@ -37,33 +34,12 @@ const SEL: &str = "__agentplus_sel";
 const IDFMT: &str = "__agentplus_idfmt";
 const STORE_LABEL: &str = "AgentPlus · Droid";
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Tests point the adapter at a temp home (settings, store and backups all inside it).
-fn test_home() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        TEST_HOME.with(|t| t.borrow().clone())
-    }
-    #[cfg(not(test))]
-    {
-        None
-    }
-}
-
 /// Droid's default config dir, `~/.factory`.
-#[allow(dead_code)]
 pub fn default_dir() -> PathBuf {
-    test_home().unwrap_or_else(home).join(".factory")
+    home().join(".factory")
 }
 
 fn dir() -> PathBuf {
-    if test_home().is_some() {
-        return default_dir();
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -75,47 +51,12 @@ fn legacy_path() -> PathBuf {
     dir().join("config.json")
 }
 
-fn load_root() -> Value {
-    match test_home() {
-        Some(h) => std::fs::read_to_string(h.join("agentplus-store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_root(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(h) => Ok(std::fs::write(h.join("agentplus-store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(h) => {
-            let d = h.join("agentplus-backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
-}
-
 // ---------- detection ----------
 
-fn npm_version(pkg: &str) -> Option<String> {
-    let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version").and_then(|x| x.as_str()).map(String::from)
-}
-
 /// The `droid` CLI: npm global package, or the native installer's `droid.exe`.
-#[allow(dead_code)]
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some(v) = npm_version("droid").or_else(|| npm_version("@factory/cli")) {
+    if let Some(v) = crate::process::npm_global_version("droid").or_else(|| crate::process::npm_global_version("@factory/cli")) {
         inst.installed = true;
         inst.version = Some(v);
     } else {
@@ -123,9 +64,8 @@ pub fn detect() -> Install {
         let native = [h.join(".local").join("bin").join("droid.exe"), h.join("bin").join("droid.exe"), h.join(".factory").join("bin").join("droid.exe")];
         if let Some(exe) = native.into_iter().find(|p| p.is_file()).or_else(|| crate::process::on_path(&["droid.exe", "droid.cmd"])) {
             inst.installed = true;
-            if exe.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
-                static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-                inst.version = V.get_or_init(|| crate::process::cli_version(&exe)).clone();
+            if crate::process::is_exe(&exe) {
+                inst.version = crate::process::cli_version(&exe);
             }
         }
     }
@@ -134,10 +74,6 @@ pub fn detect() -> Install {
 }
 
 // ---------- format helpers ----------
-
-fn s(v: &Value, k: &str) -> String {
-    v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
-}
 
 fn norm_base(u: &str) -> String {
     u.trim().trim_end_matches('/').to_string()
@@ -151,14 +87,6 @@ fn api_of(provider: &str) -> &'static str {
     }
 }
 
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        _ => "Chat",
-    }
-}
-
 fn provider_for(api: &str) -> Result<&'static str> {
     match api {
         "chat" => Ok("generic-chat-completion-api"),
@@ -168,26 +96,10 @@ fn provider_for(api: &str) -> Result<&'static str> {
     }
 }
 
-/// `${VAR}` / `$VAR` → the variable name.
-fn env_ref(k: &str) -> Option<&str> {
-    let k = k.trim();
-    k.strip_prefix("${").and_then(|r| r.strip_suffix('}')).or_else(|| k.strip_prefix('$')).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
-}
-
-/// The key a request would use: a literal, or the value of the referenced env variable.
-fn resolve_key(k: &str) -> Option<String> {
-    match env_ref(k) {
-        // The variable lives in the WSL shell, not in this Windows process.
-        Some(_) if test_home().is_none() && crate::env::is_wsl() => None,
-        Some(var) => std::env::var(var).ok().filter(|v| !v.trim().is_empty()),
-        None => Some(k.trim().to_string()).filter(|v| !v.is_empty()),
-    }
-}
-
 /// What Droid shows / selects: displayName, else the model id.
 fn display(e: &Value) -> String {
-    let d = s(e, "displayName");
-    if d.trim().is_empty() { s(e, "model") } else { d }
+    let d = str_field(e, "displayName");
+    if d.trim().is_empty() { str_field(e, "model") } else { d }
 }
 
 /// Droid's selection id of the entry at `i`.
@@ -200,10 +112,9 @@ fn entry_id(e: &Value, i: usize) -> String {
     e.get("id").and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(String::from).unwrap_or_else(|| sel_id(e, i))
 }
 
-type Key = (String, String, String);
-
+/// Groups entries by (baseUrl, provider, apiKey).
 fn key_of(e: &Value) -> Key {
-    (norm_base(&s(e, "baseUrl")), s(e, "provider"), s(e, "apiKey"))
+    (norm_base(&str_field(e, "baseUrl")), str_field(e, "provider"), str_field(e, "apiKey"))
 }
 
 /// Store key for a group's display name (a one-way fingerprint; the key never lands in it).
@@ -211,21 +122,10 @@ fn fp(k: &Key) -> String {
     key_fingerprint(&format!("{}\n{}\n{}", k.0, k.1, k.2))
 }
 
-fn host(base: &str) -> String {
-    url::Url::parse(base).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| host_of(base))
-}
-
 fn strip_markers(e: &mut Value) {
     if let Some(o) = e.as_object_mut() {
         o.retain(|k, _| !k.starts_with("__agentplus_"));
     }
-}
-
-#[derive(Clone, Debug)]
-struct Group {
-    id: String,
-    key: Key,
-    name: String,
 }
 
 /// Groups in order of first appearance (active entries first, then parked ones).
@@ -238,42 +138,27 @@ fn groups_of(entries: &[Value], parked: &[Value], names: &Map<String, Value>) ->
             continue;
         }
         let name = names.get(&fp(&k)).and_then(|x| x.as_str()).map(String::from).unwrap_or_else(|| host(&k.0));
-        let base = slug(&name);
-        let id = if out.iter().any(|g| g.id == base) { (2..).map(|n| format!("{base}-{n}")).find(|c| !out.iter().any(|g| &g.id == c)).unwrap() } else { base };
+        let id = unique_id(&slug(&name), |c| out.iter().any(|g| g.id == c));
         out.push(Group { id, key: k, name });
     }
     out
 }
 
 fn parked_of(root: &Value) -> Vec<Value> {
-    store::agent_get(root, ID, "parked").and_then(|x| x.as_array()).cloned().unwrap_or_default()
+    store::get_arr(root, ID, "parked")
 }
 
 fn names_of(root: &Value) -> Map<String, Value> {
-    store::agent_get(root, ID, "names").and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    store::get_obj(root, ID, "names")
 }
 
 fn parked_why(p: &Value) -> &str {
     p.get("why").and_then(|x| x.as_str()).unwrap_or("hidden")
 }
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
-
 /// (settings, meta, had_comments); a missing file reads as `{}`.
 fn load_settings() -> Result<(Value, TextMeta, bool)> {
-    let p = settings_path();
-    if !p.exists() {
-        return Ok((json!({}), default_meta(), false));
-    }
-    let (text, meta) = read_text(&p)?;
-    let (clean, had) = strip_jsonc(&text);
-    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("settings.json 解析失败：{e}", "Couldn't parse settings.json: {e}")))?;
-    if !v.is_object() {
-        return Err(anyhow!(l("settings.json 顶层不是对象", "settings.json: top level is not an object")));
-    }
-    Ok((v, meta, had))
+    read_jsonc_object_or(&settings_path(), json!({}))
 }
 
 fn custom_models(cfg: &Value) -> Vec<Value> {
@@ -290,11 +175,11 @@ fn legacy_entries() -> Vec<Value> {
             a.iter()
                 .map(|e| {
                     json!({
-                        "model": s(e, "model"),
-                        "displayName": s(e, "model_display_name"),
-                        "baseUrl": s(e, "base_url"),
-                        "apiKey": s(e, "api_key"),
-                        "provider": s(e, "provider"),
+                        "model": str_field(e, "model"),
+                        "displayName": str_field(e, "model_display_name"),
+                        "baseUrl": str_field(e, "base_url"),
+                        "apiKey": str_field(e, "api_key"),
+                        "provider": str_field(e, "provider"),
                         "maxOutputTokens": e.get("max_tokens").cloned().unwrap_or(Value::Null),
                     })
                 })
@@ -305,7 +190,7 @@ fn legacy_entries() -> Vec<Value> {
 
 /// Legacy groups not already covered by settings.json (id "legacy-…").
 fn legacy_groups(active: &[Value]) -> Vec<(Group, Vec<Value>)> {
-    let covered = |e: &Value| active.iter().any(|a| s(a, "model") == s(e, "model") && norm_base(&s(a, "baseUrl")) == norm_base(&s(e, "baseUrl")));
+    let covered = |e: &Value| active.iter().any(|a| str_field(a, "model") == str_field(e, "model") && norm_base(&str_field(a, "baseUrl")) == norm_base(&str_field(e, "baseUrl")));
     let entries: Vec<Value> = legacy_entries().into_iter().filter(|e| !covered(e)).collect();
     let mut out: Vec<(Group, Vec<Value>)> = vec![];
     for e in entries {
@@ -314,33 +199,24 @@ fn legacy_groups(active: &[Value]) -> Vec<(Group, Vec<Value>)> {
             g.1.push(e);
             continue;
         }
-        let base = format!("legacy-{}", slug(&host(&k.0)));
-        let id = if out.iter().any(|(g, _)| g.id == base) { (2..).map(|n| format!("{base}-{n}")).find(|c| !out.iter().any(|(g, _)| &g.id == c)).unwrap() } else { base };
+        let id = unique_id(&format!("legacy-{}", slug(&host(&k.0))), |c| out.iter().any(|(g, _)| g.id == c));
         out.push((Group { id, name: tr!("{}（旧版 config.json）", "{} (legacy config.json)", host(&k.0)), key: k }, vec![e]));
     }
     out
 }
 
 fn model_of(e: &Value, visible: bool, readonly: bool) -> Model {
-    let d = s(e, "displayName");
+    let d = str_field(e, "displayName");
     let out = e.get("maxOutputTokens").and_then(|x| x.as_u64());
     Model {
-        id: s(e, "model"),
+        id: str_field(e, "model"),
         visible,
         readonly,
         tags: out.map(|n| vec![Tag::new("output", tr!("输出 {}", "Output {}", fmt_ctx(n)))]).unwrap_or_default(),
-        name: (!d.trim().is_empty() && d != s(e, "model")).then_some(d),
+        name: (!d.trim().is_empty() && d != str_field(e, "model")).then_some(d),
         deletable: !readonly,
         extra: crate::mfields::read(e, crate::mfields::DROID),
         ..Default::default()
-    }
-}
-
-fn key_note(k: &str) -> String {
-    match env_ref(k) {
-        Some(var) => if resolve_key(k).is_some() { tr!("环境变量 ${{{var}}}（已设置）", "Environment variable ${{{var}}} (set)") } else { tr!("环境变量 ${{{var}}}（未设置）", "Environment variable ${{{var}}} (not set)") },
-        None if k.trim().is_empty() => l("未填写", "Not set").into(),
-        None => l("明文保存在 settings.json", "Stored in plain text in settings.json").into(),
     }
 }
 
@@ -369,65 +245,38 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         base_url: Some(g.key.0.clone()),
         host: host_of(&g.key.0),
         apis: vec![api_label(api).into()],
-        builtin: false,
         enabled: !disabled,
         compatible: true,
-        reason: None,
         models,
         details: vec![
             Kv::mono("provider", if g.key.1.is_empty() { "-".into() } else { g.key.1.clone() }),
-            Kv::text(l("条目", "Entries"), tr!("customModels 里 {} 个模型条目（每个条目自带地址和密钥）", "{} model entries in customModels (each carries its own base URL and API key)", active.len())),
-            Kv::text(l("密钥", "API key"), key_note(&g.key.2)),
-            Kv::text(l("状态", "Status"), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
+            Kv::text(l("条目", "Entries"), trn!(active.len(), "customModels 里 {n} 个模型条目（每个条目自带地址和密钥）", "{n} model entry in customModels (it carries its own base URL and API key)", "{n} model entries in customModels (each carries its own base URL and API key)")),
+            Kv::text(lbl::api_key(), keyref::key_note(&g.key.2, "settings.json")),
+            Kv::text(lbl::status(), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
         ],
         editable: !readonly,
         api: api.into(),
-        has_key: resolve_key(&g.key.2).is_some() || env_ref(&g.key.2).is_some(),
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        has_key: keyref::has_key(&g.key.2),
+        ..Default::default()
     }
 }
 
-#[allow(dead_code)]
 pub fn state(inst: &Install) -> AgentState {
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&settings_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&settings_path())]);
     let cfg = match load_settings() {
         Ok((cfg, _, had)) => {
             if had {
                 st.readonly = true;
-                st.notes.push(l("settings.json 含注释，写回会丢失注释，已切换为只读。", "settings.json contains comments that would be lost on write, so it's read-only.").into());
+                st.notes.push(msg::comments_readonly("settings.json"));
             }
             cfg
         }
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
-    let root = load_root();
+    let root = store::load();
     let entries = custom_models(&cfg);
     let parked = parked_of(&root);
     let groups = groups_of(&entries, &parked, &names_of(&root));
@@ -446,7 +295,7 @@ pub fn state(inst: &Install) -> AgentState {
     let model = cfg.get("model").and_then(|x| x.as_str()).map(String::from);
     let selected = model.as_deref().and_then(|m| entries.iter().enumerate().find(|(i, e)| entry_id(e, *i) == m));
     st.current = vec![
-        Kv::mono(l("当前模型", "Current model"), model.clone().unwrap_or_else(|| l("-（Droid 默认）", "- (Droid default)").into())),
+        Kv::mono(lbl::current_model(), model.clone().unwrap_or_else(|| l("-（Droid 默认）", "- (Droid default)").into())),
         Kv::text(
             l("对应条目", "Matching entry"),
             match selected {
@@ -455,23 +304,22 @@ pub fn state(inst: &Install) -> AgentState {
                 None => l("内置模型", "Built-in model").into(),
             },
         ),
-        Kv::text(l("自定义模型", "Custom models"), tr!("{} 个", "{}", entries.len())),
-        Kv::mono(l("配置文件", "Config file"), display_path(&settings_path())),
+        Kv::text(lbl::custom_models(), tr!("{} 个", "{}", entries.len())),
+        Kv::mono(lbl::config_file(), display_path(&settings_path())),
     ];
     st.notes.push(l("Droid 运行时会改写 settings.json；AgentPlus 只改 customModels 和 model，改动对新会话生效。", "Droid rewrites settings.json while running; AgentPlus only changes customModels and model, and changes apply to new sessions.").into());
     st.notes.push(l("自定义模型按列表位置编号（custom:名称-序号）；增删或隐藏条目后 AgentPlus 会同步修正当前选中的 model。", "Custom models are numbered by list position (custom:name-index); after adding, removing or hiding entries AgentPlus fixes up the selected model.").into());
     st
 }
 
-#[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_settings()?;
-    let root = load_root();
+    let root = store::load();
     let entries = custom_models(&cfg);
     let groups = groups_of(&entries, &parked_of(&root), &names_of(&root));
     let key = match groups.into_iter().find(|g| g.id == id) {
         Some(g) => g.key,
-        None => legacy_groups(&entries).into_iter().find(|(g, _)| g.id == id).map(|(g, _)| g.key).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?,
+        None => legacy_groups(&entries).into_iter().find(|(g, _)| g.id == id).map(|(g, _)| g.key).ok_or_else(|| msg::no_provider(id))?,
     };
     if key.0.is_empty() {
         return Err(anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")));
@@ -495,7 +343,7 @@ impl Work {
         if self.legacy.iter().any(|l| l == id) {
             return Err(anyhow!(l("旧版 config.json 里的条目只读；请在 Droid 里迁移到 settings.json 后再编辑", "Entries in the legacy config.json are read-only; migrate them to settings.json in Droid before editing")));
         }
-        self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))
+        self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| msg::no_provider(id))
     }
 
     fn enabled(&self, g: &Group) -> bool {
@@ -503,7 +351,7 @@ impl Work {
     }
 
     fn require_enabled(&self, g: &Group) -> Result<()> {
-        if self.enabled(g) { Ok(()) } else { Err(anyhow!(tr!("供应商「{}」已停用，先启用再调整模型", "Provider \"{}\" is disabled; enable it before changing its models", g.name))) }
+        keyref::require_enabled(g, self.enabled(g))
     }
 
     fn park(&mut self, e: Value, why: &str) {
@@ -517,12 +365,10 @@ impl Work {
             "model": model,
             "displayName": name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(model),
             "baseUrl": g.key.0,
-            "apiKey": g.key.2,
+            "apiKey": "",
             "provider": g.key.1,
         });
-        if g.key.2.is_empty() {
-            e.as_object_mut().unwrap().remove("apiKey");
-        }
+        set_or_remove(&mut e, "apiKey", &g.key.2);
         e
     }
 
@@ -537,36 +383,48 @@ impl Work {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 let prov = provider_for(&p.api)?;
                 let base = norm_base(&p.base_url);
                 let new_key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
                 match &p.id {
                     None => {
-                        let models: Vec<&str> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+                        let models = clean_ids(&p.models);
                         if models.is_empty() {
                             return Err(anyhow!(l("Droid 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型", "Each Droid model entry carries its own base URL and API key: add at least one model when creating a provider")));
                         }
                         let key: Key = (base.clone(), prov.to_string(), new_key.clone().unwrap_or_default());
                         let g = match self.groups.iter().find(|g| g.key == key) {
-                            Some(g) => g.clone(),
+                            // Same as an existing provider: add to it, unless it is disabled
+                            // (its entries are parked; adding would orphan them).
+                            Some(g) => {
+                                let g = g.clone();
+                                self.require_enabled(&g)?;
+                                g
+                            }
                             None => {
-                                let b = slug(p.name.trim());
-                                let id = if self.groups.iter().any(|g| g.id == b) || self.legacy.contains(&b) { (2..).map(|n| format!("{b}-{n}")).find(|c| !self.groups.iter().any(|g| &g.id == c)).unwrap() } else { b };
+                                let id = unique_id(&slug(p.name.trim()), |c| self.groups.iter().any(|g| g.id == c) || self.legacy.iter().any(|l| l == c));
                                 let g = Group { id, key: key.clone(), name: p.name.trim().to_string() };
                                 self.groups.push(g.clone());
                                 g
                             }
                         };
                         self.names.insert(fp(&key), json!(p.name.trim()));
-                        let key_part = new_key.as_deref().map(|k| tr!(" · 密钥 {}", " · API key {}", mask_key(k))).unwrap_or_default();
-                        self.diff.push(&file, tr!("+ 「{}」{} 个模型条目（{base} · {}{}）", "+ \"{}\" {} model entries ({base} · {}{})", p.name.trim(), models.len(), api_label(&p.api), key_part), true);
-                        for m in models {
-                            if !self.entries.iter().any(|e| key_of(e) == key && s(e, "model") == m) {
-                                self.entries.push(Self::new_entry(&g, m, None));
+                        // Adding to an existing provider under another name renames it.
+                        if p.name.trim() != g.name {
+                            self.diff.push(STORE_LABEL, tr!("供应商名称「{}」→「{}」", "Provider name \"{}\" → \"{}\"", g.name, p.name.trim()), true);
+                            if let Some(x) = self.groups.iter_mut().find(|x| x.id == g.id) {
+                                x.name = p.name.trim().to_string();
                             }
                         }
+                        // A hidden (parked) model is already there: it stays hidden.
+                        let added: Vec<&String> = models.iter().filter(|m| !self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == key && str_field(e, "model") == **m)).collect();
+                        if !added.is_empty() {
+                            self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), msg::key_suffix(new_key.as_deref())), true);
+                        }
+                        let new: Vec<Value> = added.into_iter().map(|m| Self::new_entry(&g, m, None)).collect();
+                        self.entries.extend(new);
                     }
                     Some(id) => {
                         let g = self.group(id)?;
@@ -585,11 +443,18 @@ impl Work {
                             lines.push(format!("apiKey = {}", if key.2.is_empty() { l("（空）", "(empty)").into() } else { mask_key(&key.2) }));
                         }
                         if key != g.key {
+                            // Only the changed fields: a keyless entry gets no `"apiKey": ""`.
                             let set = |e: &mut Value| {
                                 if key_of(e) == g.key {
-                                    e["baseUrl"] = json!(key.0);
-                                    e["provider"] = json!(key.1);
-                                    e["apiKey"] = json!(key.2);
+                                    if key.0 != g.key.0 {
+                                        e["baseUrl"] = json!(key.0);
+                                    }
+                                    if key.1 != g.key.1 {
+                                        e["provider"] = json!(key.1);
+                                    }
+                                    if key.2 != g.key.2 {
+                                        set_or_remove(e, "apiKey", &key.2);
+                                    }
                                 }
                             };
                             self.entries.iter_mut().for_each(set);
@@ -618,7 +483,7 @@ impl Work {
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
                 self.names.remove(&fp(&g.key));
                 self.groups.retain(|x| x.id != g.id);
-                self.diff.push(&file, tr!("- 「{}」（{removed} 个模型条目，含地址和密钥）", "- \"{}\" ({removed} model entries, with base URL and API key)", g.name), false);
+                self.diff.push(&file, trn!(removed, "- 「{}」（{n} 个模型条目，含地址和密钥）", "- \"{}\" ({n} model entry, with base URL and API key)", "- \"{}\" ({n} model entries, with base URL and API key)", g.name), false);
             }
             Op::SetProviderEnabled { provider, enabled } => {
                 let g = self.group(provider)?;
@@ -626,14 +491,14 @@ impl Work {
                     let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| parked_why(p) == "disabled" && p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false));
                     self.parked = keep;
                     if !back.is_empty() {
-                        self.diff.push(&file, tr!("+ 「{}」{} 个模型条目（从 AgentPlus 恢复）", "+ \"{}\" {} model entries (restored from AgentPlus)", g.name, back.len()), true);
+                        self.diff.push(&file, trn!(back.len(), "+ 「{}」{n} 个模型条目（从 AgentPlus 恢复）", "+ \"{}\" {n} model entry (restored from AgentPlus)", "+ \"{}\" {n} model entries (restored from AgentPlus)", g.name), true);
                         self.entries.extend(back.into_iter().filter_map(|p| p.get("entry").cloned()));
                     }
                 } else {
                     let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key);
                     self.entries = keep;
                     if !out.is_empty() {
-                        self.diff.push(&file, tr!("- 「{}」{} 个模型条目（暂存在 AgentPlus，可恢复）", "- \"{}\" {} model entries (parked in AgentPlus, restorable)", g.name, out.len()), false);
+                        self.diff.push(&file, trn!(out.len(), "- 「{}」{n} 个模型条目（暂存在 AgentPlus，可恢复）", "- \"{}\" {n} model entry (parked in AgentPlus, restorable)", "- \"{}\" {n} model entries (parked in AgentPlus, restorable)", g.name), false);
                         for e in out {
                             self.park(e, "disabled");
                         }
@@ -644,14 +509,14 @@ impl Work {
                 let g = self.group(provider)?;
                 self.require_enabled(&g)?;
                 if *visible {
-                    let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| parked_why(p) == "hidden" && p.get("entry").map(|e| key_of(e) == g.key && &s(e, "model") == model).unwrap_or(false));
+                    let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| parked_why(p) == "hidden" && p.get("entry").map(|e| key_of(e) == g.key && &str_field(e, "model") == model).unwrap_or(false));
                     self.parked = keep;
                     if !back.is_empty() {
                         self.entries.extend(back.into_iter().filter_map(|p| p.get("entry").cloned()));
                         self.diff.push(&file, tr!("customModels + {model}（{}，显示）", "customModels + {model} ({}, shown)", g.name), true);
                     }
                 } else {
-                    let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key && &s(e, "model") == model);
+                    let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key && &str_field(e, "model") == model);
                     self.entries = keep;
                     if !out.is_empty() {
                         self.diff.push(&file, tr!("customModels - {model}（{}，隐藏，条目暂存在 AgentPlus）", "customModels - {model} ({}, hidden, entry parked in AgentPlus)", g.name), false);
@@ -665,19 +530,19 @@ impl Work {
                 let g = self.group(provider)?;
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 for (k, v) in &m.extra {
                     crate::mfields::check(crate::mfields::DROID, k, v)?;
                 }
-                let exists = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == g.key && s(e, "model") == mid);
+                let exists = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == g.key && str_field(e, "model") == mid);
                 if !exists {
                     self.require_enabled(&g)?;
                     self.add_model(&g, &mid, m.name.as_deref());
                 } else if let Some(n) = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                     let mut changed = false;
                     let set = |e: &mut Value| {
-                        if key_of(e) == g.key && s(e, "model") == mid && s(e, "displayName") != n {
+                        if key_of(e) == g.key && str_field(e, "model") == mid && str_field(e, "displayName") != n {
                             e["displayName"] = json!(n);
                             true
                         } else {
@@ -697,7 +562,7 @@ impl Work {
                 // Droid has no context-window field for custom models; `context` is ignored.
                 let mut lines = vec![];
                 for e in self.entries.iter_mut().chain(self.parked.iter_mut().filter_map(|p| p.get_mut("entry"))) {
-                    if key_of(e) == g.key && s(e, "model") == mid {
+                    if key_of(e) == g.key && str_field(e, "model") == mid {
                         lines.extend(crate::mfields::write(e, crate::mfields::DROID, &m.extra)?);
                     }
                 }
@@ -709,8 +574,8 @@ impl Work {
             Op::DeleteModel { provider, model } => {
                 let g = self.group(provider)?;
                 let n = self.entries.len() + self.parked.len();
-                self.entries.retain(|e| !(key_of(e) == g.key && &s(e, "model") == model));
-                self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &s(e, "model") == model).unwrap_or(false));
+                self.entries.retain(|e| !(key_of(e) == g.key && &str_field(e, "model") == model));
+                self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &str_field(e, "model") == model).unwrap_or(false));
                 if self.entries.len() + self.parked.len() != n {
                     self.diff.push(&file, tr!("customModels - {model}（{}，删除）", "customModels - {model} ({}, deleted)", g.name), false);
                 }
@@ -718,39 +583,33 @@ impl Work {
             Op::SetProviderModels { provider, models } => {
                 let g = self.group(provider)?;
                 self.require_enabled(&g)?;
-                let mut want: Vec<String> = vec![];
-                for m in models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-                    if !want.iter().any(|w| w == m) {
-                        want.push(m.to_string());
-                    }
-                }
+                let want = clean_ids(models);
                 if want.is_empty() {
                     return Err(anyhow!(l("至少保留一个模型；不要这个供应商的话请直接删除", "Keep at least one model; delete the provider if you don't need it")));
                 }
-                let keep = |e: &Value| key_of(e) != g.key || want.contains(&s(e, "model"));
-                let gone: Vec<String> = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).filter(|e| !keep(e)).map(|e| s(e, "model")).collect();
+                let keep = |e: &Value| key_of(e) != g.key || want.contains(&str_field(e, "model"));
+                let gone: Vec<String> = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).filter(|e| !keep(e)).map(|e| str_field(e, "model")).collect();
                 self.entries.retain(|e| keep(e));
                 self.parked.retain(|p| p.get("entry").map(keep).unwrap_or(true));
                 for m in gone {
                     self.diff.push(&file, tr!("customModels - {m}（{}）", "customModels - {m} ({})", g.name), false);
                 }
                 for m in &want {
-                    let has = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == g.key && &s(e, "model") == m);
+                    let has = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == g.key && &str_field(e, "model") == m);
                     if !has {
                         self.add_model(&g, m, None);
                     }
                 }
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Droid 的自定义模型可以同时存在，在 Droid 里用 /model 切换", "Droid custom models can all coexist; switch with /model inside Droid"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code uses model roles"))),
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
         Ok(())
     }
 }
 
-#[allow(dead_code)]
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (cfg, _, had_comments) = load_settings()?;
     let orig_entries = custom_models(&cfg);
@@ -767,7 +626,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             e[IDFMT] = json!(true);
         }
     }
-    let mut root = load_root();
+    let mut root = store::load();
     let parked0 = parked_of(&root);
     let names0 = names_of(&root);
     let groups = groups_of(&entries, &parked0, &names0);
@@ -811,19 +670,19 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let cfg_dirty = w.entries != orig_entries || model1 != model0;
     let store_dirty = w.parked != parked0 || w.names != names0;
     if cfg_dirty && had_comments {
-        return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing it to avoid losing them")));
+        return Err(msg::comments_not_written("settings.json"));
     }
     let mut written = vec![];
     let mut backup_dir = None;
     if !dry_run {
         if cfg_dirty {
             let path = settings_path();
-            backup_dir = Some(do_backup(std::slice::from_ref(&path))?);
+            backup_dir = Some(backup(ID, std::slice::from_ref(&path))?);
             // Droid may have rewritten the file meanwhile: take the latest copy and replace
             // only our two keys.
             let (mut fresh, meta, had) = load_settings()?;
             if had {
-                return Err(anyhow!(l("settings.json 含注释，为避免丢失注释不写入", "settings.json contains comments; not writing it to avoid losing them")));
+                return Err(msg::comments_not_written("settings.json"));
             }
             let o = fresh.as_object_mut().unwrap();
             o.insert("customModels".into(), Value::Array(w.entries.clone()));
@@ -842,7 +701,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if store_dirty {
             store::set_value(&mut root, ID, "parked", Value::Array(w.parked));
             store::set_value(&mut root, ID, "names", Value::Object(w.names));
-            save_root(&root)?;
+            store::save(&root)?;
         }
     }
     Ok((w.diff, written, backup_dir))
@@ -891,24 +750,17 @@ mod tests {
 }
 "#;
 
-    struct Home(PathBuf);
-    impl Drop for Home {
-        fn drop(&mut self) {
-            TEST_HOME.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    type Home = TestHome;
 
     fn setup(name: &str, settings: Option<&str>) -> Home {
-        std::env::set_var("AGENTPLUS_DROID_TEST_KEY", "sk-env-3333");
-        let h = std::env::temp_dir().join(format!("agentplus-droid-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&h);
+        let home = TestHome::new(&format!("droid-{name}"));
+        crate::env::set_test_vars(&[("AGENTPLUS_DROID_TEST_KEY", "sk-env-3333")]);
+        let h = home.0.clone();
         std::fs::create_dir_all(h.join(".factory")).unwrap();
         if let Some(c) = settings {
             std::fs::write(h.join(".factory/settings.json"), c).unwrap();
         }
-        TEST_HOME.with(|t| *t.borrow_mut() = Some(h.clone()));
-        Home(h)
+        home
     }
 
     fn cfg_of(h: &Home) -> Value {
@@ -935,7 +787,7 @@ mod tests {
     }
 
     fn models_of(c: &Value) -> Vec<String> {
-        c["customModels"].as_array().unwrap().iter().map(|e| s(e, "model")).collect()
+        c["customModels"].as_array().unwrap().iter().map(|e| str_field(e, "model")).collect()
     }
 
     #[test]
@@ -999,6 +851,23 @@ mod tests {
         assert_eq!(models_of(&c), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5", "kimi-k2"]);
         assert_eq!(c["model"], "custom:GLM-Coding-0");
         assert_eq!(c["customModels"][3]["apiKey"], "sk-moon-1111");
+    }
+
+    #[test]
+    fn re_adding_an_existing_provider_renames_it_and_keeps_hidden_models() {
+        let h = setup("readd", Some(SAMPLE));
+        let old = state(&Install::default()).providers.iter().find(|p| p.id == "api-moonshot-cn").unwrap().name.clone();
+        plan(&[Op::SetModelVisible { provider: "api-moonshot-cn".into(), model: "kimi-k2".into(), visible: false }], false).unwrap();
+        let (d, _, _) = plan(&[upsert(None, "Moonshot", "https://api.moonshot.cn/v1", "chat", Some("sk-moon-1111"), &["kimi-k2"])], false).unwrap();
+        let t = diff_text(&d);
+        assert_eq!(t, format!("供应商名称「{old}」→「Moonshot」"), "the rename shows, and the hidden model is not added again");
+        let st = state(&Install::default());
+        // The id follows the name.
+        let kimi = st.providers.iter().find(|p| p.id == "moonshot").unwrap();
+        assert_eq!(kimi.name, "Moonshot");
+        assert!(kimi.models.len() == 1 && !kimi.models[0].visible);
+        plan(&[Op::SetModelVisible { provider: "moonshot".into(), model: "kimi-k2".into(), visible: true }], false).unwrap();
+        assert_eq!(models_of(&cfg_of(&h)), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5", "kimi-k2"], "no duplicate entry");
     }
 
     #[test]
@@ -1084,10 +953,46 @@ mod tests {
         let (d, w, b) = plan(&[Op::DeleteProvider { provider: "api-moonshot-cn".into() }], true).unwrap();
         assert!(!d.groups.is_empty() && w.is_empty() && b.is_none());
         assert_eq!(before, std::fs::read(h.0.join(".factory/settings.json")).unwrap());
-        assert!(!h.0.join("agentplus-store.json").exists());
+        assert!(!agentplus_dir().join("store.json").exists());
         let _h2 = setup("jsonc", Some("{\n  // c\n  \"customModels\": []\n}"));
         assert!(state(&Install::default()).readonly);
         assert!(plan(&[upsert(None, "x", "https://x/v1", "chat", None, &["m"])], true).is_err());
+    }
+
+    #[test]
+    fn keyless_edit_writes_no_api_key() {
+        let h = setup("keyless", Some(r#"{"customModels":[{"model":"qwen3","displayName":"Qwen3","baseUrl":"http://localhost:11434/v1","provider":"generic-chat-completion-api"}]}"#));
+        let st = state(&Install::default());
+        assert_eq!((st.providers[0].id.as_str(), st.providers[0].name.as_str()), ("localhost", "localhost"));
+        let ops = [
+            upsert(Some("localhost"), "localhost", "http://localhost:11435/v1", "chat", None, &[]),
+            Op::UpsertModel { provider: "localhost".into(), model: ModelInput { id: "llama4".into(), ..Default::default() } },
+        ];
+        plan(&ops, false).unwrap();
+        let c = cfg_of(&h);
+        assert_eq!(models_of(&c), ["qwen3", "llama4"]);
+        for e in c["customModels"].as_array().unwrap() {
+            assert_eq!(e["baseUrl"], "http://localhost:11435/v1");
+            assert!(e.get("apiKey").is_none(), "{e}");
+        }
+    }
+
+    #[test]
+    fn recreating_a_disabled_provider_is_refused() {
+        let h = setup("recreate", Some(SAMPLE));
+        plan(&[Op::SetProviderEnabled { provider: "api-moonshot-cn".into(), enabled: false }], false).unwrap();
+        let store0 = std::fs::read(agentplus_dir().join("store.json")).unwrap();
+        let again = upsert(None, "Kimi", "https://api.moonshot.cn/v1", "chat", Some("sk-moon-1111"), &["kimi-k3"]);
+        let err = plan(std::slice::from_ref(&again), false).err().unwrap();
+        assert!(err.to_string().contains("已停用"), "{err}");
+        assert_eq!(store0, std::fs::read(agentplus_dir().join("store.json")).unwrap());
+        assert_eq!(models_of(&cfg_of(&h)), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5"]);
+
+        // An enabled one takes the new models; the diff counts only those.
+        plan(&[Op::SetProviderEnabled { provider: "api-moonshot-cn".into(), enabled: true }], false).unwrap();
+        let (d, _, _) = plan(&[upsert(None, "Kimi", "https://api.moonshot.cn/v1", "chat", Some("sk-moon-1111"), &["kimi-k2", "kimi-k3"])], false).unwrap();
+        assert!(diff_text(&d).contains("「Kimi」1 个模型条目"), "{}", diff_text(&d));
+        assert_eq!(models_of(&cfg_of(&h)), ["glm-5.2", "glm-4.6", "claude-sonnet-4-5", "kimi-k2", "kimi-k3"]);
     }
 
     /// Read-only look at the real machine: state and a dry-run plan (nothing is written).

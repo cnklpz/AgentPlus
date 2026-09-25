@@ -8,29 +8,29 @@
 //! Keys live in `options.apiKey`, or in OpenCode's `auth.json` when that is where the
 //! user keeps them.
 
+use super::msg;
 use super::Endpoint;
 use crate::i18n::l;
 use crate::mfields;
 use crate::model::*;
 use crate::store;
 use crate::util::*;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Map, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub struct Fmt {
-    pub agent: &'static str,
+    /// The agent id, which also names its AgentPlus store section (stashed models and providers).
+    pub agent: String,
     pub path: PathBuf,
     /// OpenCode's credential store (`~/.local/share/opencode/auth.json`).
     pub auth: Option<PathBuf>,
     /// Use the config's own `disabled_providers` list instead of stashing.
     pub native_disable: bool,
-}
-
-thread_local! {
     /// Ids a new provider must not take. OpenCode project configs set it to the ids the
     /// global config already uses, so a new project provider is not merged into one of them.
-    pub static RESERVED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub reserved: Vec<String>,
 }
 
 #[derive(Default)]
@@ -73,7 +73,7 @@ fn complete_model(def: &mut Value) -> Vec<String> {
     out
 }
 
-pub fn api_of(npm: &str) -> &'static str {
+fn api_of(npm: &str) -> &'static str {
     if npm.contains("anthropic") {
         "anthropic"
     } else if npm.ends_with("/openai") {
@@ -83,15 +83,30 @@ pub fn api_of(npm: &str) -> &'static str {
     }
 }
 
-pub fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        _ => "Chat",
-    }
+/// A provider's non-empty `options.apiKey` as written (it may hold references, see `key_ref`).
+pub(super) fn cfg_key(def: &Value) -> Option<&str> {
+    def.pointer("/options/apiKey")?.as_str().filter(|k| !k.trim().is_empty())
 }
 
-pub fn npm_for(api: &str) -> &'static str {
+static KEY_REF: OnceLock<regex::Regex> = OnceLock::new();
+
+/// OpenCode's config substitutions: `{env:NAME}` and `{file:path}`.
+fn key_ref_re() -> regex::Regex {
+    regex::Regex::new(r"\{(env|file):([^}]+)\}").unwrap()
+}
+
+/// The first reference in a key: ("env", NAME) or ("file", path).
+fn key_ref(raw: &str) -> Option<(&str, &str)> {
+    let c = KEY_REF.get_or_init(key_ref_re).captures(raw)?;
+    Some((c.get(1)?.as_str(), c.get(2)?.as_str()))
+}
+
+/// A config apiKey that is not an `{env:}` / `{file:}` reference.
+pub(super) fn is_plain_key(k: &str) -> bool {
+    key_ref(k).is_none()
+}
+
+fn npm_for(api: &str) -> &'static str {
     match api {
         "anthropic" => "@ai-sdk/anthropic",
         "responses" => "@ai-sdk/openai",
@@ -99,26 +114,65 @@ pub fn npm_for(api: &str) -> &'static str {
     }
 }
 
+/// Read-only cards for the entries of an `auth.json` (OpenCode and its forks, pi) that no
+/// config entry in `known` covers: providers built into the agent, logged in with an OAuth
+/// account or given an API key. `login` is how to log in (`opencode auth`), `about` the note
+/// on where their models come from; ids in `off` are disabled.
+pub(crate) fn auth_cards(auth: Option<&Value>, known: &[Provider], login: &str, about: &str, off: &[String]) -> Vec<Provider> {
+    let Some(obj) = auth.and_then(|a| a.as_object()) else { return vec![] };
+    obj.iter()
+        .filter(|(id, _)| !known.iter().any(|p| &p.id == *id))
+        .map(|(id, e)| {
+            let oauth = e.get("type").and_then(|t| t.as_str()) == Some("oauth");
+            Provider {
+                enabled: !off.contains(id),
+                ..Provider::builtin(
+                    id.clone(),
+                    id.clone(),
+                    if oauth { tr!("账号登录（{login}）", "Account sign-in ({login})") } else { l("内置供应商 · API Key", "Built-in provider · API key").into() },
+                    "chat",
+                    l("内置", "Built-in"),
+                    vec![
+                        Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
+                        Kv::text(lbl::note(), about),
+                    ],
+                )
+            }
+        })
+        .collect()
+}
+
+/// Writes a credentials file in place (not tmp + rename) so it keeps its owner-only permissions.
+pub(crate) fn write_auth(path: &Path, auth: &Value) -> Result<()> {
+    let failed = || tr!("写入 {} 失败", "Failed to write {}", display_path(path));
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).with_context(failed)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(auth)? + "\n").with_context(failed)?;
+    Ok(())
+}
+
 impl Fmt {
+    pub fn new(agent: &str, path: PathBuf, auth: Option<PathBuf>, native_disable: bool) -> Self {
+        Fmt { agent: agent.into(), path, auth, native_disable, reserved: vec![] }
+    }
+
     pub fn file(&self) -> String {
         display_path(&self.path)
     }
 
-    fn name(&self) -> String {
+    /// The config's file name (`opencode.json`).
+    pub fn name(&self) -> String {
         self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
     }
 
     /// Returns (config, meta, has_comments). A missing file reads as `{}` when `allow_missing`.
     pub fn load(&self, allow_missing: bool) -> Result<(Value, TextMeta, bool)> {
-        if allow_missing && !self.path.exists() {
-            return Ok((json!({ "$schema": "https://opencode.ai/config.json" }), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }, false));
+        if allow_missing {
+            return read_jsonc_object_or(&self.path, json!({ "$schema": "https://opencode.ai/config.json" }));
         }
         let (text, meta) = read_text(&self.path)?;
-        let (clean, had) = strip_jsonc(&text);
-        let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("{} 解析失败：{e}", "Failed to parse {}: {e}", self.name())))?;
-        if !v.is_object() {
-            return Err(anyhow!(tr!("{} 顶层不是对象", "The top level of {} is not an object", self.name())));
-        }
+        let (v, had) = parse_jsonc_object(&text, &self.name())?;
         Ok((v, meta, had))
     }
 
@@ -127,17 +181,35 @@ impl Fmt {
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
         let p = self.auth.as_ref()?;
         if !p.exists() {
-            return Some((json!({}), TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }));
+            return Some((json!({}), TextMeta::NEW));
         }
         read_json(p).ok().filter(|(v, _)| v.is_object())
     }
 
-    fn stash(&self, root: &Value, key: &str) -> Map<String, Value> {
-        store::agent_get(root, self.agent, key).and_then(|x| x.as_object()).cloned().unwrap_or_default()
+    /// The config's own `disabled_providers` list.
+    pub fn disabled(&self, cfg: &Value) -> Vec<String> {
+        str_list(cfg.get("disabled_providers")).unwrap_or_default()
     }
 
-    fn disabled(&self, cfg: &Value) -> Vec<String> {
-        cfg.get("disabled_providers").and_then(|x| x.as_array()).map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect()).unwrap_or_default()
+    /// The real key behind an `options.apiKey` value: `{env:NAME}` / `{file:path}` references
+    /// are substituted the way OpenCode does (a relative path is relative to the config's
+    /// folder). None when a reference can't be resolved here, so it is never sent literally.
+    fn resolve_key(&self, raw: &str) -> Option<String> {
+        let mut missing = false;
+        let out = KEY_REF.get_or_init(key_ref_re).replace_all(raw, |c: &regex::Captures| {
+            let v = if &c[1] == "env" {
+                crate::env::agent_var(&c[2])
+            } else {
+                let p = crate::env::resolve_path(&c[2]);
+                let p = if p.is_absolute() { p } else { self.path.parent().map(|d| d.join(&p)).unwrap_or(p) };
+                std::fs::read_to_string(p).ok().map(|s| s.trim().to_string())
+            };
+            v.unwrap_or_else(|| {
+                missing = true;
+                String::new()
+            })
+        });
+        (!missing).then(|| out.trim().to_string()).filter(|k| !k.is_empty())
     }
 
     fn auth_key<'a>(auth: Option<&'a Value>, id: &str) -> Option<&'a str> {
@@ -173,10 +245,14 @@ impl Fmt {
                 models.push(Self::model_from(mid, d, false));
             }
         }
-        let in_cfg = def.pointer("/options/apiKey").and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
+        let in_cfg = cfg_key(def);
         let in_auth = Self::auth_key(auth, id).is_some();
-        let key_note = if in_cfg {
-            tr!("API Key · 明文保存在 {}", "API key · stored in plain text in {}", self.name())
+        let key_note = if let Some(k) = in_cfg {
+            match key_ref(k) {
+                Some(("env", n)) => tr!("API Key · 环境变量 {n}", "API key · environment variable {n}"),
+                Some((_, p)) => tr!("API Key · 读取文件 {p}", "API key · read from file {p}"),
+                None => tr!("API Key · 明文保存在 {}", "API key · stored in plain text in {}", self.name()),
+            }
         } else if in_auth {
             l("API Key · 保存在 auth.json", "API key · stored in auth.json").into()
         } else {
@@ -193,31 +269,31 @@ impl Fmt {
             host: base.as_deref().map(host_of).unwrap_or_default(),
             base_url: base,
             apis: vec![api_label(api).into()],
-            builtin: false,
             enabled,
             compatible: true,
-            reason: None,
             models,
             details: vec![
-                Kv::mono(l("配置 ID", "Config ID"), format!("provider.{id}")),
+                Kv::mono(lbl::config_id(), format!("provider.{id}")),
                 Kv::mono("npm", if npm.is_empty() { "-".into() } else { npm.to_string() }),
-                Kv::text(l("密钥", "API key"), key_note),
-                Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { parked }),
+                Kv::text(lbl::api_key(), key_note),
+                Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { parked }),
             ],
             editable: true,
             api: api.into(),
-            has_key: in_cfg || in_auth,
-            key_fp: None,
-            key_hint: None,
-            official_auth: false,
+            has_key: in_cfg.is_some() || in_auth,
+            ..Default::default()
         }
     }
 
     /// Custom providers in the config (enabled, natively disabled, or stashed).
     pub fn providers(&self, cfg: &Value, root: &Value) -> Vec<Provider> {
-        let hidden = self.stash(root, "hiddenModels");
+        self.providers_with(cfg, root, &self.disabled(cfg))
+    }
+
+    /// `providers`, with `off` as the disabled list (a project's effective one).
+    pub fn providers_with(&self, cfg: &Value, root: &Value, off: &[String]) -> Vec<Provider> {
+        let hidden = store::get_obj(root, &self.agent, "hiddenModels");
         let auth = self.load_auth().map(|x| x.0);
-        let off = self.disabled(cfg);
         let mut out = vec![];
         if let Some(p) = cfg.get("provider").and_then(|x| x.as_object()) {
             for (id, def) in p {
@@ -225,7 +301,7 @@ impl Fmt {
             }
         }
         if !self.native_disable {
-            for (id, def) in &self.stash(root, "disabledProviders") {
+            for (id, def) in &store::get_obj(root, &self.agent, "disabledProviders") {
                 out.push(self.provider_from(id, def, false, &hidden, auth.as_ref()));
             }
         }
@@ -235,17 +311,87 @@ impl Fmt {
     /// Base URL, key and API kind of a provider.
     pub fn endpoint(&self, id: &str) -> Result<Endpoint> {
         let (cfg, _, _) = self.load(true)?;
-        let parked = self.stash(&store::load(), "disabledProviders");
-        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(|| parked.get(id).cloned()).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        // Only a config without a native disabled list parks providers in the store.
+        let parked = || if self.native_disable { None } else { store::get_obj(&store::load(), &self.agent, "disabledProviders").get(id).cloned() };
+        let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(parked).ok_or_else(|| msg::no_provider(id))?;
         let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseURL", "Provider {id} has no baseURL")))?.to_string();
         let auth = self.load_auth().map(|x| x.0);
-        let key = def
-            .pointer("/options/apiKey")
-            .and_then(|x| x.as_str())
-            .filter(|k| !k.is_empty())
-            .map(String::from)
-            .or_else(|| Self::auth_key(auth.as_ref(), id).map(String::from));
+        let key = cfg_key(&def).and_then(|k| self.resolve_key(k)).or_else(|| Self::auth_key(auth.as_ref(), id).map(String::from));
         Ok((base, key, api_of(def.get("npm").and_then(|x| x.as_str()).unwrap_or("")).into()))
+    }
+
+    /// Read-only cards for the auth.json logins without a config entry (see `auth_cards`).
+    pub fn auth_only(&self, known: &[Provider], login: &str, about: &str, off: &[String]) -> Vec<Provider> {
+        auth_cards(self.load_auth().as_ref().map(|a| &a.0), known, login, about, off)
+    }
+
+    /// Loads the config for `state()`: comments make the agent read-only (with a note), an
+    /// error fails the state and gives None. `allow_missing` as in `load`.
+    pub fn load_for_state(&self, st: &mut AgentState, allow_missing: bool) -> Option<Value> {
+        match self.load(allow_missing) {
+            Ok((cfg, _, had_comments)) => {
+                if had_comments {
+                    st.readonly = true;
+                    st.notes.push(msg::comments_readonly(&self.name()));
+                }
+                Some(cfg)
+            }
+            Err(e) => {
+                st.fail(e);
+                None
+            }
+        }
+    }
+
+    /// The "current" rows of a global config: custom providers, default and small model,
+    /// visible models, config file.
+    pub fn summary(&self, cfg: &Value, providers: &[Provider]) -> Vec<Kv> {
+        let get_s = |k: &str| cfg.get(k).and_then(|x| x.as_str()).unwrap_or("-").to_string();
+        let on: Vec<&Provider> = providers.iter().filter(|p| p.enabled && !p.builtin).collect();
+        let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
+        vec![
+            Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
+            Kv::mono(lbl::default_model(), get_s("model")),
+            Kv::mono(lbl::small_model(), get_s("small_model")),
+            Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+            Kv::mono(lbl::config_file(), self.file()),
+        ]
+    }
+
+    /// A config with comments is never written back (they would be lost).
+    pub fn guard_comments(&self, dirty: &Dirty, had_comments: bool) -> Result<()> {
+        if dirty.cfg && had_comments {
+            return Err(msg::comments_not_written(&self.name()));
+        }
+        Ok(())
+    }
+
+    /// Writes what `dirty` says changed: backs up the config and auth.json (with `backup`),
+    /// then writes them. Returns (written files, backup folder); nothing on a dry run.
+    /// The caller saves the store.
+    pub fn commit(&self, cfg: &Value, meta: TextMeta, auth: &Option<(Value, TextMeta)>, dirty: &Dirty, dry_run: bool, backup: impl FnOnce(&[PathBuf]) -> Result<PathBuf>) -> Result<(Vec<PathBuf>, Option<PathBuf>)> {
+        let auth_out = self.auth.as_ref().zip(auth.as_ref()).filter(|_| dirty.auth);
+        if dry_run || (!dirty.cfg && auth_out.is_none()) {
+            return Ok((vec![], None));
+        }
+        let mut targets = vec![];
+        if dirty.cfg {
+            targets.push(self.path.clone());
+        }
+        if let Some((p, _)) = auth_out {
+            targets.push(p.clone());
+        }
+        let backup_dir = backup(&targets)?;
+        if dirty.cfg {
+            if let Some(d) = self.path.parent() {
+                std::fs::create_dir_all(d)?;
+            }
+            write_json(&self.path, cfg, meta)?;
+        }
+        if let Some((p, (a, _))) = auth_out {
+            write_auth(p, a)?;
+        }
+        Ok((targets, Some(backup_dir)))
     }
 
     fn providers_obj<'a>(&self, cfg: &'a mut Value) -> Result<&'a mut Map<String, Value>> {
@@ -262,12 +408,12 @@ impl Fmt {
         if cfg.pointer(&jptr(&["provider", pid, "models", mid])).is_some() {
             return cfg.pointer_mut(&jptr(&["provider", pid, "models", mid]));
         }
-        store::section(root, self.agent, "hiddenModels").get_mut(&format!("{pid}|{mid}"))
+        store::section(root, &self.agent, "hiddenModels").get_mut(&format!("{pid}|{mid}"))
     }
 
     fn set_key(&self, cfg: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<()> {
         // Keep the key where the user already keeps it; new ones go to auth.json when there is one.
-        let in_cfg = cfg.pointer(&jptr(&["provider", id, "options", "apiKey"])).and_then(|x| x.as_str()).map(|k| !k.is_empty()).unwrap_or(false);
+        let in_cfg = cfg.pointer(&jptr(&["provider", id])).and_then(cfg_key).is_some();
         // The agent keeps keys in auth.json but it can't be read: never fall back to the config
         // (a project's opencode.json is usually committed).
         if let (Some(p), None, false) = (&self.auth, auth.as_ref(), in_cfg) {
@@ -294,17 +440,20 @@ impl Fmt {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match &p.id {
                     None => {
-                        let parked = self.stash(root, "disabledProviders");
+                        let parked = store::get_obj(root, &self.agent, "disabledProviders");
+                        // An id already in auth.json (an OAuth login, a built-in provider's key)
+                        // would have that entry overwritten by the new provider's key.
+                        let in_auth = |c: &str| auth.as_ref().is_some_and(|(a, _)| a.get(c).is_some());
                         let providers = self.providers_obj(cfg)?;
-                        let base = slug(&p.name);
-                        let free = |c: &String| !providers.contains_key(c) && !parked.contains_key(c) && !RESERVED.with(|r| r.borrow().contains(c));
-                        let id = if free(&base) { base.clone() } else { (2..).map(|n| format!("{base}-{n}")).find(free).unwrap() };
-                        let models: Map<String, Value> = p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).map(|m| (m.to_string(), json!({}))).collect();
+                        let id = unique_id(&slug(&p.name), |c| providers.contains_key(c) || parked.contains_key(c) || self.reserved.iter().any(|x| x == c) || in_auth(c));
+                        let models: Map<String, Value> = clean_ids(&p.models).into_iter().map(|m| (m, json!({}))).collect();
                         let n = models.len();
+                        // The label of what gets written (an api OpenCode lacks falls back to Chat).
+                        let label = api_label(api_of(npm_for(&p.api)));
                         providers.insert(id.clone(), json!({
                             "npm": npm_for(&p.api),
                             "name": p.name.trim(),
@@ -313,11 +462,7 @@ impl Fmt {
                         }));
                         diff.push(
                             &ef,
-                            if crate::i18n::is_en() && n == 1 {
-                                format!("+ provider.{id} ({} · {} · 1 model)", p.base_url.trim(), api_label(&p.api))
-                            } else {
-                                tr!("+ provider.{id}（{} · {} · {n} 个模型）", "+ provider.{id} ({} · {} · {n} models)", p.base_url.trim(), api_label(&p.api))
-                            },
+                            trn!(n, "+ provider.{id}（{} · {label} · {n} 个模型）", "+ provider.{id} ({} · {label} · {n} model)", "+ provider.{id} ({} · {label} · {n} models)", p.base_url.trim()),
                             true,
                         );
                         dirty.cfg = true;
@@ -330,7 +475,7 @@ impl Fmt {
                         let def = if in_cfg {
                             cfg.pointer_mut(&jptr(&["provider", id])).unwrap()
                         } else {
-                            store::section(root, self.agent, "disabledProviders").get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?
+                            store::section(root, &self.agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?
                         };
                         let mut changed = vec![];
                         if def.get("name").and_then(|x| x.as_str()) != Some(p.name.trim()) {
@@ -356,7 +501,7 @@ impl Fmt {
                         if let Some(k) = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
                             if in_cfg {
                                 self.set_key(cfg, auth, id, k, diff, dirty)?;
-                            } else if let Some(def) = store::section(root, self.agent, "disabledProviders").get_mut(id) {
+                            } else if let Some(def) = store::section(root, &self.agent, "disabledProviders").get_mut(id) {
                                 def["options"]["apiKey"] = json!(k);
                                 diff.push(&ef, format!("provider.{id}.options.apiKey = {}", mask_key(k)), true);
                                 dirty.store = true;
@@ -367,18 +512,22 @@ impl Fmt {
             }
             Op::DeleteProvider { provider } => {
                 let removed_cfg = self.providers_obj(cfg)?.remove(provider).is_some();
-                let removed_stash = store::section(root, self.agent, "disabledProviders").remove(provider).is_some();
+                let removed_stash = store::section(root, &self.agent, "disabledProviders").remove(provider).is_some();
                 let prefix = format!("{provider}|");
-                store::section(root, self.agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
+                store::section(root, &self.agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
                 if !removed_cfg && !removed_stash {
-                    return Err(anyhow!(tr!("找不到供应商 {provider}", "Provider not found: {provider}")));
+                    return Err(msg::no_provider(provider));
                 }
                 if self.native_disable {
                     if let Some(list) = cfg.get_mut("disabled_providers").and_then(|x| x.as_array_mut()) {
                         list.retain(|x| x.as_str() != Some(provider.as_str()));
                     }
                 }
-                let line = if self.auth.is_some() {
+                // The auth.json entry stays (it may be a login OpenCode uses without a config entry).
+                let entry = auth.as_ref().and_then(|(a, _)| a.get(provider));
+                let line = if entry.and_then(|e| e.get("type")).and_then(|t| t.as_str()) == Some("oauth") {
+                    tr!("- provider.{provider}（含它的模型；auth.json 里的登录保留）", "- provider.{provider} (with its models; the sign-in in auth.json is kept)")
+                } else if Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some() {
                     tr!("- provider.{provider}（含它的模型；auth.json 里的密钥保留）", "- provider.{provider} (with its models; the API key in auth.json is kept)")
                 } else {
                     tr!("- provider.{provider}（含它的模型和密钥）", "- provider.{provider} (with its models and API key)")
@@ -399,7 +548,7 @@ impl Fmt {
                     }
                 } else {
                     let providers = self.providers_obj(cfg)?;
-                    let parked = store::section(root, self.agent, "disabledProviders");
+                    let parked = store::section(root, &self.agent, "disabledProviders");
                     if *enabled {
                         if let Some(def) = parked.remove(provider) {
                             providers.insert(provider.clone(), def);
@@ -424,7 +573,7 @@ impl Fmt {
                     .entry("models")
                     .or_insert_with(|| json!({}));
                 let models = models.as_object_mut().ok_or_else(|| anyhow!(l("models 不是对象", "models is not an object")))?;
-                let hidden = store::section(root, self.agent, "hiddenModels");
+                let hidden = store::section(root, &self.agent, "hiddenModels");
                 if *visible {
                     if !models.contains_key(model) {
                         models.insert(model.clone(), hidden.remove(&key).unwrap_or_else(|| json!({})));
@@ -442,7 +591,7 @@ impl Fmt {
             Op::UpsertModel { provider, model: m } => {
                 let mid = m.id.trim().to_string();
                 if mid.is_empty() {
-                    return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+                    return Err(msg::model_id_required());
                 }
                 for (k, v) in &m.extra {
                     mfields::check(mfields::OPENCODE, k, v)?;
@@ -489,7 +638,7 @@ impl Fmt {
                     .and_then(|m| m.as_object_mut())
                     .and_then(|m| m.remove(model))
                     .is_some();
-                let stashed = store::section(root, self.agent, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
+                let stashed = store::section(root, &self.agent, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
                 if removed || stashed {
                     diff.push(&ef, tr!("provider.{provider}.models - \"{model}\"（删除）", "provider.{provider}.models - \"{model}\" (deleted)"), false);
                     dirty.cfg |= removed;
@@ -516,5 +665,66 @@ mod tests {
         complete_model(&mut d);
         assert_eq!(d["limit"], json!({ "context": 128000, "output": 8192 }));
         assert!(d.get("modalities").is_none());
+    }
+
+    fn write_cfg(h: &TestHome, cfg: Value) -> Fmt {
+        let path = h.0.join("cfg").join("opencode.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, cfg.to_string()).unwrap();
+        Fmt::new("opencode", path, Some(h.0.join("auth.json")), true)
+    }
+
+    #[test]
+    fn key_references_are_resolved_not_sent_literally() {
+        let h = TestHome::new("ocfmt-keyref");
+        crate::env::set_test_vars(&[("OC_TEST_KEY", "sk-from-env-1111")]);
+        std::fs::write(h.0.join("cfg-key.txt"), "sk-from-file-2222\n").unwrap();
+        let prov = |key: &str| json!({ "npm": "@ai-sdk/openai-compatible", "options": { "baseURL": "https://r.example.com/v1", "apiKey": key } });
+        let f = write_cfg(&h, json!({ "provider": {
+            "env": prov("{env:OC_TEST_KEY}"),
+            "unset": prov("{env:OC_NOT_SET}"),
+            "rel": prov("{file:../cfg-key.txt}"),
+            "home": prov("{file:~/cfg-key.txt}"),
+            "plain": prov("sk-plain-3333"),
+        }}));
+        let key = |id: &str| f.endpoint(id).unwrap().1;
+        assert_eq!(key("env").as_deref(), Some("sk-from-env-1111"));
+        assert_eq!(key("unset"), None);
+        assert_eq!(key("rel").as_deref(), Some("sk-from-file-2222"));
+        assert_eq!(key("home").as_deref(), Some("sk-from-file-2222"));
+        assert_eq!(key("plain").as_deref(), Some("sk-plain-3333"));
+        let (cfg, _, _) = f.load(true).unwrap();
+        let ps = f.providers(&cfg, &json!({}));
+        let note = |id: &str| ps.iter().find(|p| p.id == id).unwrap().details.iter().find(|kv| kv.k == lbl::api_key()).unwrap().v.clone();
+        assert_eq!(note("env"), "API Key · 环境变量 OC_TEST_KEY");
+        assert_eq!(note("rel"), "API Key · 读取文件 ../cfg-key.txt");
+        assert_eq!(note("plain"), "API Key · 明文保存在 opencode.json");
+        assert!(ps.iter().all(|p| p.has_key));
+    }
+
+    #[test]
+    fn delete_says_where_the_key_was() {
+        let h = TestHome::new("ocfmt-delete");
+        std::fs::write(h.0.join("auth.json"), r#"{"a":{"type":"api","key":"sk-a"},"c":{"type":"oauth"}}"#).unwrap();
+        let prov = json!({ "options": { "baseURL": "https://r.example.com/v1" } });
+        let f = write_cfg(&h, json!({ "provider": { "a": prov, "b": prov, "c": prov } }));
+        let (mut cfg, _, _) = f.load(true).unwrap();
+        let mut auth = f.load_auth();
+        let mut diff = Diff::default();
+        for id in ["a", "b", "c"] {
+            f.apply(&Op::DeleteProvider { provider: id.into() }, &mut cfg, &mut json!({}), &mut auth, &mut diff, &mut Dirty::default()).unwrap();
+        }
+        let lines: Vec<&str> = diff.groups.iter().flat_map(|g| g.lines.iter().map(|l| l.text.as_str())).collect();
+        assert_eq!(lines, ["- provider.a（含它的模型；auth.json 里的密钥保留）", "- provider.b（含它的模型和密钥）", "- provider.c（含它的模型；auth.json 里的登录保留）"]);
+    }
+
+    #[test]
+    fn auth_cards_skip_known_and_honor_disabled() {
+        let auth = json!({ "known": { "type": "api", "key": "k" }, "anthropic": { "type": "oauth" }, "openai": { "type": "api", "key": "k" } });
+        let known = vec![Provider { id: "known".into(), ..Default::default() }];
+        let cards = auth_cards(Some(&auth), &known, "opencode auth", "about", &["openai".into()]);
+        let got: Vec<(&str, &str, bool)> = cards.iter().map(|p| (p.id.as_str(), p.host.as_str(), p.enabled)).collect();
+        assert_eq!(got, [("anthropic", "账号登录（opencode auth）", true), ("openai", "内置供应商 · API Key", false)]);
+        assert!(cards.iter().all(|p| p.builtin && !p.editable));
     }
 }

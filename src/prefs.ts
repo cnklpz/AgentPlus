@@ -1,6 +1,7 @@
 // Per-install UI preferences (animations, auto latency, language). Browser storage may be
 // unavailable, so every access is guarded and defaults always work.
-import type { LangPref } from "./i18n";
+import { type LangPref, setLang } from "./i18n";
+import { setPrivacy } from "./privacy";
 
 export type Motion = "rich" | "full" | "reduced" | "off";
 /** How a restart shows its progress: a dialog with each step, or just a notice at the bottom. */
@@ -46,7 +47,7 @@ export function savePrefs(p: Prefs): void {
   }
 }
 
-export function applyMotion(m: Motion): void {
+function applyMotion(m: Motion): void {
   document.documentElement.dataset.motion = m;
 }
 
@@ -59,7 +60,15 @@ const paintTheme = () => {
 // "auto" keeps following the system while the app is open.
 systemDark?.addEventListener("change", () => { if (theme === "auto") paintTheme(); });
 
-export function applyTheme(t: Theme): void {
+function applyTheme(t: Theme): void {
   theme = t;
   paintTheme();
+}
+
+/** Puts every preference that changes the page into effect (each one is a no-op when unchanged). */
+export function applyPrefs(p: Prefs): void {
+  applyMotion(p.motion);
+  applyTheme(p.theme);
+  void setLang(p.lang);
+  setPrivacy(p.privacy);
 }

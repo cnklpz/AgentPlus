@@ -4,126 +4,63 @@
 //! Disabling uses the native `disabled_providers` list; providers logged in through
 //! `kilo auth` without a config entry show up read-only.
 
+use super::msg;
 use super::{Plan, Endpoint};
 use super::ocfmt::{Dirty, Fmt};
+use super::ocsettings::{self, Scope};
 use crate::i18n::l;
 use crate::model::*;
 use crate::process::Install;
 use crate::store;
 use crate::util::*;
 use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)]
 pub const ID: &str = "kilo";
-#[allow(dead_code)]
 pub const NAME: &str = "Kilo Code";
-/// `kilo.jsonc` / `opencode.json` in the same dir also count (see `config_path`).
-#[allow(dead_code)]
+/// Any of `CONFIG_FILES` also counts.
 pub const MARKER: &str = "kilo.json";
-#[allow(dead_code)]
+/// The config files Kilo reads in a folder, in the order AgentPlus picks one to edit
+/// (opencode.jsonc last, so it never wins over a file picked before it was listed).
+pub const CONFIG_FILES: [&str; 4] = ["kilo.jsonc", MARKER, "opencode.json", "opencode.jsonc"];
 pub const WSL_SCRIPT: &str = "(kilo --version || kilocode --version) 2>/dev/null | head -n 1; pgrep -x kilo >/dev/null && echo @running; true";
-#[allow(dead_code)]
 pub const WSL_MARKER: &str = ".config/kilo";
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-
-/// Tests point the adapter at a temp home (config, auth, store and backups all inside it).
-fn test_home() -> Option<PathBuf> {
-    #[cfg(test)]
-    {
-        TEST_HOME.with(|t| t.borrow().clone())
-    }
-    #[cfg(not(test))]
-    {
-        None
-    }
-}
-
-fn base_home() -> PathBuf {
-    test_home().unwrap_or_else(home)
-}
-
-/// Kilo's default config dir, `~/.config/kilo`.
-#[allow(dead_code)]
+/// The folder of `KILO_CONFIG` (Windows side only), else `~/.config/kilo`.
 pub fn default_dir() -> PathBuf {
-    base_home().join(".config").join("kilo")
+    env_config().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| home().join(".config").join("kilo"))
 }
 
 fn dir() -> PathBuf {
-    if test_home().is_some() {
-        return default_dir();
-    }
-    super::dir_override(ID).unwrap_or_else(|| env_config().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(default_dir))
+    super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
 /// `KILO_CONFIG` (a file path) only applies to the Windows side.
 fn env_config() -> Option<PathBuf> {
-    if test_home().is_some() || crate::env::is_wsl() {
-        return None;
-    }
-    std::env::var_os("KILO_CONFIG").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    crate::env::agent_var("KILO_CONFIG").map(PathBuf::from)
 }
 
-/// The config file Kilo reads: `KILO_CONFIG`, else the first existing of
-/// kilo.jsonc / kilo.json / opencode.json, else a new kilo.json.
+/// The config file Kilo reads: `KILO_CONFIG`, else the first existing of `CONFIG_FILES`,
+/// else a new kilo.json.
 fn config_path() -> PathBuf {
-    if test_home().is_none() && super::dir_override(ID).is_none() {
+    if super::dir_override(ID).is_none() {
         if let Some(p) = env_config() {
             return p;
         }
     }
     let d = dir();
-    ["kilo.jsonc", "kilo.json", "opencode.json"].iter().map(|n| d.join(n)).find(|p| p.exists()).unwrap_or_else(|| d.join("kilo.json"))
+    CONFIG_FILES.iter().map(|n| d.join(n)).find(|p| p.exists()).unwrap_or_else(|| d.join(MARKER))
 }
 
 fn auth_path() -> PathBuf {
-    base_home().join(".local").join("share").join("kilo").join("auth.json")
+    home().join(".local").join("share").join("kilo").join("auth.json")
 }
 
 fn fmt() -> Fmt {
-    Fmt { agent: ID, path: config_path(), auth: Some(auth_path()), native_disable: true }
-}
-
-fn load_root() -> Value {
-    match test_home() {
-        Some(h) => std::fs::read_to_string(h.join("agentplus-store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_root(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(h) => Ok(std::fs::write(h.join("agentplus-store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn do_backup(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(h) => {
-            let d = h.join("agentplus-backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
+    Fmt::new(ID, config_path(), Some(auth_path()), true)
 }
 
 // ---------- detection ----------
-
-fn npm_version(pkg: &str) -> Option<String> {
-    let p = dirs::data_dir()?.join("npm").join("node_modules").join(pkg).join("package.json");
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version").and_then(|x| x.as_str()).map(String::from)
-}
 
 /// Newest `kilocode.kilo-code-<version>` folder in the VS Code extensions dir.
 fn vscode_extension() -> Option<String> {
@@ -138,18 +75,18 @@ fn vscode_extension() -> Option<String> {
         .max_by_key(|v| v.split('.').map(|x| x.parse::<u64>().unwrap_or(0)).collect::<Vec<_>>())
 }
 
-/// The `kilo` CLI (npm `@kilocode/cli` or a `kilo` binary on PATH) or the VS Code extension.
-#[allow(dead_code)]
+/// The `kilo` CLI (npm `@kilocode/cli`, also under another npm prefix on PATH, or a `kilo`
+/// binary on PATH) or the VS Code extension.
 pub fn detect() -> Install {
     let mut inst = Install::default();
-    if let Some(v) = npm_version("@kilocode/cli") {
+    let on_path = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]);
+    if let Some(v) = crate::process::npm_version_near("@kilocode/cli", on_path.as_deref()) {
         inst.installed = true;
         inst.version = Some(v);
-    } else if let Some(exe) = crate::process::on_path(&["kilo.exe", "kilo.cmd", "kilocode.cmd"]) {
+    } else if let Some(exe) = on_path {
         inst.installed = true;
-        if exe.extension().map(|e| e.eq_ignore_ascii_case("exe")).unwrap_or(false) {
-            static V: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-            inst.version = V.get_or_init(|| crate::process::cli_version(&exe)).clone();
+        if crate::process::is_exe(&exe) {
+            inst.version = crate::process::cli_version(&exe);
         }
     } else if let Some(v) = vscode_extension() {
         inst.installed = true;
@@ -161,121 +98,26 @@ pub fn detect() -> Install {
 
 // ---------- state / plan ----------
 
-#[allow(dead_code)]
+/// The opencode.json settings Kilo's page offers (Kilo keeps OpenCode's schema for them).
+const SETTINGS: [&str; 2] = ["autoupdate", "share"];
+
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![f.file(), display_path(&auth_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
-    let root = load_root();
-    let cfg = match f.load(true) {
-        Ok((cfg, _, had_comments)) => {
-            if had_comments {
-                st.readonly = true;
-                st.notes.push(tr!(
-                    "{} 含注释，写回会丢失注释，已切换为只读。",
-                    "{} contains comments, which would be lost on write, so it's read-only.",
-                    config_path().file_name().unwrap().to_string_lossy()
-                ));
-            }
-            cfg
-        }
-        Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
-            return st;
-        }
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![f.file(), display_path(&auth_path())]);
+    let root = store::load();
+    let Some(cfg) = f.load_for_state(&mut st, true) else { return st };
     st.providers = f.providers(&cfg, &root);
 
     // Logged in with `kilo auth` (Kilo account or a built-in provider) but not configured here.
-    if let Some((auth, _)) = f.load_auth() {
-        if let Some(obj) = auth.as_object() {
-            for (id, e) in obj {
-                if st.providers.iter().any(|p| &p.id == id) {
-                    continue;
-                }
-                let kind = e.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                st.providers.push(Provider {
-                    id: id.clone(),
-                    name: id.clone(),
-                    base_url: None,
-                    host: if kind == "oauth" { l("账号登录（kilo auth）", "Account sign-in (kilo auth)").into() } else { l("内置供应商 · API Key", "Built-in provider · API key").into() },
-                    apis: vec![l("内置", "Built-in").into()],
-                    builtin: true,
-                    enabled: true,
-                    compatible: true,
-                    reason: None,
-                    models: vec![],
-                    details: vec![
-                        Kv::mono(l("凭据", "Credentials"), format!("auth.json · {id} · {}", if kind == "oauth" { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
-                        Kv::text(
-                            l("说明", "Note"),
-                            l(
-                                "Kilo Code 内置的供应商，模型列表来自 models.dev / Kilo 网关，在 Kilo 里用 /models 选择",
-                                "A provider built into Kilo Code; its model list comes from models.dev / the Kilo gateway. Pick a model with /models in Kilo",
-                            ),
-                        ),
-                    ],
-                    editable: false,
-                    api: "chat".into(),
-                    has_key: true,
-                    key_fp: None,
-                    key_hint: None,
-                    official_auth: false,
-                });
-            }
-        }
-    }
+    let about = l("Kilo Code 内置的供应商，模型列表来自 models.dev / Kilo 网关，在 Kilo 里用 /models 选择", "A provider built into Kilo Code. Its model list comes from models.dev / the Kilo gateway; pick models with /models in Kilo.");
+    let extra = f.auth_only(&st.providers, "kilo auth", about, &f.disabled(&cfg));
+    st.providers.extend(extra);
 
-    let get_s = |k: &str| cfg.get(k).and_then(|x| x.as_str()).map(String::from);
-    st.settings = vec![
-        bool_setting(
-            "autoupdate",
-            NAME,
-            l("自动更新", "Auto-update"),
-            l("autoupdate：启动时自动下载新版本", "autoupdate: download new versions automatically on startup"),
-            cfg.get("autoupdate").and_then(|x| x.as_bool()).unwrap_or(true),
-        ),
-        bool_setting(
-            "share_disabled",
-            NAME,
-            l("禁用会话分享", "Disable session sharing"),
-            l("share = \"disabled\"：不允许把会话分享成公开链接", "share = \"disabled\": don't allow sharing sessions as public links"),
-            get_s("share").as_deref() == Some("disabled"),
-        ),
-    ];
-    let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled && !p.builtin).collect();
-    let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
-    st.current = vec![
-        Kv::text(
-            l("自定义供应商", "Custom providers"),
-            if on.is_empty() { l("无", "None").into() } else { on.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(l("、", ", ")) },
-        ),
-        Kv::mono(l("默认模型", "Default model"), get_s("model").unwrap_or_else(|| "-".into())),
-        Kv::mono(l("小模型", "Small model"), get_s("small_model").unwrap_or_else(|| "-".into())),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("配置文件", "Config file"), f.file()),
-    ];
+    st.settings = ocsettings::rows_only(&cfg, &SETTINGS);
+    for s in st.settings.iter_mut() {
+        s.group = NAME.into();
+    }
+    st.current = f.summary(&cfg, &st.providers);
     st.notes.push(
         l(
             "Kilo Code CLI 与 VS Code 扩展共用这份配置；改动对新会话生效。",
@@ -286,15 +128,13 @@ pub fn state(inst: &Install) -> AgentState {
     st
 }
 
-#[allow(dead_code)]
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     fmt().endpoint(id)
 }
 
-#[allow(dead_code)]
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let f = fmt();
-    let existed = config_path().exists();
+    let existed = f.path.exists();
     let (mut cfg, cfg_meta, had_comments) = f.load(true)?;
     if !existed {
         // ocfmt seeds OpenCode's schema URL; a new Kilo file goes without one.
@@ -303,7 +143,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
     }
     let mut auth = f.load_auth();
-    let mut root = load_root();
+    let mut root = store::load();
     let mut diff = Diff::default();
     let mut dirty = Dirty::default();
     let ef = f.file();
@@ -313,77 +153,27 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             continue;
         }
         match op {
-            Op::SetSetting { key, value } => {
-                let on = value.as_bool().unwrap_or(false);
-                match key.as_str() {
-                    "autoupdate" => {
-                        if cfg.get("autoupdate").and_then(|x| x.as_bool()).unwrap_or(true) != on {
-                            cfg["autoupdate"] = json!(on);
-                            diff.push(&ef, format!("autoupdate = {on}"), on);
-                            dirty.cfg = true;
-                        }
-                    }
-                    "share_disabled" => {
-                        let now = cfg.get("share").and_then(|x| x.as_str()) == Some("disabled");
-                        if now != on {
-                            if on {
-                                cfg["share"] = json!("disabled");
-                            } else if let Some(o) = cfg.as_object_mut() {
-                                o.remove("share");
-                            }
-                            diff.push(&ef, if on { "share = \"disabled\"".to_string() } else { "- share".to_string() }, on);
-                            dirty.cfg = true;
-                        }
-                    }
-                    other => return Err(anyhow!(tr!("未知设置 {other}", "Unknown setting: {other}"))),
-                }
+            Op::SetSetting { key, value } if SETTINGS.contains(&key.as_str()) => {
+                dirty.cfg |= ocsettings::apply(&mut cfg, key, value, Scope::Global, &mut diff, &ef)?;
             }
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::SetCurrentProvider { .. } => {
                 return Err(anyhow!(l(
                     "Kilo Code 按启用/停用管理供应商，在 Kilo 里用 /models 选择模型",
                     "Kilo Code manages providers by enabling and disabling them; pick a model with /models in Kilo"
                 )))
             }
-            Op::SetProviderModels { .. } => return Err(anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models; edit the models directly"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))),
+            Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             _ => unreachable!("handled by ocfmt"),
         }
     }
 
-    if dirty.cfg && had_comments {
-        return Err(anyhow!(l("配置文件含注释，为避免丢失注释不写入", "The config file contains comments; not writing it so they aren't lost")));
-    }
-    let mut written = vec![];
-    let mut backup_dir = None;
-    if !dry_run && (dirty.cfg || dirty.auth) {
-        let mut targets = vec![];
-        if dirty.cfg {
-            targets.push(config_path());
-        }
-        if dirty.auth {
-            targets.push(auth_path());
-        }
-        backup_dir = Some(do_backup(&targets)?);
-        if dirty.cfg {
-            if let Some(d) = config_path().parent() {
-                std::fs::create_dir_all(d)?;
-            }
-            write_json(&config_path(), &cfg, cfg_meta)?;
-            written.push(config_path());
-        }
-        if dirty.auth {
-            // Written in place (not tmp + rename) so the file keeps its owner-only permissions.
-            let (a, _) = auth.as_ref().unwrap();
-            if let Some(d) = auth_path().parent() {
-                std::fs::create_dir_all(d)?;
-            }
-            std::fs::write(auth_path(), serde_json::to_string_pretty(a)? + "\n")?;
-            written.push(auth_path());
-        }
-    }
+    f.guard_comments(&dirty, had_comments)?;
+    let (written, backup_dir) = f.commit(&cfg, cfg_meta, &auth, &dirty, dry_run, |t| backup(ID, t))?;
     if !dry_run && dirty.store {
-        save_root(&root)?;
+        store::save(&root)?;
     }
     Ok((diff, written, backup_dir))
 }
@@ -391,6 +181,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
 
     const SAMPLE: &str = r#"{
   "$schema": "https://app.kilo.ai/config.json",
@@ -411,17 +202,11 @@ mod tests {
 }
 "#;
 
-    struct Home(PathBuf);
-    impl Drop for Home {
-        fn drop(&mut self) {
-            TEST_HOME.with(|t| *t.borrow_mut() = None);
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    type Home = TestHome;
 
     fn setup(name: &str, cfg: Option<&str>, auth: Option<&str>) -> Home {
-        let h = std::env::temp_dir().join(format!("agentplus-kilo-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&h);
+        let home = TestHome::new(&format!("kilo-{name}"));
+        let h = home.0.clone();
         std::fs::create_dir_all(h.join(".config/kilo")).unwrap();
         if let Some(c) = cfg {
             std::fs::write(h.join(".config/kilo/kilo.json"), c).unwrap();
@@ -430,8 +215,7 @@ mod tests {
             std::fs::create_dir_all(h.join(".local/share/kilo")).unwrap();
             std::fs::write(h.join(".local/share/kilo/auth.json"), a).unwrap();
         }
-        TEST_HOME.with(|t| *t.borrow_mut() = Some(h.clone()));
-        Home(h)
+        home
     }
 
     fn cfg_of(h: &Home) -> Value {
@@ -470,6 +254,21 @@ mod tests {
         assert!(st.providers[1].builtin);
         let (base, key, api) = provider_endpoint("relay").unwrap();
         assert_eq!((base.as_str(), key.as_deref(), api.as_str()), ("https://relay.example.com/v1", Some("sk-relay-abcd"), "chat"));
+    }
+
+    #[test]
+    fn reads_and_edits_a_lone_opencode_jsonc() {
+        // A folder detection accepts must be the one the adapter edits, not a new kilo.json beside it.
+        let h = setup("oc-jsonc", None, None);
+        let file = h.0.join(".config/kilo/opencode.jsonc");
+        std::fs::write(&file, SAMPLE).unwrap();
+        let st = state(&Install::default());
+        assert_eq!(st.providers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["relay"]);
+        let (_, w, _) = plan(&[upsert(None, "New One", "https://n.example.com/v1", "chat", None, &["m1"])], false).unwrap();
+        assert_eq!(w, [file.as_path()]);
+        assert!(!h.0.join(".config/kilo/kilo.json").exists());
+        let c: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(c.pointer("/provider/relay").is_some() && c.pointer("/provider/new-one").is_some());
     }
 
     #[test]
@@ -562,6 +361,43 @@ mod tests {
         std::fs::write(h.0.join(".local/share/kilo/auth.json"), "[]").unwrap();
         assert!(plan(&[upsert(Some("relay"), "My Relay", "https://relay.example.com/v1", "chat", Some("sk-new-5678"), &[])], false).is_err());
         assert_eq!(std::fs::read_to_string(h.0.join(".local/share/kilo/auth.json")).unwrap(), "[]");
+    }
+
+    #[test]
+    fn new_provider_never_takes_an_auth_json_id() {
+        // The Kilo account login must survive adding a provider named "Kilo".
+        let h = setup("authid", Some(SAMPLE), Some(r#"{"kilo":{"type":"oauth","access":"x"}}"#));
+        plan(&[upsert(None, "Kilo", "https://k.example.com/v1", "chat", Some("sk-new-1234"), &["m"])], false).unwrap();
+        let c = cfg_of(&h);
+        assert!(c.pointer("/provider/kilo").is_none() && c.pointer("/provider/kilo-2").is_some());
+        let a: Value = serde_json::from_str(&std::fs::read_to_string(h.0.join(".local/share/kilo/auth.json")).unwrap()).unwrap();
+        assert_eq!(a["kilo"], json!({"type": "oauth", "access": "x"}));
+        assert_eq!(a.pointer("/kilo-2/key").unwrap(), "sk-new-1234");
+    }
+
+    #[test]
+    fn disabled_login_cards_show_disabled() {
+        let cfg = SAMPLE.replace("\"theme\": \"kilo\",", "\"theme\": \"kilo\", \"disabled_providers\": [\"kilo\"],");
+        let _h = setup("offcard", Some(&cfg), Some(r#"{"kilo":{"type":"oauth","access":"x"}}"#));
+        let st = state(&Install::default());
+        let card = st.providers.iter().find(|p| p.id == "kilo").unwrap();
+        assert!(card.builtin && !card.enabled);
+    }
+
+    #[test]
+    fn settings_keep_opencode_values() {
+        // Kilo keeps OpenCode's schema: autoupdate true | false | "notify", share manual | auto | disabled.
+        let cfg = SAMPLE.replace("\"theme\": \"kilo\",", "\"theme\": \"kilo\", \"autoupdate\": \"notify\", \"share\": \"auto\",");
+        let h = setup("settings", Some(&cfg), None);
+        let st = state(&Install::default());
+        let val = |k: &str| st.settings.iter().find(|s| s.key == k).unwrap().value.clone();
+        assert_eq!((val("autoupdate"), val("share")), (json!("notify"), json!("auto")));
+        assert!(st.settings.iter().all(|s| s.group == NAME));
+        let set = |k: &str, v: Value| Op::SetSetting { key: k.into(), value: v };
+        plan(&[set("autoupdate", json!("false")), set("share", json!("disabled"))], false).unwrap();
+        let c = cfg_of(&h);
+        assert_eq!((c["autoupdate"].clone(), c["share"].clone()), (json!(false), json!("disabled")));
+        assert!(plan(&[set("snapshot", json!(false))], true).is_err());
     }
 
     #[test]

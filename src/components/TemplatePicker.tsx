@@ -1,10 +1,12 @@
+import { api } from "../api";
 import { type Template, VENDORS, planLabel } from "../templates";
 import { Dropdown } from "./Dropdown";
+import { Seg } from "./controls";
 import { Icon, VendorIcon } from "./icons";
 import { t } from "../i18n";
 
 /** Vendor dropdown, plus a plan switch for vendors with both a coding plan and pay as you go. */
-export function TemplatePicker({ value, onPick }: { value: Template | null; onPick: (t: Template | null) => void }) {
+export function TemplatePicker({ value, onPick }: { value: Template | null; onPick: (tpl: Template | null) => void }) {
   const vendor = value ? VENDORS.find((v) => v.id === value.icon) ?? null : null;
   return (
     <div className="field tpl-dd">
@@ -17,14 +19,18 @@ export function TemplatePicker({ value, onPick }: { value: Template | null; onPi
             ...VENDORS.map((v) => ({ value: v.id, label: v.name, hint: v.plans.map(planLabel).join(" / "), icon: <VendorIcon id={v.id} size={20} />, group: v.group })),
           ]} />
         {vendor && vendor.plans.length > 1 && (
-          <div className="seg" role="radiogroup" aria-label={t("templatePicker.billing")}>
-            {vendor.plans.map((t) => (
-              <button key={t.id} type="button" role="radio" aria-checked={value?.id === t.id} className={value?.id === t.id ? "on" : ""} onClick={() => onPick(t)}>{planLabel(t)}</button>
-            ))}
-          </div>
+          <Seg value={value?.id ?? ""} label={t("templatePicker.billing")} onChange={(id) => onPick(vendor.plans.find((p) => p.id === id) ?? null)}
+            options={vendor.plans.map((p) => ({ value: p.id, label: planLabel(p) }))} />
         )}
       </div>
       {value?.note && <em className="muted tiny">{value.note}</em>}
     </div>
+  );
+}
+
+/** The template vendor's page for getting a key (after the key field's hint, space-separated). */
+export function TemplateKeyLink({ tpl }: { tpl: Template }) {
+  return (
+    <> <button type="button" className="link" onClick={() => api.openUrl(tpl.keyUrl).catch(() => undefined)}>{t("templatePicker.getKey", { vendor: tpl.vendor })}</button></>
   );
 }

@@ -9,8 +9,7 @@
 //! Edited with toml_edit so comments and layout survive. Hidden models and disabled
 //! providers are moved, as TOML text, into the AgentPlus store and restored from it.
 
-// Unused until the integrator wires the adapter into adapters::mod.
-
+use super::msg;
 use super::{Plan, Endpoint};
 use crate::i18n::l;
 use crate::model::*;
@@ -39,19 +38,6 @@ const TYPES: [&str; 8] = ["openai", "openai_legacy", "openai_responses", "anthro
 
 // ---------------------------------------------------------------- paths & test hooks
 
-#[cfg(test)]
-thread_local! {
-    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
-}
-#[cfg(test)]
-fn test_home() -> Option<PathBuf> {
-    TEST_HOME.with(|h| h.borrow().clone())
-}
-#[cfg(not(test))]
-fn test_home() -> Option<PathBuf> {
-    None
-}
-
 /// `~/.kimi-code` when it exists, else the legacy `~/.kimi` when that exists.
 fn pick_dir(h: &Path) -> PathBuf {
     let code = h.join(".kimi-code");
@@ -65,18 +51,13 @@ fn pick_dir(h: &Path) -> PathBuf {
 
 /// `$KIMI_CODE_HOME` (Windows side only), else `~/.kimi-code` / `~/.kimi`.
 pub fn default_dir() -> PathBuf {
-    if !crate::env::is_wsl() {
-        if let Some(h) = std::env::var_os("KIMI_CODE_HOME").filter(|v| !v.is_empty()) {
-            return PathBuf::from(h);
-        }
+    if let Some(h) = crate::env::agent_var("KIMI_CODE_HOME") {
+        return PathBuf::from(h);
     }
     pick_dir(&home())
 }
 
 fn dir() -> PathBuf {
-    if let Some(t) = test_home() {
-        return pick_dir(&t);
-    }
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
@@ -89,40 +70,7 @@ fn is_legacy() -> bool {
     dir().file_name().map(|n| n == ".kimi").unwrap_or(false)
 }
 
-fn load_store() -> Value {
-    match test_home() {
-        Some(t) => std::fs::read_to_string(t.join("store.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| json!({})),
-        None => store::load(),
-    }
-}
-
-fn save_store(v: &Value) -> Result<()> {
-    match test_home() {
-        Some(t) => Ok(std::fs::write(t.join("store.json"), serde_json::to_string_pretty(v)?)?),
-        None => store::save(v),
-    }
-}
-
-fn backup_files(files: &[PathBuf]) -> Result<PathBuf> {
-    match test_home() {
-        Some(t) => {
-            let d = t.join("backup");
-            std::fs::create_dir_all(&d)?;
-            for f in files.iter().filter(|f| f.exists()) {
-                std::fs::copy(f, d.join(f.file_name().unwrap()))?;
-            }
-            Ok(d)
-        }
-        None => backup(ID, files),
-    }
-}
-
 // ---------------------------------------------------------------- detection
-
-fn pkg_version(p: &Path) -> Option<String> {
-    let v: Value = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
-    v.get("version")?.as_str().map(String::from)
-}
 
 /// Native binary `~/.kimi-code/bin/kimi.exe`, npm `@moonshot-ai/kimi-code`, or the legacy
 /// PyPI `kimi-cli` (`~/.local/bin/kimi.exe` / PATH). A CLI: `exe` stays None.
@@ -130,17 +78,12 @@ pub fn detect() -> Install {
     let mut inst = Install::default();
     let home = dirs::home_dir().unwrap_or_default();
     let native = home.join(".kimi-code").join("bin").join("kimi.exe");
-    let pkg = |root: &Path| root.join("node_modules").join("@moonshot-ai").join("kimi-code").join("package.json");
     let on_path = crate::process::on_path(&["kimi.exe", "kimi.cmd", "kimi"]);
-    let mut roots: Vec<PathBuf> = dirs::data_dir().map(|d| d.join("npm")).into_iter().collect();
-    if let Some(d) = on_path.as_ref().and_then(|p| p.parent()) {
-        roots.push(d.to_path_buf());
-    }
     if native.exists() {
         inst.installed = true;
         inst.version = crate::process::cli_version(&native);
         inst.dir = native.parent().map(Path::to_path_buf);
-    } else if let Some(v) = roots.iter().find_map(|r| pkg_version(&pkg(r))) {
+    } else if let Some(v) = crate::process::npm_version_near("@moonshot-ai/kimi-code", on_path.as_deref()) {
         inst.installed = true;
         inst.version = Some(v);
     } else if let Some(p) = Some(home.join(".local").join("bin").join("kimi.exe")).filter(|p| p.exists()).or(on_path) {
@@ -155,14 +98,10 @@ pub fn detect() -> Install {
 
 // ---------------------------------------------------------------- reading
 
-fn default_meta() -> TextMeta {
-    TextMeta { crlf: false, trailing_newline: true, indent_tab: false, indent_width: 2 }
-}
-
 fn load() -> Result<(DocumentMut, TextMeta)> {
     let p = config_path();
     if !p.exists() {
-        return Ok((DocumentMut::new(), default_meta()));
+        return Ok((DocumentMut::new(), TextMeta::NEW));
     }
     let (text, meta) = read_text(&p)?;
     let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Failed to parse config.toml: {e}")))?;
@@ -193,15 +132,6 @@ fn api_of(ty: &str) -> &'static str {
     }
 }
 
-fn api_label(api: &str) -> &'static str {
-    match api {
-        "anthropic" => "Anthropic",
-        "responses" => "Responses",
-        "gemini" => "Gemini",
-        _ => "Chat",
-    }
-}
-
 fn type_for(api: &str, legacy: bool) -> &'static str {
     match (api, legacy) {
         ("responses", _) => "openai_responses",
@@ -221,11 +151,7 @@ fn check_api(api: &str) -> Result<&str> {
 }
 
 fn store_obj(root: &Value, k: &str) -> Map<String, Value> {
-    store::agent_get(root, ID, k).and_then(|x| x.as_object()).cloned().unwrap_or_default()
-}
-
-fn env_set(var: &str) -> bool {
-    !crate::env::is_wsl() && std::env::var(var).map(|v| !v.is_empty()).unwrap_or(false)
+    store::get_obj(root, ID, k)
 }
 
 /// Copies an item with every table's document position cleared, so a table moved
@@ -285,27 +211,18 @@ fn set_val(t: &mut dyn TableLike, k: &str, v: toml_edit::Value) {
 fn model_of(key: &str, item: &Item, visible: bool, def: Option<&str>) -> Model {
     let upstream = get_str(item, "model");
     let context = item.get("max_context_size").and_then(|v| v.as_integer()).filter(|n| *n > 0).map(|n| n as u64);
-    let mut tags = vec![];
-    if def == Some(key) {
-        tags.push(Tag::default_model());
-    }
-    if let Some(caps) = item.get("capabilities").and_then(|v| v.as_array()) {
-        tags.extend(caps.iter().filter_map(|c| c.as_str()).map(|c| Tag::new(format!("cap:{c}"), c)));
-    }
+    // Capabilities travel in `extra`; the UI shows them through the model fields (mfields::KIMI).
+    let caps: Option<Vec<&str>> = item.get("capabilities").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|c| c.as_str()).collect());
     Model {
         id: key.into(),
         visible,
         readonly: false,
-        tags,
+        tags: if def == Some(key) { vec![Tag::default_model()] } else { vec![] },
         ctx: context.map(fmt_ctx),
         name: upstream.filter(|m| m != key),
         context,
         deletable: true,
-        extra: item
-            .get("capabilities")
-            .and_then(|v| v.as_array())
-            .map(|a| [("capabilities".to_string(), json!(a.iter().filter_map(|c| c.as_str()).collect::<Vec<_>>()))].into_iter().collect())
-            .unwrap_or_default(),
+        extra: caps.map(|c| [("capabilities".to_string(), json!(c))].into_iter().collect()).unwrap_or_default(),
     }
 }
 
@@ -335,7 +252,7 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
     let api = api_of(&ty);
     let inline = get_str(item, "api_key").filter(|k| !k.is_empty());
     let var = get_str(item, "api_key_env").filter(|k| !k.is_empty());
-    let from_env = var.as_deref().map(env_set).unwrap_or(false);
+    let from_env = var.as_deref().and_then(crate::env::agent_var).is_some();
     let key_note = match (&var, &inline) {
         (Some(v), _) => tr!(
             "环境变量 {v}（api_key_env）· {}",
@@ -347,13 +264,13 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
     };
     let known = TYPES.contains(&ty.as_str());
     let mut details = vec![
-        Kv::mono(l("配置 ID", "Config ID"), format!("[providers.{pid}]")),
+        Kv::mono(lbl::config_id(), format!("[providers.{pid}]")),
         Kv::mono("type", format!("\"{ty}\"")),
-        Kv::text(l("密钥", "API key"), key_note),
-        Kv::text(l("状态", "Status"), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
+        Kv::text(lbl::api_key(), key_note),
+        Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
     ];
     if ty == "kimi" {
-        details.push(Kv::text(l("说明", "Note"), l("Kimi 官方接口（按 Chat 处理）；/login 会改写这一段", "Kimi's official API (treated as Chat); /login rewrites this section")));
+        details.push(Kv::text(lbl::note(), l("Kimi 官方接口（按 Chat 处理）；/login 会改写这一段", "Kimi's official API (treated as Chat); /login rewrites this section")));
     }
     Provider {
         id: pid.into(),
@@ -370,45 +287,21 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
         editable: known,
         api: api.into(),
         has_key: inline.is_some() || from_env,
-        key_fp: None,
-        key_hint: None,
-        official_auth: false,
+        ..Default::default()
     }
 }
 
 pub fn state(inst: &Install) -> AgentState {
     let legacy = is_legacy();
-    let mut st = AgentState {
-        id: ID.into(),
-        name: NAME.into(),
-        installed: inst.installed,
-        version: inst.version.clone(),
-        running: inst.running,
-        mode: "multi".into(),
-        config_dir: dir().to_string_lossy().to_string(),
-        files: vec![display_path(&config_path())],
-        current_provider: None,
-        providers: vec![],
-        catalog: None,
-        catalog_file: None,
-        settings: vec![],
-        current: vec![],
-        notes: vec![],
-        readonly: false,
-        fixed_pending: false,
-        fixed_prompt: false,
-        restartable: false,
-        model_fields: vec![],
-    };
+    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&config_path())]);
     let (doc, _) = match load() {
         Ok(x) => x,
         Err(e) => {
-            st.notes.push(e.to_string());
-            st.readonly = true;
+            st.fail(e);
             return st;
         }
     };
-    let root = load_store();
+    let root = store::load();
     let names = store_obj(&root, "names");
     let hidden = store_obj(&root, "hiddenModels");
     let def = default_model(&doc);
@@ -428,9 +321,9 @@ pub fn state(inst: &Install) -> AgentState {
     let vis: usize = st.providers.iter().filter(|p| p.enabled).map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
         Kv::mono("default_model", def.clone().unwrap_or_else(|| "-".into())),
-        Kv::text(l("供应商", "Provider"), def_prov.as_deref().map(|p| st.providers.iter().find(|x| x.id == p).map(|x| x.name.clone()).unwrap_or_else(|| p.to_string())).unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::provider(), def_prov.as_deref().map(|p| st.providers.iter().find(|x| x.id == p).map(|x| x.name.clone()).unwrap_or_else(|| p.to_string())).unwrap_or_else(|| "-".into())),
         Kv::mono(l("上游模型", "Upstream model"), def_item.and_then(|m| get_str(m, "model")).unwrap_or_else(|| "-".into())),
-        Kv::text(l("可见模型", "Visible models"), tr!("{vis} 个", "{vis}")),
+        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
         Kv::text(l("配置", "Config"), if legacy { l("旧版 Kimi CLI（~/.kimi）", "Legacy Kimi CLI (~/.kimi)") } else { "Kimi Code" }),
     ];
     st.notes.push(l("/login 和 /model 会重写 config.toml 并丢掉注释", "/login and /model rewrite config.toml and drop its comments").into());
@@ -452,17 +345,17 @@ pub fn state(inst: &Install) -> AgentState {
 
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load()?;
-    let stashed = store_obj(&load_store(), "disabledProviders").get(id).map(|r| from_text(stash_text(r))).transpose()?;
+    let stashed = store_obj(&store::load(), "disabledProviders").get(id).map(|r| from_text(stash_text(r))).transpose()?;
     let item = doc
         .get("providers")
         .and_then(|t| t.get(id))
         .cloned()
         .or_else(|| stashed.as_ref().and_then(|d| d.get("providers").and_then(|t| t.get(id)).cloned()))
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+        .ok_or_else(|| msg::no_provider(id))?;
     let base = get_str(&item, "base_url").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
     let key = get_str(&item, "api_key")
         .filter(|k| !k.is_empty())
-        .or_else(|| get_str(&item, "api_key_env").filter(|v| env_set(v)).and_then(|v| std::env::var(v).ok()));
+        .or_else(|| get_str(&item, "api_key_env").and_then(|v| crate::env::agent_var(&v)));
     Ok((base, key, api_of(&get_str(&item, "type").unwrap_or_default()).into()))
 }
 
@@ -483,7 +376,7 @@ fn edit_provider_in(doc: &mut DocumentMut, pid: &str, p: &ProviderInput, legacy:
         .get_mut("providers")
         .and_then(|x| x.get_mut(pid))
         .and_then(|x| x.as_table_like_mut())
-        .ok_or_else(|| anyhow!(tr!("找不到供应商 {pid}", "Provider not found: {pid}")))?;
+        .ok_or_else(|| msg::no_provider(pid))?;
     let mut lines = vec![];
     let base = p.base_url.trim();
     if t.get("base_url").and_then(|v| v.as_str()) != Some(base) {
@@ -556,7 +449,7 @@ impl Ctx {
         } else if store_obj(&self.root, "disabledProviders").contains_key(pid) {
             Err(anyhow!(tr!("供应商 {pid} 已停用，先启用再调整模型", "Provider {pid} is disabled; enable it before changing its models")))
         } else {
-            Err(anyhow!(tr!("找不到供应商 {pid}", "Provider not found: {pid}")))
+            Err(msg::no_provider(pid))
         }
     }
 
@@ -594,14 +487,9 @@ impl Ctx {
         out
     }
 
-    fn check_default(&self, keys: &[String], what: &str) -> Result<()> {
-        match default_model(&self.doc) {
-            Some(d) if keys.contains(&d) => Err(anyhow!(tr!(
-                "「{d}」是 default_model，{what}前先在 Kimi 里用 /model 换一个默认模型",
-                "\"{d}\" is the default_model; switch to another default model with /model in Kimi before {what}"
-            ))),
-            _ => Ok(()),
-        }
+    /// The default_model, when it is one of `keys`.
+    fn default_in(&self, keys: &[String]) -> Option<String> {
+        default_model(&self.doc).filter(|d| keys.contains(d))
     }
 
     fn parent(&mut self, name: &str) -> Result<&mut Table> {
@@ -617,8 +505,8 @@ impl Ctx {
         self.doc.get_mut(parent).and_then(|t| t.as_table_like_mut()).and_then(|t| t.remove(key))
     }
 
-    fn set_store(&mut self, k: &str, v: Map<String, Value>) {
-        store::set_value(&mut self.root, ID, k, Value::Object(v));
+    fn set_store(&mut self, k: &str, v: impl Into<Value>) {
+        store::set_value(&mut self.root, ID, k, v.into());
         self.store_dirty = true;
     }
 
@@ -632,21 +520,18 @@ impl Ctx {
         }
     }
 
-    fn add_model(&mut self, pid: &str, mid: &str, ctx: Option<u64>) -> Result<String> {
+    /// Adds `[models.<key>]` sending `upstream` as the model id; returns the key used.
+    fn add_model(&mut self, pid: &str, key: &str, upstream: &str, ctx: Option<u64>) -> Result<String> {
         let all = self.all_keys();
-        let key = if !all.contains(mid) {
-            mid.to_string()
-        } else {
-            let b = format!("{pid}/{mid}");
-            std::iter::once(b.clone()).chain((2..).map(|n| format!("{b}-{n}"))).find(|c| !all.contains(c)).unwrap()
-        };
+        // A models key taken by another provider's model gets the provider as prefix.
+        let key = if !all.contains(key) { key.to_string() } else { unique_id(&format!("{pid}/{key}"), |c| all.contains(c)) };
         let c = ctx.unwrap_or(DEFAULT_CTX);
         let mut t = Table::new();
         t.insert("provider", value(pid));
-        t.insert("model", value(mid));
+        t.insert("model", value(upstream));
         t.insert("max_context_size", value(c as i64));
         self.parent("models")?.insert(&key, Item::Table(t));
-        self.diff.push(&self.file, format!("+ [models.\"{key}\"] provider = \"{pid}\", model = \"{mid}\", max_context_size = {c}"), true);
+        self.diff.push(&self.file, format!("+ [models.\"{key}\"] provider = \"{pid}\", model = \"{upstream}\", max_context_size = {c}"), true);
         self.cfg_dirty = true;
         Ok(key)
     }
@@ -655,8 +540,7 @@ impl Ctx {
         let api = check_api(&p.api)?;
         let mut taken: HashSet<String> = table_items(&self.doc, "providers").into_iter().map(|(k, _)| k).collect();
         taken.extend(store_obj(&self.root, "disabledProviders").keys().cloned());
-        let b = slug(p.name.trim());
-        let id = std::iter::once(b.clone()).chain((2..).map(|n| format!("{b}-{n}"))).find(|c| !taken.contains(c)).unwrap();
+        let id = unique_id(&slug(p.name.trim()), |c| taken.contains(c));
         let ty = type_for(api, self.legacy);
         let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
         let mut t = Table::new();
@@ -670,12 +554,8 @@ impl Ctx {
         }
         self.cfg_dirty = true;
         self.set_name(&id, p.name.trim());
-        let mut seen: Vec<&str> = vec![];
-        for m in p.models.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !seen.contains(&m) {
-                seen.push(m);
-                self.add_model(&id, m, None)?;
-            }
+        for m in clean_ids(&p.models) {
+            self.add_model(&id, &m, &m, None)?;
         }
         Ok(())
     }
@@ -690,7 +570,7 @@ impl Ctx {
             }
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
-            let rec = d.get_mut(id).ok_or_else(|| anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")))?;
+            let rec = d.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
             let mut sd = from_text(stash_text(rec))?;
             let lines = edit_provider_in(&mut sd, id, p, legacy)?;
             if !lines.is_empty() {
@@ -710,17 +590,22 @@ impl Ctx {
     fn delete_provider(&mut self, id: &str) -> Result<()> {
         if self.has_provider(id) {
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
-            self.check_default(&keys, l("删除这个供应商", "deleting this provider"))?;
+            if let Some(d) = self.default_in(&keys) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，删除这个供应商前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting this provider"
+                )));
+            }
             self.remove("providers", id);
             for k in &keys {
                 self.remove("models", k);
             }
-            self.diff.push(&self.file, tr!("- [providers.{id}] 和它的 {} 个模型（含密钥）", "- [providers.{id}] and its {} model(s) (API key included)", keys.len()), false);
+            self.diff.push(&self.file, trn!(keys.len(), "- [providers.{id}] 和它的 {n} 个模型（含密钥）", "- [providers.{id}] and its {n} model (API key included)", "- [providers.{id}] and its {n} models (API key included)"), false);
             self.cfg_dirty = true;
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
             if d.remove(id).is_none() {
-                return Err(anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}")));
+                return Err(msg::no_provider(id));
             }
             self.set_store("disabledProviders", d);
             self.diff.push(store_label(), tr!("- 「{id}」（已停用，暂存的定义一并删除）", "- \"{id}\" (disabled; its stashed definition is deleted too)"), false);
@@ -729,7 +614,7 @@ impl Ctx {
         let n = hidden.len();
         hidden.retain(|_, h| h.get("provider").and_then(|x| x.as_str()) != Some(id));
         if hidden.len() != n {
-            self.diff.push(store_label(), tr!("- 「{id}」暂存的 {} 个隐藏模型", "- {} hidden model(s) stashed for \"{id}\"", n - hidden.len()), false);
+            self.diff.push(store_label(), trn!(n - hidden.len(), "- 「{id}」暂存的 {n} 个隐藏模型", "- {n} hidden model stashed for \"{id}\"", "- {n} hidden models stashed for \"{id}\""), false);
             self.set_store("hiddenModels", hidden);
         }
         let mut names = store_obj(&self.root, "names");
@@ -743,22 +628,34 @@ impl Ctx {
         let mut d = store_obj(&self.root, "disabledProviders");
         if !on {
             if !self.has_provider(id) {
-                return if d.contains_key(id) { Ok(()) } else { Err(anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}"))) };
+                return if d.contains_key(id) { Ok(()) } else { Err(msg::no_provider(id)) };
             }
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
-            self.check_default(&keys, l("停用这个供应商", "disabling this provider"))?;
+            if let Some(d) = self.default_in(&keys) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，停用这个供应商前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before disabling this provider"
+                )));
+            }
             let prov = self.remove("providers", id).unwrap();
             let models: Vec<(String, Item)> = keys.iter().filter_map(|k| self.remove("models", k).map(|m| (k.clone(), m))).collect();
             let mut parts: Vec<(&str, &str, &Item)> = vec![("providers", id, &prov)];
             parts.extend(models.iter().map(|(k, m)| ("models", k.as_str(), m)));
             d.insert(id.into(), json!({ "toml": to_text(&parts) }));
             self.set_store("disabledProviders", d);
-            self.diff.push(&self.file, tr!("- [providers.{id}] 和它的 {} 个模型（暂存在 AgentPlus，可恢复）", "- [providers.{id}] and its {} model(s) (stashed in AgentPlus; can be restored)", models.len()), false);
+            self.diff.push(&self.file, trn!(models.len(), "- [providers.{id}] 和它的 {n} 个模型（暂存在 AgentPlus，可恢复）", "- [providers.{id}] and its {n} model (stashed in AgentPlus; can be restored)", "- [providers.{id}] and its {n} models (stashed in AgentPlus; can be restored)"), false);
             self.cfg_dirty = true;
         } else {
             let Some(rec) = d.remove(id) else {
-                return if self.has_provider(id) { Ok(()) } else { Err(anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}"))) };
+                return if self.has_provider(id) { Ok(()) } else { Err(msg::no_provider(id)) };
             };
+            // A [providers.<id>] written meanwhile (by hand, /login) would be replaced, api_key and all.
+            if self.has_provider(id) {
+                return Err(anyhow!(tr!(
+                    "config.toml 里已经有 [providers.{id}]，无法恢复停用的「{id}」",
+                    "config.toml already has [providers.{id}]; can't restore the disabled \"{id}\""
+                )));
+            }
             let sd = from_text(stash_text(&rec))?;
             let prov = sd.get("providers").and_then(|t| t.get(id)).ok_or_else(|| anyhow!(tr!("暂存的供应商 {id} 不完整", "Stashed provider {id} is incomplete")))?;
             let models = table_items(&sd, "models");
@@ -771,7 +668,7 @@ impl Ctx {
                 self.parent("models")?.insert(k, fresh(m));
             }
             self.set_store("disabledProviders", d);
-            self.diff.push(&self.file, tr!("+ [providers.{id}] 和它的 {} 个模型", "+ [providers.{id}] and its {} model(s)", models.len()), true);
+            self.diff.push(&self.file, trn!(models.len(), "+ [providers.{id}] 和它的 {n} 个模型", "+ [providers.{id}] and its {n} model", "+ [providers.{id}] and its {n} models"), true);
             self.cfg_dirty = true;
         }
         Ok(())
@@ -784,7 +681,20 @@ impl Ctx {
             if !self.is_live_model(pid, key) {
                 return if hidden.contains_key(key) { Ok(()) } else { Err(anyhow!(tr!("找不到模型 {key}", "Model not found: {key}"))) };
             }
-            self.check_default(&[key.to_string()], l("隐藏它", "hiding it"))?;
+            if let Some(d) = self.default_in(&[key.to_string()]) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，隐藏它前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before hiding it"
+                )));
+            }
+            // The stash is keyed by models key: never overwrite another model stashed under it
+            // (config.toml can bring a key back behind AgentPlus's back: /login, /model, by hand).
+            if hidden.contains_key(key) {
+                return Err(anyhow!(tr!(
+                    "模型键 {key} 在 AgentPlus 里已暂存了一个隐藏模型，先在 config.toml 里给这个模型换个键",
+                    "Model key {key} already has a hidden model stashed in AgentPlus; give this model a different key in config.toml first"
+                )));
+            }
             let item = self.remove("models", key).unwrap();
             hidden.insert(key.into(), json!({ "provider": pid, "toml": to_text(&[("models", key, &item)]) }));
             self.set_store("hiddenModels", hidden);
@@ -812,7 +722,7 @@ impl Ctx {
         self.live_provider(pid)?;
         let mid = m.id.trim();
         if mid.is_empty() {
-            return Err(anyhow!(l("模型 ID 不能为空", "Model ID is required")));
+            return Err(msg::model_id_required());
         }
         let name = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty());
         for (k, v) in &m.extra {
@@ -838,7 +748,8 @@ impl Ctx {
             }
             return Ok(());
         }
-        let key = self.add_model(pid, mid, m.context)?;
+        // Kimi's per-model "name" is the upstream model id (`model = …`), as on edit.
+        let key = self.add_model(pid, mid, name.unwrap_or(mid), m.context)?;
         for l in edit_model_in(&mut self.doc, &key, None, None, &m.extra) {
             self.diff.push(&self.file, l, true);
         }
@@ -848,7 +759,12 @@ impl Ctx {
     fn delete_model(&mut self, pid: &str, key: &str) -> Result<()> {
         self.live_provider(pid)?;
         if self.is_live_model(pid, key) {
-            self.check_default(&[key.to_string()], l("删除它", "deleting it"))?;
+            if let Some(d) = self.default_in(&[key.to_string()]) {
+                return Err(anyhow!(tr!(
+                    "「{d}」是 default_model，删除它前先在 Kimi 里用 /model 换一个默认模型",
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting it"
+                )));
+            }
             self.remove("models", key);
             self.diff.push(&self.file, tr!("- [models.\"{key}\"]（删除）", "- [models.\"{key}\"] (deleted)"), false);
             self.cfg_dirty = true;
@@ -866,12 +782,7 @@ impl Ctx {
     /// Makes exactly `want` the provider's visible models; entries match by key or upstream name.
     fn set_models(&mut self, pid: &str, want: &[String]) -> Result<()> {
         self.live_provider(pid)?;
-        let mut list: Vec<String> = vec![];
-        for m in want.iter().map(|m| m.trim()).filter(|m| !m.is_empty()) {
-            if !list.iter().any(|x| x == m) {
-                list.push(m.to_string());
-            }
-        }
+        let list = clean_ids(want);
         let keep = |k: &str, up: &Option<String>| list.iter().any(|w| w == k || Some(w) == up.as_ref());
         let def = default_model(&self.doc);
         let (live, hidden) = (self.live_models(pid), self.hidden_models(pid));
@@ -893,7 +804,7 @@ impl Ctx {
             match hidden.iter().find(|x| hit(x)) {
                 Some((k, _)) => self.set_visible(pid, k, true)?,
                 None => {
-                    self.add_model(pid, w, None)?;
+                    self.add_model(pid, w, w, None)?;
                 }
             }
         }
@@ -903,13 +814,13 @@ impl Ctx {
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (doc, meta) = load()?;
-    let mut cx = Ctx { doc, root: load_store(), diff: Diff::default(), file: display_path(&config_path()), legacy: is_legacy(), cfg_dirty: false, store_dirty: false };
+    let mut cx = Ctx { doc, root: store::load(), diff: Diff::default(), file: display_path(&config_path()), legacy: is_legacy(), cfg_dirty: false, store_dirty: false };
 
     for op in ops {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
-                    return Err(anyhow!(l("名称和地址不能为空", "Name and base URL are required")));
+                    return Err(msg::name_and_url_required());
                 }
                 match p.id.as_deref() {
                     None => cx.create_provider(p)?,
@@ -922,9 +833,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::UpsertModel { provider, model } => cx.upsert_model(provider, model)?,
             Op::DeleteModel { provider, model } => cx.delete_model(provider, model)?,
             Op::SetProviderModels { provider, models } => cx.set_models(provider, models)?,
-            Op::SetSetting { key, .. } => return Err(anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))),
+            Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Kimi Code 可以同时配置多个供应商，默认模型在 Kimi 里用 /model 切换", "Kimi Code can have several providers at once; switch the default model with /model in Kimi"))),
-            Op::SetModelRoles { .. } => return Err(anyhow!(l("只有 Claude Code 需要分配模型角色", "Only Claude Code needs model roles"))),
+            Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
@@ -934,13 +845,13 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !dry_run {
         if cx.cfg_dirty {
             let p = config_path();
-            backup_dir = Some(backup_files(std::slice::from_ref(&p))?);
+            backup_dir = Some(backup(ID, std::slice::from_ref(&p))?);
             std::fs::create_dir_all(dir())?;
             write_text_atomic(&p, &cx.doc.to_string(), meta)?;
             written.push(p);
         }
         if cx.store_dirty {
-            save_store(&cx.root)?;
+            store::save(&cx.root)?;
         }
     }
     Ok((cx.diff, written, backup_dir))
@@ -994,16 +905,14 @@ max_context_size = 128000
 max_steps_per_run = 100 # keep
 "#;
 
-    fn setup(tag: &str, legacy: bool, sample: Option<&str>) -> PathBuf {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let t = std::env::temp_dir().join(format!("agentplus-kimi-{tag}-{}-{nanos}", std::process::id()));
-        let d = t.join(if legacy { ".kimi" } else { ".kimi-code" });
+    fn setup(tag: &str, legacy: bool, sample: Option<&str>) -> TestHome {
+        let home = TestHome::new(&format!("kimi-{tag}"));
+        let d = home.0.join(if legacy { ".kimi" } else { ".kimi-code" });
         fs::create_dir_all(&d).unwrap();
         if let Some(s) = sample {
             fs::write(d.join("config.toml"), s).unwrap();
         }
-        TEST_HOME.with(|h| *h.borrow_mut() = Some(t.clone()));
-        t
+        home
     }
 
     fn text() -> String {
@@ -1045,7 +954,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn reads_providers_and_models() {
-        setup("read", false, Some(SAMPLE));
+        let _home = setup("read", false, Some(SAMPLE));
         let s = st();
         assert_eq!(s.mode, "multi");
         assert!(!s.readonly);
@@ -1055,7 +964,10 @@ max_steps_per_run = 100 # keep
         assert!(m.models[0].tags.contains(&Tag::default_model()));
         assert_eq!(m.models[0].name.as_deref(), Some("kimi-k2-0905-preview"));
         assert_eq!(m.models[0].ctx.as_deref(), Some("262K"));
+        assert_eq!(m.models[0].extra.get("capabilities"), Some(&json!(["thinking"])));
+        assert_eq!(m.models[0].tags, [Tag::default_model()]);
         let r = prov(&s, "relay");
+        assert!(r.models[0].extra.is_empty());
         assert!(!r.builtin && r.has_key);
         assert_eq!(r.models.iter().map(|m| (m.id.as_str(), m.name.as_deref())).collect::<Vec<_>>(), [("gpt-4.1", None), ("relay-mini", Some("gpt-4.1-mini"))]);
         let e = prov(&s, "envy");
@@ -1068,7 +980,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn create_provider_with_models() {
-        setup("create", false, Some(SAMPLE));
+        let _home = setup("create", false, Some(SAMPLE));
         let d = apply(vec![Op::UpsertProvider { provider: input(None, "My Relay", "https://my.relay/v1", "responses", Some(SECRET), &["gpt-4.1", "o3"]) }]);
         let all = lines(&d);
         assert!(!all.contains(SECRET), "{all}");
@@ -1099,7 +1011,7 @@ max_steps_per_run = 100 # keep
             Op::UpsertProvider { provider: input(None, "Chat", "https://c/v1", "chat", Some(SECRET), &["m1"]) },
             Op::UpsertProvider { provider: input(None, "Gem", "https://g", "gemini", None, &[]) },
         ]);
-        let doc: DocumentMut = fs::read_to_string(t.join(".kimi").join("config.toml")).unwrap().parse().unwrap();
+        let doc: DocumentMut = fs::read_to_string(t.0.join(".kimi").join("config.toml")).unwrap().parse().unwrap();
         assert_eq!(doc["providers"]["chat"]["type"].as_str(), Some("openai_legacy"));
         assert_eq!(doc["providers"]["gem"]["type"].as_str(), Some("gemini"));
         assert_eq!(doc["models"]["m1"]["provider"].as_str(), Some("chat"));
@@ -1108,7 +1020,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn edit_provider_keeps_comments() {
-        setup("edit", false, Some(SAMPLE));
+        let _home = setup("edit", false, Some(SAMPLE));
         let d = apply(vec![Op::UpsertProvider { provider: input(Some("relay"), "Relay", "https://relay2.example.com/v1", "responses", Some(SECRET), &[]) }]);
         assert!(!lines(&d).contains(SECRET));
         let t = text();
@@ -1125,7 +1037,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn hide_show_keeps_table_and_comment() {
-        setup("hide", false, Some(SAMPLE));
+        let _home = setup("hide", false, Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "relay".into(), model: "gpt-4.1".into(), visible: false }]);
         let t = text();
         assert!(!t.contains("gpt-4.1\"]") && !t.contains("# GPT via relay"));
@@ -1138,7 +1050,7 @@ max_steps_per_run = 100 # keep
         let t = text();
         assert!(t.contains("# GPT via relay\n[models.\"gpt-4.1\"]\nprovider = \"relay\"\nmodel = \"gpt-4.1\"\nmax_context_size = 1000000\n"), "{t}");
         assert!(t.contains("[loop_control]\nmax_steps_per_run = 100 # keep\n"));
-        assert!(store_obj(&load_store(), "hiddenModels").is_empty());
+        assert!(store_obj(&store::load(), "hiddenModels").is_empty());
         // The default model cannot be hidden or deleted.
         assert!(plan(&[Op::SetModelVisible { provider: "moonshot".into(), model: "kimi-k2".into(), visible: false }], true).is_err());
         assert!(plan(&[Op::DeleteModel { provider: "moonshot".into(), model: "kimi-k2".into() }], true).is_err());
@@ -1146,7 +1058,7 @@ max_steps_per_run = 100 # keep
 
     #[test]
     fn add_edit_delete_models() {
-        setup("models", false, Some(SAMPLE));
+        let _home = setup("models", false, Some(SAMPLE));
         apply(vec![
             Op::UpsertModel { provider: "relay".into(), model: model("o3", None, Some(200_000)) },
             Op::UpsertModel { provider: "relay".into(), model: model("relay-mini", Some("gpt-4.1-nano"), Some(64_000)) },
@@ -1164,8 +1076,28 @@ max_steps_per_run = 100 # keep
     }
 
     #[test]
+    fn added_model_name_is_its_upstream_model() {
+        let _home = setup("add-upstream", false, Some(SAMPLE));
+        let d = apply(vec![
+            Op::UpsertModel { provider: "relay".into(), model: model("k", Some("gpt-x"), None) },
+            Op::UpsertModel { provider: "relay".into(), model: model("plain", Some("  "), None) },
+            // Key taken by another provider: prefixed key, the name still goes upstream.
+            Op::UpsertModel { provider: "envy".into(), model: model("gpt-4.1", Some("claude-x"), None) },
+        ]);
+        let doc: DocumentMut = text().parse().unwrap();
+        assert_eq!(doc["models"]["k"]["model"].as_str(), Some("gpt-x"));
+        assert_eq!(doc["models"]["k"]["provider"].as_str(), Some("relay"));
+        assert_eq!(doc["models"]["plain"]["model"].as_str(), Some("plain"));
+        assert_eq!(doc["models"]["envy/gpt-4.1"]["model"].as_str(), Some("claude-x"));
+        assert_eq!(doc["models"]["gpt-4.1"]["model"].as_str(), Some("gpt-4.1"));
+        assert!(lines(&d).contains("+ [models.\"k\"] provider = \"relay\", model = \"gpt-x\""), "{}", lines(&d));
+        let m = prov(&st(), "relay").models.into_iter().find(|m| m.id == "k").unwrap();
+        assert_eq!(m.name.as_deref(), Some("gpt-x"));
+    }
+
+    #[test]
     fn disable_enable_and_delete_provider() {
-        setup("enable", false, Some(SAMPLE));
+        let _home = setup("enable", false, Some(SAMPLE));
         apply(vec![Op::SetModelVisible { provider: "relay".into(), model: "relay-mini".into(), visible: false }]);
         apply(vec![Op::SetProviderEnabled { provider: "relay".into(), enabled: false }]);
         let t = text();
@@ -1189,8 +1121,28 @@ max_steps_per_run = 100 # keep
         apply(vec![Op::DeleteProvider { provider: "relay".into() }]);
         let t = text();
         assert!(!t.contains("relay"), "{t}");
-        assert!(store_obj(&load_store(), "hiddenModels").is_empty());
+        assert!(store_obj(&store::load(), "hiddenModels").is_empty());
         assert!(st().providers.iter().all(|p| p.id != "relay"));
+    }
+
+    #[test]
+    fn stash_never_overwrites_a_hand_written_key() {
+        let _home = setup("clash", false, Some(SAMPLE));
+        apply(vec![Op::SetModelVisible { provider: "relay".into(), model: "relay-mini".into(), visible: false }]);
+        // The same key comes back by hand, now for another provider: hiding it must not
+        // replace relay's stashed model.
+        fs::write(config_path(), format!("{}\n[models.relay-mini]\nprovider = \"moonshot\"\nmodel = \"moon-mini\"\nmax_context_size = 8000\n", text())).unwrap();
+        assert!(plan(&[Op::SetModelVisible { provider: "moonshot".into(), model: "relay-mini".into(), visible: false }], false).is_err());
+        let hidden = store_obj(&store::load(), "hiddenModels");
+        assert_eq!(hidden["relay-mini"]["provider"], "relay");
+        assert!(stash_text(&hidden["relay-mini"]).contains("gpt-4.1-mini"));
+        // A disabled provider whose [providers.<id>] was written again by hand stays disabled.
+        apply(vec![Op::SetProviderEnabled { provider: "envy".into(), enabled: false }]);
+        let by_hand = format!("{}\n[providers.envy]\ntype = \"openai\"\nbase_url = \"https://hand.example/v1\"\napi_key = \"sk-hand\"\n", text());
+        fs::write(config_path(), &by_hand).unwrap();
+        assert!(plan(&[Op::SetProviderEnabled { provider: "envy".into(), enabled: true }], false).is_err());
+        assert_eq!(text(), by_hand);
+        assert!(store_obj(&store::load(), "disabledProviders").contains_key("envy"));
     }
 
     #[test]
@@ -1208,7 +1160,7 @@ max_steps_per_run = 100 # keep
         assert!(w.is_empty() && b.is_none() && !lines(&d).is_empty());
         assert!(!lines(&d).contains(SECRET));
         assert_eq!(text(), SAMPLE);
-        assert!(!t.join("store.json").exists() && !t.join("backup").exists());
+        assert!(!t.0.join(".agentplus").exists(), "no store or backup");
         assert!(plan(&[Op::SetCurrentProvider { provider: "relay".into() }], true).is_err());
         assert!(plan(&[Op::SetModelRoles { provider: "relay".into(), roles: Default::default() }], true).is_err());
         assert!(plan(&[Op::SetSetting { key: "x".into(), value: json!(true) }], true).is_err());

@@ -37,10 +37,27 @@ fn root() -> PathBuf {
     agentplus_dir().join("backups")
 }
 
-/// Original locations for backups made before manifests existed.
+/// Fixed backup reasons, (zh, en). A reason is stored in the language of the moment and
+/// shown in the current one (`reason_text`), so both sides use these same pairs.
+pub const REASON_APPLY: (&str, &str) = ("应用配置", "Apply config");
+pub const REASON_OFFICIAL: (&str, &str) = ("获取官方模型列表前", "Before fetching official model list");
+const REASON_CLEANUP: (&str, &str) = ("Codex 清理", "Codex cleanup");
+const REASON_REPAIR: (&str, &str) = ("会话修复", "Session repair");
+
+fn read_manifest(dir: &Path) -> Option<Value> {
+    fs::read_to_string(dir.join("manifest.json")).ok().and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// A file's modification time for display, in local time.
+fn fmt_mtime(m: &fs::Metadata) -> Option<String> {
+    m.modified().ok().map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+/// Original locations for backups made before manifests existed. Codex files go back to
+/// the folder the adapter edits (the one picked in AgentPlus, else `$CODEX_HOME` / `~/.codex`).
 fn legacy_path(agent: &str, name: &str) -> Option<PathBuf> {
     let h = home();
-    let codex = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h.join(".codex"));
+    let codex = crate::adapters::codex::codex_home();
     let app = dirs::config_dir().unwrap_or_else(|| h.clone()).join("Xiaomi MiMo");
     Some(match (agent, name) {
         ("codex", "config.toml" | "models.json" | ".env") => codex.join(name),
@@ -53,7 +70,7 @@ fn legacy_path(agent: &str, name: &str) -> Option<PathBuf> {
 
 fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
     let agent = agent_dir.file_name()?.to_string_lossy().to_string();
-    let manifest: Option<Value> = fs::read_to_string(agent_dir.join("manifest.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+    let manifest = read_manifest(agent_dir);
     let mut files = vec![];
     let mut bytes = 0;
     for e in fs::read_dir(agent_dir).ok()?.flatten() {
@@ -73,10 +90,13 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
     let reason = manifest
         .as_ref()
         .and_then(|m| m["reason"].as_str().map(reason_text))
-        .unwrap_or_else(|| match agent.as_str() {
-            "codex-cleanup" => l("Codex 清理", "Codex cleanup").into(),
-            "codex-repair" => l("会话修复", "Session repair").into(),
-            _ => l("应用配置", "Apply config").into(),
+        .unwrap_or_else(|| {
+            let (zh, en) = match agent.as_str() {
+                "codex-cleanup" => REASON_CLEANUP,
+                "codex-repair" => REASON_REPAIR,
+                _ => REASON_APPLY,
+            };
+            l(zh, en).into()
         });
     let missing: Vec<&str> = files.iter().filter(|f| f.path.as_ref().is_some_and(|p| !Path::new(p).is_file())).map(|f| f.name.as_str()).collect();
     let mut blocked_missing = false;
@@ -87,7 +107,7 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
     } else if !missing.is_empty() {
         // Rolling back would recreate files nobody uses any more (e.g. a deleted temp dir).
         blocked_missing = true;
-        Some(tr!("原文件已不存在：{}", "Original file no longer exists: {}", missing.join(l("、", ", "))))
+        Some(tr!("原文件已不存在：{}", "Original file no longer exists: {}", crate::i18n::join(&missing)))
     } else {
         None
     };
@@ -97,12 +117,7 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
 /// Backup reasons are stored in the language of the moment; show the known fixed ones
 /// in the current language.
 fn reason_text(r: &str) -> String {
-    const KNOWN: &[(&str, &str)] = &[
-        ("应用配置", "Apply config"),
-        ("获取官方模型列表前", "Before fetching official model list"),
-        ("Codex 清理", "Codex cleanup"),
-        ("会话修复", "Session repair"),
-    ];
+    const KNOWN: &[(&str, &str)] = &[REASON_APPLY, REASON_OFFICIAL, REASON_CLEANUP, REASON_REPAIR];
     const PREFIX: &[(&str, &str, &str, &str)] = &[
         ("回滚到 ", " 之前", "Before rolling back to ", ""),
         ("项目配置 · ", "", "Project config · ", ""),
@@ -162,9 +177,18 @@ pub fn restore(id: &str) -> Result<String> {
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = PathBuf::from(format!("{}.agentplus-tmp", to.display()));
-        if let Err(e) = fs::copy(dir.join(&f.name), &tmp).and_then(|_| fs::rename(&tmp, &to)) {
-            let _ = fs::remove_file(&tmp);
+        // Through a symlinked config (the backup recorded the link), retrying a locked file.
+        // fs::copy keeps the backup's permissions.
+        let put_back = || -> Result<()> {
+            let target = resolve_link(&to)?;
+            let tmp = tmp_sibling(&target);
+            if let Err(e) = fs::copy(dir.join(&f.name), &tmp) {
+                let _ = fs::remove_file(&tmp);
+                return Err(e.into());
+            }
+            replace_file(&tmp, &target, &to)
+        };
+        if let Err(e) = put_back() {
             return Err(anyhow!(tr!("恢复 {} 失败：{e}（回滚前的文件备份在 {}）", "Failed to restore {}: {e} (the pre-rollback files are backed up in {})", to.display(), display_path(&safety))));
         }
     }
@@ -246,7 +270,7 @@ fn same_content(a: &Path, b: &Path) -> bool {
 pub fn detail(id: &str) -> Result<BackupDetail> {
     let (stamp, _, dir) = backup_dir(id)?;
     let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("找不到备份 {id}", "Backup not found: {id}")))?;
-    let manifest: Option<Value> = fs::read_to_string(dir.join("manifest.json")).ok().and_then(|s| serde_json::from_str(&s).ok());
+    let manifest = read_manifest(&dir);
     let files = entry.files.into_iter().map(|f| file_detail(&dir, f)).collect();
     Ok(BackupDetail {
         id: entry.id,
@@ -258,24 +282,26 @@ pub fn detail(id: &str) -> Result<BackupDetail> {
 
 fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
     let old_path = dir.join(&f.name);
-    let old_len = fs::metadata(&old_path).map(|m| m.len()).unwrap_or(0);
+    let old_len = file_len(&old_path);
     let cur_path = f.path.as_ref().map(PathBuf::from);
     let meta = cur_path.as_ref().and_then(|p| fs::metadata(p).ok()).filter(|m| m.is_file());
+    let mut d = FileDetail {
+        name: f.name,
+        path: f.path,
+        backup_bytes: old_len,
+        current_bytes: meta.as_ref().map(|m| m.len()),
+        current_modified: meta.as_ref().and_then(fmt_mtime),
+        same: false,
+        binary: false,
+        diff: vec![],
+        added: 0,
+        removed: 0,
+        truncated: false,
+    };
     if old_len > MAX_DIFF_BYTES || meta.as_ref().is_some_and(|m| m.len() > MAX_DIFF_BYTES) {
-        let same = cur_path.as_ref().is_some_and(|c| meta.is_some() && same_content(&old_path, c));
-        return FileDetail {
-            name: f.name,
-            path: f.path,
-            backup_bytes: old_len,
-            current_bytes: meta.as_ref().map(|m| m.len()),
-            current_modified: meta.as_ref().and_then(|m| m.modified().ok()).map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string()),
-            same,
-            binary: true,
-            diff: vec![],
-            added: 0,
-            removed: 0,
-            truncated: false,
-        };
+        d.same = cur_path.as_ref().is_some_and(|c| meta.is_some() && same_content(&old_path, c));
+        d.binary = true;
+        return d;
     }
     let old = fs::read(&old_path).unwrap_or_default();
     let cur = meta.as_ref().and_then(|_| fs::read(cur_path.as_ref()?).ok());
@@ -285,22 +311,8 @@ fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
         Some(c) => text(c),
         None => Some(String::new()),
     };
-    let mut d = FileDetail {
-        name: f.name,
-        path: f.path,
-        backup_bytes: old.len() as u64,
-        current_bytes: meta.as_ref().map(|m| m.len()),
-        current_modified: meta
-            .as_ref()
-            .and_then(|m| m.modified().ok())
-            .map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string()),
-        same: cur.as_deref() == Some(&old[..]),
-        binary: false,
-        diff: vec![],
-        added: 0,
-        removed: 0,
-        truncated: false,
-    };
+    d.backup_bytes = old.len() as u64;
+    d.same = cur.as_deref() == Some(&old[..]);
     match (old_text, cur_text) {
         (Some(a), Some(b)) if !d.same => {
             let (rows, added, removed) = line_diff(&a, &b);
@@ -441,6 +453,26 @@ mod tests {
         let e = read_entry("x", &dir).unwrap();
         assert!(e.restorable && e.blocked.is_none());
         let _ = fs::remove_dir_all(dir.parent().unwrap());
+    }
+
+    /// A rollback writes through a symlinked config (the backup recorded the link path).
+    #[cfg(unix)]
+    #[test]
+    fn restore_keeps_symlinks() {
+        let h = TestHome::new("hist-link");
+        let (real, link) = (h.0.join("dotfiles").join("config.toml"), h.0.join("config.toml"));
+        fs::create_dir_all(real.parent().unwrap()).unwrap();
+        fs::write(&real, "a = 1\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let dir = backup("codex", std::slice::from_ref(&link)).unwrap();
+        fs::write(&link, "a = 2\n").unwrap();
+        let id = format!("{}/codex", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
+        restore(&id).unwrap();
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "a = 1\n");
+        assert!(fs::read_dir(real.parent().unwrap()).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
+        let e = list().unwrap().into_iter().find(|e| e.id == id).unwrap();
+        assert_eq!(e.reason, "应用配置");
     }
 
     #[test]

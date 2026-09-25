@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { usePopover } from "../hooks";
 import type { EnvInfo } from "../api";
-import { Icon } from "./icons";
+import { EnvIcon, Icon } from "./icons";
 import { t } from "../i18n";
 import { scrub } from "../privacy";
 
@@ -17,17 +18,8 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  // Esc closes the menu alone, not the settings page or detail panel underneath.
+  usePopover(open, () => setOpen(false), [root]);
 
   const wsl = current?.id.startsWith("wsl:");
   return (
@@ -39,8 +31,8 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
         title={t("envSwitch.switchTitle")}
         onClick={() => { if (!open) onOpen(); setOpen((o) => !o); }}
       >
-        {wsl ? <Icon.terminal /> : <Icon.monitor />}
-        <span>{switching ? t("envSwitch.switching") : current?.label ?? t("envSwitch.localWindows")}</span>
+        <EnvIcon id={current?.id ?? ""} />
+        <span>{switching ? t("envSwitch.switching") : current?.label ?? t("common.localWindows")}</span>
         <Icon.chevron />
       </button>
       {open && (
@@ -49,7 +41,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
           {envs.map((e) => (
             <button key={e.id} role="menuitemradio" aria-checked={e.current} className={`dd-item env-item${e.current ? " sel" : ""}`}
               onClick={() => { setOpen(false); if (!e.current) onPick(e.id); }}>
-              <span className="env-ico">{e.id.startsWith("wsl:") ? <Icon.terminal /> : <Icon.monitor />}</span>
+              <span className="env-ico"><EnvIcon id={e.id} /></span>
               <span className="grow minw0">
                 <span className="block ellipsis">{e.label}</span>
                 <span className="block tiny muted ellipsis">{scrub(e.detail)}</span>
