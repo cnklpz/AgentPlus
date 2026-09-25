@@ -51,6 +51,9 @@ pub struct ModelField {
     pub options: Vec<String>,
     /// One short label per option (same order).
     pub hints: Vec<String>,
+    /// Short tags for the model table's capability column: one for a bool input field (shown
+    /// when on); one per option for chips, or none to use `hints`.
+    pub caps: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]

@@ -44,6 +44,8 @@ export interface ModelField {
   options: string[];
   /** Label per option. */
   hints: string[];
+  /** Short tags for the model table's capability column: one for a bool input field (shown when on); one per option for chips, or none to use `hints`. */
+  caps: string[];
 }
 
 /** Wire protocol. "gemini" is shown for Gemini-only agents; the gateway converts the other three. */

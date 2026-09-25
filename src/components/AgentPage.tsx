@@ -264,11 +264,8 @@ interface ModelTableProps {
 /** Backend capability tags (`cap:*`), replaced by the ones below (they would lag behind pending edits). */
 const isCapTag = (g: ModelTag) => g.id.startsWith("cap:");
 
-/** "读取图片" / "Read images" → "图片" / "Images". */
-const capName = (s: string) => {
-  const r = s.replace(/^(读取|Read)\s*/i, "");
-  return r.charAt(0).toUpperCase() + r.slice(1);
-};
+/** A raw config value as a tag ("image_x" → "Image_x"). */
+const rawTag = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Short tags for what a model can read / do, from its field values (pending edits included). */
 function capTags(fields: ModelField[], extra: Model["extra"]): string[] {
@@ -279,11 +276,11 @@ function capTags(fields: ModelField[], extra: Model["extra"]): string[] {
       for (const o of v) {
         if (o === "text") continue;
         const i = f.options.indexOf(o);
-        out.push(capName(i >= 0 ? f.hints[i] || o : o));
+        out.push((i >= 0 && (f.caps[i] || f.hints[i])) || rawTag(o));
       }
     } else if (f.kind === "bool" && v === true) {
       if (/reasoning$/i.test(f.key)) out.push(t("agentPage.capReasoning"));
-      else if (f.gid === "io") out.push(capName(f.label));
+      else if (f.gid === "io" && f.caps[0]) out.push(f.caps[0]);
     }
   }
   return [...new Set(out)];
