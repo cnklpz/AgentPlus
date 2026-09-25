@@ -593,9 +593,11 @@ const withTags = (m: Model): Model => ({ ...m, tags: (m.tags ?? []).map(tagOf) }
 async function fixture(): Promise<AgentState[]> {
   const load = FIXTURE["./dev-fixture.json"];
   const raw = load ? ((await load()).default as AgentState[]) : [];
-  // The snapshot predates `restartable`: its desktop apps are.
+  // The snapshot may predate `restartable` (its desktop apps are), `currentModel` and the
+  // model fields' `caps`.
   const list = raw.map((a) => ({
     ...a, restartable: a.restartable ?? true, running: demoRunning[a.id] ?? a.running,
+    currentModel: a.currentModel ?? null, modelFields: a.modelFields?.map((f) => ({ ...f, caps: f.caps ?? [] })),
     catalog: a.catalog?.map(withTags) ?? null, providers: a.providers.map((p) => ({ ...p, models: p.models.map(withTags) })),
   }));
   // No OpenCode in the snapshot: MiMo runs the same config format, so it stands in.
