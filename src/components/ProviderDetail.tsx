@@ -76,14 +76,13 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
       {p.baseUrl && p.compatible && (() => {
         // Codex: one shared catalog; others: this provider's own list (visible first).
         const list = st.catalog ? st.catalog.filter((m) => m.visible).map((m) => m.id) : [...p.models].sort((a, b) => Number(b.visible) - Number(a.visible)).map((m) => m.id);
-        const configured = st.current.find((r) => r.k === "model")?.v ?? null;
         return (
           <ProviderTest
             // A fresh tester per provider: a result still on its way for the last one is dropped.
             key={`${st.id}\n${p.id}`}
             source={p.isNew ? null : { agent: st.id, provider: p.id }}
             models={list}
-            defaultModel={configured}
+            defaultModel={st.currentModel}
             disabled={p.isNew ? t("providerDetail.testAfterApply") : null}
           />
         );

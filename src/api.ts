@@ -130,6 +130,8 @@ export interface AgentState {
   catalogFile: string | null;
   settings: Setting[];
   current: Kv[];
+  /** The model requests go out with, whichever provider is active (Codex, Gemini); null when unset or per provider. */
+  currentModel: string | null;
   notes: string[];
   readonly: boolean;
   /** Codex: not on the fixed id yet, but could be. */
