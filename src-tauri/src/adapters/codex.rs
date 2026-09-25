@@ -312,13 +312,23 @@ fn read_env() -> (Vec<String>, TextMeta) {
     read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
+/// Codex skips ~/.codex/.env keys whose ASCII-uppercased name starts with `CODEX_`
+/// (codex-rs/arg0 `load_dotenv`), so such an env_key only works from the process environment.
+fn codex_ignores_in_file(name: &str) -> bool {
+    name.to_ascii_uppercase().starts_with("CODEX_")
+}
+
 /// An env_key as Codex sees it, and whether it comes from ~/.codex/.env. Codex sets every
 /// pair of that file into its environment in order, so the file beats the process
 /// environment (an assignment there wins even when empty) and the last assignment of a key
-/// wins.
+/// wins — except for `CODEX_` names, which it never reads from the file.
 fn env_lookup(name: &str) -> Option<(String, bool)> {
-    let (lines, _) = read_env();
-    match dotenv::get_last(&lines.join("\n"), name) {
+    let file = if codex_ignores_in_file(name) {
+        None
+    } else {
+        dotenv::get_last(&read_env().0.join("\n"), name)
+    };
+    match file {
         Some(v) => Some((v, true)),
         None => crate::env::agent_var(name).map(|v| (v, false)),
     }
@@ -329,10 +339,10 @@ pub fn env_value(name: &str) -> Option<String> {
     env_lookup(name).map(|(v, _)| v).filter(|v| !v.is_empty())
 }
 
-/// Sets `name` to `val` so Codex reads it back: the value is quoted when it needs to be, and
-/// later duplicates of the key are dropped (they would win over the rewritten line).
+/// Sets `name` to `val` so Codex (dotenvy) reads it back: the value is quoted when it needs
+/// to be, and later duplicates of the key are dropped (they would win over the rewritten line).
 fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
-    *lines = dotenv::set(&lines.join("\n"), name, Some(val)).lines().map(String::from).collect();
+    *lines = dotenv::set_dotenvy(&lines.join("\n"), name, val).lines().map(String::from).collect();
 }
 
 /// Where the key comes from; agrees with `env_value` (an empty `KEY=` in .env is not a key).
@@ -794,8 +804,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     None => unique_id(&slug(&p.name), |c| c == "openai" || c == FIXED_ID || provider_item(&doc, c).is_some()),
                 };
                 let is_new = p.id.is_none();
-                let env_key = provider_str(&doc, &id, "env_key")
-                    .unwrap_or_else(|| format!("{}_API_KEY", id.to_uppercase().replace('-', "_")));
+                // A default name Codex would skip in .env (id `codex-…`) gets an AGENTPLUS_ prefix.
+                let env_key = provider_str(&doc, &id, "env_key").unwrap_or_else(|| {
+                    let k = format!("{}_API_KEY", id.to_uppercase().replace('-', "_"));
+                    if codex_ignores_in_file(&k) {
+                        format!("AGENTPLUS_{k}")
+                    } else {
+                        k
+                    }
+                });
                 if is_new {
                     let mut t = Table::new();
                     t.insert("name", value(p.name.trim()));
@@ -831,6 +848,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                 }
                 if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+                    if codex_ignores_in_file(&env_key) {
+                        return Err(anyhow!(tr!("Codex 不读取 ~/.codex/.env 里以 CODEX_ 开头的变量：请把 env_key 改成别的名字，或在系统环境变量里设置 {env_key}", "Codex ignores ~/.codex/.env variables starting with CODEX_: rename env_key, or set {env_key} as a system environment variable")));
+                    }
                     set_env(&mut env_lines, &env_key, k.trim());
                     diff.push(&env_file, format!("{env_key} = {}", mask_key(k.trim())), true);
                     env_dirty = true;
@@ -1338,6 +1358,54 @@ http_headers = { X = \"1\" }
         plan(&[Op::UpsertProvider { provider: input }], false).unwrap();
         assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "RELAY_API_KEY=sk-new\nA=1\n");
         assert_eq!(env_value("RELAY_API_KEY").as_deref(), Some("sk-new"));
+    }
+
+    fn relay_input(id: Option<&str>, name: &str, key: &str) -> ProviderInput {
+        ProviderInput {
+            id: id.map(String::from),
+            name: name.into(),
+            base_url: "https://r/v1".into(),
+            api: "responses".into(),
+            api_key: Some(key.into()),
+            models: vec![],
+            key_from_library: None,
+            official_auth: None,
+        }
+    }
+
+    #[test]
+    fn codex_prefixed_keys_are_not_read_from_env_file() {
+        let _h = codex_home_with("codex-prefix", "", Some("CODEX_X=sk\ncodex_y=sk\n"));
+        crate::env::set_test_vars(&[]);
+        for name in ["CODEX_X", "codex_y"] {
+            assert_eq!(env_value(name), None, "{name}: Codex skips it in .env");
+            assert_eq!(key_status(name), "未找到，请求会失败");
+        }
+        crate::env::set_test_vars(&[("CODEX_X", "sk-e"), ("codex_y", "sk-e")]);
+        for name in ["CODEX_X", "codex_y"] {
+            assert_eq!(env_value(name).as_deref(), Some("sk-e"));
+            assert_eq!(key_status(name), "已在系统环境变量配置");
+        }
+        crate::env::set_test_vars(&[]);
+    }
+
+    #[test]
+    fn new_codex_named_provider_gets_a_readable_env_key() {
+        let _h = codex_home_with("codex-prefix-new", "", None);
+        plan(&[Op::UpsertProvider { provider: relay_input(None, "Codex Relay", "sk-$new") }], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "codex-relay", "env_key").as_deref(), Some("AGENTPLUS_CODEX_RELAY_API_KEY"));
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "AGENTPLUS_CODEX_RELAY_API_KEY='sk-$new'\n", "a `$` is single-quoted for dotenvy");
+        assert_eq!(env_value("AGENTPLUS_CODEX_RELAY_API_KEY").as_deref(), Some("sk-$new"));
+    }
+
+    #[test]
+    fn key_edit_refuses_a_codex_prefixed_env_key() {
+        let cfg = "[model_providers.relay]\nname = \"relay\"\nbase_url = \"https://r/v1\"\nenv_key = \"CODEX_X\"\n";
+        let _h = codex_home_with("codex-prefix-edit", cfg, Some("A=1\n"));
+        assert!(plan(&[Op::UpsertProvider { provider: relay_input(Some("relay"), "relay", "sk-new") }], true).is_err());
+        assert!(plan(&[Op::UpsertProvider { provider: relay_input(Some("relay"), "relay", "sk-new") }], false).is_err());
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "A=1\n");
     }
 
     #[test]
