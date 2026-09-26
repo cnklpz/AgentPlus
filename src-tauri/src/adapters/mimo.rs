@@ -21,12 +21,12 @@ pub const MARKER: &str = "mimocode.jsonc";
 pub const WSL_SCRIPT: &str = "";
 pub const WSL_MARKER: &str = "";
 const SKILLS: [&str; 4] = ["agents", "claude", "codex", "opencode"];
-/// (key, label zh, label en, description)
+/// (key, label en, label zh, description)
 const PREFS: [(&str, &str, &str, &str); 4] = [
-    ("trayEnabled", "托盘图标", "Tray icon", "trayEnabled"),
-    ("voiceFeedback", "语音反馈", "Voice feedback", "voiceFeedback"),
-    ("gitVersionPinEnabled", "Git 版本固定", "Git version pinning", "gitVersionPinEnabled"),
-    ("uncommittedHintEnabled", "提示未提交的改动", "Hint about uncommitted changes", "uncommittedHintEnabled"),
+    ("trayEnabled", "Tray icon", "托盘图标", "trayEnabled"),
+    ("voiceFeedback", "Voice feedback", "语音反馈", "voiceFeedback"),
+    ("gitVersionPinEnabled", "Git version pinning", "Git 版本固定", "gitVersionPinEnabled"),
+    ("uncommittedHintEnabled", "Hint about uncommitted changes", "提示未提交的改动", "uncommittedHintEnabled"),
 ];
 
 /// `~/.config/mimocode`.
@@ -86,14 +86,14 @@ pub fn state(inst: &Install) -> AgentState {
             models,
             ..Provider::builtin(
                 "account",
-                l("MiMo 账号内置", "MiMo account (built-in)"),
-                l("小米账号登录", "Xiaomi account sign-in"),
+                l("MiMo account (built-in)", "MiMo 账号内置"),
+                l("Xiaomi account sign-in", "小米账号登录"),
                 "chat",
-                l("账号", "Account"),
+                l("Account", "账号"),
                 vec![
-                    Kv::text(lbl::auth(), l("小米账号登录", "Xiaomi account sign-in")),
+                    Kv::text(lbl::auth(), l("Xiaomi account sign-in", "小米账号登录")),
                     Kv::mono(lbl::source(), "model-catalog.json"),
-                    Kv::text(lbl::note(), l("MiMo Desktop 内置，模型列表由 MiMo 管理", "Built into MiMo Desktop; MiMo manages the model list")),
+                    Kv::text(lbl::note(), l("Built into MiMo Desktop; MiMo manages the model list", "MiMo Desktop 内置，模型列表由 MiMo 管理")),
                 ],
             )
         });
@@ -112,28 +112,28 @@ pub fn state(inst: &Install) -> AgentState {
         .collect();
     st.settings = vec![chips_setting(
         "skills",
-        l("技能", "Skills"),
-        l("读取其他工具的技能目录", "Read other tools' skill folders"),
-        l("skillPathCompat：只读兼容，MiMo 不会写入这些目录", "skillPathCompat: read-only compatibility; MiMo never writes to these folders"),
+        l("Skills", "技能"),
+        l("Read other tools' skill folders", "读取其他工具的技能目录"),
+        l("skillPathCompat: read-only compatibility; MiMo never writes to these folders", "skillPathCompat：只读兼容，MiMo 不会写入这些目录"),
         skills.clone(),
         &["~/.agents", "~/.claude", "~/.codex", "~/.opencode"],
     )
     .with_hints(&[
-        l("通用 Agent 技能目录", "Shared agent skills folder"),
-        l("Claude Code 的技能", "Claude Code skills"),
-        l("Codex 的技能", "Codex skills"),
-        l("OpenCode 的技能", "OpenCode skills"),
+        l("Shared agent skills folder", "通用 Agent 技能目录"),
+        l("Claude Code skills", "Claude Code 的技能"),
+        l("Codex skills", "Codex 的技能"),
+        l("OpenCode skills", "OpenCode 的技能"),
     ])];
-    st.settings.extend(PREFS.iter().map(|(k, zh, en, d)| bool_setting(k, l("应用", "App"), l(zh, en), d, get_b(k))));
+    st.settings.extend(PREFS.iter().map(|(k, en, zh, d)| bool_setting(k, l("App", "应用"), l(en, zh), d, get_b(k))));
 
     let on: Vec<&Provider> = st.providers.iter().filter(|p| p.enabled).collect();
     let vis: usize = on.iter().map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::text(l("供应商", "Providers"), lbl::names_or_none(on.iter().map(|p| &p.name))),
+        Kv::text(l("Providers", "供应商"), lbl::names_or_none(on.iter().map(|p| &p.name))),
         Kv::mono(lbl::default_model(), prefs.get("model").and_then(|x| x.as_str()).unwrap_or("-").to_string()),
-        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
-        Kv::mono(l("技能兼容", "Skill compatibility"), if skills.is_empty() { l("无", "None").into() } else { skills.join(" ") }),
-        Kv::text(l("托盘图标", "Tray icon"), crate::i18n::on_off(get_b("trayEnabled"))),
+        Kv::text(lbl::visible_models(), tr!("{vis}", "{vis} 个")),
+        Kv::mono(l("Skill compatibility", "技能兼容"), if skills.is_empty() { l("None", "无").into() } else { skills.join(" ") }),
+        Kv::text(l("Tray icon", "托盘图标"), crate::i18n::on_off(get_b("trayEnabled"))),
     ];
     st
 }
@@ -186,7 +186,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     return Err(msg::unknown_setting(key));
                 }
             }
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("MiMo Desktop 按启用/停用管理供应商", "MiMo Desktop manages providers by enabling and disabling them"))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("MiMo Desktop manages providers by enabling and disabling them", "MiMo Desktop 按启用/停用管理供应商"))),
             Op::UpsertProvider { .. } | Op::DeleteProvider { .. } | Op::SetProviderEnabled { .. } | Op::SetModelVisible { .. } | Op::UpsertModel { .. } | Op::DeleteModel { .. } => unreachable!("handled by ocfmt"),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),

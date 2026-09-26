@@ -16,21 +16,21 @@ pub enum Kind {
     Bool,
     /// Positive integer (tokens).
     Number,
-    /// Several of (value, label zh, label en).
+    /// Several of (value, label en, label zh).
     Chips(&'static [(&'static str, &'static str, &'static str)]),
-    /// One of (value, label zh, label en).
+    /// One of (value, label en, label zh).
     Select(&'static [(&'static str, &'static str, &'static str)]),
 }
 
 pub struct Spec {
     pub path: &'static str,
     pub group: &'static str,
-    /// (zh, en)
+    /// (en, zh)
     pub label: (&'static str, &'static str),
-    /// (zh, en)
+    /// (en, zh)
     pub desc: (&'static str, &'static str),
     pub kind: Kind,
-    /// (zh, en) short tags for the model table's capability column: a Bool input field has
+    /// (en, zh) short tags for the model table's capability column: a Bool input field has
     /// one (shown when on); Chips have one per option, or none to use the option labels.
     pub caps: &'static [(&'static str, &'static str)],
 }
@@ -41,59 +41,59 @@ const GEN: &str = "gen";
 
 fn group_label(id: &str) -> &'static str {
     match id {
-        IO => l("输入能力", "Input"),
-        _ => l("生成", "Generation"),
+        IO => l("Input", "输入能力"),
+        _ => l("Generation", "生成"),
     }
 }
 
 /// OpenCode and its forks (Kilo, MiMo Desktop): `provider.<id>.models.<id>`.
 pub const OPENCODE: &[Spec] = &[
-    Spec { path: "/modalities/input", group: IO, label: ("可以读取", "Can read"), desc: ("modalities.input：模型接受的输入类型。不设置时按 OpenCode 自带的模型信息，自定义模型一般只当作文本。", "modalities.input: the input types the model accepts. When unset, OpenCode uses its built-in model info; custom models are usually treated as text-only."), kind: Kind::Chips(&[("text", "文本", "Text"), ("image", "图片", "Images"), ("pdf", "PDF", "PDF"), ("video", "视频", "Video"), ("audio", "音频", "Audio")]), caps: &[] },
-    Spec { path: "/attachment", group: IO, label: ("允许附件", "Allow attachments"), desc: ("attachment：能在对话里附加文件（图片、PDF 等）。", "attachment: files (images, PDFs, etc.) can be attached in the conversation."), kind: Kind::Bool, caps: &[("允许附件", "Allow attachments")] },
-    Spec { path: "/reasoning", group: GEN, label: ("推理模型", "Reasoning model"), desc: ("reasoning：模型会输出思考过程。", "reasoning: the model outputs its thinking."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/tool_call", group: GEN, label: ("工具调用", "Tool calls"), desc: ("tool_call：支持函数/工具调用；关掉后 OpenCode 不会给它工具。", "tool_call: supports function/tool calls; when off, OpenCode gives it no tools."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/temperature", group: GEN, label: ("支持 temperature", "Supports temperature"), desc: ("temperature：请求里可以带温度参数。", "temperature: requests may include a temperature parameter."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/limit/output", group: GEN, label: ("最大输出", "Max output"), desc: ("limit.output：单次回复最多多少 token。OpenCode 要求上下文和最大输出一起写，只填一个时另一个按默认补上（输出 32000、上下文 128000）。", "limit.output: the maximum tokens in one reply. OpenCode requires context and max output to be set together; if only one is filled in, the other gets its default (output 32000, context 128000)."), kind: Kind::Number, caps: &[] },
+    Spec { path: "/modalities/input", group: IO, label: ("Can read", "可以读取"), desc: ("modalities.input: the input types the model accepts. When unset, OpenCode uses its built-in model info; custom models are usually treated as text-only.", "modalities.input：模型接受的输入类型。不设置时按 OpenCode 自带的模型信息，自定义模型一般只当作文本。"), kind: Kind::Chips(&[("text", "Text", "文本"), ("image", "Images", "图片"), ("pdf", "PDF", "PDF"), ("video", "Video", "视频"), ("audio", "Audio", "音频")]), caps: &[] },
+    Spec { path: "/attachment", group: IO, label: ("Allow attachments", "允许附件"), desc: ("attachment: files (images, PDFs, etc.) can be attached in the conversation.", "attachment：能在对话里附加文件（图片、PDF 等）。"), kind: Kind::Bool, caps: &[("Allow attachments", "允许附件")] },
+    Spec { path: "/reasoning", group: GEN, label: ("Reasoning model", "推理模型"), desc: ("reasoning: the model outputs its thinking.", "reasoning：模型会输出思考过程。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/tool_call", group: GEN, label: ("Tool calls", "工具调用"), desc: ("tool_call: supports function/tool calls; when off, OpenCode gives it no tools.", "tool_call：支持函数/工具调用；关掉后 OpenCode 不会给它工具。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/temperature", group: GEN, label: ("Supports temperature", "支持 temperature"), desc: ("temperature: requests may include a temperature parameter.", "temperature：请求里可以带温度参数。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/limit/output", group: GEN, label: ("Max output", "最大输出"), desc: ("limit.output: the maximum tokens in one reply. OpenCode requires context and max output to be set together; if only one is filled in, the other gets its default (output 32000, context 128000).", "limit.output：单次回复最多多少 token。OpenCode 要求上下文和最大输出一起写，只填一个时另一个按默认补上（输出 32000、上下文 128000）。"), kind: Kind::Number, caps: &[] },
 ];
 
 /// pi `models.json`: `providers.<id>.models[]`.
 pub const PI: &[Spec] = &[
-    Spec { path: "/input", group: IO, label: ("可以读取", "Can read"), desc: ("input：模型接受的输入类型；不设置时只当作文本，图片不会发给它。", "input: the input types the model accepts; when unset it is treated as text-only and images are not sent to it."), kind: Kind::Chips(&[("text", "文本", "Text"), ("image", "图片", "Images")]), caps: &[] },
-    Spec { path: "/reasoning", group: GEN, label: ("推理模型", "Reasoning model"), desc: ("reasoning：支持思考（可以调思考强度）；不设置时按不支持。", "reasoning: supports thinking (reasoning effort can be adjusted); when unset, treated as unsupported."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/maxTokens", group: GEN, label: ("最大输出", "Max output"), desc: ("maxTokens：单次回复最多多少 token；不设置时是 16384。", "maxTokens: the maximum tokens in one reply; 16384 when unset."), kind: Kind::Number, caps: &[] },
+    Spec { path: "/input", group: IO, label: ("Can read", "可以读取"), desc: ("input: the input types the model accepts; when unset it is treated as text-only and images are not sent to it.", "input：模型接受的输入类型；不设置时只当作文本，图片不会发给它。"), kind: Kind::Chips(&[("text", "Text", "文本"), ("image", "Images", "图片")]), caps: &[] },
+    Spec { path: "/reasoning", group: GEN, label: ("Reasoning model", "推理模型"), desc: ("reasoning: supports thinking (reasoning effort can be adjusted); when unset, treated as unsupported.", "reasoning：支持思考（可以调思考强度）；不设置时按不支持。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/maxTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxTokens: the maximum tokens in one reply; 16384 when unset.", "maxTokens：单次回复最多多少 token；不设置时是 16384。"), kind: Kind::Number, caps: &[] },
 ];
 
 /// OpenClaw `models.providers.<id>.models[]` (same shape as pi, more input kinds).
 pub const OPENCLAW: &[Spec] = &[
-    Spec { path: "/input", group: IO, label: ("可以读取", "Can read"), desc: ("input：模型接受的输入类型。", "input: the input types the model accepts."), kind: Kind::Chips(&[("text", "文本", "Text"), ("image", "图片", "Images"), ("video", "视频", "Video"), ("audio", "音频", "Audio")]), caps: &[] },
-    Spec { path: "/reasoning", group: GEN, label: ("推理模型", "Reasoning model"), desc: ("reasoning：支持思考。", "reasoning: supports thinking."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/compat/supportsTools", group: GEN, label: ("工具调用", "Tool calls"), desc: ("compat.supportsTools：支持函数/工具调用。", "compat.supportsTools: supports function/tool calls."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/maxTokens", group: GEN, label: ("最大输出", "Max output"), desc: ("maxTokens：单次回复最多多少 token。", "maxTokens: the maximum tokens in one reply."), kind: Kind::Number, caps: &[] },
+    Spec { path: "/input", group: IO, label: ("Can read", "可以读取"), desc: ("input: the input types the model accepts.", "input：模型接受的输入类型。"), kind: Kind::Chips(&[("text", "Text", "文本"), ("image", "Images", "图片"), ("video", "Video", "视频"), ("audio", "Audio", "音频")]), caps: &[] },
+    Spec { path: "/reasoning", group: GEN, label: ("Reasoning model", "推理模型"), desc: ("reasoning: supports thinking.", "reasoning：支持思考。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/compat/supportsTools", group: GEN, label: ("Tool calls", "工具调用"), desc: ("compat.supportsTools: supports function/tool calls.", "compat.supportsTools：支持函数/工具调用。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/maxTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxTokens: the maximum tokens in one reply.", "maxTokens：单次回复最多多少 token。"), kind: Kind::Number, caps: &[] },
 ];
 
 /// CodeBuddy Code `models.json`: `models[]`.
 pub const CODEBUDDY: &[Spec] = &[
-    Spec { path: "/supportsImages", group: IO, label: ("读取图片", "Read images"), desc: ("supportsImages：可以把图片发给这个模型。", "supportsImages: images can be sent to this model."), kind: Kind::Bool, caps: &[("图片", "Images")] },
-    Spec { path: "/supportsReasoning", group: GEN, label: ("推理模型", "Reasoning model"), desc: ("supportsReasoning：模型会输出思考过程。", "supportsReasoning: the model outputs its thinking."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/supportsToolCall", group: GEN, label: ("工具调用", "Tool calls"), desc: ("supportsToolCall：支持函数/工具调用。", "supportsToolCall: supports function/tool calls."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/maxOutputTokens", group: GEN, label: ("最大输出", "Max output"), desc: ("maxOutputTokens：单次回复最多多少 token。", "maxOutputTokens: the maximum tokens in one reply."), kind: Kind::Number, caps: &[] },
+    Spec { path: "/supportsImages", group: IO, label: ("Read images", "读取图片"), desc: ("supportsImages: images can be sent to this model.", "supportsImages：可以把图片发给这个模型。"), kind: Kind::Bool, caps: &[("Images", "图片")] },
+    Spec { path: "/supportsReasoning", group: GEN, label: ("Reasoning model", "推理模型"), desc: ("supportsReasoning: the model outputs its thinking.", "supportsReasoning：模型会输出思考过程。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/supportsToolCall", group: GEN, label: ("Tool calls", "工具调用"), desc: ("supportsToolCall: supports function/tool calls.", "supportsToolCall：支持函数/工具调用。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/maxOutputTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxOutputTokens: the maximum tokens in one reply.", "maxOutputTokens：单次回复最多多少 token。"), kind: Kind::Number, caps: &[] },
 ];
 
 /// Factory Droid `settings.json`: `customModels[]`. (`noImageSupport`'s tag says what the
 /// model can't read, unlike the other input tags.)
 pub const DROID: &[Spec] = &[
-    Spec { path: "/noImageSupport", group: IO, label: ("不支持图片", "No image support"), desc: ("noImageSupport：打开后 Droid 不会把图片发给这个模型。", "noImageSupport: when on, Droid does not send images to this model."), kind: Kind::Bool, caps: &[("不支持图片", "No image support")] },
-    Spec { path: "/maxOutputTokens", group: GEN, label: ("最大输出", "Max output"), desc: ("maxOutputTokens：单次回复最多多少 token。", "maxOutputTokens: the maximum tokens in one reply."), kind: Kind::Number, caps: &[] },
+    Spec { path: "/noImageSupport", group: IO, label: ("No image support", "不支持图片"), desc: ("noImageSupport: when on, Droid does not send images to this model.", "noImageSupport：打开后 Droid 不会把图片发给这个模型。"), kind: Kind::Bool, caps: &[("No image support", "不支持图片")] },
+    Spec { path: "/maxOutputTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxOutputTokens: the maximum tokens in one reply.", "maxOutputTokens：单次回复最多多少 token。"), kind: Kind::Number, caps: &[] },
 ];
 
 /// Codex model catalog (`model_catalog_json`): `models[]`.
 pub const CODEX: &[Spec] = &[
-    Spec { path: "/input_modalities", group: IO, label: ("可以读取", "Can read"), desc: ("input_modalities：不含图片时，Codex 不会把截图和图片附件发给这个模型；不设置时按文本 + 图片。", "input_modalities: without images, Codex won't send screenshots or image attachments to this model; when unset, text + images is assumed."), kind: Kind::Chips(&[("text", "文本", "Text"), ("image", "图片", "Images"), ("audio", "音频", "Audio")]), caps: &[] },
+    Spec { path: "/input_modalities", group: IO, label: ("Can read", "可以读取"), desc: ("input_modalities: without images, Codex won't send screenshots or image attachments to this model; when unset, text + images is assumed.", "input_modalities：不含图片时，Codex 不会把截图和图片附件发给这个模型；不设置时按文本 + 图片。"), kind: Kind::Chips(&[("text", "Text", "文本"), ("image", "Images", "图片"), ("audio", "Audio", "音频")]), caps: &[] },
     Spec {
         path: "/default_reasoning_level",
         group: GEN,
-        label: ("默认思考强度", "Default reasoning effort"),
-        desc: ("default_reasoning_level：新会话默认用的思考强度，要在这个模型支持的档位里（supported_reasoning_levels）。", "default_reasoning_level: the reasoning effort new sessions start with; must be one of the levels this model supports (supported_reasoning_levels)."),
+        label: ("Default reasoning effort", "默认思考强度"),
+        desc: ("default_reasoning_level: the reasoning effort new sessions start with; must be one of the levels this model supports (supported_reasoning_levels).", "default_reasoning_level：新会话默认用的思考强度，要在这个模型支持的档位里（supported_reasoning_levels）。"),
         kind: Kind::Select(&[("none", "none", "none"), ("minimal", "minimal", "minimal"), ("low", "low", "low"), ("medium", "medium", "medium"), ("high", "high", "high"), ("xhigh", "xhigh", "xhigh"), ("max", "max", "max"), ("ultra", "ultra", "ultra")]),
         caps: &[],
     },
@@ -101,32 +101,32 @@ pub const CODEX: &[Spec] = &[
 
 /// ZCode: `config.modelConfigRules.providerModelRules[].config` (paths are inside `config`).
 pub const ZCODE: &[Spec] = &[
-    Spec { path: "/properties/inputFormat/supportsImage", group: IO, label: ("读取图片", "Read images"), desc: ("inputFormat.supportsImage", "inputFormat.supportsImage"), kind: Kind::Bool, caps: &[("图片", "Images")] },
-    Spec { path: "/properties/inputFormat/supportsPdf", group: IO, label: ("读取 PDF", "Read PDF"), desc: ("inputFormat.supportsPdf", "inputFormat.supportsPdf"), kind: Kind::Bool, caps: &[("PDF", "PDF")] },
-    Spec { path: "/properties/inputFormat/supportsVideo", group: IO, label: ("读取视频", "Read video"), desc: ("inputFormat.supportsVideo", "inputFormat.supportsVideo"), kind: Kind::Bool, caps: &[("视频", "Video")] },
-    Spec { path: "/optionSpecs/maxOutputTokens/max", group: GEN, label: ("最大输出", "Max output"), desc: ("optionSpecs.maxOutputTokens.max：单次回复最多多少 token。", "optionSpecs.maxOutputTokens.max: the maximum tokens in one reply."), kind: Kind::Number, caps: &[] },
-    Spec { path: "/properties/supportsJsonSchemaOutput", group: GEN, label: ("JSON Schema 输出", "JSON Schema output"), desc: ("supportsJsonSchemaOutput：支持按 JSON Schema 约束输出。", "supportsJsonSchemaOutput: supports output constrained by a JSON Schema."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/properties/supportsNativeWebSearch", group: GEN, label: ("原生联网搜索", "Native web search"), desc: ("supportsNativeWebSearch：模型自带联网搜索。", "supportsNativeWebSearch: the model has built-in web search."), kind: Kind::Bool, caps: &[] },
-    Spec { path: "/properties/supportsMidConversationSystem", group: GEN, label: ("对话中的系统消息", "Mid-conversation system messages"), desc: ("supportsMidConversationSystem：允许在对话中途插入系统消息。", "supportsMidConversationSystem: allows system messages mid-conversation."), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/properties/inputFormat/supportsImage", group: IO, label: ("Read images", "读取图片"), desc: ("inputFormat.supportsImage", "inputFormat.supportsImage"), kind: Kind::Bool, caps: &[("Images", "图片")] },
+    Spec { path: "/properties/inputFormat/supportsPdf", group: IO, label: ("Read PDF", "读取 PDF"), desc: ("inputFormat.supportsPdf", "inputFormat.supportsPdf"), kind: Kind::Bool, caps: &[("PDF", "PDF")] },
+    Spec { path: "/properties/inputFormat/supportsVideo", group: IO, label: ("Read video", "读取视频"), desc: ("inputFormat.supportsVideo", "inputFormat.supportsVideo"), kind: Kind::Bool, caps: &[("Video", "视频")] },
+    Spec { path: "/optionSpecs/maxOutputTokens/max", group: GEN, label: ("Max output", "最大输出"), desc: ("optionSpecs.maxOutputTokens.max: the maximum tokens in one reply.", "optionSpecs.maxOutputTokens.max：单次回复最多多少 token。"), kind: Kind::Number, caps: &[] },
+    Spec { path: "/properties/supportsJsonSchemaOutput", group: GEN, label: ("JSON Schema output", "JSON Schema 输出"), desc: ("supportsJsonSchemaOutput: supports output constrained by a JSON Schema.", "supportsJsonSchemaOutput：支持按 JSON Schema 约束输出。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/properties/supportsNativeWebSearch", group: GEN, label: ("Native web search", "原生联网搜索"), desc: ("supportsNativeWebSearch: the model has built-in web search.", "supportsNativeWebSearch：模型自带联网搜索。"), kind: Kind::Bool, caps: &[] },
+    Spec { path: "/properties/supportsMidConversationSystem", group: GEN, label: ("Mid-conversation system messages", "对话中的系统消息"), desc: ("supportsMidConversationSystem: allows system messages mid-conversation.", "supportsMidConversationSystem：允许在对话中途插入系统消息。"), kind: Kind::Bool, caps: &[] },
 ];
 
 /// Qwen Code `settings.json`: `modelProviders.<protocol>[]`.
 pub const QWEN: &[Spec] = &[
-    Spec { path: "/generationConfig/modalities/image", group: IO, label: ("读取图片", "Read images"), desc: ("generationConfig.modalities.image。四项都不设置时 Qwen Code 按模型名猜；设置了任意一项后，没打开的都按不支持。", "generationConfig.modalities.image. When none of the four is set, Qwen Code guesses from the model name; once any is set, the ones not turned on are treated as unsupported."), kind: Kind::Bool, caps: &[("图片", "Images")] },
-    Spec { path: "/generationConfig/modalities/pdf", group: IO, label: ("读取 PDF", "Read PDF"), desc: ("generationConfig.modalities.pdf", "generationConfig.modalities.pdf"), kind: Kind::Bool, caps: &[("PDF", "PDF")] },
-    Spec { path: "/generationConfig/modalities/video", group: IO, label: ("读取视频", "Read video"), desc: ("generationConfig.modalities.video", "generationConfig.modalities.video"), kind: Kind::Bool, caps: &[("视频", "Video")] },
-    Spec { path: "/generationConfig/modalities/audio", group: IO, label: ("读取音频", "Read audio"), desc: ("generationConfig.modalities.audio", "generationConfig.modalities.audio"), kind: Kind::Bool, caps: &[("音频", "Audio")] },
-    Spec { path: "/generationConfig/samplingParams/max_tokens", group: GEN, label: ("最大输出", "Max output"), desc: ("generationConfig.samplingParams.max_tokens：单次回复最多多少 token。", "generationConfig.samplingParams.max_tokens: the maximum tokens in one reply."), kind: Kind::Number, caps: &[] },
+    Spec { path: "/generationConfig/modalities/image", group: IO, label: ("Read images", "读取图片"), desc: ("generationConfig.modalities.image. When none of the four is set, Qwen Code guesses from the model name; once any is set, the ones not turned on are treated as unsupported.", "generationConfig.modalities.image。四项都不设置时 Qwen Code 按模型名猜；设置了任意一项后，没打开的都按不支持。"), kind: Kind::Bool, caps: &[("Images", "图片")] },
+    Spec { path: "/generationConfig/modalities/pdf", group: IO, label: ("Read PDF", "读取 PDF"), desc: ("generationConfig.modalities.pdf", "generationConfig.modalities.pdf"), kind: Kind::Bool, caps: &[("PDF", "PDF")] },
+    Spec { path: "/generationConfig/modalities/video", group: IO, label: ("Read video", "读取视频"), desc: ("generationConfig.modalities.video", "generationConfig.modalities.video"), kind: Kind::Bool, caps: &[("Video", "视频")] },
+    Spec { path: "/generationConfig/modalities/audio", group: IO, label: ("Read audio", "读取音频"), desc: ("generationConfig.modalities.audio", "generationConfig.modalities.audio"), kind: Kind::Bool, caps: &[("Audio", "音频")] },
+    Spec { path: "/generationConfig/samplingParams/max_tokens", group: GEN, label: ("Max output", "最大输出"), desc: ("generationConfig.samplingParams.max_tokens: the maximum tokens in one reply.", "generationConfig.samplingParams.max_tokens：单次回复最多多少 token。"), kind: Kind::Number, caps: &[] },
 ];
 
 /// Kimi Code `config.toml` `[models.<key>]` (TOML; mapped in the adapter).
 pub const KIMI: &[Spec] = &[Spec {
     path: "capabilities",
     group: IO,
-    label: ("能力", "Capabilities"),
-    desc: ("capabilities：image_in 读图片、video_in 读视频、thinking 可开关思考、always_thinking 始终思考。", "capabilities: image_in reads images, video_in reads video, thinking lets thinking be toggled, always_thinking always thinks."),
-    kind: Kind::Chips(&[("image_in", "读取图片", "Read images"), ("video_in", "读取视频", "Read video"), ("thinking", "思考", "Thinking"), ("always_thinking", "始终思考", "Always thinking")]),
-    caps: &[("图片", "Images"), ("视频", "Video"), ("思考", "Thinking"), ("始终思考", "Always thinking")],
+    label: ("Capabilities", "能力"),
+    desc: ("capabilities: image_in reads images, video_in reads video, thinking lets thinking be toggled, always_thinking always thinks.", "capabilities：image_in 读图片、video_in 读视频、thinking 可开关思考、always_thinking 始终思考。"),
+    kind: Kind::Chips(&[("image_in", "Read images", "读取图片"), ("video_in", "Read video", "读取视频"), ("thinking", "Thinking", "思考"), ("always_thinking", "Always thinking", "始终思考")]),
+    caps: &[("Images", "图片"), ("Video", "视频"), ("Thinking", "思考"), ("Always thinking", "始终思考")],
 }];
 
 /// Field declarations shown for an agent's models (OpenCode's for its project configs).
@@ -191,7 +191,7 @@ pub fn read(def: &Value, specs: &[Spec]) -> Extra {
 
 /// Checks a requested change and returns the value to write (None = clear).
 pub fn check<'a>(specs: &'a [Spec], key: &str, v: &Value) -> Result<(&'a Spec, Option<Value>)> {
-    let s = specs.iter().find(|s| s.path == key).ok_or_else(|| anyhow!(tr!("不支持的模型设置 {key}", "Unsupported model setting {key}")))?;
+    let s = specs.iter().find(|s| s.path == key).ok_or_else(|| anyhow!(tr!("Unsupported model setting {key}", "不支持的模型设置 {key}")))?;
     if v.is_null() {
         return Ok((s, None));
     }
@@ -208,11 +208,11 @@ pub fn check<'a>(specs: &'a [Spec], key: &str, v: &Value) -> Result<(&'a Spec, O
         _ => v.clone(),
     };
     if !valid(s.kind, &v) {
-        return Err(anyhow!(tr!("「{}」的值不对：{v}", "Invalid value for \"{}\": {v}", l(s.label.0, s.label.1))));
+        return Err(anyhow!(tr!("Invalid value for \"{}\": {v}", "「{}」的值不对：{v}", l(s.label.0, s.label.1))));
     }
     if let (Kind::Select(o), Some(x)) = (s.kind, v.as_str()) {
         if !o.iter().any(|(k, ..)| *k == x) {
-            return Err(anyhow!(tr!("「{}」不能是 {x}", "\"{}\" can't be {x}", l(s.label.0, s.label.1))));
+            return Err(anyhow!(tr!("\"{}\" can't be {x}", "「{}」不能是 {x}", l(s.label.0, s.label.1))));
         }
     }
     Ok((s, Some(v)))
@@ -297,7 +297,7 @@ pub fn write(def: &mut Value, specs: &[Spec], extra: &Extra) -> Result<Vec<Strin
         match v {
             None => {
                 if remove(def, s.path) {
-                    lines.push(tr!("{} 删除（恢复默认）", "{} removed (back to default)", dotted(s.path)));
+                    lines.push(tr!("{} removed (back to default)", "{} 删除（恢复默认）", dotted(s.path)));
                 }
             }
             Some(v) => {
@@ -381,9 +381,9 @@ mod tests {
                 match s.kind {
                     Kind::Bool if s.group == IO => {
                         assert_eq!(s.caps.len(), 1, "{}", s.path);
-                        // The tag is the label without its "读取" (read) verb.
-                        let short = s.label.0.trim_start_matches("读取").trim_start();
-                        assert_eq!(s.caps[0].0, short, "{}", s.path);
+                        // The tag is the (Chinese) label without its leading "read" verb.
+                        let short = s.label.1.trim_start_matches("读取").trim_start();
+                        assert_eq!(s.caps[0].1, short, "{}", s.path);
                     }
                     Kind::Chips(o) => assert!(s.caps.is_empty() || s.caps.len() == o.len(), "{}", s.path),
                     _ => assert!(s.caps.is_empty(), "{}", s.path),

@@ -1,6 +1,5 @@
-import type zh from "../zh/officialFetch";
-
-const en: typeof zh = {
+// src/components/OfficialFetch.tsx
+export default {
   startedFlash: "Backed up config.toml and temporarily switched to the OpenAI official account",
   cancelledFlash: "Cancelled; config.toml restored",
   finishedFlash: "Wrote {n} official model; config.toml restored|Wrote {n} official models; config.toml restored",
@@ -38,5 +37,3 @@ const en: typeof zh = {
   hiddenByDefault: "Hidden by default (official)",
   adjustHint: "You can still choose which models are shown in the table above.",
 };
-
-export default en;

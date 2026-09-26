@@ -110,7 +110,7 @@ pub fn status() -> FetchStatus {
 pub fn start() -> Result<FetchStatus> {
     let mut root = store::load();
     if state(&root).is_some() {
-        return Err(anyhow!(crate::i18n::l("已经在获取中，先完成或取消上一次", "A fetch is already in progress. Finish or cancel it first")));
+        return Err(anyhow!(crate::i18n::l("A fetch is already in progress. Finish or cancel it first", "已经在获取中，先完成或取消上一次")));
     }
     let (mut doc, meta) = load_doc()?;
     let catalog = catalog_of(&doc);
@@ -118,8 +118,8 @@ pub fn start() -> Result<FetchStatus> {
     if catalog.exists() {
         files.push(catalog.clone());
     }
-    let (zh, en) = crate::history::REASON_OFFICIAL;
-    let dir = backup_tagged(ID, &files, crate::i18n::l(zh, en))?;
+    let (en, zh) = crate::history::REASON_OFFICIAL;
+    let dir = backup_tagged(ID, &files, crate::i18n::l(en, zh))?;
 
     // Official provider, no custom catalog: Codex will fetch and cache the list.
     doc["model_provider"] = value("openai");
@@ -140,8 +140,8 @@ pub fn start() -> Result<FetchStatus> {
 }
 
 fn restore_config(st: &Value) -> Result<()> {
-    let src = PathBuf::from(st.get("config").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("找不到备份的 config.toml", "Backed-up config.toml not found")))?);
-    let bytes = fs::read(&src).with_context(|| tr!("读取备份 {} 失败", "Failed to read backup {}", src.display()))?;
+    let src = PathBuf::from(st.get("config").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("Backed-up config.toml not found", "找不到备份的 config.toml")))?);
+    let bytes = fs::read(&src).with_context(|| tr!("Failed to read backup {}", "读取备份 {} 失败", src.display()))?;
     // Byte for byte, and through a symlinked config.toml like `start`'s write.
     write_bytes_atomic(&config_path(), &bytes)
 }
@@ -154,11 +154,11 @@ fn clear(root: &mut Value) -> Result<()> {
 /// Copies the fresh cache over the catalog and restores config.toml.
 pub fn finish() -> Result<Vec<FetchModel>> {
     let mut root = store::load();
-    let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("没有进行中的获取", "No fetch in progress")))?;
+    let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("No fetch in progress", "没有进行中的获取")))?;
     if cache_models(started_ms(&st)).is_none() {
-        anyhow::bail!("{}", tr!("还没有新的 {CACHE}：请确认 Codex 已重启并用 ChatGPT 账号登录，打开一次模型选择", "No new {CACHE} yet: make sure Codex has restarted, is signed in with a ChatGPT account, and open the model picker once"));
+        anyhow::bail!("{}", tr!("No new {CACHE} yet: make sure Codex has restarted, is signed in with a ChatGPT account, and open the model picker once", "还没有新的 {CACHE}：请确认 Codex 已重启并用 ChatGPT 账号登录，打开一次模型选择"));
     }
-    let catalog = PathBuf::from(st.get("catalogFile").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("备份信息不完整", "Backup info is incomplete")))?);
+    let catalog = PathBuf::from(st.get("catalogFile").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("Backup info is incomplete", "备份信息不完整")))?);
 
     // New catalog = the cache file as-is, plus AgentPlus's custom models from the old one.
     let (mut cache, _) = read_json(&cache_path())?;
@@ -207,7 +207,7 @@ pub fn finish() -> Result<Vec<FetchModel>> {
 /// Gives up: config.toml goes back to the backup, the catalog is untouched.
 pub fn cancel() -> Result<()> {
     let mut root = store::load();
-    let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("没有进行中的获取", "No fetch in progress")))?;
+    let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("No fetch in progress", "没有进行中的获取")))?;
     restore_config(&st)?;
     clear(&mut root)
 }

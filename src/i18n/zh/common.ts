@@ -1,5 +1,7 @@
 // Shared words. Only add a key here when several files need it.
-export default {
+import type en from "../en/common";
+
+const zh: typeof en = {
   save: "保存",
   cancel: "取消",
   delete: "删除",
@@ -80,3 +82,5 @@ export default {
   apiHintChat: "OpenAI 兼容 Chat Completions（/v1/chat/completions）",
   apiHintAnthropic: "Anthropic Messages 接口（/v1/messages）",
 };
+
+export default zh;

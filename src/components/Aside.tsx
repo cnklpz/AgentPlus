@@ -11,7 +11,7 @@ interface Props {
   pending: number;
   error: string | null;
   busy: boolean;
-  /** Provider details replace "当前配置" while a card is selected. */
+  /** Provider details replace "Current config" while a card is selected. */
   detail: ReactNode | null;
   onDiscard: () => void;
   onApply: () => void;

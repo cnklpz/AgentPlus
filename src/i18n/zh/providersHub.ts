@@ -1,5 +1,7 @@
 // src/components/ProvidersHub.tsx
-export default {
+import type en from "../en/providersHub";
+
+const zh: typeof en = {
   intro: "按服务地址归成中转站，一个中转站可以有多个分组（不同协议、路径或密钥）。地址和密钥在这里维护，模型在各 Agent 的「模型列表」里设置。当前环境：{env}",
   testLatency: "测试延迟",
   filterAll: "全部",
@@ -19,3 +21,5 @@ export default {
   noMatch: "没有匹配的供应商",
   accounts: "账号登录 · 各 Agent 内置",
 };
+
+export default zh;

@@ -549,9 +549,9 @@ fn usage_to_anthropic(u: Usage) -> Value {
 /// Why a request (or response) body was refused: it is not a JSON object.
 pub fn not_object(request: bool) -> &'static str {
     if request {
-        l("请求体必须是 JSON 对象", "The request body must be a JSON object")
+        l("The request body must be a JSON object", "请求体必须是 JSON 对象")
     } else {
-        l("响应体不是 JSON 对象", "The response body is not a JSON object")
+        l("The response body is not a JSON object", "响应体不是 JSON 对象")
     }
 }
 
@@ -1346,7 +1346,7 @@ fn error_type(status: u16) -> &'static str {
 pub fn error_body(to: Proto, status: u16, upstream_text: &str) -> Value {
     let mut msg = extract_error_message(upstream_text);
     if msg.is_empty() {
-        msg = tr!("上游出错（HTTP {status}）", "Upstream error (HTTP {status})");
+        msg = tr!("Upstream error (HTTP {status})", "上游出错（HTTP {status}）");
     }
     match to {
         Proto::Anthropic => json!({"type": "error", "error": {"type": error_type(status), "message": msg}}),
@@ -1446,7 +1446,7 @@ fn sse_data(v: &Value) -> String {
 
 /// What a stream that stopped without its closing event reports.
 pub fn stream_cut_off() -> &'static str {
-    l("上游的流没有正常结束就断开了", "The upstream stream ended before it finished")
+    l("The upstream stream ended before it finished", "上游的流没有正常结束就断开了")
 }
 
 // ---------------------------------------------------------------------------
@@ -1602,7 +1602,7 @@ impl UpstreamStream {
     fn error_chunk(&mut self, msg: &str) -> Value {
         self.done = true;
         let mut c = chunk_json(&self.id, self.created, &self.model, json!([]));
-        c["error"] = json!({"message": if msg.is_empty() { l("上游流出错", "Upstream stream error") } else { msg }, "type": "upstream_error"});
+        c["error"] = json!({"message": if msg.is_empty() { l("Upstream stream error", "上游流出错") } else { msg }, "type": "upstream_error"});
         c
     }
 
@@ -1911,7 +1911,7 @@ impl UpstreamStream {
                 self.emit_final(out);
             }
             "response.failed" => {
-                let msg = error_message(&v["response"]).unwrap_or_else(|| l("上游响应失败", "The upstream response failed").to_string());
+                let msg = error_message(&v["response"]).unwrap_or_else(|| l("The upstream response failed", "上游响应失败").to_string());
                 let c = self.error_chunk(&msg);
                 out.push(c);
             }
@@ -2180,7 +2180,7 @@ impl DownstreamStream {
         if self.finished {
             return Vec::new();
         }
-        let msg = if msg.is_empty() { l("上游出错", "Upstream error") } else { msg };
+        let msg = if msg.is_empty() { l("Upstream error", "上游出错") } else { msg };
         let mut out = Vec::new();
         match self.to {
             Proto::Chat => {

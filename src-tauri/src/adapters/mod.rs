@@ -31,53 +31,53 @@ pub(crate) mod msg {
     use anyhow::{anyhow, Error};
 
     pub fn no_provider(id: &str) -> Error {
-        anyhow!(tr!("找不到供应商 {id}", "Provider not found: {id}"))
+        anyhow!(tr!("Provider not found: {id}", "找不到供应商 {id}"))
     }
 
     /// Deleting the provider the agent is on.
     pub fn in_use(id: &str) -> Error {
-        anyhow!(tr!("「{id}」正在使用，先切换到其他供应商", "\"{id}\" is in use; switch to another provider first"))
+        anyhow!(tr!("\"{id}\" is in use; switch to another provider first", "「{id}」正在使用，先切换到其他供应商"))
     }
 
     pub fn name_required() -> Error {
-        anyhow!(l("名称不能为空", "Name is required"))
+        anyhow!(l("Name is required", "名称不能为空"))
     }
 
     pub fn name_and_url_required() -> Error {
-        anyhow!(l("名称和地址不能为空", "Name and base URL are required"))
+        anyhow!(l("Name and base URL are required", "名称和地址不能为空"))
     }
 
     pub fn model_id_required() -> Error {
-        anyhow!(l("模型 ID 不能为空", "Model ID is required"))
+        anyhow!(l("Model ID is required", "模型 ID 不能为空"))
     }
 
     pub fn unknown_setting(key: &str) -> Error {
-        anyhow!(tr!("未知设置 {key}", "Unknown setting: {key}"))
+        anyhow!(tr!("Unknown setting: {key}", "未知设置 {key}"))
     }
 
     /// SetModelRoles on an agent without model roles.
     pub fn no_model_roles() -> Error {
-        anyhow!(l("这个 Agent 没有模型角色可分配", "This agent has no model roles to assign"))
+        anyhow!(l("This agent has no model roles to assign", "这个 Agent 没有模型角色可分配"))
     }
 
     /// SetProviderModels on an agent whose providers each keep their own models.
     pub fn models_per_provider() -> Error {
-        anyhow!(l("每个供应商的模型已经各自独立，请直接编辑模型", "Each provider already has its own models; edit the models directly"))
+        anyhow!(l("Each provider already has its own models; edit the models directly", "每个供应商的模型已经各自独立，请直接编辑模型"))
     }
 
     /// Note for a config file with comments: shown, but not written back.
     pub fn comments_readonly(file: &str) -> String {
-        tr!("{file} 含注释，写回会丢失注释，已切换为只读。", "{file} contains comments that would be lost on write, so it's read-only.")
+        tr!("{file} contains comments that would be lost on write, so it's read-only.", "{file} 含注释，写回会丢失注释，已切换为只读。")
     }
 
     /// A change to a config file with comments.
     pub fn comments_not_written(file: &str) -> Error {
-        anyhow!(tr!("{file} 含注释，为避免丢失注释不写入", "{file} contains comments; not writing it to avoid losing them"))
+        anyhow!(tr!("{file} contains comments; not writing it to avoid losing them", "{file} 含注释，为避免丢失注释不写入"))
     }
 
-    /// ` · 密钥 ••••1234` at the end of a diff line (empty without a key).
+    /// ` · API key ••••1234` at the end of a diff line (empty without a key).
     pub fn key_suffix(key: Option<&str>) -> String {
-        key.map(|k| tr!(" · 密钥 {}", " · API key {}", crate::model::mask_key(k))).unwrap_or_default()
+        key.map(|k| tr!(" · API key {}", " · 密钥 {}", crate::model::mask_key(k))).unwrap_or_default()
     }
 }
 
@@ -163,7 +163,7 @@ pub fn ext(agent: &str) -> Option<&'static Ext> {
 
 /// [`ext`], or the error for an id no adapter has.
 fn adapter(agent: &str) -> Result<&'static Ext> {
-    ext(agent).ok_or_else(|| anyhow!(tr!("未知 Agent {agent}", "Unknown agent: {agent}")))
+    ext(agent).ok_or_else(|| anyhow!(tr!("Unknown agent: {agent}", "未知 Agent {agent}")))
 }
 
 /// The agent an id belongs to: OpenCode for its project configs (`opencode@<folder>`).
@@ -213,7 +213,7 @@ fn copy_label(c: &process::DesktopCopy) -> String {
     let dir = process::app_dir(&c.exe).map(|d| crate::util::display_path(&d)).unwrap_or_default();
     let ver = c.version.as_deref().unwrap_or("?");
     if c.running {
-        tr!("{ver} · {dir}（运行中）", "{ver} · {dir} (running)")
+        tr!("{ver} · {dir} (running)", "{ver} · {dir}（运行中）")
     } else {
         format!("{ver} · {dir}")
     }
@@ -227,8 +227,8 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
     let picked = store::get_str(&store::load(), agent, process::DESKTOP_EXE_STORE_KEY).unwrap_or_default();
     let current = inst.copies.iter().find(|c| Some(&c.exe) == inst.exe.as_ref());
     let auto = match current {
-        Some(c) => tr!("自动（现在是 {}）", "Automatic (now {})", c.version.as_deref().unwrap_or("?")),
-        None => l("自动", "Automatic").to_string(),
+        Some(c) => tr!("Automatic (now {})", "自动（现在是 {}）", c.version.as_deref().unwrap_or("?")),
+        None => l("Automatic", "自动").to_string(),
     };
     let mut options = vec![String::new()];
     let mut hints = vec![auto];
@@ -241,10 +241,10 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
     Some(Setting {
         key: DESKTOP_EXE_SETTING.into(),
         group: "AgentPlus".into(),
-        label: tr!("启动哪个 {}", "Which {} to start", name),
+        label: tr!("Which {} to start", "启动哪个 {}", name),
         desc: tr!(
-            "检测到 {} 个桌面版。自动：优先用正在运行的那个，都没运行时用版本最新的。启动、重启和自动重启都按这里来。",
             "{} desktop copies found. Automatic uses the one that's running, or the newest when none is. Start, Restart and restart-after-applying all follow this.",
+            "检测到 {} 个桌面版。自动：优先用正在运行的那个，都没运行时用版本最新的。启动、重启和自动重启都按这里来。",
             inst.copies.len()
         ),
         kind: "select".into(),
@@ -254,7 +254,7 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
     })
 }
 
-/// Store key of the config folder picked by hand in 设置 › Agent 识别 (kept per environment).
+/// Store key of the config folder picked by hand in Settings › Agent detection (kept per environment).
 const CONFIG_DIR_STORE_KEY: &str = "configDir";
 
 /// The picked folder as typed (None when unset or blank).
@@ -262,7 +262,7 @@ fn custom_dir(root: &serde_json::Value, agent: &str) -> Option<String> {
     store::get_str(root, agent, CONFIG_DIR_STORE_KEY).filter(|s| !s.trim().is_empty())
 }
 
-/// Config folder picked by hand in 设置 › Agent 识别 (kept per environment).
+/// Config folder picked by hand in Settings › Agent detection (kept per environment).
 pub fn dir_override(agent: &str) -> Option<PathBuf> {
     custom_dir(&store::load(), agent).map(|s| crate::env::resolve_path(&s))
 }
@@ -339,13 +339,13 @@ fn detect_manual() -> Vec<Detect> {
         enabled: false,
         note: Some(
             l(
-                "Trae 的自定义模型登记在账号云端，密钥加密保存在本地数据库里，AgentPlus 无法代为写入。\
-                 手动添加：Trae 右上角设置 → 模型 → 添加模型，服务商选「自定义」或对应厂商，填入供应商页里复制的地址和密钥。\
-                 需要协议转换时，地址可以填本地网关的统一入口。",
                 "Trae keeps custom models in your cloud account and encrypts API keys in a local database, so AgentPlus can't write them. \
                  To add one by hand: in Trae, open Settings (top right) → Models → Add model, choose \"Custom\" or the matching vendor, \
                  and paste the base URL and API key copied from the provider page. \
                  If you need protocol conversion, use the local gateway's unified endpoint as the base URL.",
+                "Trae 的自定义模型登记在账号云端，密钥加密保存在本地数据库里，AgentPlus 无法代为写入。\
+                 手动添加：Trae 右上角设置 → 模型 → 添加模型，服务商选「自定义」或对应厂商，填入供应商页里复制的地址和密钥。\
+                 需要协议转换时，地址可以填本地网关的统一入口。",
             )
             .into(),
         ),
@@ -376,7 +376,7 @@ pub fn detect_all() -> Vec<Detect> {
                 custom_dir: custom,
                 config_dir: dir.to_string_lossy().to_string(),
                 config_found: found,
-                note: wsl_desktop.then(|| tr!("{name} 是 Windows 应用；在 WSL 里需要手动指定配置目录", "{name} is a Windows app; in WSL, set its config folder by hand")),
+                note: wsl_desktop.then(|| tr!("{name} is a Windows app; in WSL, set its config folder by hand", "{name} 是 Windows 应用；在 WSL 里需要手动指定配置目录")),
                 manual: false,
             }
         })
@@ -394,8 +394,8 @@ pub fn set_dir(agent: &str, path: Option<&str>) -> Result<()> {
             crate::util::require_dir(&dir)?;
             if !has_marker(&dir, e) {
                 return Err(anyhow!(tr!(
-                    "这个目录里没有 {}，不像是 {} 的配置目录",
                     "No {} in this folder; it doesn't look like a {} config folder",
+                    "这个目录里没有 {}，不像是 {} 的配置目录",
                     e.marker,
                     e.name
                 )));
@@ -439,7 +439,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
             if agent == codex::ID {
                 // UI injection patches the desktop app; the CLI has nothing to patch.
                 st.settings.retain(|s| !codex::INJECTIONS.iter().any(|i| i.key == s.key));
-                st.notes.insert(0, l("WSL 里是 Codex CLI：改动写入后，新开的 codex 会话就会读取。", "In WSL this is the Codex CLI: new codex sessions pick up changes once they're written.").into());
+                st.notes.insert(0, l("In WSL this is the Codex CLI: new codex sessions pick up changes once they're written.", "WSL 里是 Codex CLI：改动写入后，新开的 codex 会话就会读取。").into());
             }
         } else {
             st.installed = false;
@@ -450,8 +450,8 @@ pub fn state(agent: &str) -> Result<AgentState> {
             st.settings.clear();
             st.current.clear();
             st.notes = vec![tr!(
-                "{} 是 Windows 应用，{} 里没有它的配置。切回「本机 · Windows」即可管理。",
                 "{} is a Windows app and has no config in {}. Switch back to \"This PC · Windows\" to manage it.",
+                "{} 是 Windows 应用，{} 里没有它的配置。切回「本机 · Windows」即可管理。",
                 st.name,
                 crate::env::label()
             )];
@@ -463,7 +463,7 @@ pub fn state(agent: &str) -> Result<AgentState> {
         // On macOS without Codex.app, detection found the Codex CLI.
         if agent == codex::ID && inst.installed {
             st.settings.retain(|s| !codex::INJECTIONS.iter().any(|i| i.key == s.key));
-            st.notes.insert(0, l("没有找到 Codex 桌面版，这里管理的是 Codex CLI：改动写入后，新开的 codex 会话就会读取。", "The Codex desktop app wasn't found, so this is the Codex CLI: new codex sessions pick up changes once they're written.").into());
+            st.notes.insert(0, l("The Codex desktop app wasn't found, so this is the Codex CLI: new codex sessions pick up changes once they're written.", "没有找到 Codex 桌面版，这里管理的是 Codex CLI：改动写入后，新开的 codex 会话就会读取。").into());
         }
         return Ok(st);
     }
@@ -471,10 +471,10 @@ pub fn state(agent: &str) -> Result<AgentState> {
     st.settings.push(bool_setting(
         AUTO_RESTART_SETTING,
         "AgentPlus",
-        &tr!("应用后自动重启 {}", "Restart {} after applying", st.name),
+        &tr!("Restart {} after applying", "应用后自动重启 {}", st.name),
         l(
-            "写入配置后自动重启，让改动马上生效（没在运行时不会启动它）。Codex 开启了 Fast 注入时会一并注入。",
             "Restart after writing the config so changes take effect right away (it won't be started if it isn't running). If Codex has Fast injection on, it's injected as well.",
+            "写入配置后自动重启，让改动马上生效（没在运行时不会启动它）。Codex 开启了 Fast 注入时会一并注入。",
         ),
         auto_restart(agent),
     ));
@@ -508,16 +508,16 @@ fn resolve_import(agent: &str, from: &str, provider: &str, api: Option<&str>, na
     let api = api.map(String::from).unwrap_or(src_api);
     match only_api(agent) {
         Some(only) if only != api && only == "gemini" => {
-            return Err(anyhow!(tr!("{} 只支持 Gemini 协议，这个供应商是 {api}", "{} only supports the Gemini protocol; this provider uses {api}", display_name(agent))))
+            return Err(anyhow!(tr!("{} only supports the Gemini protocol; this provider uses {api}", "{} 只支持 Gemini 协议，这个供应商是 {api}", display_name(agent))))
         }
         Some(only) if only != api => {
             return Err(anyhow!(tr!(
-                "{} 只支持 {only} 接口，这个供应商是 {api}；可以经本地网关转换",
                 "{} only supports the {only} API; this provider uses {api}. You can convert it through the local gateway",
+                "{} 只支持 {only} 接口，这个供应商是 {api}；可以经本地网关转换",
                 display_name(agent)
             )))
         }
-        None if api == "gemini" => return Err(anyhow!(tr!("{} 不支持 Gemini 协议", "{} doesn't support the Gemini protocol", display_name(agent)))),
+        None if api == "gemini" => return Err(anyhow!(tr!("{} doesn't support the Gemini protocol", "{} 不支持 Gemini 协议", display_name(agent)))),
         _ => {}
     }
     Ok(Op::UpsertProvider {
@@ -578,9 +578,9 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
                     let inst = process::detect(agent);
                     let label = match inst.copies.iter().find(|c| c.exe.to_string_lossy() == v) {
                         Some(c) => copy_label(c),
-                        None => l("自动", "Automatic").to_string(),
+                        None => l("Automatic", "自动").to_string(),
                     };
-                    diff.push(l("AgentPlus 设置", "AgentPlus settings"), &tr!("启动的桌面版 → {label}", "Desktop copy to start → {label}"), true);
+                    diff.push(l("AgentPlus settings", "AgentPlus 设置"), &tr!("Desktop copy to start → {label}", "启动的桌面版 → {label}"), true);
                     if !dry_run {
                         let mut s = store::load();
                         store::set_str(&mut s, agent, process::DESKTOP_EXE_STORE_KEY, &v);
@@ -592,8 +592,8 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
             let on = value.as_bool().unwrap_or(false);
             if auto_restart(agent) != on {
                 diff.push(
-                    l("AgentPlus 设置", "AgentPlus settings"),
-                    if on { l("应用后自动重启 → 开", "Restart after applying → on") } else { l("应用后自动重启 → 关", "Restart after applying → off") },
+                    l("AgentPlus settings", "AgentPlus 设置"),
+                    if on { l("Restart after applying → on", "应用后自动重启 → 开") } else { l("Restart after applying → off", "应用后自动重启 → 关") },
                     on,
                 );
                 if !dry_run {

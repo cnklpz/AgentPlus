@@ -46,7 +46,7 @@ fn info(u: &Update) -> UpdateInfo {
 /// A newer release, or `None` when this is the latest.
 #[tauri::command]
 pub async fn update_check(app: AppHandle, pending: State<'_, Pending>) -> Result<Option<UpdateInfo>, String> {
-    let fail = |e: tauri_plugin_updater::Error| tr!("检查更新失败：{e}", "Update check failed: {e}");
+    let fail = |e: tauri_plugin_updater::Error| tr!("Update check failed: {e}", "检查更新失败：{e}");
     let updater = app.updater_builder().timeout(Duration::from_secs(30)).build().map_err(fail)?;
     let found = updater.check().await.map_err(fail)?;
     let out = found.as_ref().map(info);
@@ -59,9 +59,9 @@ pub async fn update_check(app: AppHandle, pending: State<'_, Pending>) -> Result
 /// Elsewhere the app restarts itself once the new bundle is in place.
 #[tauri::command]
 pub async fn update_install(app: AppHandle, pending: State<'_, Pending>, on_progress: Channel<Progress>) -> Result<(), String> {
-    let update = pending.0.lock().unwrap().clone().ok_or(crate::i18n::l("没有待安装的更新，请先检查更新", "No update to install; check for updates first"))?;
+    let update = pending.0.lock().unwrap().clone().ok_or(crate::i18n::l("No update to install; check for updates first", "没有待安装的更新，请先检查更新"))?;
     if INSTALLING.swap(true, Ordering::SeqCst) {
-        return Err(crate::i18n::l("正在安装更新", "An update is already being installed").into());
+        return Err(crate::i18n::l("An update is already being installed", "正在安装更新").into());
     }
     let r = install(&update, &on_progress).await;
     INSTALLING.store(false, Ordering::SeqCst);
@@ -85,7 +85,7 @@ async fn install(update: &Update, on_progress: &Channel<Progress>) -> Result<(),
             || {},
         )
         .await
-        .map_err(|e| tr!("下载更新失败：{e}", "Download failed: {e}"))?;
+        .map_err(|e| tr!("Download failed: {e}", "下载更新失败：{e}"))?;
     let _ = on_progress.send(Progress::Install);
-    update.install(bytes).map_err(|e| tr!("安装更新失败：{e}", "Install failed: {e}"))
+    update.install(bytes).map_err(|e| tr!("Install failed: {e}", "安装更新失败：{e}"))
 }

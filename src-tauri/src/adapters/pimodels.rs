@@ -185,20 +185,20 @@ impl Fmt {
     fn key_desc(&self, v: Option<&Value>, in_auth: bool) -> String {
         let fname = self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let cfg = match v {
-            Some(Value::Object(o)) => Some(tr!("SecretRef（{}）", "SecretRef ({})", o.get("source").and_then(|x| x.as_str()).unwrap_or("?"))),
+            Some(Value::Object(o)) => Some(tr!("SecretRef ({})", "SecretRef（{}）", o.get("source").and_then(|x| x.as_str()).unwrap_or("?"))),
             Some(Value::String(k)) if !k.trim().is_empty() => Some(match self.key_source(k.trim()) {
-                KeySrc::Cmd => l("shell 命令（AgentPlus 不执行）", "Shell command (AgentPlus doesn't run it)").to_string(),
-                KeySrc::Env(n) => tr!("环境变量 {n}{}", "Environment variable {n}{}", if self.lookup(n).is_some() { "" } else { l("（当前未设置）", " (not set now)") }),
-                KeySrc::Template => l("含环境变量引用", "Contains environment variable references").to_string(),
-                KeySrc::Literal => tr!("明文保存在 {fname}", "Stored in plain text in {fname}"),
+                KeySrc::Cmd => l("Shell command (AgentPlus doesn't run it)", "shell 命令（AgentPlus 不执行）").to_string(),
+                KeySrc::Env(n) => tr!("Environment variable {n}{}", "环境变量 {n}{}", if self.lookup(n).is_some() { "" } else { l(" (not set now)", "（当前未设置）") }),
+                KeySrc::Template => l("Contains environment variable references", "含环境变量引用").to_string(),
+                KeySrc::Literal => tr!("Stored in plain text in {fname}", "明文保存在 {fname}"),
             }),
             _ => None,
         };
         match (in_auth, cfg) {
-            (true, Some(c)) => tr!("auth.json（优先）；{fname} 里另有：{c}", "auth.json (takes precedence); {fname} also has: {c}"),
-            (true, None) => l("保存在 auth.json", "Stored in auth.json").into(),
+            (true, Some(c)) => tr!("auth.json (takes precedence); {fname} also has: {c}", "auth.json（优先）；{fname} 里另有：{c}"),
+            (true, None) => l("Stored in auth.json", "保存在 auth.json").into(),
             (false, Some(c)) => c,
-            (false, None) => l("未填写", "Not set").into(),
+            (false, None) => l("Not set", "未填写").into(),
         }
     }
 
@@ -246,11 +246,11 @@ impl Fmt {
         for seg in self.ptr.trim_start_matches('/').split('/') {
             cur = cur
                 .as_object_mut()
-                .ok_or_else(|| anyhow!(tr!("{} 的结构不对：{seg} 的上一级不是对象", "{} has an unexpected structure: the parent of {seg} is not an object", self.file())))?
+                .ok_or_else(|| anyhow!(tr!("{} has an unexpected structure: the parent of {seg} is not an object", "{} 的结构不对：{seg} 的上一级不是对象", self.file())))?
                 .entry(seg)
                 .or_insert_with(|| json!({}));
         }
-        cur.as_object_mut().ok_or_else(|| anyhow!(tr!("{} 不是对象", "{} is not an object", self.cfg_prefix())))
+        cur.as_object_mut().ok_or_else(|| anyhow!(tr!("{} is not an object", "{} 不是对象", self.cfg_prefix())))
     }
 
     /// Per-model fields this flavor's schema has.
@@ -266,10 +266,10 @@ impl Fmt {
         let context = def.get("contextWindow").and_then(|x| x.as_u64());
         let mut tags = vec![];
         if def.get("reasoning").and_then(|x| x.as_bool()) == Some(true) {
-            tags.push(Tag::new("cap:reasoning", l("推理", "Reasoning")));
+            tags.push(Tag::new("cap:reasoning", l("Reasoning", "推理")));
         }
         if def.get("input").and_then(|x| x.as_array()).map(|a| a.iter().any(|i| i.as_str() == Some("image"))).unwrap_or(false) {
-            tags.push(Tag::new("cap:image", l("图片", "Images")));
+            tags.push(Tag::new("cap:image", l("Images", "图片")));
         }
         Some(Model {
             id,
@@ -308,16 +308,16 @@ impl Fmt {
             Kv::mono(lbl::config_id(), format!("{}.{id}", self.cfg_prefix())),
             Kv::mono("api", raw.clone()),
             Kv::text(lbl::api_key(), self.key_desc(key_v, in_auth)),
-            Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
+            Kv::text(lbl::status(), if enabled { l("Enabled", "已启用") } else { l("Disabled · definition kept in AgentPlus", "已停用 · 定义暂存在 AgentPlus") }),
         ];
         if BUILTIN_PROVIDERS.contains(&id) {
-            details.push(Kv::text(lbl::note(), l("与内置供应商同名：这里的设置会合并到内置供应商上", "Same id as a built-in provider: these settings are merged into the built-in one")));
+            details.push(Kv::text(lbl::note(), l("Same id as a built-in provider: these settings are merged into the built-in one", "与内置供应商同名：这里的设置会合并到内置供应商上")));
         }
         if let Some(h) = def.get("headers").and_then(|x| x.as_object()).filter(|h| !h.is_empty()) {
             details.push(Kv::mono("headers", h.keys().cloned().collect::<Vec<_>>().join(", ")));
         }
         if let Some(n) = def.get("modelOverrides").and_then(|x| x.as_object()).filter(|o| !o.is_empty()) {
-            details.push(Kv::text("modelOverrides", tr!("{} 个（原样保留）", "{} (kept as is)", n.len())));
+            details.push(Kv::text("modelOverrides", tr!("{} (kept as is)", "{} 个（原样保留）", n.len())));
         }
         Provider {
             id: id.into(),
@@ -327,7 +327,7 @@ impl Fmt {
             apis: vec![known.map(|k| api_label(k).to_string()).unwrap_or_else(|| raw.clone())],
             enabled,
             compatible: known.is_some(),
-            reason: known.is_none().then(|| tr!("{raw} 协议，AgentPlus 不能测速或转接", "{raw} protocol: AgentPlus can't test speed or relay it")),
+            reason: known.is_none().then(|| tr!("{raw} protocol: AgentPlus can't test speed or relay it", "{raw} 协议，AgentPlus 不能测速或转接")),
             models,
             details,
             editable: true,
@@ -364,7 +364,7 @@ impl Fmt {
             Kv::mono(lbl::default_model(), default_model),
         ];
         rows.extend(extra);
-        rows.push(Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")));
+        rows.push(Kv::text(lbl::visible_models(), tr!("{vis}", "{vis} 个")));
         rows.push(Kv::mono(lbl::config_file(), self.file()));
         rows
     }
@@ -372,7 +372,7 @@ impl Fmt {
     /// Base URL, key and api of a provider (auth.json wins over the config, as in pi).
     pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<Endpoint> {
         let def = self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id)).cloned().ok_or_else(|| msg::no_provider(id))?;
-        let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl（沿用内置地址）", "Provider {id} has no baseUrl (uses the built-in URL)")))?.to_string();
+        let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("Provider {id} has no baseUrl (uses the built-in URL)", "供应商 {id} 没有 baseUrl（沿用内置地址）")))?.to_string();
         let auth = self.load_auth().map(|a| a.0);
         let key = Self::auth_key(auth.as_ref(), id).and_then(|k| self.resolve(k)).or_else(|| def.get("apiKey").and_then(|k| self.resolve(k)));
         let raw = raw_api(id, &def);
@@ -441,10 +441,10 @@ impl Fmt {
             .providers_mut(cfg)?
             .get_mut(provider)
             .and_then(|p| p.as_object_mut())
-            .ok_or_else(|| anyhow!(tr!("供应商 {provider} 未启用，先启用再{what}", "Provider {provider} is disabled. Enable it before {what}.")))?;
+            .ok_or_else(|| anyhow!(tr!("Provider {provider} is disabled. Enable it before {what}.", "供应商 {provider} 未启用，先启用再{what}")))?;
         let m = def.entry("models").or_insert_with(|| json!([]));
         if !m.is_array() {
-            return Err(anyhow!(tr!("{provider}.models 不是数组", "{provider}.models is not an array")));
+            return Err(anyhow!(tr!("{provider}.models is not an array", "{provider}.models 不是数组")));
         }
         Ok(m.as_array_mut().unwrap())
     }
@@ -464,7 +464,7 @@ impl Fmt {
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
                 match &p.id {
                     None => {
-                        let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("不支持的协议 {}", "Unsupported protocol: {}", p.api)))?;
+                        let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("Unsupported protocol: {}", "不支持的协议 {}", p.api)))?;
                         let providers = self.providers_mut(cfg)?;
                         let id = unique_id(&slug(name), |c| providers.contains_key(c) || self.parked(root, c).is_some() || BUILTIN_PROVIDERS.contains(&c));
                         let ids = clean_ids(&p.models);
@@ -477,7 +477,7 @@ impl Fmt {
                         def.insert("api".into(), json!(raw));
                         def.insert("models".into(), Value::Array(models));
                         providers.insert(id.clone(), Value::Object(def));
-                        diff.push(&ef, trn!(ids.len(), "+ {pre}.{id}（{base_url} · {raw} · {n} 个模型）", "+ {pre}.{id} ({base_url} · {raw} · {n} model)", "+ {pre}.{id} ({base_url} · {raw} · {n} models)"), true);
+                        diff.push(&ef, trn!(ids.len(), "+ {pre}.{id} ({base_url} · {raw} · {n} model)", "+ {pre}.{id} ({base_url} · {raw} · {n} models)", "+ {pre}.{id}（{base_url} · {raw} · {n} 个模型）"), true);
                         dirty.cfg = true;
                         if self.flavor == Flavor::OpenClaw && name != id {
                             store::section(root, agent, "names").insert(id.clone(), json!(name));
@@ -485,7 +485,7 @@ impl Fmt {
                         }
                         match key {
                             Some(k) => self.set_key(cfg, auth, &id, k, diff, dirty)?,
-                            None if self.flavor == Flavor::Pi => diff.push(&ef, tr!("（{id} 没填密钥：pi 里它的模型用不了，可以填 $环境变量名）", "({id} has no API key: its models won't work in pi. You can enter $ENV_VAR_NAME.)"), false),
+                            None if self.flavor == Flavor::Pi => diff.push(&ef, tr!("({id} has no API key: its models won't work in pi. You can enter $ENV_VAR_NAME.)", "（{id} 没填密钥：pi 里它的模型用不了，可以填 $环境变量名）"), false),
                             None => {}
                         }
                         for op in crate::modelinfo::seed_ops(agent, &id, &ids) {
@@ -499,7 +499,7 @@ impl Fmt {
                         if flavor == Flavor::OpenClaw && cur_name != name {
                             let names = store::section(root, agent, "names");
                             if name == id { names.remove(id) } else { names.insert(id.clone(), json!(name)) };
-                            diff.push(l("AgentPlus · 显示名称", "AgentPlus · display names"), tr!("{id} → 「{name}」", "{id} → \"{name}\""), true);
+                            diff.push(l("AgentPlus · display names", "AgentPlus · 显示名称"), tr!("{id} → \"{name}\"", "{id} → 「{name}」"), true);
                             dirty.store = true;
                         }
                         let def = if in_cfg {
@@ -508,7 +508,7 @@ impl Fmt {
                             store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?
                         };
                         if !def.is_object() {
-                            return Err(anyhow!(tr!("{pre}.{id} 不是对象", "{pre}.{id} is not an object")));
+                            return Err(anyhow!(tr!("{pre}.{id} is not an object", "{pre}.{id} 不是对象")));
                         }
                         let mut changed = vec![];
                         if flavor == Flavor::Pi && s(def, "name").unwrap_or(id) != name {
@@ -521,9 +521,9 @@ impl Fmt {
                         }
                         let raw_now = raw_api(id, def);
                         if p.api != family(&raw_now) {
-                            let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("不支持的协议 {}", "Unsupported protocol: {}", p.api)))?;
+                            let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("Unsupported protocol: {}", "不支持的协议 {}", p.api)))?;
                             if api_of(&raw_now).is_none() {
-                                return Err(anyhow!(tr!("{id} 用的是 {raw_now} 协议，AgentPlus 不改它的协议", "{id} uses the {raw_now} protocol; AgentPlus doesn't change its protocol")));
+                                return Err(anyhow!(tr!("{id} uses the {raw_now} protocol; AgentPlus doesn't change its protocol", "{id} 用的是 {raw_now} 协议，AgentPlus 不改它的协议")));
                             }
                             def["api"] = json!(raw);
                             changed.push(format!("api = \"{raw}\""));
@@ -539,7 +539,7 @@ impl Fmt {
                                 // Disabled, key inline: it goes back into the parked definition.
                                 if let Some(def) = store::section(root, agent, "disabledProviders").get_mut(id) {
                                     def["apiKey"] = json!(k);
-                                    diff.push(&ef, tr!("{pre}.{id}.apiKey = {}（停用中，启用时写入）", "{pre}.{id}.apiKey = {} (disabled; written when enabled)", mask_key(k)), true);
+                                    diff.push(&ef, tr!("{pre}.{id}.apiKey = {} (disabled; written when enabled)", "{pre}.{id}.apiKey = {}（停用中，启用时写入）", mask_key(k)), true);
                                     dirty.store = true;
                                 }
                             }
@@ -567,9 +567,9 @@ impl Fmt {
                     }
                 }
                 let line = if kept_key {
-                    tr!("- {pre}.{provider}（含它的模型；auth.json 里的密钥保留）", "- {pre}.{provider} (with its models; the API key in auth.json is kept)")
+                    tr!("- {pre}.{provider} (with its models; the API key in auth.json is kept)", "- {pre}.{provider}（含它的模型；auth.json 里的密钥保留）")
                 } else {
-                    tr!("- {pre}.{provider}（含它的模型和密钥）", "- {pre}.{provider} (with its models and API key)")
+                    tr!("- {pre}.{provider} (with its models and API key)", "- {pre}.{provider}（含它的模型和密钥）")
                 };
                 diff.push(&ef, line, false);
                 dirty.cfg |= removed_cfg;
@@ -581,13 +581,13 @@ impl Fmt {
                 if *enabled {
                     if let Some(def) = parked.remove(provider) {
                         providers.insert(provider.clone(), def);
-                        diff.push(&ef, tr!("+ {pre}.{provider}（启用）", "+ {pre}.{provider} (enabled)"), true);
+                        diff.push(&ef, tr!("+ {pre}.{provider} (enabled)", "+ {pre}.{provider}（启用）"), true);
                         dirty.cfg = true;
                         dirty.store = true;
                     }
                 } else if let Some(def) = providers.remove(provider) {
                     parked.insert(provider.clone(), def);
-                    diff.push(&ef, tr!("- {pre}.{provider}（停用：定义暂存在 AgentPlus，可恢复）", "- {pre}.{provider} (disabled: definition kept in AgentPlus, can be restored)"), false);
+                    diff.push(&ef, tr!("- {pre}.{provider} (disabled: definition kept in AgentPlus, can be restored)", "- {pre}.{provider}（停用：定义暂存在 AgentPlus，可恢复）"), false);
                     dirty.cfg = true;
                     dirty.store = true;
                 }
@@ -595,7 +595,7 @@ impl Fmt {
             Op::SetModelVisible { provider, model, visible } => {
                 let key = format!("{provider}|{model}");
                 let fresh = self.new_model(model, None, None);
-                let models = self.models_mut(cfg, provider, l("调整模型", "changing its models"))?;
+                let models = self.models_mut(cfg, provider, l("changing its models", "调整模型"))?;
                 let hidden = store::section(root, agent, "hiddenModels");
                 let idx = models.iter().position(|m| s(m, "id") == Some(model.as_str()));
                 match (visible, idx) {
@@ -607,7 +607,7 @@ impl Fmt {
                     }
                     (false, Some(i)) => {
                         hidden.insert(key, models.remove(i));
-                        diff.push(&ef, tr!("{pre}.{provider}.models - \"{model}\"（隐藏，定义暂存在 AgentPlus）", "{pre}.{provider}.models - \"{model}\" (hidden, definition kept in AgentPlus)"), false);
+                        diff.push(&ef, tr!("{pre}.{provider}.models - \"{model}\" (hidden, definition kept in AgentPlus)", "{pre}.{provider}.models - \"{model}\"（隐藏，定义暂存在 AgentPlus）"), false);
                         dirty.cfg = true;
                         dirty.store = true;
                     }
@@ -627,7 +627,7 @@ impl Fmt {
                 let def: &mut Value = if in_stash {
                     store::section(root, agent, "hiddenModels").get_mut(&key).unwrap()
                 } else {
-                    let models = self.models_mut(cfg, provider, l("添加模型", "adding models"))?;
+                    let models = self.models_mut(cfg, provider, l("adding models", "添加模型"))?;
                     match models.iter().position(|d| s(d, "id") == Some(mid.as_str())) {
                         Some(i) => &mut models[i],
                         None => {
@@ -666,7 +666,7 @@ impl Fmt {
                 }
                 let stashed = store::section(root, agent, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
                 if removed || stashed {
-                    diff.push(&ef, tr!("{pre}.{provider}.models - \"{model}\"（删除）", "{pre}.{provider}.models - \"{model}\" (deleted)"), false);
+                    diff.push(&ef, tr!("{pre}.{provider}.models - \"{model}\" (deleted)", "{pre}.{provider}.models - \"{model}\"（删除）"), false);
                     dirty.cfg |= removed;
                     dirty.store |= stashed;
                 }
@@ -675,7 +675,7 @@ impl Fmt {
                 let hidden = self.hidden(root);
                 let want = clean_ids(ids);
                 let fresh: Vec<Value> = want.iter().map(|m| self.new_model(m, None, None)).collect();
-                let models = self.models_mut(cfg, provider, l("调整模型", "changing its models"))?;
+                let models = self.models_mut(cfg, provider, l("changing its models", "调整模型"))?;
                 let old = models.clone();
                 let next: Vec<Value> = want
                     .iter()

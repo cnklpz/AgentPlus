@@ -1,7 +1,7 @@
 //! Claude Code: providers are AgentPlus profiles (address, key, model list, and which
 //! model each role uses). Switching writes the profile into the `env` block of
 //! `~/.claude/settings.json`; only the variables below are touched, everything else in
-//! the file stays as it is. "Claude 官方账号" means none of them are set.
+//! the file stays as it is. "Claude official account" means none of them are set.
 //!
 //! Claude Code speaks the Anthropic Messages protocol only; relays with other protocols
 //! go through the local gateway.
@@ -31,13 +31,13 @@ const UNMANAGED: &str = "settings-env";
 const BASE: &str = "ANTHROPIC_BASE_URL";
 const TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 const API_KEY: &str = "ANTHROPIC_API_KEY";
-/// (role, env var, (label zh, label en))
+/// (role, env var, (label en, label zh))
 const ROLES: [(&str, &str, (&str, &str)); 5] = [
-    ("default", "ANTHROPIC_MODEL", ("默认", "Default")),
+    ("default", "ANTHROPIC_MODEL", ("Default", "默认")),
     ("opus", "ANTHROPIC_DEFAULT_OPUS_MODEL", ("Opus", "Opus")),
     ("sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL", ("Sonnet", "Sonnet")),
     ("haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL", ("Haiku", "Haiku")),
-    ("subagent", "CLAUDE_CODE_SUBAGENT_MODEL", ("子代理", "Subagent")),
+    ("subagent", "CLAUDE_CODE_SUBAGENT_MODEL", ("Subagent", "子代理")),
 ];
 /// Older name of the Haiku slot, kept in step with it.
 const SMALL_FAST: &str = "ANTHROPIC_SMALL_FAST_MODEL";
@@ -111,9 +111,9 @@ fn models_with_roles(list: &[(String, bool)], roles: &BTreeMap<String, String>) 
         }
     }
     for m in out.iter_mut() {
-        for (role, _, (zh, en)) in ROLES {
+        for (role, _, (en, zh)) in ROLES {
             if roles.get(role) == Some(&m.id) {
-                m.tags.push(Tag::new(format!("role:{role}"), l(zh, en)));
+                m.tags.push(Tag::new(format!("role:{role}"), l(en, zh)));
             }
         }
     }
@@ -159,16 +159,16 @@ fn provider_of(id: &str, p: &Value, managed: bool) -> Provider {
     let key = str_field(p, "apiKey");
     let mut details = vec![
         Kv::mono(lbl::base_url(), base.clone()),
-        Kv::text(lbl::api_key(), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{} · {}", if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN }, mask_key(&key)) }),
+        Kv::text(lbl::api_key(), if key.is_empty() { l("Not set", "未填写").into() } else { format!("{} · {}", if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN }, mask_key(&key)) }),
     ];
-    for (role, _, (zh, en)) in ROLES {
+    for (role, _, (en, zh)) in ROLES {
         if let Some(m) = roles.get(role) {
-            let label = l(zh, en);
-            details.push(Kv::mono(&tr!("{label}模型", "{label} model"), m.clone()));
+            let label = l(en, zh);
+            details.push(Kv::mono(&tr!("{label} model", "{label}模型"), m.clone()));
         }
     }
     if managed {
-        details.push(Kv::text(l("保存位置", "Stored in"), l("AgentPlus 配置档（切换时写入 settings.json 的 env）", "AgentPlus profile (written to the env block of settings.json on switch)")));
+        details.push(Kv::text(l("Stored in", "保存位置"), l("AgentPlus profile (written to the env block of settings.json on switch)", "AgentPlus 配置档（切换时写入 settings.json 的 env）")));
     }
     Provider {
         id: id.into(),
@@ -204,13 +204,13 @@ pub fn state(inst: &Install) -> AgentState {
 
     st.providers.push(Provider::builtin(
         OFFICIAL,
-        l("Claude 官方账号", "Claude official account"),
-        l("Claude.ai / Console 登录", "Claude.ai / Console sign-in"),
+        l("Claude official account", "Claude 官方账号"),
+        l("Claude.ai / Console sign-in", "Claude.ai / Console 登录"),
         "anthropic",
         api_label("anthropic"),
         vec![
-            Kv::text(lbl::auth(), l("claude 登录（~/.claude/.credentials.json）", "claude sign-in (~/.claude/.credentials.json)")),
-            Kv::text(lbl::note(), l("不设置 ANTHROPIC_BASE_URL 等环境变量，用官方账号和官方模型", "Leaves ANTHROPIC_BASE_URL and related variables unset; uses the official account and official models")),
+            Kv::text(lbl::auth(), l("claude sign-in (~/.claude/.credentials.json)", "claude 登录（~/.claude/.credentials.json）")),
+            Kv::text(lbl::note(), l("Leaves ANTHROPIC_BASE_URL and related variables unset; uses the official account and official models", "不设置 ANTHROPIC_BASE_URL 等环境变量，用官方账号和官方模型")),
         ],
     ));
     for (id, p) in &profs {
@@ -225,31 +225,31 @@ pub fn state(inst: &Install) -> AgentState {
             }
         }
         let p = json!({
-            "name": l("settings.json 里的配置", "Config in settings.json"),
+            "name": l("Config in settings.json", "settings.json 里的配置"),
             "baseUrl": env_str(&env, BASE).unwrap_or_default(),
             "apiKey": env_str(&env, TOKEN).or_else(|| env_str(&env, API_KEY)).unwrap_or_default(),
             "keyEnv": if env_str(&env, API_KEY).is_some() && env_str(&env, TOKEN).is_none() { API_KEY } else { TOKEN },
             "roles": roles,
         });
         let mut prov = provider_of(UNMANAGED, &p, false);
-        prov.details.push(Kv::text(lbl::note(), l("不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
+        prov.details.push(Kv::text(lbl::note(), l("Not saved by AgentPlus; edit and save it once and AgentPlus will manage it", "不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理")));
         st.providers.push(prov);
-        st.notes.push(l("settings.json 里有手动设置的 ANTHROPIC_BASE_URL，已显示为「settings.json 里的配置」；编辑保存一次即可由 AgentPlus 管理。", "settings.json has a hand-set ANTHROPIC_BASE_URL, shown as \"Config in settings.json\". Edit and save it once to let AgentPlus manage it.").into());
+        st.notes.push(l("settings.json has a hand-set ANTHROPIC_BASE_URL, shown as \"Config in settings.json\". Edit and save it once to let AgentPlus manage it.", "settings.json 里有手动设置的 ANTHROPIC_BASE_URL，已显示为「settings.json 里的配置」；编辑保存一次即可由 AgentPlus 管理。").into());
     }
 
     st.settings = vec![
-        bool_setting("coauthor", "Claude Code", l("提交里署名 Claude", "Credit Claude in commits"), l("includeCoAuthoredBy：git 提交信息末尾加 Co-Authored-By: Claude", "includeCoAuthoredBy: append Co-Authored-By: Claude to git commit messages"), cfg.get("includeCoAuthoredBy").and_then(|x| x.as_bool()).unwrap_or(true)),
-        bool_setting("quiet", "Claude Code", l("关闭非必要网络请求", "Disable nonessential traffic"), l("env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = 1：不发遥测、错误报告和自动更新检查（用中转时推荐）", "env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = 1: no telemetry, error reports or auto-update checks (recommended with a relay)"), env_str(&env, QUIET).is_some()),
+        bool_setting("coauthor", "Claude Code", l("Credit Claude in commits", "提交里署名 Claude"), l("includeCoAuthoredBy: append Co-Authored-By: Claude to git commit messages", "includeCoAuthoredBy：git 提交信息末尾加 Co-Authored-By: Claude"), cfg.get("includeCoAuthoredBy").and_then(|x| x.as_bool()).unwrap_or(true)),
+        bool_setting("quiet", "Claude Code", l("Disable nonessential traffic", "关闭非必要网络请求"), l("env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = 1: no telemetry, error reports or auto-update checks (recommended with a relay)", "env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = 1：不发遥测、错误报告和自动更新检查（用中转时推荐）"), env_str(&env, QUIET).is_some()),
     ];
     let cur_name = st.providers.iter().find(|p| p.id == cur).map(|p| p.name.clone()).unwrap_or_default();
     st.current = vec![
         Kv::text(lbl::provider(), cur_name),
-        Kv::mono(BASE, env_str(&env, BASE).unwrap_or_else(|| l("-（官方）", "- (official)").into())),
+        Kv::mono(BASE, env_str(&env, BASE).unwrap_or_else(|| l("- (official)", "-（官方）").into())),
     ];
-    for (_, k, (zh, en)) in ROLES {
+    for (_, k, (en, zh)) in ROLES {
         if let Some(m) = env_str(&env, k) {
-            let label = l(zh, en);
-            st.current.push(Kv::mono(&tr!("{label}模型", "{label} model"), m));
+            let label = l(en, zh);
+            st.current.push(Kv::mono(&tr!("{label} model", "{label}模型"), m));
         }
     }
     st
@@ -265,7 +265,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     };
     let base = str_field(&p, "baseUrl");
     if base.is_empty() {
-        return Err(anyhow!(l("官方账号没有可用的地址", "The official account has no usable base URL")));
+        return Err(anyhow!(l("The official account has no usable base URL", "官方账号没有可用的地址")));
     }
     let key = str_field(&p, "apiKey");
     // Claude Code appends /v1/messages to the base; callers append /messages.
@@ -276,10 +276,10 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 /// The profile whose models an op edits; the built-in entries have none.
 fn profile_mut<'a>(profs: &'a mut Map<String, Value>, id: &str) -> Result<&'a mut Value> {
     if id == OFFICIAL {
-        return Err(anyhow!(l("官方账号没有模型列表可编辑", "The official account has no model list to edit")));
+        return Err(anyhow!(l("The official account has no model list to edit", "官方账号没有模型列表可编辑")));
     }
     if id == UNMANAGED {
-        return Err(anyhow!(l("先编辑并保存一次「settings.json 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in settings.json\" once so AgentPlus takes it over, then change its models")));
+        return Err(anyhow!(l("Edit and save \"Config in settings.json\" once so AgentPlus takes it over, then change its models", "先编辑并保存一次「settings.json 里的配置」，让 AgentPlus 接管后再改模型")));
     }
     profiles::get_mut(profs, id)
 }
@@ -292,7 +292,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let before = current(&env0, &profs);
     let mut cur = before.clone();
     let file = display_path(&settings_path());
-    let store_label = l("AgentPlus · Claude Code 配置档", "AgentPlus · Claude Code profiles");
+    let store_label = l("AgentPlus · Claude Code profiles", "AgentPlus · Claude Code 配置档");
     let mut diff = Diff::default();
     let (mut cfg_dirty, mut store_dirty) = (false, false);
 
@@ -300,7 +300,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.api != "anthropic" {
-                    return Err(anyhow!(l("Claude Code 只支持 Anthropic 协议；其他协议的中转请经本地网关接入", "Claude Code only supports the Anthropic protocol; connect relays using other protocols through the local gateway")));
+                    return Err(anyhow!(l("Claude Code only supports the Anthropic protocol; connect relays using other protocols through the local gateway", "Claude Code 只支持 Anthropic 协议；其他协议的中转请经本地网关接入")));
                 }
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
                     return Err(msg::name_and_url_required());
@@ -328,14 +328,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             "name": p.name.trim(), "baseUrl": claude_base(&p.base_url), "apiKey": key.clone().unwrap_or_default(),
                             "keyEnv": key_env, "models": profiles::models_value(&p.models), "roles": roles,
                         }));
-                        let adopt = if adopting { l("（接管 settings.json 里的配置）", " (takes over the config in settings.json)") } else { "" };
+                        let adopt = if adopting { l(" (takes over the config in settings.json)", "（接管 settings.json 里的配置）") } else { "" };
                         profiles::push_added(&mut diff, store_label, p.name.trim(), adopt, &claude_base(&p.base_url), key.as_deref());
                         if adopting && cur == UNMANAGED {
                             cur = id;
                         }
                         store_dirty = true;
                     }
-                    Some(OFFICIAL) => return Err(anyhow!(l("官方账号不能编辑", "The official account can't be edited"))),
+                    Some(OFFICIAL) => return Err(anyhow!(l("The official account can't be edited", "官方账号不能编辑"))),
                     Some(id) => {
                         let e = profiles::get_mut(&mut profs, id)?;
                         store_dirty |= profiles::edit(e, id, p.name.trim(), &claude_base(&p.base_url), key.as_deref(), &mut diff, store_label);
@@ -344,7 +344,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::DeleteProvider { provider } => {
                 if provider == OFFICIAL || provider == UNMANAGED {
-                    return Err(anyhow!(l("这一项不能删除", "This entry can't be deleted")));
+                    return Err(anyhow!(l("This entry can't be deleted", "这一项不能删除")));
                 }
                 if provider == &cur {
                     return Err(msg::in_use(provider));
@@ -380,10 +380,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let old = roles_of(p);
                 let new: BTreeMap<String, String> = roles.iter().filter(|(k, v)| ROLES.iter().any(|(r, ..)| r == k) && !v.trim().is_empty()).map(|(k, v)| (k.clone(), v.trim().to_string())).collect();
                 if old != new {
-                    for (role, _, (zh, en)) in ROLES {
+                    for (role, _, (en, zh)) in ROLES {
                         if old.get(role) != new.get(role) {
-                            let label = l(zh, en);
-                            diff.push(store_label, tr!("「{provider}」{label}模型 = {}", "\"{provider}\" {label} model = {}", new.get(role).map(String::as_str).unwrap_or(l("（不指定）", "(unset)"))), new.contains_key(role));
+                            let label = l(en, zh);
+                            diff.push(store_label, tr!("\"{provider}\" {label} model = {}", "「{provider}」{label}模型 = {}", new.get(role).map(String::as_str).unwrap_or(l("(unset)", "（不指定）"))), new.contains_key(role));
                         }
                     }
                     p["roles"] = json!(new);
@@ -404,14 +404,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if env_str(&env_of(&cfg), QUIET).is_some() != on {
                             let env = obj_at(&mut cfg, &["env"])?;
                             if on { env.insert(QUIET.into(), json!("1")); } else { env.remove(QUIET); }
-                            diff.push(&file, format!("env.{QUIET} {}", if on { "= 1" } else { l("（删除）", "(removed)") }), on);
+                            diff.push(&file, format!("env.{QUIET} {}", if on { "= 1" } else { l("(removed)", "（删除）") }), on);
                             cfg_dirty = true;
                         }
                     }
                     other => return Err(msg::unknown_setting(other)),
                 }
             }
-            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Claude Code 同时只用一个供应商，请用「设为当前」", "Claude Code uses one provider at a time; use \"Set as current\""))),
+            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Claude Code uses one provider at a time; use \"Set as current\"", "Claude Code 同时只用一个供应商，请用「设为当前」"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
@@ -438,7 +438,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
                 None => {
                     env.remove(k);
-                    diff.push(&file, tr!("env.{k}（删除）", "env.{k} (removed)"), false);
+                    diff.push(&file, tr!("env.{k} (removed)", "env.{k}（删除）"), false);
                 }
             }
             cfg_dirty = true;

@@ -1,6 +1,5 @@
-import type zh from "../zh/projectsPage";
-
-const en: typeof zh = {
+// src/components/ProjectsPage.tsx
+export default {
   intro: "Configure OpenCode for a single project folder: the project's opencode.json is merged with the global config, and keys defined in the project take precedence.",
   pickFolder: "Choose folder…",
   or: "or",
@@ -25,5 +24,3 @@ const en: typeof zh = {
   switchProject: "Switch project",
   openFolder: "Open folder",
 };
-
-export default en;

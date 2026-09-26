@@ -1,6 +1,5 @@
-import type zh from "../zh/modelDialog";
-
-const en: typeof zh = {
+// src/components/ModelDialog.tsx
+export default {
   editTitle: "Edit model",
   editHead: "Edit model {id}",
   addHead: "Add a model to {agent}",
@@ -31,5 +30,3 @@ const en: typeof zh = {
   matchNothingNew: "Nothing to add from \"{id}\"",
   matchNone: "No data found for this model",
 };
-
-export default en;

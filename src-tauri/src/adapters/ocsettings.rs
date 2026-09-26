@@ -22,7 +22,7 @@ pub enum Scope {
 enum Kind {
     /// On/off with OpenCode's default when the key is missing.
     Bool(bool),
-    /// Fixed values: (stored value, zh label, en label). "true"/"false" are written as booleans.
+    /// Fixed values: (stored value, en label, zh label). "true"/"false" are written as booleans.
     Select(&'static [(&'static str, &'static str, &'static str)], &'static str),
     /// Free text with suggestions (model ids, agent names).
     Text,
@@ -32,7 +32,7 @@ enum Kind {
     Providers,
 }
 
-/// UI text as (zh, en), picked with `l()` when rows are built.
+/// UI text as (en, zh), picked with `l()` when rows are built.
 type Text2 = (&'static str, &'static str);
 
 struct Spec {
@@ -44,7 +44,7 @@ struct Spec {
     global_only: bool,
 }
 
-const ACTIONS: &[(&str, &str, &str)] = &[("allow", "允许", "Allow"), ("ask", "每次询问", "Ask each time"), ("deny", "禁止", "Deny")];
+const ACTIONS: &[(&str, &str, &str)] = &[("allow", "Allow", "允许"), ("ask", "Ask each time", "每次询问"), ("deny", "Deny", "禁止")];
 
 /// Every tool key OpenCode's `permission` accepts; used when a single string has to be
 /// spread into per-tool entries.
@@ -53,29 +53,29 @@ const PERMISSION_KEYS: &[&str] = &[
     "todowrite", "question", "webfetch", "websearch", "doom_loop",
 ];
 
-const G_MODEL: Text2 = ("模型", "Models");
-const G_PROVIDER: Text2 = ("供应商", "Providers");
-const G_BEHAVIOR: Text2 = ("行为", "Behavior");
-const G_PERMISSION: Text2 = ("权限", "Permissions");
-const G_FILES: Text2 = ("指令与文件", "Instructions & files");
+const G_MODEL: Text2 = ("Models", "模型");
+const G_PROVIDER: Text2 = ("Providers", "供应商");
+const G_BEHAVIOR: Text2 = ("Behavior", "行为");
+const G_PERMISSION: Text2 = ("Permissions", "权限");
+const G_FILES: Text2 = ("Instructions & files", "指令与文件");
 
 const SPECS: &[Spec] = &[
-    Spec { key: "model", group: G_MODEL, label: ("默认模型", "Default model"), desc: ("provider/model 格式，OpenCode 启动时默认选中它", "provider/model format; OpenCode selects it by default on startup"), kind: Kind::Text, global_only: false },
-    Spec { key: "small_model", group: G_MODEL, label: ("小模型", "Small model"), desc: ("生成会话标题等轻量任务用的模型，provider/model 格式", "Model for lightweight tasks such as session titles, in provider/model format"), kind: Kind::Text, global_only: false },
-    Spec { key: "default_agent", group: G_MODEL, label: ("默认 Agent", "Default agent"), desc: ("启动时使用的主 Agent，OpenCode 默认是 build", "The primary agent used on startup; OpenCode defaults to build"), kind: Kind::Text, global_only: false },
-    Spec { key: "enabled_providers", group: G_PROVIDER, label: ("只加载这些供应商", "Only load these providers"), desc: ("都不选＝不限制；选了之后只有这些供应商会出现在 OpenCode 里（停用列表优先）", "None selected = no restriction; otherwise only these providers appear in OpenCode (the disabled list takes precedence)"), kind: Kind::Providers, global_only: false },
-    Spec { key: "share", group: G_BEHAVIOR, label: ("会话分享", "Session sharing"), desc: ("share：会话能否分享成公开链接", "share: whether sessions can be shared as public links"), kind: Kind::Select(&[("manual", "手动分享", "Manual"), ("auto", "自动分享", "Automatic"), ("disabled", "禁止分享", "Disabled")], "manual"), global_only: false },
-    Spec { key: "autoupdate", group: G_BEHAVIOR, label: ("自动更新", "Auto update"), desc: ("autoupdate：启动时检查新版本", "autoupdate: check for new versions on startup"), kind: Kind::Select(&[("true", "自动下载更新", "Download updates automatically"), ("notify", "只提醒", "Notify only"), ("false", "不检查", "Don't check")], "true"), global_only: true },
-    Spec { key: "snapshot", group: G_BEHAVIOR, label: ("改动快照", "Change snapshots"), desc: ("snapshot：记录文件改动，支持 /undo 撤销；很大的仓库可以关掉提速", "snapshot: track file changes so /undo can revert them; turn off to speed up very large repos"), kind: Kind::Bool(true), global_only: false },
-    Spec { key: "compaction.auto", group: G_BEHAVIOR, label: ("自动压缩上下文", "Auto-compact context"), desc: ("compaction.auto：上下文快满时自动压缩会话", "compaction.auto: compact the session automatically when the context is nearly full"), kind: Kind::Bool(true), global_only: false },
-    Spec { key: "compaction.prune", group: G_BEHAVIOR, label: ("清理旧工具输出", "Prune old tool output"), desc: ("compaction.prune：压缩时删掉较早的工具输出，省 token", "compaction.prune: drop older tool output when compacting to save tokens"), kind: Kind::Bool(false), global_only: false },
-    Spec { key: "username", group: G_BEHAVIOR, label: ("显示的用户名", "Display name"), desc: ("username：会话里显示的名字，留空用系统用户名", "username: the name shown in sessions; leave empty to use the system user name"), kind: Kind::Text, global_only: false },
-    Spec { key: "permission.edit", group: G_PERMISSION, label: ("修改文件", "Edit files"), desc: ("permission.edit：edit / write / patch 等改文件的工具", "permission.edit: edit / write / patch and other file-editing tools"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
-    Spec { key: "permission.bash", group: G_PERMISSION, label: ("执行命令", "Run commands"), desc: ("permission.bash：运行 shell 命令", "permission.bash: run shell commands"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
-    Spec { key: "permission.webfetch", group: G_PERMISSION, label: ("抓取网页", "Fetch web pages"), desc: ("permission.webfetch：读取 URL 内容", "permission.webfetch: read URL contents"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
-    Spec { key: "permission.external_directory", group: G_PERMISSION, label: ("访问项目外目录", "Access outside the project"), desc: ("permission.external_directory：读写工作目录以外的文件", "permission.external_directory: read and write files outside the working directory"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
-    Spec { key: "instructions", group: G_FILES, label: ("额外指令文件", "Extra instruction files"), desc: ("instructions：每行一个路径或 glob（如 CONTRIBUTING.md、docs/*.md），内容会加进系统提示", "instructions: one path or glob per line (e.g. CONTRIBUTING.md, docs/*.md); their content is added to the system prompt"), kind: Kind::List, global_only: false },
-    Spec { key: "watcher.ignore", group: G_FILES, label: ("文件监视忽略", "File watcher ignore"), desc: ("watcher.ignore：每行一个 glob（如 node_modules/**、dist/**）", "watcher.ignore: one glob per line (e.g. node_modules/**, dist/**)"), kind: Kind::List, global_only: false },
+    Spec { key: "model", group: G_MODEL, label: ("Default model", "默认模型"), desc: ("provider/model format; OpenCode selects it by default on startup", "provider/model 格式，OpenCode 启动时默认选中它"), kind: Kind::Text, global_only: false },
+    Spec { key: "small_model", group: G_MODEL, label: ("Small model", "小模型"), desc: ("Model for lightweight tasks such as session titles, in provider/model format", "生成会话标题等轻量任务用的模型，provider/model 格式"), kind: Kind::Text, global_only: false },
+    Spec { key: "default_agent", group: G_MODEL, label: ("Default agent", "默认 Agent"), desc: ("The primary agent used on startup; OpenCode defaults to build", "启动时使用的主 Agent，OpenCode 默认是 build"), kind: Kind::Text, global_only: false },
+    Spec { key: "enabled_providers", group: G_PROVIDER, label: ("Only load these providers", "只加载这些供应商"), desc: ("None selected = no restriction; otherwise only these providers appear in OpenCode (the disabled list takes precedence)", "都不选＝不限制；选了之后只有这些供应商会出现在 OpenCode 里（停用列表优先）"), kind: Kind::Providers, global_only: false },
+    Spec { key: "share", group: G_BEHAVIOR, label: ("Session sharing", "会话分享"), desc: ("share: whether sessions can be shared as public links", "share：会话能否分享成公开链接"), kind: Kind::Select(&[("manual", "Manual", "手动分享"), ("auto", "Automatic", "自动分享"), ("disabled", "Disabled", "禁止分享")], "manual"), global_only: false },
+    Spec { key: "autoupdate", group: G_BEHAVIOR, label: ("Auto update", "自动更新"), desc: ("autoupdate: check for new versions on startup", "autoupdate：启动时检查新版本"), kind: Kind::Select(&[("true", "Download updates automatically", "自动下载更新"), ("notify", "Notify only", "只提醒"), ("false", "Don't check", "不检查")], "true"), global_only: true },
+    Spec { key: "snapshot", group: G_BEHAVIOR, label: ("Change snapshots", "改动快照"), desc: ("snapshot: track file changes so /undo can revert them; turn off to speed up very large repos", "snapshot：记录文件改动，支持 /undo 撤销；很大的仓库可以关掉提速"), kind: Kind::Bool(true), global_only: false },
+    Spec { key: "compaction.auto", group: G_BEHAVIOR, label: ("Auto-compact context", "自动压缩上下文"), desc: ("compaction.auto: compact the session automatically when the context is nearly full", "compaction.auto：上下文快满时自动压缩会话"), kind: Kind::Bool(true), global_only: false },
+    Spec { key: "compaction.prune", group: G_BEHAVIOR, label: ("Prune old tool output", "清理旧工具输出"), desc: ("compaction.prune: drop older tool output when compacting to save tokens", "compaction.prune：压缩时删掉较早的工具输出，省 token"), kind: Kind::Bool(false), global_only: false },
+    Spec { key: "username", group: G_BEHAVIOR, label: ("Display name", "显示的用户名"), desc: ("username: the name shown in sessions; leave empty to use the system user name", "username：会话里显示的名字，留空用系统用户名"), kind: Kind::Text, global_only: false },
+    Spec { key: "permission.edit", group: G_PERMISSION, label: ("Edit files", "修改文件"), desc: ("permission.edit: edit / write / patch and other file-editing tools", "permission.edit：edit / write / patch 等改文件的工具"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
+    Spec { key: "permission.bash", group: G_PERMISSION, label: ("Run commands", "执行命令"), desc: ("permission.bash: run shell commands", "permission.bash：运行 shell 命令"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
+    Spec { key: "permission.webfetch", group: G_PERMISSION, label: ("Fetch web pages", "抓取网页"), desc: ("permission.webfetch: read URL contents", "permission.webfetch：读取 URL 内容"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
+    Spec { key: "permission.external_directory", group: G_PERMISSION, label: ("Access outside the project", "访问项目外目录"), desc: ("permission.external_directory: read and write files outside the working directory", "permission.external_directory：读写工作目录以外的文件"), kind: Kind::Select(ACTIONS, "allow"), global_only: false },
+    Spec { key: "instructions", group: G_FILES, label: ("Extra instruction files", "额外指令文件"), desc: ("instructions: one path or glob per line (e.g. CONTRIBUTING.md, docs/*.md); their content is added to the system prompt", "instructions：每行一个路径或 glob（如 CONTRIBUTING.md、docs/*.md），内容会加进系统提示"), kind: Kind::List, global_only: false },
+    Spec { key: "watcher.ignore", group: G_FILES, label: ("File watcher ignore", "文件监视忽略"), desc: ("watcher.ignore: one glob per line (e.g. node_modules/**, dist/**)", "watcher.ignore：每行一个 glob（如 node_modules/**、dist/**）"), kind: Kind::List, global_only: false },
 ];
 
 /// A dotted key as a JSON pointer (keys hold no `~` or `/`).
@@ -106,7 +106,7 @@ fn select_str(v: Option<&Value>) -> Option<String> {
 }
 
 fn label_of(opts: &[(&'static str, &'static str, &'static str)], v: &str) -> String {
-    opts.iter().find(|o| o.0 == v).map(|o| l(o.1, o.2).to_string()).unwrap_or_else(|| if v == "custom" { l("按规则细分", "Per rule").into() } else { v.to_string() })
+    opts.iter().find(|o| o.0 == v).map(|o| l(o.1, o.2).to_string()).unwrap_or_else(|| if v == "custom" { l("Per rule", "按规则细分").into() } else { v.to_string() })
 }
 
 /// Rows for one config. `global` is the global config when `cfg` is a project's.
@@ -139,7 +139,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 row.kind = "select".into();
                 row.value = json!(cur.and_then(|v| v.as_bool()).map(|b| b.to_string()).unwrap_or_default());
                 row.options = vec!["".into(), "true".into(), "false".into()];
-                row.hints = vec![tr!("继承全局（{}）", "Inherit global ({})", on_off(g)), on_off(true).into(), on_off(false).into()];
+                row.hints = vec![tr!("Inherit global ({})", "继承全局（{}）", on_off(g)), on_off(true).into(), on_off(false).into()];
             }
             Kind::Select(opts, def) => {
                 row.kind = "select".into();
@@ -147,18 +147,18 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 if scope == Scope::Project {
                     let g = select_str(inherited).unwrap_or_else(|| def.to_string());
                     row.options.push(String::new());
-                    row.hints.push(tr!("继承全局（{}）", "Inherit global ({})", label_of(opts, &g)));
+                    row.hints.push(tr!("Inherit global ({})", "继承全局（{}）", label_of(opts, &g)));
                     row.value = json!(v.clone().unwrap_or_default());
                 } else {
                     row.value = json!(v.clone().unwrap_or_else(|| def.to_string()));
                 }
-                for (val, zh, en) in opts.iter() {
+                for (val, en, zh) in opts.iter() {
                     row.options.push(val.to_string());
-                    row.hints.push(l(zh, en).to_string());
+                    row.hints.push(l(en, zh).to_string());
                 }
                 if v.as_deref() == Some("custom") {
                     row.options.push("custom".into());
-                    row.hints.push(l("按规则细分（保持文件里的写法）", "Per rule (kept as written in the file)").into());
+                    row.hints.push(l("Per rule (kept as written in the file)", "按规则细分（保持文件里的写法）").into());
                 }
             }
             Kind::Text => {
@@ -179,7 +179,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 };
                 if scope == Scope::Project {
                     let g = inherited.and_then(|v| v.as_str()).filter(|x| !x.is_empty());
-                    row.desc = tr!("{}。留空＝继承全局{}", "{}. Leave empty to inherit global{}", row.desc, g.map(|x| tr!("（{x}）", " ({x})")).unwrap_or_default());
+                    row.desc = tr!("{}. Leave empty to inherit global{}", "{}。留空＝继承全局{}", row.desc, g.map(|x| tr!(" ({x})", "（{x}）")).unwrap_or_default());
                 }
             }
             Kind::List => {
@@ -187,9 +187,9 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 row.value = json!(str_list(cur).unwrap_or_default());
                 if scope == Scope::Project {
                     let g = str_list(inherited).unwrap_or_default();
-                    let tail = if s.key == "instructions" { l("和全局的合并", "Merged with global") } else { l("留空＝继承全局", "Leave empty to inherit global") };
-                    let shown = if g.is_empty() { String::new() } else { tr!("（全局：{}）", " (global: {})", join(&g)) };
-                    row.desc = tr!("{}。{tail}{shown}", "{}. {tail}{shown}", row.desc);
+                    let tail = if s.key == "instructions" { l("Merged with global", "和全局的合并") } else { l("Leave empty to inherit global", "留空＝继承全局") };
+                    let shown = if g.is_empty() { String::new() } else { tr!(" (global: {})", "（全局：{}）", join(&g)) };
+                    row.desc = tr!("{}. {tail}{shown}", "{}。{tail}{shown}", row.desc);
                 }
             }
             Kind::Providers => {
@@ -207,7 +207,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
                 if scope == Scope::Project {
                     let g = str_list(inherited).unwrap_or_default();
                     if !g.is_empty() {
-                        row.desc = tr!("{}。都不选＝沿用全局的 {}", "{}. None selected = use the global {}", row.desc, join(&g));
+                        row.desc = tr!("{}. None selected = use the global {}", "{}。都不选＝沿用全局的 {}", row.desc, join(&g));
                     }
                 }
             }
@@ -226,7 +226,7 @@ fn to_stored(kind: &Kind, key: &str, v: &Value) -> Result<Option<Value>> {
             Value::String(s) if s == "true" || s == "false" => Some(json!(s == "true")),
             Value::String(s) => Some(json!(s)),
             Value::Null => None,
-            _ => return Err(anyhow!(tr!("{key} 的值无效", "Invalid value for {key}"))),
+            _ => return Err(anyhow!(tr!("Invalid value for {key}", "{key} 的值无效"))),
         },
         Kind::Text => match v.as_str().map(str::trim) {
             Some("") | None => None,
@@ -275,7 +275,7 @@ pub fn apply(cfg: &mut Value, key: &str, value: &Value, scope: Scope, diff: &mut
         Some(all) => {
             let map: Map<String, Value> = PERMISSION_KEYS.iter().map(|k| (k.to_string(), json!(all))).collect();
             cfg["permission"] = Value::Object(map);
-            diff.push(file, tr!("permission = \"{all}\" → 按工具展开", "permission = \"{all}\" → expanded per tool"), true);
+            diff.push(file, tr!("permission = \"{all}\" → expanded per tool", "permission = \"{all}\" → 按工具展开"), true);
         }
         None if read(cfg, key) == want.as_ref() => return Ok(false),
         None => {}

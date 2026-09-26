@@ -1,6 +1,3 @@
-import type zh from "../zh/motion";
-
-const en: typeof zh = {
+// src/motion.ts
+export default {
 };
-
-export default en;

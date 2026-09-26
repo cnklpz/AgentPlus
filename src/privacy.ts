@@ -1,4 +1,4 @@
-// 隐私模式 (privacy mode): API keys, provider addresses, the user name in folder paths and
+// Privacy mode: API keys, provider addresses, the user name in folder paths and
 // conversation text are masked or blurred, so the window can be shown in screenshots,
 // screen shares and recordings. Only what is displayed changes; nothing is written.
 import { createStore } from "./store";

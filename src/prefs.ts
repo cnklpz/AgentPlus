@@ -23,7 +23,7 @@ export interface Prefs {
   theme: Theme;
   restartProgress: RestartProgressPref;
   closeAction: CloseAction;
-  /** 隐私模式: mask keys, addresses, user folders and conversation text on screen. */
+  /** Privacy mode: mask keys, addresses, user folders and conversation text on screen. */
   privacy: boolean;
   /** Look for a new AgentPlus release on GitHub at startup. */
   autoUpdate: boolean;

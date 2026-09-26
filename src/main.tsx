@@ -17,7 +17,7 @@ window.addEventListener("unhandledrejection", (e) => { if (typeof e.reason !== "
 // Styles that differ on macOS (room for the traffic lights).
 if (isMac) document.documentElement.dataset.os = "mac";
 installMotion();
-// Before the first paint: a dark start never flashes light, and 隐私模式 masks from the start.
+// Before the first paint: a dark start never flashes light, and Privacy mode masks from the start.
 applyPrefs(loadPrefs());
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

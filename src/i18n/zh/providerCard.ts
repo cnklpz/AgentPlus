@@ -1,5 +1,7 @@
 // src/components/ProviderCard.tsx
-export default {
+import type en from "../en/providerCard";
+
+const zh: typeof en = {
   incompatible: "不兼容",
   offNoTest: "停用中，不测速",
   accountLogin: "账号登录",
@@ -20,3 +22,5 @@ export default {
   switchOnApply: "写入后切换",
   setCurrent: "设为当前",
 };
+
+export default zh;

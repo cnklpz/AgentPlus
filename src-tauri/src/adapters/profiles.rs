@@ -49,9 +49,9 @@ pub(super) fn models_value<S: AsRef<str>>(ids: &[S]) -> Value {
     Value::Array(clean_ids(ids).into_iter().map(|m| json!({ "id": m, "visible": true })).collect())
 }
 
-/// The diff line of a new profile: `+ 「name」adopt（where · 密钥 ••••1234）`.
+/// The diff line of a new profile: `+ "name"adopt (where · API key ••••1234)`.
 pub(super) fn push_added(diff: &mut Diff, label: &str, name: &str, adopt: &str, where_: &str, key: Option<&str>) {
-    diff.push(label, tr!("+ 「{}」{}（{}{}）", "+ \"{}\"{} ({}{})", name, adopt, where_, msg::key_suffix(key)), true);
+    diff.push(label, tr!("+ \"{}\"{} ({}{})", "+ 「{}」{}（{}{}）", name, adopt, where_, msg::key_suffix(key)), true);
 }
 
 /// Edits the name, address and (when given) key of profile `e`. Only changed fields are
@@ -61,13 +61,13 @@ pub(super) fn edit(e: &mut Value, id: &str, name: &str, base: &str, key: Option<
     for (k, v) in [("name", name), ("baseUrl", base)] {
         if str_field(e, k) != v {
             e[k] = json!(v);
-            diff.push(label, tr!("「{id}」{k} = {v}", "\"{id}\" {k} = {v}"), true);
+            diff.push(label, tr!("\"{id}\" {k} = {v}", "「{id}」{k} = {v}"), true);
             changed = true;
         }
     }
     if let Some(k) = key.filter(|k| str_field(e, "apiKey") != *k) {
         e["apiKey"] = json!(k);
-        diff.push(label, tr!("「{id}」密钥 = {}", "\"{id}\" API key = {}", mask_key(k)), true);
+        diff.push(label, tr!("\"{id}\" API key = {}", "「{id}」密钥 = {}", mask_key(k)), true);
         changed = true;
     }
     changed
@@ -76,7 +76,7 @@ pub(super) fn edit(e: &mut Value, id: &str, name: &str, base: &str, key: Option<
 /// Removes profile `id`; an unknown id is an error.
 pub(super) fn delete(profs: &mut Map<String, Value>, id: &str, diff: &mut Diff, label: &str) -> Result<()> {
     profs.remove(id).ok_or_else(|| msg::no_provider(id))?;
-    diff.push(label, tr!("- 「{id}」", "- \"{id}\""), false);
+    diff.push(label, tr!("- \"{id}\"", "- 「{id}」"), false);
     Ok(())
 }
 
@@ -89,7 +89,7 @@ pub(super) fn set_visible(p: &mut Value, id: &str, model: &str, visible: bool, d
         None => list.push((model.to_string(), visible)),
     }
     set_model_list(p, &list);
-    diff.push(label, if visible { tr!("「{id}」{model} 显示", "\"{id}\" {model} shown") } else { tr!("「{id}」{model} 隐藏", "\"{id}\" {model} hidden") }, visible);
+    diff.push(label, if visible { tr!("\"{id}\" {model} shown", "「{id}」{model} 显示") } else { tr!("\"{id}\" {model} hidden", "「{id}」{model} 隐藏") }, visible);
     true
 }
 
@@ -105,7 +105,7 @@ pub(super) fn add_model(p: &mut Value, id: &str, model: &str, diff: &mut Diff, l
     }
     list.push((model.to_string(), true));
     set_model_list(p, &list);
-    diff.push(label, tr!("「{id}」+ {model}", "\"{id}\" + {model}"), true);
+    diff.push(label, tr!("\"{id}\" + {model}", "「{id}」+ {model}"), true);
     Ok(true)
 }
 
@@ -118,7 +118,7 @@ pub(super) fn delete_model(p: &mut Value, id: &str, model: &str, diff: &mut Diff
         return false;
     }
     set_model_list(p, &list);
-    diff.push(label, tr!("「{id}」- {model}", "\"{id}\" - {model}"), false);
+    diff.push(label, tr!("\"{id}\" - {model}", "「{id}」- {model}"), false);
     true
 }
 
@@ -127,7 +127,7 @@ pub(super) fn set_models(p: &mut Value, id: &str, models: &[String], diff: &mut 
     let list = models_value(models);
     let n = list.as_array().map_or(0, Vec::len);
     p["models"] = list;
-    diff.push(label, tr!("「{id}」模型列表：{} 个", "\"{id}\" model list: {}", n), true);
+    diff.push(label, tr!("\"{id}\" model list: {}", "「{id}」模型列表：{} 个", n), true);
 }
 
 #[cfg(test)]

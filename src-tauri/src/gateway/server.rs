@@ -144,7 +144,7 @@ fn encode(c: &Config, bad: Vec<Value>) -> Result<Value> {
 fn update_config<T>(f: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
     store::update(|s| {
         if s.get("gateway").is_some_and(|g| !g.is_object() && !g.is_null()) {
-            return Err(anyhow!(l("store.json 里的 gateway 设置无法读取，没有保存", "The gateway section of store.json can't be read; nothing was saved")));
+            return Err(anyhow!(l("The gateway section of store.json can't be read; nothing was saved", "store.json 里的 gateway 设置无法读取，没有保存")));
         }
         let (mut c, bad) = decode(s);
         let out = f(&mut c)?;
@@ -320,10 +320,10 @@ pub fn running_port() -> Option<u16> {
 /// backend and the listener alive until the request ends, even during a port change.
 pub fn list_models(route_ids: &[String]) -> Result<Vec<String>> {
     if route_ids.iter().any(|id| id.is_empty() || id == "v1" || !id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')) {
-        return Err(anyhow!(l("无效的网关转发标识", "Invalid gateway route ID")));
+        return Err(anyhow!(l("Invalid gateway route ID", "无效的网关转发标识")));
     }
     let _g = lock(&CONTROL);
-    let port = running_port().ok_or_else(|| anyhow!(l("网关未运行，请先启动网关", "The gateway isn't running; start it first")))?;
+    let port = running_port().ok_or_else(|| anyhow!(l("The gateway isn't running; start it first", "网关未运行，请先启动网关")))?;
     let path = if route_ids.is_empty() { String::new() } else { format!("/{}", route_ids.join("+")) };
     let base = format!("http://127.0.0.1:{port}{path}/v1");
     crate::net::list_models(&base, Some(test_key()), "chat").map_err(anyhow::Error::msg)
@@ -375,7 +375,7 @@ pub fn status() -> Status {
 pub fn set_enabled(enabled: bool, port: Option<u16>) -> Result<()> {
     let _g = lock(&CONTROL);
     if port.is_some_and(|p| p < 1024) {
-        return Err(anyhow!(l("端口需要在 1024–65535 之间", "The port must be between 1024 and 65535")));
+        return Err(anyhow!(l("The port must be between 1024 and 65535", "端口需要在 1024–65535 之间")));
     }
     let port = port.unwrap_or_else(|| load_config().port);
     if enabled {
@@ -481,8 +481,8 @@ enum BindError {
 impl BindError {
     fn message(&self) -> String {
         match self {
-            BindError::InUse(port) => tr!("端口 {port} 已被占用", "Port {port} is already in use"),
-            BindError::Other(port, e) => tr!("监听 127.0.0.1:{port} 失败：{e}", "Could not listen on 127.0.0.1:{port}: {e}"),
+            BindError::InUse(port) => tr!("Port {port} is already in use", "端口 {port} 已被占用"),
+            BindError::Other(port, e) => tr!("Could not listen on 127.0.0.1:{port}: {e}", "监听 127.0.0.1:{port} 失败：{e}"),
         }
     }
 }
@@ -520,7 +520,7 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
             };
             let Some(slot) = ConnSlot::take() else {
                 let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
-                let msg = l("网关同时处理的连接太多，请稍后再试", "Too many connections to the gateway; try again shortly");
+                let msg = l("Too many connections to the gateway; try again shortly", "网关同时处理的连接太多，请稍后再试");
                 write_json(&mut s, 503, &json!({ "error": { "message": msg, "type": "overloaded" } }));
                 continue;
             };
@@ -578,17 +578,17 @@ fn stop() {
 pub fn save_route(mut r: Route, old_id: Option<String>) -> Result<()> {
     r.id = crate::model::slug(r.id.trim());
     if r.id.is_empty() || r.id == "v1" {
-        return Err(anyhow!(l("路由名只能用字母、数字和连字符", "Route names may only use letters, digits and hyphens")));
+        return Err(anyhow!(l("Route names may only use letters, digits and hyphens", "路由名只能用字母、数字和连字符")));
     }
     if Proto::from_api(&r.upstream_api).is_none() {
-        return Err(anyhow!(tr!("未知协议 {}", "Unknown protocol {}", r.upstream_api)));
+        return Err(anyhow!(tr!("Unknown protocol {}", "未知协议 {}", r.upstream_api)));
     }
     library::endpoint(&r.library)?;
     let old = old_id.as_deref().unwrap_or(&r.id).to_string();
     let new = r.id.clone();
     update_config(|c| {
         if c.routes.iter().any(|x| x.id == r.id && x.id != old) {
-            return Err(anyhow!(tr!("路由 {} 已存在", "Route {} already exists", r.id)));
+            return Err(anyhow!(tr!("Route {} already exists", "路由 {} 已存在", r.id)));
         }
         match c.routes.iter_mut().find(|x| x.id == old) {
             Some(x) => *x = r,
@@ -641,7 +641,7 @@ fn breaker_cfg(root: &Value) -> breaker::Config {
     config_in(root).breaker
 }
 
-/// API key AgentPlus's own "测试" button sends: it goes through even while the forward is
+/// API key AgentPlus's own "Test" button sends: it goes through even while the forward is
 /// paused, so a successful test closes the breaker. Random per launch and never written
 /// anywhere, so nothing but AgentPlus itself knows it.
 pub fn test_key() -> &'static str {
@@ -693,7 +693,7 @@ fn bad(status: u16, msg: &str) -> anyhow::Error {
 }
 
 fn too_large() -> anyhow::Error {
-    bad(413, l("请求体太大", "Request body too large"))
+    bad(413, l("Request body too large", "请求体太大"))
 }
 
 /// Reads from the client, giving up once the whole request has taken longer than `until`.
@@ -705,7 +705,7 @@ struct Deadline<'a> {
 impl Read for Deadline<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if Instant::now() > self.until {
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, l("读取请求超时", "Timed out reading the request")));
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, l("Timed out reading the request", "读取请求超时")));
         }
         (&mut &*self.s).read(buf)
     }
@@ -716,7 +716,7 @@ fn read_line(r: &mut impl BufRead) -> Result<String> {
     let mut line = String::new();
     r.take(MAX_LINE as u64 + 1).read_line(&mut line)?;
     if line.len() > MAX_LINE {
-        return Err(bad(431, l("请求行或请求头太长", "Request line or header too long")));
+        return Err(bad(431, l("Request line or header too long", "请求行或请求头太长")));
     }
     Ok(line)
 }
@@ -737,8 +737,8 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
     let mut r = BufReader::new(Deadline { s: stream, until: Instant::now() + Duration::from_secs(120) });
     let line = read_line(&mut r)?;
     let mut parts = line.split_whitespace();
-    let method = parts.next().ok_or_else(|| anyhow!(l("空请求", "Empty request")))?.to_string();
-    let path = parts.next().ok_or_else(|| anyhow!(l("缺少路径", "Missing path")))?.to_string();
+    let method = parts.next().ok_or_else(|| anyhow!(l("Empty request", "空请求")))?.to_string();
+    let path = parts.next().ok_or_else(|| anyhow!(l("Missing path", "缺少路径")))?.to_string();
     let mut headers = vec![];
     loop {
         let h = read_line(&mut r)?;
@@ -750,7 +750,7 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
             break;
         }
         if headers.len() >= MAX_HEADERS {
-            return Err(bad(431, l("请求头太多", "Too many request headers")));
+            return Err(bad(431, l("Too many request headers", "请求头太多")));
         }
         if let Some((k, v)) = h.split_once(':') {
             headers.push((k.trim().to_string(), v.trim().to_string()));
@@ -761,7 +761,7 @@ fn read_request(stream: &TcpStream) -> Result<Request> {
     if find("transfer-encoding").map(|v| v.to_ascii_lowercase().contains("chunked")).unwrap_or(false) {
         loop {
             let size = read_line(&mut r)?;
-            let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).map_err(|_| anyhow!(l("分块长度无效", "Invalid chunk size")))?;
+            let n = usize::from_str_radix(size.trim().split(';').next().unwrap_or("0"), 16).map_err(|_| anyhow!(l("Invalid chunk size", "分块长度无效")))?;
             if n == 0 {
                 let _ = read_line(&mut r);
                 break;
@@ -850,8 +850,8 @@ fn inbound_key(req: &Request) -> Option<&str> {
 fn authenticate(root: &Value, req: &Request) -> std::result::Result<String, String> {
     let Some(key) = inbound_key(req) else {
         return Err(l(
-            "缺少网关密钥：在 AgentPlus 里把这个供应商重新写入 Agent，或在请求头带上 Authorization: Bearer <网关密钥>",
             "Missing gateway key: write this provider to the agent again from AgentPlus, or send Authorization: Bearer <gateway key>",
+            "缺少网关密钥：在 AgentPlus 里把这个供应商重新写入 Agent，或在请求头带上 Authorization: Bearer <网关密钥>",
         )
         .into());
     };
@@ -860,8 +860,8 @@ fn authenticate(root: &Value, req: &Request) -> std::result::Result<String, Stri
     }
     keys::caller_in(root, key).ok_or_else(|| {
         l(
-            "网关密钥不对：在 AgentPlus 里把这个供应商重新写入 Agent（每个 Agent 有自己的网关密钥）",
             "Wrong gateway key: write this provider to the agent again from AgentPlus (each agent has its own gateway key)",
+            "网关密钥不对：在 AgentPlus 里把这个供应商重新写入 Agent（每个 Agent 有自己的网关密钥）",
         )
         .into()
     })
@@ -1008,12 +1008,12 @@ fn handle(mut s: TcpStream) {
         }
     };
     if !host_allowed(&req) {
-        let msg = l("Host 不是本机地址，请求被拒绝", "Refused: the Host header isn't this machine");
+        let msg = l("Refused: the Host header isn't this machine", "Host 不是本机地址，请求被拒绝");
         write_json(&mut s, 403, &json!({ "error": { "message": msg, "type": "permission_error" } }));
         return;
     }
     if req.header("origin").is_some_and(|o| !origin_allowed(o)) {
-        let msg = l("网页不能访问本地网关", "Web pages can't use the local gateway");
+        let msg = l("Web pages can't use the local gateway", "网页不能访问本地网关");
         write_json(&mut s, 403, &json!({ "error": { "message": msg, "type": "permission_error" } }));
         return;
     }
@@ -1050,7 +1050,7 @@ fn handle(mut s: TcpStream) {
                 .unwrap_or_else(|| split_path(&req.path).map_or_else(|| models_proto(&req), |(_, rest)| client_proto(&req, &rest)));
             write_json(&mut s, 502, &convert::error_body(inbound, 502, &msg));
             log.error = Some(match log.error.take() {
-                Some(note) => tr!("{msg}（{note}）", "{msg} ({note})"),
+                Some(note) => tr!("{msg} ({note})", "{msg}（{note}）"),
                 None => msg,
             });
             502
@@ -1100,7 +1100,7 @@ fn fingerprint(proto: Proto, base: &str, key: Option<&str>) -> u64 {
 
 /// A forward's upstream, as configured in the store snapshot `root`.
 fn target(root: &Value, route: &Route) -> Result<Target> {
-    let proto = Proto::from_api(&route.upstream_api).ok_or_else(|| anyhow!(tr!("转发「{}」的协议无效", "Forward \"{}\" has an invalid protocol", route.id)))?;
+    let proto = Proto::from_api(&route.upstream_api).ok_or_else(|| anyhow!(tr!("Forward \"{}\" has an invalid protocol", "转发「{}」的协议无效", route.id)))?;
     #[cfg(test)]
     if let Some(t) = lock(&TEST_ROUTES).iter().find(|t| t.0.id == route.id) {
         let base: String = t.1.trim_end_matches('/').into();
@@ -1247,7 +1247,7 @@ fn weighted_order(mut items: Vec<Target>) -> Vec<Target> {
 
 fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     let Some((route_id, rest)) = split_path(&req.path) else {
-        let msg = l("路径应为 /v1/...（统一入口）或 /<转发>/v1/...", "Path should be /v1/... (unified entry) or /<forward>/v1/...");
+        let msg = l("Path should be /v1/... (unified entry) or /<forward>/v1/...", "路径应为 /v1/...（统一入口）或 /<转发>/v1/...");
         return Ok(reply_error(s, log, models_proto(req), 404, msg));
     };
     let p = client_proto(req, &rest);
@@ -1267,7 +1267,7 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     }
     log.route = route_id.clone();
     let Some(route) = routes(&root).into_iter().find(|r| r.id == route_id && r.enabled) else {
-        return Ok(reply_error(s, log, p, 404, &tr!("没有启用的转发「{route_id}」", "No enabled forward \"{route_id}\"")));
+        return Ok(reply_error(s, log, p, 404, &tr!("No enabled forward \"{route_id}\"", "没有启用的转发「{route_id}」")));
     };
     let t = target(&root, &route)?;
     log.upstream = t.proto.api().into();
@@ -1302,8 +1302,8 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
 /// Forwards paused by the breaker are skipped. With `only`, just those forwards take part.
 fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry, only: Option<Vec<String>>, root: &Value) -> Result<u16> {
     let entry = match &only {
-        None => l("统一入口", "Unified entry").to_string(),
-        Some(ids) => tr!("组合 {}", "Combined {}", ids.join("+")),
+        None => l("Unified entry", "统一入口").to_string(),
+        Some(ids) => tr!("Combined {}", "组合 {}", ids.join("+")),
     };
     log.route = entry.clone();
     let targets: Vec<Target> = routes(root)
@@ -1313,8 +1313,8 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         .collect();
     if targets.is_empty() {
         let msg = match &only {
-            None => l("本地网关还没有启用的转发", "The local gateway has no enabled forwards").to_string(),
-            Some(ids) => tr!("转发 {} 都不存在或已暂停", "Forwards {} don't exist or are paused", crate::i18n::join(ids)),
+            None => l("The local gateway has no enabled forwards", "本地网关还没有启用的转发").to_string(),
+            Some(ids) => tr!("Forwards {} don't exist or are paused", "转发 {} 都不存在或已暂停", crate::i18n::join(ids)),
         };
         return Ok(reply_error(s, log, client_proto(req, rest), 503, &msg));
     }
@@ -1363,7 +1363,7 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     order.extend(weighted_order(maybe));
     native_first(&mut order, inbound);
     if order.is_empty() {
-        return Ok(reply_error(s, log, inbound, 404, &tr!("没有哪个转发提供模型「{model}」", "No forward serves model \"{model}\"")));
+        return Ok(reply_error(s, log, inbound, 404, &tr!("No forward serves model \"{model}\"", "没有哪个转发提供模型「{model}」")));
     }
     let cfg = breaker_cfg(root);
     let mut paused = vec![];
@@ -1375,7 +1375,7 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         None => true,
     });
     if order.is_empty() {
-        let msg = tr!("提供模型「{model}」的转发都因连续出错暂停了。{}", "Every forward serving model \"{model}\" is paused after repeated errors. {}", paused.join(" "));
+        let msg = tr!("Every forward serving model \"{model}\" is paused after repeated errors. {}", "提供模型「{model}」的转发都因连续出错暂停了。{}", paused.join(" "));
         return Ok(reply_error(s, log, inbound, 503, &msg));
     }
     let n = order.len();
@@ -1385,24 +1385,24 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
         log.upstream = t.proto.api().into();
         // Another request may have paused it meanwhile, or be probing it.
         let Ok(ticket) = breaker::admit(&cfg, &t.route.id) else {
-            tried.push(tr!("{} 已熔断", "{} paused (circuit breaker)", t.route.id));
+            tried.push(tr!("{} paused (circuit breaker)", "{} 已熔断", t.route.id));
             continue;
         };
         match tracked(s, req, t, inbound, &body, log, i + 1 < n, &cfg, ticket)? {
             Attempt::Done(st) => {
                 if !tried.is_empty() {
-                    log.error = Some(tr!("已切换：{}", "Failed over: {}", tried.join(l("；", "; "))));
+                    log.error = Some(tr!("Failed over: {}", "已切换：{}", tried.join(l("; ", "；"))));
                 }
                 return Ok(st);
             }
             Attempt::Retry(why) => {
-                let note = log.error.take().map(|n| tr!("（{n}）", " ({n})")).unwrap_or_default();
+                let note = log.error.take().map(|n| tr!(" ({n})", "（{n}）")).unwrap_or_default();
                 tried.push(format!("{} {why}{note}", t.route.id));
             }
         }
     }
     // Nothing answered: every forward failed, or was paused while we were trying.
-    let msg = tr!("所有转发都失败了：{}", "Every forward failed: {}", tried.join(l("；", "; ")));
+    let msg = tr!("Every forward failed: {}", "所有转发都失败了：{}", tried.join(l("; ", "；")));
     Ok(reply_error(s, log, inbound, 502, &msg))
 }
 
@@ -1410,18 +1410,18 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
 /// answered the client with.
 fn parse_call(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry) -> std::result::Result<(Proto, Value), u16> {
     let Some(inbound) = inbound_of(rest) else {
-        let msg = tr!("不支持的接口 {rest}，可用：/chat/completions、/responses、/messages、/models", "Unsupported endpoint {rest}; available: /chat/completions, /responses, /messages, /models");
+        let msg = tr!("Unsupported endpoint {rest}; available: /chat/completions, /responses, /messages, /models", "不支持的接口 {rest}，可用：/chat/completions、/responses、/messages、/models");
         return Err(reply_error(s, log, models_proto(req), 404, &msg));
     };
     log.inbound = inbound.api().into();
     if req.method != "POST" {
-        return Err(reply_error(s, log, inbound, 405, l("只支持 POST", "Only POST is supported")));
+        return Err(reply_error(s, log, inbound, 405, l("Only POST is supported", "只支持 POST")));
     }
     // The client's mistake: a 400 that says why, not an upstream failure.
     match serde_json::from_slice::<Value>(&req.body) {
         Ok(body) if body.is_object() => Ok((inbound, body)),
         Ok(_) => Err(reply_error(s, log, inbound, 400, convert::not_object(true))),
-        Err(e) => Err(reply_error(s, log, inbound, 400, &tr!("请求体不是 JSON：{e}", "Request body is not JSON: {e}"))),
+        Err(e) => Err(reply_error(s, log, inbound, 400, &tr!("Request body is not JSON: {e}", "请求体不是 JSON：{e}"))),
     }
 }
 
@@ -1481,7 +1481,7 @@ fn tracked(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     };
     if let Some(note) = breaker::record(cfg, &t.route.id, outcome, ticket) {
         log.error = Some(match log.error.take() {
-            Some(e) => tr!("{e}（{note}）", "{e} ({note})"),
+            Some(e) => tr!("{e} ({note})", "{e}（{note}）"),
             None => note,
         });
     }
@@ -1531,8 +1531,8 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     }
     let mut resp = match up.send() {
         Ok(r) => r,
-        Err(e) if can_retry => return Ok(Attempt::Retry(tr!("连不上：{e}", "unreachable: {e}"))),
-        Err(e) => return Err(fault(if e.is_connect() { tr!("连接上游失败：{e}", "Can't connect to upstream: {e}") } else { tr!("请求上游失败：{e}", "Upstream request failed: {e}") })),
+        Err(e) if can_retry => return Ok(Attempt::Retry(tr!("unreachable: {e}", "连不上：{e}"))),
+        Err(e) => return Err(fault(if e.is_connect() { tr!("Can't connect to upstream: {e}", "连接上游失败：{e}") } else { tr!("Upstream request failed: {e}", "请求上游失败：{e}") })),
     };
     let status = resp.status().as_u16();
 
@@ -1553,7 +1553,7 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     }
 
     let ct = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/json").to_string();
-    let read_err = |e: std::io::Error| fault(tr!("读取上游响应失败：{e}", "Failed to read the upstream response: {e}"));
+    let read_err = |e: std::io::Error| fault(tr!("Failed to read the upstream response: {e}", "读取上游响应失败：{e}"));
     // Some upstreams stream SSE under another Content-Type, or even when asked not to
     // stream: look at the body too.
     let (is_sse, head) = if ct.contains("event-stream") { (true, vec![]) } else { sniff_sse(&mut resp).map_err(read_err)? };
@@ -1575,10 +1575,10 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     body.read_to_end(&mut raw).map_err(read_err)?;
     let text = String::from_utf8_lossy(&raw);
     let chat = if is_sse {
-        convert::collect_stream(upstream, &text).map_err(|e| fault(tr!("上游的流式响应出错：{e}", "The upstream stream returned an error: {e}")))?
+        convert::collect_stream(upstream, &text).map_err(|e| fault(tr!("The upstream stream returned an error: {e}", "上游的流式响应出错：{e}")))?
     } else {
-        let v: Value = serde_json::from_str(&text).map_err(|_| fault(tr!("上游返回的不是 JSON：{}", "Upstream response is not JSON: {}", clip(&text, 200))))?;
-        convert::response_to_chat(upstream, &v).map_err(|e| fault(tr!("上游响应无法解析：{e:#}", "Can't parse the upstream response: {e:#}")))?
+        let v: Value = serde_json::from_str(&text).map_err(|_| fault(tr!("Upstream response is not JSON: {}", "上游返回的不是 JSON：{}", clip(&text, 200))))?;
+        convert::response_to_chat(upstream, &v).map_err(|e| fault(tr!("Can't parse the upstream response: {e:#}", "上游响应无法解析：{e:#}")))?
     };
     log.usage = convert::usage_tokens(&chat);
     if ctx.stream {
@@ -1727,7 +1727,7 @@ fn pipe(s: &mut TcpStream, mut resp: impl Read, status: u16, ct: &str, sniff: &m
             Ok(n) => n,
             Err(e) => {
                 // No closing chunk: the client sees a cut-off body, not a complete answer.
-                log.error = Some(tr!("上游中断：{e}", "Upstream interrupted: {e}"));
+                log.error = Some(tr!("Upstream interrupted: {e}", "上游中断：{e}"));
                 log.upstream_broken = true;
                 return status;
             }
@@ -1782,9 +1782,9 @@ fn stream_convert(s: &mut TcpStream, resp: &mut impl Read, inbound: Proto, upstr
             Ok(0) => break,
             Ok(n) => n,
             Err(e) => {
-                log.error = Some(tr!("上游中断：{e}", "Upstream interrupted: {e}"));
+                log.error = Some(tr!("Upstream interrupted: {e}", "上游中断：{e}"));
                 log.upstream_broken = true;
-                if out.send_all(down.error(502, &tr!("上游连接中断：{e}", "Upstream connection broken: {e}"))) {
+                if out.send_all(down.error(502, &tr!("Upstream connection broken: {e}", "上游连接中断：{e}"))) {
                     out.end();
                 }
                 return;

@@ -1,4 +1,5 @@
-// Source dictionary: one namespace per source file (see the comment at the top of each).
+// Chinese dictionary: the same namespaces as the English source (en/index.ts).
+import type en from "../en";
 import common from "./common";
 import app from "./app";
 import api from "./api";
@@ -38,7 +39,7 @@ import providerTest from "./providerTest";
 import restartDialog from "./restartDialog";
 import format from "./format";
 
-export default {
+const zh: typeof en = {
   common,
   app,
   api,
@@ -78,3 +79,5 @@ export default {
   restartDialog,
   format,
 };
+
+export default zh;

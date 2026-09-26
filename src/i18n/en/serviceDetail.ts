@@ -1,6 +1,5 @@
-import type zh from "../zh/serviceDetail";
-
-const en: typeof zh = {
+// src/components/ServiceDetail.tsx
+export default {
   builtinNoDelete: "Built-in providers can't be deleted",
   inUse: "In use; switch Codex to another provider first",
   detailsAria: "{name} details",
@@ -25,5 +24,3 @@ const en: typeof zh = {
   viaGatewayTitle: "Route through the local gateway: convert protocols, share one API key, see request logs",
   viaGateway: "Via gateway",
 };
-
-export default en;

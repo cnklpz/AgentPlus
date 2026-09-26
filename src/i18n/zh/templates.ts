@@ -1,5 +1,7 @@
 // src/templates.ts
-export default {
+import type en from "../en/templates";
+
+const zh: typeof en = {
   groupCn: "国内",
   groupIntl: "海外 · 聚合",
 
@@ -39,3 +41,5 @@ export default {
   noteOpencodeGo: "每个模型只走一种协议，模型列表跟着协议换：Chat 是 GLM、Kimi、DeepSeek、MiMo，Anthropic 是 MiniMax、Qwen，Responses 是 GPT、Grok",
   noteOpencodeZen: "余额按量扣费；每个模型只走一种协议，模型列表跟着协议换：Anthropic 是 Claude，Responses 是 GPT、Grok，其余走 Chat",
 };
+
+export default zh;

@@ -1,6 +1,5 @@
-import type zh from "../zh/gatewayPage";
-
-const en: typeof zh = {
+// src/components/GatewayPage.tsx
+export default {
   // time / breaker
   minSec: "{m}m {s}s",
   sec: "{n}s",
@@ -124,5 +123,3 @@ const en: typeof zh = {
   cooldownLabel: "Pause (seconds)",
   breakerSaved: "Circuit breaker settings saved",
 };
-
-export default en;

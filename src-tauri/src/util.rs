@@ -107,10 +107,10 @@ pub fn read_text_or_new(path: &Path) -> Result<(String, TextMeta)> {
 }
 
 pub fn read_text(path: &Path) -> Result<(String, TextMeta)> {
-    let bytes = fs::read(path).with_context(|| tr!("读取 {} 失败", "Failed to read {}", path.display()))?;
+    let bytes = fs::read(path).with_context(|| tr!("Failed to read {}", "读取 {} 失败", path.display()))?;
     let bom = bytes.starts_with(&[0xEF, 0xBB, 0xBF]);
     let body = if bom { &bytes[3..] } else { &bytes[..] };
-    let text = String::from_utf8(body.to_vec()).with_context(|| tr!("{} 不是 UTF-8", "{} is not UTF-8", path.display()))?;
+    let text = String::from_utf8(body.to_vec()).with_context(|| tr!("{} is not UTF-8", "{} 不是 UTF-8", path.display()))?;
     let first_indent = text
         .lines()
         .map(|l| &l[..l.len() - l.trim_start_matches([' ', '\t']).len()])
@@ -172,7 +172,7 @@ fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     };
     #[cfg(not(unix))]
     let _ = private;
-    let mut file = options.open(&tmp).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    let mut file = options.open(&tmp).with_context(|| tr!("Failed to write {}", "写入 {} 失败", tmp.display()))?;
     let written = (|| -> std::io::Result<()> {
         file.write_all(bytes)?;
         #[cfg(unix)]
@@ -182,7 +182,7 @@ fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     drop(file);
     if let Err(e) = written {
         let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()));
+        return Err(e).with_context(|| tr!("Failed to write {}", "写入 {} 失败", tmp.display()));
     }
     replace_file(&tmp, &target, path)
 }
@@ -218,7 +218,7 @@ pub fn ensure_private_dir(path: &Path) -> Result<()> {
 /// written through, so the link survives.
 pub fn resolve_link(path: &Path) -> Result<PathBuf> {
     Ok(match fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => fs::canonicalize(path).with_context(|| tr!("找不到 {} 指向的文件", "Can't resolve the link {}", path.display()))?,
+        Ok(m) if m.file_type().is_symlink() => fs::canonicalize(path).with_context(|| tr!("Can't resolve the link {}", "找不到 {} 指向的文件", path.display()))?,
         _ => path.to_path_buf(),
     })
 }
@@ -268,7 +268,7 @@ pub fn replace_file(tmp: &Path, target: &Path, shown: &Path) -> Result<()> {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     let _ = fs::remove_file(tmp);
-    Err(anyhow::anyhow!(tr!("替换 {} 失败：{}", "Failed to replace {}: {}", shown.display(), last.map(|e| e.to_string()).unwrap_or_default())))
+    Err(anyhow::anyhow!(tr!("Failed to replace {}: {}", "替换 {} 失败：{}", shown.display(), last.map(|e| e.to_string()).unwrap_or_default())))
 }
 
 /// Size of a file in bytes; 0 when it is missing or unreadable.
@@ -279,7 +279,7 @@ pub fn file_len(p: &Path) -> u64 {
 /// A folder the user named must exist before anything is done with it.
 pub fn require_dir(p: &Path) -> Result<()> {
     if !p.is_dir() {
-        anyhow::bail!("{}", tr!("找不到文件夹：{}", "Folder not found: {}", display_path(p)));
+        anyhow::bail!("{}", tr!("Folder not found: {}", "找不到文件夹：{}", display_path(p)));
     }
     Ok(())
 }
@@ -287,8 +287,8 @@ pub fn require_dir(p: &Path) -> Result<()> {
 /// Copies each file into `~/.agentplus/backups/<time>/<agent>/` before a write,
 /// with a `manifest.json` recording where each file came from (for rollback).
 pub fn backup(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
-    let (zh, en) = crate::history::REASON_APPLY;
-    backup_tagged(agent, files, crate::i18n::l(zh, en))
+    let (en, zh) = crate::history::REASON_APPLY;
+    backup_tagged(agent, files, crate::i18n::l(en, zh))
 }
 
 pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
@@ -310,10 +310,10 @@ fn new_dir_in(root: &Path, agent: &str) -> Result<PathBuf> {
         match fs::create_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e).with_context(|| tr!("创建 {} 失败", "Failed to create {}", dir.display())),
+            Err(e) => return Err(e).with_context(|| tr!("Failed to create {}", "创建 {} 失败", dir.display())),
         }
     }
-    Err(anyhow::anyhow!(tr!("创建备份目录失败：{} 下同一秒的备份太多", "Failed to create a backup folder: too many backups in one second under {}", root.display())))
+    Err(anyhow::anyhow!(tr!("Failed to create a backup folder: too many backups in one second under {}", "创建备份目录失败：{} 下同一秒的备份太多", root.display())))
 }
 
 fn backup_in(root: &Path, agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
@@ -325,7 +325,7 @@ fn backup_in(root: &Path, agent: &str, files: &[PathBuf], reason: &str) -> Resul
             let base = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
             // Several files can share a name (one models.json per OpenClaw agent): number the rest.
             let name = (1..).map(|n| if n == 1 { base.clone() } else { format!("{n}-{base}") }).find(|n| !used.contains(n)).unwrap();
-            fs::copy(f, dir.join(&name)).with_context(|| tr!("备份 {} 失败", "Failed to back up {}", f.display()))?;
+            fs::copy(f, dir.join(&name)).with_context(|| tr!("Failed to back up {}", "备份 {} 失败", f.display()))?;
             entries.push(serde_json::json!({ "name": name, "path": f.to_string_lossy() }));
             used.push(name);
         }
@@ -483,7 +483,7 @@ pub fn jptr(parts: &[&str]) -> String {
 
 pub fn read_json(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
     let (text, meta) = read_text(path)?;
-    let v = serde_json::from_str(&text).with_context(|| tr!("解析 {} 失败", "Failed to parse {}", path.display()))?;
+    let v = serde_json::from_str(&text).with_context(|| tr!("Failed to parse {}", "解析 {} 失败", path.display()))?;
     Ok((v, meta))
 }
 
@@ -492,7 +492,7 @@ pub fn read_json(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
 pub fn read_json_object(path: &Path) -> Result<(serde_json::Value, TextMeta)> {
     let (v, meta) = read_json(path)?;
     if !v.is_object() {
-        anyhow::bail!("{}", tr!("{} 的顶层不是 JSON 对象，不修改它", "The top level of {} is not a JSON object; leaving it alone", display_path(path)));
+        anyhow::bail!("{}", tr!("The top level of {} is not a JSON object; leaving it alone", "{} 的顶层不是 JSON 对象，不修改它", display_path(path)));
     }
     Ok((v, meta))
 }
@@ -509,9 +509,9 @@ pub fn read_json_object_or_new(path: &Path) -> Result<(serde_json::Value, TextMe
 /// Returns (value, had_comments); `name` is how errors refer to the file.
 pub fn parse_jsonc_object(text: &str, name: &str) -> Result<(serde_json::Value, bool)> {
     let (clean, had) = strip_jsonc(text);
-    let v: serde_json::Value = serde_json::from_str(&clean).map_err(|e| anyhow::anyhow!(tr!("{name} 解析失败：{e}", "Failed to parse {name}: {e}")))?;
+    let v: serde_json::Value = serde_json::from_str(&clean).map_err(|e| anyhow::anyhow!(tr!("Failed to parse {name}: {e}", "{name} 解析失败：{e}")))?;
     if !v.is_object() {
-        anyhow::bail!("{}", tr!("{name} 顶层不是对象", "The top level of {name} is not an object"));
+        anyhow::bail!("{}", tr!("The top level of {name} is not an object", "{name} 顶层不是对象"));
     }
     Ok((v, had))
 }
@@ -540,8 +540,8 @@ pub fn obj_at<'a>(v: &'a mut serde_json::Value, path: &[&str]) -> Result<&'a mut
             *cur = serde_json::json!({});
         }
         if !cur.is_object() {
-            let at = if i == 0 { crate::i18n::l("（顶层）", "(top level)").to_string() } else { path[..i].join(".") };
-            anyhow::bail!("{}", tr!("{at} 不是对象", "{at} is not an object"));
+            let at = if i == 0 { crate::i18n::l("(top level)", "（顶层）").to_string() } else { path[..i].join(".") };
+            anyhow::bail!("{}", tr!("{at} is not an object", "{at} 不是对象"));
         }
     }
     Ok(cur.as_object_mut().unwrap())

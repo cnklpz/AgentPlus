@@ -894,7 +894,7 @@ pub fn cancel() {
 /// Err once the restart has been cancelled.
 pub fn check_cancel() -> Result<()> {
     if CANCEL.load(Ordering::SeqCst) {
-        return Err(anyhow!(crate::i18n::l("已取消", "Cancelled")));
+        return Err(anyhow!(crate::i18n::l("Cancelled", "已取消")));
     }
     Ok(())
 }
@@ -982,10 +982,10 @@ fn stop(inst: &Install, on: &dyn Fn(Progress)) -> Result<()> {
         }
         if left != left_seen {
             left_seen = left;
-            on(Progress::step("stop", "active", Some(tr!("等待 {left} 个进程退出", "Waiting for {left} process(es) to exit"))));
+            on(Progress::step("stop", "active", Some(tr!("Waiting for {left} process(es) to exit", "等待 {left} 个进程退出"))));
         }
         if t0.elapsed() > Duration::from_secs(10) {
-            return Err(anyhow!(crate::i18n::l("进程没有在 10 秒内退出", "The process did not exit within 10 seconds")));
+            return Err(anyhow!(crate::i18n::l("The process did not exit within 10 seconds", "进程没有在 10 秒内退出")));
         }
         pause(Duration::from_millis(200))?;
     }
@@ -1004,7 +1004,7 @@ fn activate(aumid: &str, args: &str) -> Result<u32> {
 }
 #[cfg(not(windows))]
 fn activate(_: &str, _: &str) -> Result<u32> {
-    Err(anyhow!(crate::i18n::l("仅支持 Windows", "Windows only")))
+    Err(anyhow!(crate::i18n::l("Windows only", "仅支持 Windows")))
 }
 
 /// What a restart found.
@@ -1018,12 +1018,12 @@ pub struct Restarted {
 /// `args` are passed to the new process (e.g. a debug port).
 pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restarted> {
     if crate::env::is_wsl() {
-        return Err(anyhow!(crate::i18n::l("WSL 里的 Codex 是命令行工具，不用重启：新开的 codex 会话会读取新配置", "Codex in WSL is a command-line tool and doesn't need a restart: new codex sessions read the new config")));
+        return Err(anyhow!(crate::i18n::l("Codex in WSL is a command-line tool and doesn't need a restart: new codex sessions read the new config", "WSL 里的 Codex 是命令行工具，不用重启：新开的 codex 会话会读取新配置")));
     }
     let t0 = Instant::now();
     let inst = detect(agent);
     if !inst.installed {
-        return Err(anyhow!(crate::i18n::l("没有检测到安装", "No installation detected")));
+        return Err(anyhow!(crate::i18n::l("No installation detected", "没有检测到安装")));
     }
     let sys = processes();
     let app = app_of(&sys, &inst);
@@ -1041,9 +1041,9 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
             t0.elapsed().as_secs_f32()
         ),
     );
-    let cli_note = (cli > 0).then(|| tr!("终端里的 {cli} 个 CLI 会话不会重启，重新打开后才读到新配置", "{cli} CLI session(s) in terminals aren't restarted; they read the new config once reopened"));
+    let cli_note = (cli > 0).then(|| tr!("{cli} CLI session(s) in terminals aren't restarted; they read the new config once reopened", "终端里的 {cli} 个 CLI 会话不会重启，重新打开后才读到新配置"));
     if running > 0 {
-        on(Progress::step("stop", "active", Some(tr!("正在结束 {running} 个进程", "Ending {running} process(es)"))));
+        on(Progress::step("stop", "active", Some(tr!("Ending {running} process(es)", "正在结束 {running} 个进程"))));
         stop(&inst, on)?;
         on(match cli_note {
             Some(n) => Progress::step("stop", "warn", Some(n)),
@@ -1051,9 +1051,9 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
         });
         pause(Duration::from_millis(400))?;
     } else {
-        let idle = crate::i18n::l("没有在运行", "Not running");
+        let idle = crate::i18n::l("Not running", "没有在运行");
         on(match cli_note {
-            Some(n) => Progress::step("stop", "warn", Some(format!("{idle}{}{n}", crate::i18n::l("；", "; ")))),
+            Some(n) => Progress::step("stop", "warn", Some(format!("{idle}{}{n}", crate::i18n::l("; ", "；")))),
             None => Progress::step("stop", "skip", Some(idle.into())),
         });
     }
@@ -1064,19 +1064,19 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     if let Some(aumid) = &inst.aumid {
         activate(aumid, args)?;
     } else if let Some(exe) = &inst.exe {
-        start_exe(exe, args).map_err(|e| anyhow!(tr!("启动失败：{e}", "Failed to start: {e}")))?;
+        start_exe(exe, args).map_err(|e| anyhow!(tr!("Failed to start: {e}", "启动失败：{e}")))?;
     }
     crate::applog::info("restart", format!("{agent}: launch call returned after {:.1}s", t1.elapsed().as_secs_f32()));
     // Wait until its process shows up, so "done" means it is actually up.
     if inst.dir.is_some() {
-        on(Progress::step("start", "active", Some(crate::i18n::l("等待进程出现", "Waiting for the process").into())));
+        on(Progress::step("start", "active", Some(crate::i18n::l("Waiting for the process", "等待进程出现").into())));
         let t0 = Instant::now();
         let mut scans = 0u32;
         while app_of(&processes(), &inst).is_empty() {
             scans += 1;
             if t0.elapsed() > Duration::from_secs(15) {
                 crate::applog::warn("restart", format!("{agent}: no app process seen within 15s ({scans} scans); {}", near_misses(&inst)));
-                on(Progress::step("start", "warn", Some(crate::i18n::l("15 秒内没有看到它的进程，可能还在启动", "No process seen within 15 seconds; it may still be starting").into())));
+                on(Progress::step("start", "warn", Some(crate::i18n::l("No process seen within 15 seconds; it may still be starting", "15 秒内没有看到它的进程，可能还在启动").into())));
                 return Ok(done);
             }
             pause(Duration::from_millis(300))?;

@@ -132,13 +132,13 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
         let mut msg = if inject {
             cdp::inject(cdp::PORT, patches, &report)?
         } else if r.was_running {
-            i18n::l("已重启", "Restarted").into()
+            i18n::l("Restarted", "已重启").into()
         } else {
-            i18n::l("已启动", "Started").into()
+            i18n::l("Started", "已启动").into()
         };
         if r.cli_sessions > 0 {
             let n = r.cli_sessions;
-            msg.push_str(&tr!("；终端里的 {n} 个 CLI 会话要重新打开才会生效", "; reopen the {n} CLI session(s) in terminals for the change to apply"));
+            msg.push_str(&tr!("; reopen the {n} CLI session(s) in terminals for the change to apply", "；终端里的 {n} 个 CLI 会话要重新打开才会生效"));
         }
         Ok(msg)
     })
@@ -299,7 +299,7 @@ async fn open_path(path: String) -> Result<(), String> {
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") || url.chars().any(|c| c.is_whitespace() || c == '"') {
-        return Err(i18n::l("只能打开 https 链接", "Only https links can be opened").into());
+        return Err(i18n::l("Only https links can be opened", "只能打开 https 链接").into());
     }
     process::open_dir(&url).map_err(err)
 }
@@ -373,7 +373,7 @@ async fn gateway_test(route: String, api: String, model: String) -> Result<net::
     blocking(move || {
         let st = gateway::server::status();
         if !st.running {
-            anyhow::bail!("{}", i18n::l("网关没有运行", "The gateway is not running"));
+            anyhow::bail!("{}", i18n::l("The gateway is not running", "网关没有运行"));
         }
         let base = format!("http://127.0.0.1:{}/{route}/v1", st.port);
         Ok(net::test_call(&base, Some(gateway::server::test_key()), &api, model.trim()))

@@ -36,7 +36,7 @@ pub const WSL_MARKER: &str = ".qwen/settings.json";
 
 const STANDARD: [&str; 4] = ["openai", "anthropic", "gemini", "vertex-ai"];
 fn store_label() -> &'static str {
-    l("AgentPlus · Qwen Code 暂存", "AgentPlus · Qwen Code stash")
+    l("AgentPlus · Qwen Code stash", "AgentPlus · Qwen Code 暂存")
 }
 const OAUTH: &str = "qwen-oauth";
 
@@ -183,7 +183,7 @@ fn agentplus_var(id: &str) -> String {
 fn check_api(api: &str) -> Result<&str> {
     match api {
         "chat" | "responses" | "anthropic" | "gemini" => Ok(api),
-        other => Err(anyhow!(tr!("Qwen Code 不支持 {other} 接口", "Qwen Code doesn't support the {other} API"))),
+        other => Err(anyhow!(tr!("Qwen Code doesn't support the {other} API", "Qwen Code 不支持 {other} 接口"))),
     }
 }
 
@@ -382,7 +382,7 @@ fn fallback_name(g: &Group) -> String {
         .as_deref()
         .map(|b| host_of(b).split('/').next().unwrap_or("").to_string())
         .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| tr!("{} 默认地址", "{} default URL", api_label(g.api())))
+        .unwrap_or_else(|| tr!("{} default URL", "{} 默认地址", api_label(g.api())))
 }
 
 fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) -> Provider {
@@ -392,17 +392,17 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
     let var = g.key_var();
     let found = var.as_deref().and_then(|v| lookup(cfg, v));
     let key_note = match (&var, &found) {
-        (Some(v), Some((_, KeySrc::Settings))) => tr!("环境变量 {v} · 已在 settings.json 的 env 里设置", "Environment variable {v} · set in the env block of settings.json"),
-        (Some(v), Some((_, KeySrc::DotEnv))) => tr!("环境变量 {v} · 已在 {} 里设置", "Environment variable {v} · set in {}", display_path(&dotenv_path())),
-        (Some(v), Some((_, KeySrc::System))) => tr!("环境变量 {v} · 已在系统环境变量里设置", "Environment variable {v} · set in the system environment"),
-        (Some(v), None) => tr!("环境变量 {v} · 未设置，请求会失败", "Environment variable {v} · not set, requests will fail"),
-        _ => l("未设置", "Not set").into(),
+        (Some(v), Some((_, KeySrc::Settings))) => tr!("Environment variable {v} · set in the env block of settings.json", "环境变量 {v} · 已在 settings.json 的 env 里设置"),
+        (Some(v), Some((_, KeySrc::DotEnv))) => tr!("Environment variable {v} · set in {}", "环境变量 {v} · 已在 {} 里设置", display_path(&dotenv_path())),
+        (Some(v), Some((_, KeySrc::System))) => tr!("Environment variable {v} · set in the system environment", "环境变量 {v} · 已在系统环境变量里设置"),
+        (Some(v), None) => tr!("Environment variable {v} · not set, requests will fail", "环境变量 {v} · 未设置，请求会失败"),
+        _ => l("Not set", "未设置").into(),
     };
     let mut details = vec![
-        Kv::mono(lbl::config_location(), trn!(g.live.len(), "modelProviders.{}（{n} 个条目）", "modelProviders.{} ({n} entry)", "modelProviders.{} ({n} entries)", g.key)),
-        Kv::mono("envKey", g.env_key.clone().unwrap_or_else(|| tr!("-（默认 {}）", "- (default {})", var.clone().unwrap_or_default()))),
+        Kv::mono(lbl::config_location(), trn!(g.live.len(), "modelProviders.{} ({n} entry)", "modelProviders.{} ({n} entries)", "modelProviders.{}（{n} 个条目）", g.key)),
+        Kv::mono("envKey", g.env_key.clone().unwrap_or_else(|| tr!("- (default {})", "-（默认 {}）", var.clone().unwrap_or_default()))),
         Kv::text(lbl::api_key(), key_note),
-        Kv::text(lbl::status(), if g.enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries kept in AgentPlus") }),
+        Kv::text(lbl::status(), if g.enabled { l("Enabled", "已启用") } else { l("Disabled · entries kept in AgentPlus", "已停用 · 条目暂存在 AgentPlus") }),
     ];
     if g.proto.as_deref().is_some_and(|p| p != g.key) {
         details.push(Kv::mono("providerProtocol", format!("{} → {}", g.key, g.proto.as_deref().unwrap_or(""))));
@@ -411,11 +411,11 @@ fn provider_of(g: &Group, cfg: &Value, names: &Map<String, Value>, sel: &Sel) ->
         id: g.id.clone(),
         name: names.get(&g.id).and_then(|x| x.as_str()).map(String::from).unwrap_or_else(|| fallback_name(g)),
         base_url: g.base.clone(),
-        host: g.base.as_deref().map(host_of).unwrap_or_else(|| l("默认地址", "Default URL").into()),
+        host: g.base.as_deref().map(host_of).unwrap_or_else(|| l("Default URL", "默认地址").into()),
         apis: vec![api_label(api).into()],
         enabled: g.enabled,
         compatible: g.proto.is_some(),
-        reason: g.proto.is_none().then(|| tr!("modelProviders.{} 没有在 providerProtocol 里声明协议，Qwen Code 会忽略它", "modelProviders.{} has no protocol declared in providerProtocol, so Qwen Code ignores it", g.key)),
+        reason: g.proto.is_none().then(|| tr!("modelProviders.{} has no protocol declared in providerProtocol, so Qwen Code ignores it", "modelProviders.{} 没有在 providerProtocol 里声明协议，Qwen Code 会忽略它", g.key)),
         models,
         details,
         editable: g.proto.is_some(),
@@ -448,13 +448,13 @@ pub fn state(inst: &Install) -> AgentState {
     if sel.auth.as_deref() == Some(OAUTH) || dir().join("oauth_creds.json").exists() {
         st.providers.push(Provider::builtin(
             OAUTH,
-            l("Qwen 账号（OAuth）", "Qwen account (OAuth)"),
-            l("Qwen OAuth 登录", "Qwen OAuth sign-in"),
+            l("Qwen account (OAuth)", "Qwen 账号（OAuth）"),
+            l("Qwen OAuth sign-in", "Qwen OAuth 登录"),
             "chat",
-            l("账号", "Account"),
+            l("Account", "账号"),
             vec![
-                Kv::text(lbl::auth(), tr!("qwen-oauth（{}）", "qwen-oauth ({})", display_path(&dir().join("oauth_creds.json")))),
-                Kv::text(lbl::note(), l("Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换", "Qwen Code's built-in account sign-in. Models are managed by Qwen Code; switch with /auth.")),
+                Kv::text(lbl::auth(), tr!("qwen-oauth ({})", "qwen-oauth（{}）", display_path(&dir().join("oauth_creds.json")))),
+                Kv::text(lbl::note(), l("Qwen Code's built-in account sign-in. Models are managed by Qwen Code; switch with /auth.", "Qwen Code 内置的账号登录，模型由 Qwen Code 管理，用 /auth 切换")),
             ],
         ));
     }
@@ -471,8 +471,8 @@ pub fn state(inst: &Install) -> AgentState {
     st.settings = vec![bool_setting(
         "usage_stats",
         NAME,
-        l("发送使用统计", "Send usage statistics"),
-        l("privacy.usageStatisticsEnabled：向 Qwen Code 发送匿名使用统计", "privacy.usageStatisticsEnabled: send anonymous usage statistics to Qwen Code"),
+        l("Send usage statistics", "发送使用统计"),
+        l("privacy.usageStatisticsEnabled: send anonymous usage statistics to Qwen Code", "privacy.usageStatisticsEnabled：向 Qwen Code 发送匿名使用统计"),
         cfg.pointer("/privacy/usageStatisticsEnabled").and_then(|x| x.as_bool()).unwrap_or(true),
     )];
 
@@ -480,17 +480,17 @@ pub fn state(inst: &Install) -> AgentState {
     let cur_name = cur.and_then(|g| st.providers.iter().find(|p| p.id == g.id)).map(|p| p.name.clone());
     let vis: usize = st.providers.iter().filter(|p| p.enabled && !p.builtin).map(|p| p.models.iter().filter(|m| m.visible).count()).sum();
     st.current = vec![
-        Kv::mono(lbl::auth(), sel.auth.clone().unwrap_or_else(|| l("-（未选择）", "- (not selected)").into())),
+        Kv::mono(lbl::auth(), sel.auth.clone().unwrap_or_else(|| l("- (not selected)", "-（未选择）").into())),
         Kv::mono(lbl::current_model(), sel.model.clone().unwrap_or_else(|| "-".into())),
-        Kv::text(lbl::provider(), cur_name.unwrap_or_else(|| if sel.auth.as_deref() == Some(OAUTH) { l("Qwen 账号（OAuth）", "Qwen account (OAuth)").into() } else { "-".into() })),
-        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+        Kv::text(lbl::provider(), cur_name.unwrap_or_else(|| if sel.auth.as_deref() == Some(OAUTH) { l("Qwen account (OAuth)", "Qwen 账号（OAuth）").into() } else { "-".into() })),
+        Kv::text(lbl::visible_models(), tr!("{vis}", "{vis} 个")),
         Kv::mono(lbl::config_file(), display_path(&settings_path())),
     ];
-    st.notes.push(l("Qwen Code 会热加载 modelProviders；在 Qwen Code 里用 /model 选择模型。", "Qwen Code hot-reloads modelProviders; pick models with /model in Qwen Code.").into());
-    st.notes.push(l("密钥写入 settings.json 的 env 块（按 envKey 命名的变量），不会写进模型条目。", "API keys are written to the env block of settings.json (in the variable named by envKey), never into model entries.").into());
+    st.notes.push(l("Qwen Code hot-reloads modelProviders; pick models with /model in Qwen Code.", "Qwen Code 会热加载 modelProviders；在 Qwen Code 里用 /model 选择模型。").into());
+    st.notes.push(l("API keys are written to the env block of settings.json (in the variable named by envKey), never into model entries.", "密钥写入 settings.json 的 env 块（按 envKey 命名的变量），不会写进模型条目。").into());
     if let (Some(m), Some(a)) = (&sel.model, &sel.auth) {
         if a != OAUTH && cur.is_none() && gs.iter().any(|g| g.key == *a) {
-            st.notes.push(tr!("当前选中的模型 {m} 不在已启用的 modelProviders.{a} 里（可能已隐藏或停用）。", "The selected model {m} is not in the enabled modelProviders.{a} (it may be hidden or disabled)."));
+            st.notes.push(tr!("The selected model {m} is not in the enabled modelProviders.{a} (it may be hidden or disabled).", "当前选中的模型 {m} 不在已启用的 modelProviders.{a} 里（可能已隐藏或停用）。"));
         }
     }
     st
@@ -499,7 +499,7 @@ pub fn state(inst: &Install) -> AgentState {
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load()?;
     let g = groups(&cfg, &store::load()).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
-    let base = g.base.clone().filter(|b| !b.trim().is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")))?;
+    let base = g.base.clone().filter(|b| !b.trim().is_empty()).ok_or_else(|| anyhow!(tr!("Provider {id} has no baseUrl", "供应商 {id} 没有 baseUrl")))?;
     let key = g.key_var().and_then(|v| lookup(&cfg, &v)).map(|x| x.0);
     Ok((base, key, g.api().into()))
 }
@@ -589,10 +589,10 @@ impl Ctx {
     fn enabled_group(&self, id: &str) -> Result<Group> {
         let g = self.group(id)?;
         if !g.enabled {
-            return Err(anyhow!(tr!("供应商 {id} 已停用，先启用再调整模型", "Provider {id} is disabled; enable it before changing its models")));
+            return Err(anyhow!(tr!("Provider {id} is disabled; enable it before changing its models", "供应商 {id} 已停用，先启用再调整模型")));
         }
         if g.proto.is_none() {
-            return Err(anyhow!(tr!("modelProviders.{} 没有声明协议，AgentPlus 不修改它", "modelProviders.{} has no declared protocol; AgentPlus won't modify it", g.key)));
+            return Err(anyhow!(tr!("modelProviders.{} has no declared protocol; AgentPlus won't modify it", "modelProviders.{} 没有声明协议，AgentPlus 不修改它", g.key)));
         }
         Ok(g)
     }
@@ -606,7 +606,7 @@ impl Ctx {
             .entry(key.to_string())
             .or_insert_with(|| json!([]))
             .as_array_mut()
-            .ok_or_else(|| anyhow!(tr!("modelProviders.{key} 不是数组", "modelProviders.{key} is not an array")))
+            .ok_or_else(|| anyhow!(tr!("modelProviders.{key} is not an array", "modelProviders.{key} 不是数组")))
     }
 
     fn live_arr(&mut self, key: &str) -> Option<&mut Vec<Value>> {
@@ -703,7 +703,7 @@ impl Ctx {
         if names.get(id).and_then(|x| x.as_str()) != Some(name) {
             names.insert(id.into(), json!(name));
             self.set_store("names", names);
-            self.diff.push(store_label(), tr!("「{id}」名称 = {name}", "\"{id}\" name = {name}"), true);
+            self.diff.push(store_label(), tr!("\"{id}\" name = {name}", "「{id}」名称 = {name}"), true);
         }
     }
 
@@ -773,11 +773,11 @@ impl Ctx {
         let models = clean_ids(&p.models);
         if models.is_empty() {
             self.push_skeleton(key, tmpl.clone());
-            self.diff.push(store_label(), tr!("+ 「{}」{}（{} · 还没有模型，添加模型后写入 modelProviders.{key}）", "+ \"{}\" {} ({} · no models yet; written to modelProviders.{key} once you add models)", p.name.trim(), p.base_url.trim(), api_label(api)), true);
+            self.diff.push(store_label(), tr!("+ \"{}\" {} ({} · no models yet; written to modelProviders.{key} once you add models)", "+ 「{}」{}（{} · 还没有模型，添加模型后写入 modelProviders.{key}）", p.name.trim(), p.base_url.trim(), api_label(api)), true);
         } else {
             let entries: Vec<Value> = models.iter().map(|m| new_entry(&tmpl, m, None, None)).collect();
             self.arr(key)?.extend(entries);
-            self.diff.push(&self.file, trn!(models.len(), "+ modelProviders.{key}：「{}」{} · {} · {n} 个模型（envKey = {var}）", "+ modelProviders.{key}: \"{}\" {} · {} · {n} model (envKey = {var})", "+ modelProviders.{key}: \"{}\" {} · {} · {n} models (envKey = {var})", p.name.trim(), p.base_url.trim(), api_label(api)), true);
+            self.diff.push(&self.file, trn!(models.len(), "+ modelProviders.{key}: \"{}\" {} · {} · {n} model (envKey = {var})", "+ modelProviders.{key}: \"{}\" {} · {} · {n} models (envKey = {var})", "+ modelProviders.{key}：「{}」{} · {} · {n} 个模型（envKey = {var}）", p.name.trim(), p.base_url.trim(), api_label(api)), true);
             self.cfg_dirty = true;
         }
         self.repin(&id, key, Some(p.base_url.trim().to_string()), Some(var.clone()), true);
@@ -796,7 +796,7 @@ impl Ctx {
     fn edit_provider(&mut self, id: &str, p: &ProviderInput) -> Result<()> {
         let api = check_api(&p.api)?;
         let g = self.group(id)?;
-        let proto = g.proto.clone().ok_or_else(|| anyhow!(tr!("modelProviders.{} 没有声明协议，AgentPlus 不修改它", "modelProviders.{} has no declared protocol; AgentPlus won't modify it", g.key)))?;
+        let proto = g.proto.clone().ok_or_else(|| anyhow!(tr!("modelProviders.{} has no declared protocol; AgentPlus won't modify it", "modelProviders.{} 没有声明协议，AgentPlus 不修改它", g.key)))?;
         let same_family = g.api() == api || (proto == "openai" && (api == "chat" || api == "responses"));
         let new_key = if same_family { g.key.clone() } else { key_for_api(api).to_string() };
         let openai = proto_of(&self.cfg, &new_key).as_deref() == Some("openai");
@@ -824,14 +824,14 @@ impl Ctx {
             self.transform(&g, &new_key, &f)?;
             let file = if g.enabled { self.file.clone() } else { store_label().to_string() };
             if base_changed {
-                self.diff.push(&file, trn!(n, "modelProviders.{new_key}「{id}」baseUrl = \"{base}\"（{n} 个条目）", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entry)", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entries)"), true);
+                self.diff.push(&file, trn!(n, "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entry)", "modelProviders.{new_key} \"{id}\" baseUrl = \"{base}\" ({n} entries)", "modelProviders.{new_key}「{id}」baseUrl = \"{base}\"（{n} 个条目）"), true);
             }
             if api_changed {
-                let moved = if new_key != g.key { tr!("，移到 modelProviders.{new_key}", ", moved to modelProviders.{new_key}") } else { String::new() };
-                self.diff.push(&file, tr!("「{id}」协议 {} → {}{moved}", "\"{id}\" protocol {} → {}{moved}", api_label(g.api()), api_label(api)), true);
+                let moved = if new_key != g.key { tr!(", moved to modelProviders.{new_key}", "，移到 modelProviders.{new_key}") } else { String::new() };
+                self.diff.push(&file, tr!("\"{id}\" protocol {} → {}{moved}", "「{id}」协议 {} → {}{moved}", api_label(g.api()), api_label(api)), true);
             }
             if let Some(v) = &new_env {
-                self.diff.push(&file, trn!(n, "「{id}」envKey = \"{v}\"（{n} 个条目）", "\"{id}\" envKey = \"{v}\" ({n} entry)", "\"{id}\" envKey = \"{v}\" ({n} entries)"), true);
+                self.diff.push(&file, trn!(n, "\"{id}\" envKey = \"{v}\" ({n} entry)", "\"{id}\" envKey = \"{v}\" ({n} entries)", "「{id}」envKey = \"{v}\"（{n} 个条目）"), true);
             }
         }
         // The group is now found by its new (key, baseUrl, envKey); its derived id may
@@ -841,7 +841,7 @@ impl Ctx {
             self.set_name(id, p.name.trim());
         }
         if let Some(k) = key {
-            let var = new_env.or(g.key_var()).ok_or_else(|| anyhow!(l("没有可写入密钥的变量", "No variable to write the API key to")))?;
+            let var = new_env.or(g.key_var()).ok_or_else(|| anyhow!(l("No variable to write the API key to", "没有可写入密钥的变量")))?;
             self.set_env(&var, &k)?;
         }
         Ok(())
@@ -856,16 +856,16 @@ impl Ctx {
             let h = self.take_hidden(&g, &|_| true).len();
             self.take_skeleton(&g);
             if n > 0 {
-                self.diff.push(&self.file, trn!(n, "- modelProviders.{}：「{name}」的 {n} 个条目", "- modelProviders.{}: {n} entry of \"{name}\"", "- modelProviders.{}: {n} entries of \"{name}\"", g.key), false);
+                self.diff.push(&self.file, trn!(n, "- modelProviders.{}: {n} entry of \"{name}\"", "- modelProviders.{}: {n} entries of \"{name}\"", "- modelProviders.{}：「{name}」的 {n} 个条目", g.key), false);
             }
             if h > 0 || n == 0 {
-                self.diff.push(store_label(), trn!(h, "- 「{name}」暂存的 {n} 个隐藏模型", "- {n} stashed hidden model of \"{name}\"", "- {n} stashed hidden models of \"{name}\""), false);
+                self.diff.push(store_label(), trn!(h, "- {n} stashed hidden model of \"{name}\"", "- {n} stashed hidden models of \"{name}\"", "- 「{name}」暂存的 {n} 个隐藏模型"), false);
             }
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
             d.remove(id);
             self.set_store("disabledProviders", d);
-            self.diff.push(store_label(), tr!("- 「{name}」（已停用，暂存的条目一并删除）", "- \"{name}\" (disabled; stashed entries deleted too)"), false);
+            self.diff.push(store_label(), tr!("- \"{name}\" (disabled; stashed entries deleted too)", "- 「{name}」（已停用，暂存的条目一并删除）"), false);
         }
         self.pins.retain(|p| p.id != id);
         let mut names = store_obj(&self.root, "names");
@@ -878,7 +878,7 @@ impl Ctx {
             let has = self.cfg.get("env").and_then(|e| e.get(var)).is_some();
             if !used && has {
                 self.cfg["env"].as_object_mut().unwrap().remove(var);
-                self.diff.push(&self.file, tr!("env.{var}（删除）", "env.{var} (deleted)"), false);
+                self.diff.push(&self.file, tr!("env.{var} (deleted)", "env.{var}（删除）"), false);
                 self.cfg_dirty = true;
             }
         }
@@ -899,9 +899,9 @@ impl Ctx {
             self.take_skeleton(&g);
             if entries.is_empty() {
                 // Only hidden models or none at all: settings.json itself doesn't change.
-                self.diff.push(store_label(), tr!("- 「{name}」（停用，暂存在 AgentPlus）", "- \"{name}\" (disabled, kept in AgentPlus)"), false);
+                self.diff.push(store_label(), tr!("- \"{name}\" (disabled, kept in AgentPlus)", "- 「{name}」（停用，暂存在 AgentPlus）"), false);
             } else {
-                self.diff.push(&self.file, trn!(entries.len(), "- modelProviders.{}：「{name}」的 {n} 个条目（暂存在 AgentPlus，可恢复）", "- modelProviders.{}: {n} entry of \"{name}\" (kept in AgentPlus, can be restored)", "- modelProviders.{}: {n} entries of \"{name}\" (kept in AgentPlus, can be restored)", g.key), false);
+                self.diff.push(&self.file, trn!(entries.len(), "- modelProviders.{}: {n} entry of \"{name}\" (kept in AgentPlus, can be restored)", "- modelProviders.{}: {n} entries of \"{name}\" (kept in AgentPlus, can be restored)", "- modelProviders.{}：「{name}」的 {n} 个条目（暂存在 AgentPlus，可恢复）", g.key), false);
             }
             d.insert(g.id.clone(), json!({ "key": g.key, "entries": entries, "hidden": hidden, "template": g.template() }));
             self.repin(id, &g.key, g.base.clone(), g.env_key.clone(), false);
@@ -911,11 +911,11 @@ impl Ctx {
             let arr = |k: &str| rec.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
             let (entries, hidden) = (arr("entries"), arr("hidden"));
             if !entries.is_empty() {
-                self.diff.push(&self.file, trn!(entries.len(), "+ modelProviders.{key}：「{name}」的 {n} 个条目", "+ modelProviders.{key}: {n} entry of \"{name}\"", "+ modelProviders.{key}: {n} entries of \"{name}\""), true);
+                self.diff.push(&self.file, trn!(entries.len(), "+ modelProviders.{key}: {n} entry of \"{name}\"", "+ modelProviders.{key}: {n} entries of \"{name}\"", "+ modelProviders.{key}：「{name}」的 {n} 个条目"), true);
                 self.arr(&key)?.extend(entries.clone());
                 self.cfg_dirty = true;
             } else {
-                self.diff.push(store_label(), tr!("+ 「{name}」（还没有可见模型）", "+ \"{name}\" (no visible models yet)"), true);
+                self.diff.push(store_label(), tr!("+ \"{name}\" (no visible models yet)", "+ 「{name}」（还没有可见模型）"), true);
             }
             for e in hidden.iter().cloned() {
                 self.push_hidden(&key, e);
@@ -933,20 +933,20 @@ impl Ctx {
         let g = self.enabled_group(provider)?;
         if !visible {
             if !g.has_live(model) {
-                return if g.has_hidden(model) { Ok(()) } else { Err(anyhow!(tr!("找不到模型 {model}", "Model not found: {model}"))) };
+                return if g.has_hidden(model) { Ok(()) } else { Err(anyhow!(tr!("Model not found: {model}", "找不到模型 {model}"))) };
             }
             let taken = self.take_live(&g, &|e| s(e, "id") == Some(model));
             for e in taken {
                 self.push_hidden(&g.key, e);
             }
-            self.diff.push(&self.file, tr!("modelProviders.{} - \"{model}\"（暂存在 AgentPlus）", "modelProviders.{} - \"{model}\" (kept in AgentPlus)", g.key), false);
+            self.diff.push(&self.file, tr!("modelProviders.{} - \"{model}\" (kept in AgentPlus)", "modelProviders.{} - \"{model}\"（暂存在 AgentPlus）", g.key), false);
         } else {
             if g.has_live(model) {
                 return Ok(());
             }
             let back = self.take_hidden(&g, &|e| s(e, "id") == Some(model));
             if back.is_empty() {
-                return Err(anyhow!(tr!("找不到模型 {model}", "Model not found: {model}")));
+                return Err(anyhow!(tr!("Model not found: {model}", "找不到模型 {model}")));
             }
             self.put_live(&g, back)?;
             self.diff.push(&self.file, format!("modelProviders.{} + \"{model}\"", g.key), true);
@@ -991,7 +991,7 @@ impl Ctx {
                 }
             }
             for c in &changed {
-                self.diff.push(&self.file, tr!("modelProviders.{}「{mid}」{c}", "modelProviders.{} \"{mid}\" {c}", g.key), true);
+                self.diff.push(&self.file, tr!("modelProviders.{} \"{mid}\" {c}", "modelProviders.{}「{mid}」{c}", g.key), true);
             }
             self.cfg_dirty |= !changed.is_empty();
         } else if g.has_hidden(&mid) {
@@ -1002,7 +1002,7 @@ impl Ctx {
             if !changed.is_empty() {
                 self.set_store("hiddenModels", l);
                 for c in &changed {
-                    self.diff.push(store_label(), tr!("「{mid}」（已隐藏）{c}", "\"{mid}\" (hidden) {c}"), true);
+                    self.diff.push(store_label(), tr!("\"{mid}\" (hidden) {c}", "「{mid}」（已隐藏）{c}"), true);
                 }
             }
         } else {
@@ -1010,7 +1010,7 @@ impl Ctx {
             crate::mfields::write(&mut e, crate::mfields::QWEN, &m.extra)?;
             self.put_live(&g, vec![e])?;
             self.take_skeleton(&g);
-            self.diff.push(&self.file, format!("modelProviders.{} + \"{mid}\"{}", g.key, ctx.map(|c| tr!("（上下文 {}）", " (context {})", fmt_ctx(c))).unwrap_or_default()), true);
+            self.diff.push(&self.file, format!("modelProviders.{} + \"{mid}\"{}", g.key, ctx.map(|c| tr!(" (context {})", "（上下文 {}）", fmt_ctx(c))).unwrap_or_default()), true);
         }
         Ok(())
     }
@@ -1023,9 +1023,9 @@ impl Ctx {
             return Ok(());
         }
         if n > 0 {
-            self.diff.push(&self.file, tr!("modelProviders.{} - \"{model}\"（删除）", "modelProviders.{} - \"{model}\" (deleted)", g.key), false);
+            self.diff.push(&self.file, tr!("modelProviders.{} - \"{model}\" (deleted)", "modelProviders.{} - \"{model}\"（删除）", g.key), false);
         } else {
-            self.diff.push(store_label(), tr!("- 「{model}」（已隐藏，删除）", "- \"{model}\" (hidden, deleted)"), false);
+            self.diff.push(store_label(), tr!("- \"{model}\" (hidden, deleted)", "- 「{model}」（已隐藏，删除）"), false);
         }
         self.keep_if_gone(&g);
         Ok(())
@@ -1078,13 +1078,13 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
                 match p.id.as_deref() {
                     None => cx.create_provider(p)?,
-                    Some(OAUTH) => return Err(anyhow!(l("Qwen 账号登录不能编辑", "The Qwen account sign-in can't be edited"))),
+                    Some(OAUTH) => return Err(anyhow!(l("The Qwen account sign-in can't be edited", "Qwen 账号登录不能编辑"))),
                     Some(id) => cx.edit_provider(id, p)?,
                 }
             }
             Op::DeleteProvider { provider } => {
                 if provider == OAUTH {
-                    return Err(anyhow!(l("Qwen 账号登录不能删除，在 Qwen Code 里用 /auth 切换", "The Qwen account sign-in can't be deleted; switch with /auth in Qwen Code")));
+                    return Err(anyhow!(l("The Qwen account sign-in can't be deleted; switch with /auth in Qwen Code", "Qwen 账号登录不能删除，在 Qwen Code 里用 /auth 切换")));
                 }
                 cx.delete_provider(provider)?
             }
@@ -1104,7 +1104,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
                 other => return Err(msg::unknown_setting(other)),
             },
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Qwen Code 可以同时配置多个供应商，在 Qwen Code 里用 /model 选择模型", "Qwen Code can have several providers configured at once; pick models with /model in Qwen Code."))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Qwen Code can have several providers configured at once; pick models with /model in Qwen Code.", "Qwen Code 可以同时配置多个供应商，在 Qwen Code 里用 /model 选择模型"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }

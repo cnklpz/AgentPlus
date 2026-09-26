@@ -1,22 +1,22 @@
-name: 功能建议 / Feature request
-description: 新功能或改进建议 / Suggest a new feature or an improvement
+name: Feature request / 功能建议
+description: Suggest a new feature or an improvement / 新功能或改进建议
 labels: ["enhancement"]
 body:
   - type: checkboxes
     id: checks
     attributes:
-      label: 提交前确认 / Before submitting
+      label: Before submitting / 提交前确认
       options:
-        - label: 已确认 [最新版本](https://github.com/cnklpz/AgentPlus/releases/latest) 还没有这个功能 / The latest version doesn't already do this
+        - label: The [latest version](https://github.com/cnklpz/AgentPlus/releases/latest) doesn't already do this / 已确认 [最新版本](https://github.com/cnklpz/AgentPlus/releases/latest) 还没有这个功能
           required: true
-        - label: 已搜索过 [已有 issue](https://github.com/cnklpz/AgentPlus/issues?q=is%3Aissue)，没有重复 / I searched existing issues
+        - label: I searched [existing issues](https://github.com/cnklpz/AgentPlus/issues?q=is%3Aissue) and found no duplicate / 已搜索过 [已有 issue](https://github.com/cnklpz/AgentPlus/issues?q=is%3Aissue)，没有重复
           required: true
-        - label: 截图前已开启隐私模式（`Ctrl+Shift+H`，macOS `⇧⌘H`）/ Screenshots were taken in Privacy mode
+        - label: Screenshots were taken in Privacy mode (`Ctrl+Shift+H`, macOS `⇧⌘H`) / 截图前已开启隐私模式（`Ctrl+Shift+H`，macOS `⇧⌘H`）
 
   - type: textarea
     id: what
     attributes:
-      label: 建议内容 / Your suggestion
-      description: 遇到了什么不方便，希望怎样改 / What's inconvenient, and how you'd like it to work
+      label: Your suggestion / 建议内容
+      description: What's inconvenient, and how you'd like it to work / 遇到了什么不方便，希望怎样改
     validations:
       required: true

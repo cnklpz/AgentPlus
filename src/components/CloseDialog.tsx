@@ -6,11 +6,11 @@ import { ConfirmFrame } from "./Modal";
 
 export interface CloseChoice {
   action: Exclude<CloseAction, "ask">;
-  /** Save it as the 关闭窗口时 preference and stop asking. */
+  /** Save it as the "When closing the window" preference and stop asking. */
   remember: boolean;
 }
 
-/** Asked when the window is closed while 设置 › 界面 › 关闭窗口时 is "每次询问". null = cancelled. */
+/** Asked when the window is closed while Settings › Interface › When closing the window is "Ask every time". null = cancelled. */
 export function CloseDialog({ onDone }: { onDone: (c: CloseChoice | null) => void }) {
   const [remember, setRemember] = useState(false);
   const trayRef = useRef<HTMLButtonElement>(null);

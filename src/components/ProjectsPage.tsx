@@ -19,7 +19,7 @@ interface ListProps {
   onReveal: (path: string) => void;
 }
 
-/** OpenCode's 项目 tab: open a folder (picker or typed path) or one of the recent projects. */
+/** OpenCode's Projects tab: open a folder (picker or typed path) or one of the recent projects. */
 export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget, onReveal }: ListProps) {
   const [path, setPath] = useState("");
   const go = () => { if (path.trim()) onOpen(path.trim()); };

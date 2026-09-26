@@ -1,6 +1,5 @@
-import type zh from "../zh/app";
-
-const en: typeof zh = {
+// src/App.tsx
+export default {
   // Window controls and top bar
   minimize: "Minimize",
   maximize: "Maximize",
@@ -134,5 +133,3 @@ const en: typeof zh = {
   gatewayKeysItem: "{agent}: {provider}",
   gatewayKeysConfirm: "Update and write",
 };
-
-export default en;

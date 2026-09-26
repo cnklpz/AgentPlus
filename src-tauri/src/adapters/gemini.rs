@@ -3,7 +3,7 @@
 //! `GOOGLE_GEMINI_BASE_URL` / `GEMINI_API_KEY` into `~/.gemini/.env` (only those two lines;
 //! every other line stays) and `security.auth.selectedType = "gemini-api-key"` (plus
 //! `model.name` = the profile's default model) into `~/.gemini/settings.json`.
-//! "Google 账号登录" (oauth-personal) removes the two variables again.
+//! "Google account sign-in" (oauth-personal) removes the two variables again.
 //!
 //! Model roles: Gemini CLI has one model setting, `model.name`; `SetModelRoles` accepts the
 //! role "default" for it (the first model of the list is the default when none is chosen).
@@ -46,9 +46,9 @@ const OFFICIAL_BASE: &str = "https://generativelanguage.googleapis.com";
 struct BoolSetting {
     key: &'static str,
     path: [&'static str; 2],
-    /// (zh, en)
+    /// (en, zh)
     label: (&'static str, &'static str),
-    /// (zh, en)
+    /// (en, zh)
     desc: (&'static str, &'static str),
 }
 
@@ -56,14 +56,14 @@ const BOOL_SETTINGS: [BoolSetting; 2] = [
     BoolSetting {
         key: "autoupdate",
         path: ["general", "enableAutoUpdate"],
-        label: ("自动更新", "Auto-update"),
-        desc: ("general.enableAutoUpdate：启动时自动更新 Gemini CLI", "general.enableAutoUpdate: update Gemini CLI automatically on start"),
+        label: ("Auto-update", "自动更新"),
+        desc: ("general.enableAutoUpdate: update Gemini CLI automatically on start", "general.enableAutoUpdate：启动时自动更新 Gemini CLI"),
     },
     BoolSetting {
         key: "usage_stats",
         path: ["privacy", "usageStatisticsEnabled"],
-        label: ("发送使用统计", "Send usage statistics"),
-        desc: ("privacy.usageStatisticsEnabled：向 Google 发送使用统计（用中转时建议关闭）", "privacy.usageStatisticsEnabled: send usage statistics to Google (turning it off is recommended with a relay)"),
+        label: ("Send usage statistics", "发送使用统计"),
+        desc: ("privacy.usageStatisticsEnabled: send usage statistics to Google (turning it off is recommended with a relay)", "privacy.usageStatisticsEnabled：向 Google 发送使用统计（用中转时建议关闭）"),
     },
 ];
 
@@ -192,9 +192,9 @@ fn auth_label(t: &str) -> &str {
     match t {
         "vertex-ai" => "Vertex AI",
         "cloud-shell" => "Cloud Shell",
-        "compute-default-credentials" => l("Google Cloud 默认凭据", "Google Cloud default credentials"),
-        API_KEY_AUTH => l("Gemini API 密钥（来自环境变量）", "Gemini API key (from environment variables)"),
-        GATEWAY_AUTH => l("网关（gateway）", "Gateway (gateway)"),
+        "compute-default-credentials" => l("Google Cloud default credentials", "Google Cloud 默认凭据"),
+        API_KEY_AUTH => l("Gemini API key (from environment variables)", "Gemini API 密钥（来自环境变量）"),
+        GATEWAY_AUTH => l("Gateway (gateway)", "网关（gateway）"),
         other => other,
     }
 }
@@ -209,14 +209,14 @@ fn provider_of(id: &str, p: &Value, managed: bool) -> Provider {
         .map(|(mid, visible)| Model { tags: if dflt.as_deref() == Some(mid.as_str()) { vec![Tag::default_model()] } else { vec![] }, id: mid, visible, deletable: true, ..Default::default() })
         .collect();
     let mut details = vec![
-        Kv::mono(lbl::base_url(), if base.is_empty() { l("（Gemini 官方 API）", "(Gemini official API)").into() } else { base.clone() }),
-        Kv::text(lbl::api_key(), if key.is_empty() { l("未填写", "Not set").into() } else { format!("{KEY} · {}", mask_key(&key)) }),
+        Kv::mono(lbl::base_url(), if base.is_empty() { l("(Gemini official API)", "（Gemini 官方 API）").into() } else { base.clone() }),
+        Kv::text(lbl::api_key(), if key.is_empty() { l("Not set", "未填写").into() } else { format!("{KEY} · {}", mask_key(&key)) }),
     ];
     if let Some(d) = &dflt {
         details.push(Kv::mono(lbl::default_model(), d.clone()));
     }
     if managed {
-        details.push(Kv::text(l("保存位置", "Stored in"), l("AgentPlus 配置档（切换时写入 ~/.gemini/.env 和 settings.json）", "AgentPlus profile (written to ~/.gemini/.env and settings.json on switch)")));
+        details.push(Kv::text(l("Stored in", "保存位置"), l("AgentPlus profile (written to ~/.gemini/.env and settings.json on switch)", "AgentPlus 配置档（切换时写入 ~/.gemini/.env 和 settings.json）")));
     }
     let base = if base.is_empty() { OFFICIAL_BASE.to_string() } else { base };
     Provider {
@@ -238,7 +238,7 @@ fn provider_of(id: &str, p: &Value, managed: bool) -> Provider {
 
 fn unmanaged_profile(env: &str) -> Value {
     json!({
-        "name": l(".env 里的配置", "Config in .env"),
+        "name": l("Config in .env", ".env 里的配置"),
         "baseUrl": dotenv::get(env, BASE).map(|b| clean_base(&b)).unwrap_or_default(),
         "apiKey": dotenv::get(env, KEY).unwrap_or_default(),
         "models": [],
@@ -247,7 +247,7 @@ fn unmanaged_profile(env: &str) -> Value {
 
 pub fn state(inst: &Install) -> AgentState {
     let mut st = super::new_state(ID, NAME, inst, "single", &dir(), vec![display_path(&settings_path()), display_path(&env_path())]);
-    st.notes.push(l("改动对新启动的 gemini 生效。", "Changes apply to newly started gemini sessions.").into());
+    st.notes.push(l("Changes apply to newly started gemini sessions.", "改动对新启动的 gemini 生效。").into());
     let (cfg, _, had_comments) = match load() {
         Ok(x) => x,
         Err(e) => {
@@ -267,17 +267,17 @@ pub fn state(inst: &Install) -> AgentState {
 
     st.providers.push(Provider::builtin(
         GOOGLE,
-        l("Google 账号登录", "Google account sign-in"),
-        l("Google 账号（oauth-personal）", "Google account (oauth-personal)"),
+        l("Google account sign-in", "Google 账号登录"),
+        l("Google account (oauth-personal)", "Google 账号（oauth-personal）"),
         "gemini",
         api_label("gemini"),
         vec![
-            Kv::text(lbl::auth(), l("security.auth.selectedType = oauth-personal（凭据在 ~/.gemini/oauth_creds.json）", "security.auth.selectedType = oauth-personal (credentials in ~/.gemini/oauth_creds.json)")),
-            Kv::text(lbl::note(), l("不设置 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，用 Google 账号和官方模型", "Leaves GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY unset; uses the Google account and official models")),
+            Kv::text(lbl::auth(), l("security.auth.selectedType = oauth-personal (credentials in ~/.gemini/oauth_creds.json)", "security.auth.selectedType = oauth-personal（凭据在 ~/.gemini/oauth_creds.json）")),
+            Kv::text(lbl::note(), l("Leaves GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY unset; uses the Google account and official models", "不设置 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，用 Google 账号和官方模型")),
         ],
     ));
     if let Some(t) = cur.strip_prefix(AUTH) {
-        st.providers.push(Provider::builtin(&cur, auth_label(t), l("其他认证方式", "Other auth method"), "gemini", api_label("gemini"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(lbl::note(), l("在 Gemini CLI 里用 /auth 管理", "Manage it with /auth in Gemini CLI"))]));
+        st.providers.push(Provider::builtin(&cur, auth_label(t), l("Other auth method", "其他认证方式"), "gemini", api_label("gemini"), vec![Kv::mono("security.auth.selectedType", t.to_string()), Kv::text(lbl::note(), l("Manage it with /auth in Gemini CLI", "在 Gemini CLI 里用 /auth 管理"))]));
     }
     for (id, p) in &profs {
         st.providers.push(provider_of(id, p, true));
@@ -285,26 +285,26 @@ pub fn state(inst: &Install) -> AgentState {
     // A relay / key in .env that no profile covers: show it so it can be adopted.
     if has_env_vars(&env) && matching_profile(&env, &profs).is_none() {
         let mut prov = provider_of(UNMANAGED, &unmanaged_profile(&env), false);
-        prov.details.push(Kv::text(lbl::note(), l("~/.gemini/.env 里的设置，不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理", "Set in ~/.gemini/.env, not saved by AgentPlus; edit and save it once and AgentPlus will manage it")));
+        prov.details.push(Kv::text(lbl::note(), l("Set in ~/.gemini/.env, not saved by AgentPlus; edit and save it once and AgentPlus will manage it", "~/.gemini/.env 里的设置，不是 AgentPlus 保存的配置；编辑并保存一次后就会由 AgentPlus 管理")));
         st.providers.push(prov);
         if cur != UNMANAGED {
-            st.notes.push(l("~/.gemini/.env 里设置了 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，但当前用的是 Google 账号登录（settings.json 的 selectedType 优先）。", "~/.gemini/.env sets GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY, but Google account sign-in is in use (selectedType in settings.json takes precedence).").into());
+            st.notes.push(l("~/.gemini/.env sets GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY, but Google account sign-in is in use (selectedType in settings.json takes precedence).", "~/.gemini/.env 里设置了 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY，但当前用的是 Google 账号登录（settings.json 的 selectedType 优先）。").into());
         }
     }
     for var in [BASE, KEY] {
         if crate::env::agent_var(var).is_some_and(|v| !v.trim().is_empty()) {
-            st.notes.push(tr!("系统环境变量 {var} 已设置，它会覆盖 ~/.gemini/.env 里的同名设置。", "System environment variable {var} is set and overrides the same setting in ~/.gemini/.env."));
+            st.notes.push(tr!("System environment variable {var} is set and overrides the same setting in ~/.gemini/.env.", "系统环境变量 {var} 已设置，它会覆盖 ~/.gemini/.env 里的同名设置。"));
         }
     }
-    st.notes.push(l("项目目录（或上级目录）里有 .env 时，Gemini CLI 会先读它，而不是 ~/.gemini/.env。", "When the project directory (or a parent) has a .env, Gemini CLI reads that instead of ~/.gemini/.env.").into());
+    st.notes.push(l("When the project directory (or a parent) has a .env, Gemini CLI reads that instead of ~/.gemini/.env.", "项目目录（或上级目录）里有 .env 时，Gemini CLI 会先读它，而不是 ~/.gemini/.env。").into());
 
     st.settings = BOOL_SETTINGS.iter().map(|s| bool_setting(s.key, NAME, l(s.label.0, s.label.1), l(s.desc.0, s.desc.1), setting_on(&cfg, &s.path))).collect();
     let cur_name = st.providers.iter().find(|p| p.id == cur).map(|p| p.name.clone()).unwrap_or_default();
     st.current = vec![
         Kv::text(lbl::provider(), cur_name),
-        Kv::mono("selectedType", auth_type(&cfg).unwrap_or_else(|| l("-（未设置）", "- (not set)").into())),
+        Kv::mono("selectedType", auth_type(&cfg).unwrap_or_else(|| l("- (not set)", "-（未设置）").into())),
         Kv::mono(BASE, dotenv::get(&env, BASE).unwrap_or_else(|| "-".into())),
-        Kv::mono("model.name", model_name(&cfg).unwrap_or_else(|| l("-（默认）", "- (default)").into())),
+        Kv::mono("model.name", model_name(&cfg).unwrap_or_else(|| l("- (default)", "-（默认）").into())),
     ];
     st
 }
@@ -313,7 +313,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let p = if id == UNMANAGED {
         unmanaged_profile(&dotenv::load(&env_path()).0)
     } else if id == GOOGLE || id.starts_with(AUTH) {
-        return Err(anyhow!(l("Google 账号登录没有可用的地址", "Google account sign-in has no usable base URL")));
+        return Err(anyhow!(l("Google account sign-in has no usable base URL", "Google 账号登录没有可用的地址")));
     } else {
         profiles::load(&store::load(), ID).get(id).cloned().ok_or_else(|| msg::no_provider(id))?
     };
@@ -340,10 +340,10 @@ fn set_at(cfg: &mut Value, path: &[&str], v: Value) -> Result<()> {
 /// The profile whose models an op edits; the built-in entries have none.
 fn profile_mut<'a>(profs: &'a mut Map<String, Value>, id: &str) -> Result<&'a mut Value> {
     if id == GOOGLE || id.starts_with(AUTH) {
-        return Err(anyhow!(l("Google 账号登录没有模型列表可编辑", "Google account sign-in has no model list to edit")));
+        return Err(anyhow!(l("Google account sign-in has no model list to edit", "Google 账号登录没有模型列表可编辑")));
     }
     if id == UNMANAGED {
-        return Err(anyhow!(l("先编辑并保存一次「.env 里的配置」，让 AgentPlus 接管后再改模型", "Edit and save \"Config in .env\" once so AgentPlus takes it over, then change its models")));
+        return Err(anyhow!(l("Edit and save \"Config in .env\" once so AgentPlus takes it over, then change its models", "先编辑并保存一次「.env 里的配置」，让 AgentPlus 接管后再改模型")));
     }
     profiles::get_mut(profs, id)
 }
@@ -370,7 +370,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let mut cur = before.clone();
     let file = display_path(&settings_path());
     let envfile = display_path(&env_path());
-    let store_label = l("AgentPlus · Gemini CLI 配置档", "AgentPlus · Gemini CLI profiles");
+    let store_label = l("AgentPlus · Gemini CLI profiles", "AgentPlus · Gemini CLI 配置档");
     let mut diff = Diff::default();
     let mut store_dirty = false;
 
@@ -378,7 +378,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.api != "gemini" {
-                    return Err(anyhow!(l("Gemini CLI 只支持 Gemini 协议；其他协议的中转请经本地网关接入", "Gemini CLI only supports the Gemini protocol; connect relays using other protocols through the local gateway")));
+                    return Err(anyhow!(l("Gemini CLI only supports the Gemini protocol; connect relays using other protocols through the local gateway", "Gemini CLI 只支持 Gemini 协议；其他协议的中转请经本地网关接入")));
                 }
                 if p.name.trim().is_empty() {
                     return Err(msg::name_required());
@@ -402,15 +402,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             }
                         }
                         profs.insert(id.clone(), prof);
-                        let adopt = if adopting { l("（接管 .env 里的配置）", " (takes over the config in .env)") } else { "" };
-                        let where_: &str = if base.is_empty() { l("官方 API", "official API") } else { &base };
+                        let adopt = if adopting { l(" (takes over the config in .env)", "（接管 .env 里的配置）") } else { "" };
+                        let where_: &str = if base.is_empty() { l("official API", "官方 API") } else { &base };
                         profiles::push_added(&mut diff, store_label, p.name.trim(), adopt, where_, key.as_deref());
                         if adopting && cur == UNMANAGED {
                             cur = id;
                         }
                         store_dirty = true;
                     }
-                    Some(id) if id == GOOGLE || id.starts_with(AUTH) => return Err(anyhow!(l("Google 账号登录不能编辑", "Google account sign-in can't be edited"))),
+                    Some(id) if id == GOOGLE || id.starts_with(AUTH) => return Err(anyhow!(l("Google account sign-in can't be edited", "Google 账号登录不能编辑"))),
                     Some(id) => {
                         let e = profiles::get_mut(&mut profs, id)?;
                         store_dirty |= profiles::edit(e, id, p.name.trim(), &base, key.as_deref(), &mut diff, store_label);
@@ -419,7 +419,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::DeleteProvider { provider } => {
                 if provider == GOOGLE || provider == UNMANAGED || provider.starts_with(AUTH) {
-                    return Err(anyhow!(l("这一项不能删除", "This entry can't be deleted")));
+                    return Err(anyhow!(l("This entry can't be deleted", "这一项不能删除")));
                 }
                 if provider == &cur {
                     return Err(msg::in_use(provider));
@@ -429,10 +429,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetCurrentProvider { provider } => {
                 if provider.starts_with(AUTH) && provider != &before {
-                    return Err(anyhow!(l("这种认证方式请在 Gemini CLI 里用 /auth 选择", "Choose this auth method with /auth in Gemini CLI")));
+                    return Err(anyhow!(l("Choose this auth method with /auth in Gemini CLI", "这种认证方式请在 Gemini CLI 里用 /auth 选择")));
                 }
                 if provider == UNMANAGED && !has_env_vars(&env0) {
-                    return Err(anyhow!(l(".env 里没有 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY", ".env has no GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY")));
+                    return Err(anyhow!(l(".env has no GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY", ".env 里没有 GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY")));
                 }
                 if provider != GOOGLE && provider != UNMANAGED && !provider.starts_with(AUTH) && !profs.contains_key(provider) {
                     return Err(msg::no_provider(provider));
@@ -444,7 +444,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 // The default model can't be hidden (hiding it again is a no-op, not an error).
                 let hidden = model_list(p).iter().any(|(x, v)| x == model && !v);
                 if !*visible && !hidden && str_field(p, "defaultModel") == *model {
-                    return Err(anyhow!(tr!("{model} 是默认模型，不能隐藏；先换一个默认模型", "{model} is the default model and can't be hidden; choose another default model first")));
+                    return Err(anyhow!(tr!("{model} is the default model and can't be hidden; choose another default model first", "{model} 是默认模型，不能隐藏；先换一个默认模型")));
                 }
                 store_dirty |= profiles::set_visible(p, provider, model, *visible, &mut diff, store_label);
             }
@@ -472,7 +472,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetModelRoles { provider, roles } => {
                 if roles.keys().any(|k| k != "default") {
-                    return Err(anyhow!(l("Gemini CLI 只有「默认模型」（model.name）一个角色", "Gemini CLI has only one role: \"Default model\" (model.name)")));
+                    return Err(anyhow!(l("Gemini CLI has only one role: \"Default model\" (model.name)", "Gemini CLI 只有「默认模型」（model.name）一个角色")));
                 }
                 let p = profile_mut(&mut profs, provider)?;
                 let want = roles.get("default").map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
@@ -488,7 +488,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         }
                         None => drop_default_model(p),
                     }
-                    diff.push(store_label, tr!("「{provider}」默认模型 = {}", "\"{provider}\" default model = {}", want.as_deref().unwrap_or(l("（列表第一个）", "(first in list)"))), want.is_some());
+                    diff.push(store_label, tr!("\"{provider}\" default model = {}", "「{provider}」默认模型 = {}", want.as_deref().unwrap_or(l("(first in list)", "（列表第一个）"))), want.is_some());
                     store_dirty = true;
                 }
             }
@@ -500,7 +500,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     diff.push(&file, format!("{} = {on}", s.path.join(".")), on);
                 }
             }
-            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Gemini CLI 同时只用一个供应商，请用「设为当前」", "Gemini CLI uses one provider at a time; use \"Set as current\""))),
+            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Gemini CLI uses one provider at a time; use \"Set as current\"", "Gemini CLI 同时只用一个供应商，请用「设为当前」"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
     }
@@ -526,7 +526,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 env = dotenv::set(&env, var, v.as_deref());
                 match v {
                     Some(val) => diff.push(&envfile, format!("{var} = {}", if var == KEY { mask_key(val) } else { val.clone() }), true),
-                    None => diff.push(&envfile, tr!("{var}（删除）", "{var} (removed)"), false),
+                    None => diff.push(&envfile, tr!("{var} (removed)", "{var}（删除）"), false),
                 }
             }
         }
@@ -556,7 +556,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 } else {
                     crate::mfields::remove(&mut cfg, "/model/name");
                 }
-                diff.push(&file, l("model.name（删除，用 Gemini CLI 默认模型）", "model.name (removed; Gemini CLI uses its default model)"), false);
+                diff.push(&file, l("model.name (removed; Gemini CLI uses its default model)", "model.name（删除，用 Gemini CLI 默认模型）"), false);
             }
         }
     }
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn unreadable_dotenv_is_never_rewritten() {
-        // GBK bytes ("# 中文") as Notepad saves them on a Chinese system.
+        // A GBK comment line (Chinese text) as Notepad saves it on a Chinese system.
         let gbk: &[u8] = b"# \xd6\xd0\xce\xc4\nGEMINI_API_KEY=old\nOTHER=keep\n";
         let t = setup(Some(SETTINGS), None);
         fs::write(t.0.join(".env"), gbk).unwrap();

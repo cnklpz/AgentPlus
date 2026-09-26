@@ -88,7 +88,7 @@ fn defaults() -> (Option<String>, Option<String>) {
 pub fn state(inst: &Install) -> AgentState {
     let f = fmt();
     let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![f.file(), display_path(&auth_path()), display_path(&settings_path())]);
-    st.notes.push(l("改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。", "Changes take effect in new pi sessions (running sessions can pick again with /model).").into());
+    st.notes.push(l("Changes take effect in new pi sessions (running sessions can pick again with /model).", "改动在新开的 pi 会话里生效（运行中的会话可用 /model 重新选择）。").into());
     let root = store::load();
     let cfg = match load_models() {
         Ok((cfg, _, had_comments)) => {
@@ -107,14 +107,14 @@ pub fn state(inst: &Install) -> AgentState {
     st.providers = f.providers(&cfg, &root, auth.as_ref());
 
     // Built-in providers logged in through `pi` (/login or an API key) but not configured here.
-    let about = l("pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择", "A provider built into pi. Its model list ships with pi; pick models with /model in pi.");
+    let about = l("A provider built into pi. Its model list ships with pi; pick models with /model in pi.", "pi 内置的供应商，模型列表随 pi 发布，在 pi 里用 /model 选择");
     let cards = super::ocfmt::auth_cards(auth.as_ref(), &st.providers, "/login", about, &[]);
     st.providers.extend(cards);
 
     let default = match defaults() {
         (Some(p), Some(m)) => format!("{p}/{m}"),
         (None, Some(m)) => m,
-        (Some(p), None) => tr!("{p}/（未指定）", "{p}/(not set)"),
+        (Some(p), None) => tr!("{p}/(not set)", "{p}/（未指定）"),
         _ => "-".into(),
     };
     st.current = f.summary(&st.providers, default, None);
@@ -140,7 +140,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             continue;
         }
         match op {
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("pi 可以同时用多个供应商：按启用/停用管理，在 pi 里用 /model 选择模型", "pi can use several providers at once: manage them by enabling/disabling, and pick models with /model in pi."))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("pi can use several providers at once: manage them by enabling/disabling, and pick models with /model in pi.", "pi 可以同时用多个供应商：按启用/停用管理，在 pi 里用 /model 选择模型"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
@@ -159,7 +159,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     o.remove("defaultProvider");
                     o.remove("defaultModel");
                 }
-                diff.push(&display_path(&settings_path()), tr!("- defaultProvider / defaultModel（{dp}/{} 已移除，pi 会另选可用模型）", "- defaultProvider / defaultModel ({dp}/{} was removed; pi will pick another available model)", dm.unwrap_or_default()), false);
+                diff.push(&display_path(&settings_path()), tr!("- defaultProvider / defaultModel ({dp}/{} was removed; pi will pick another available model)", "- defaultProvider / defaultModel（{dp}/{} 已移除，pi 会另选可用模型）", dm.unwrap_or_default()), false);
                 settings = Some((s, m));
             }
         }

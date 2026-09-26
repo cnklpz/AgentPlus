@@ -100,7 +100,7 @@ fn write_in(dir: &Path, v: &Value) -> anyhow::Result<()> {
     // A file that exists but does not parse loaded as {}: keep it instead of overwriting it.
     if path.exists() && read(&path).is_none() && fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
         let keep = dir.join(format!("store.broken-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-        crate::util::write_private_atomic(&keep, &fs::read(&path)?).with_context(|| tr!("备份无法解析的 {} 失败", "Failed to back up unparsable {}", path.display()))?;
+        crate::util::write_private_atomic(&keep, &fs::read(&path)?).with_context(|| tr!("Failed to back up unparsable {}", "备份无法解析的 {} 失败", path.display()))?;
     }
     crate::util::write_private_atomic(&path, &serde_json::to_vec_pretty(v)?)
 }

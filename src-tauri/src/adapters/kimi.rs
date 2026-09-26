@@ -30,7 +30,7 @@ pub const WSL_SCRIPT: &str = "(command -v kimi >/dev/null && kimi --version || $
 pub const WSL_MARKER: &str = ".kimi-code/config.toml";
 
 fn store_label() -> &'static str {
-    l("AgentPlus · Kimi Code 暂存", "AgentPlus · Kimi Code stash")
+    l("AgentPlus · Kimi Code stash", "AgentPlus · Kimi Code 暂存")
 }
 /// `max_context_size` is required; used when a new model has none.
 const DEFAULT_CTX: u64 = 128_000;
@@ -105,7 +105,7 @@ fn load() -> Result<(DocumentMut, TextMeta)> {
         return Ok((DocumentMut::new(), TextMeta::NEW));
     }
     let (text, meta) = read_text(&p)?;
-    let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Failed to parse config.toml: {e}")))?;
+    let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("Failed to parse config.toml: {e}", "config.toml 解析失败：{e}")))?;
     Ok((doc, meta))
 }
 
@@ -147,7 +147,7 @@ fn type_for(api: &str, legacy: bool) -> &'static str {
 fn check_api(api: &str) -> Result<&str> {
     match api {
         "chat" | "responses" | "anthropic" | "gemini" => Ok(api),
-        other => Err(anyhow!(tr!("Kimi Code 不支持 {other} 接口", "Kimi Code doesn't support the {other} API"))),
+        other => Err(anyhow!(tr!("Kimi Code doesn't support the {other} API", "Kimi Code 不支持 {other} 接口"))),
     }
 }
 
@@ -189,7 +189,7 @@ fn to_text(parts: &[(&str, &str, &Item)]) -> String {
 }
 
 fn from_text(text: &str) -> Result<DocumentMut> {
-    text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("AgentPlus 暂存的定义解析失败：{e}", "Failed to parse the definition stashed in AgentPlus: {e}")))
+    text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("Failed to parse the definition stashed in AgentPlus: {e}", "AgentPlus 暂存的定义解析失败：{e}")))
 }
 
 fn stash_text(v: &Value) -> &str {
@@ -256,22 +256,22 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
     let from_env = var.as_deref().and_then(crate::env::agent_var).is_some();
     let key_note = match (&var, &inline) {
         (Some(v), _) => tr!(
-            "环境变量 {v}（api_key_env）· {}",
             "Environment variable {v} (api_key_env) · {}",
-            if from_env { l("已设置", "set") } else { l("AgentPlus 没读到，确认 Kimi 运行时有这个变量", "AgentPlus can't see it; make sure Kimi has this variable when it runs") }
+            "环境变量 {v}（api_key_env）· {}",
+            if from_env { l("set", "已设置") } else { l("AgentPlus can't see it; make sure Kimi has this variable when it runs", "AgentPlus 没读到，确认 Kimi 运行时有这个变量") }
         ),
-        (None, Some(_)) => l("api_key · 明文保存在 config.toml", "api_key · stored in plain text in config.toml").into(),
-        _ => l("未填写", "Not set").into(),
+        (None, Some(_)) => l("api_key · stored in plain text in config.toml", "api_key · 明文保存在 config.toml").into(),
+        _ => l("Not set", "未填写").into(),
     };
     let known = TYPES.contains(&ty.as_str());
     let mut details = vec![
         Kv::mono(lbl::config_id(), format!("[providers.{pid}]")),
         Kv::mono("type", format!("\"{ty}\"")),
         Kv::text(lbl::api_key(), key_note),
-        Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus") }),
+        Kv::text(lbl::status(), if enabled { l("Enabled", "已启用") } else { l("Disabled · definition kept in AgentPlus", "已停用 · 定义暂存在 AgentPlus") }),
     ];
     if ty == "kimi" {
-        details.push(Kv::text(lbl::note(), l("Kimi 官方接口（按 Chat 处理）；/login 会改写这一段", "Kimi's official API (treated as Chat); /login rewrites this section")));
+        details.push(Kv::text(lbl::note(), l("Kimi's official API (treated as Chat); /login rewrites this section", "Kimi 官方接口（按 Chat 处理）；/login 会改写这一段")));
     }
     Provider {
         id: pid.into(),
@@ -282,7 +282,7 @@ fn provider_of(pid: &str, item: &Item, models: Vec<Model>, enabled: bool, names:
         builtin: ty == "kimi",
         enabled,
         compatible: known,
-        reason: (!known).then(|| tr!("未知的 type = \"{ty}\"", "Unknown type = \"{ty}\"")),
+        reason: (!known).then(|| tr!("Unknown type = \"{ty}\"", "未知的 type = \"{ty}\"")),
         models,
         details,
         editable: known,
@@ -323,23 +323,23 @@ pub fn state(inst: &Install) -> AgentState {
     st.current = vec![
         Kv::mono("default_model", def.clone().unwrap_or_else(|| "-".into())),
         Kv::text(lbl::provider(), def_prov.as_deref().map(|p| st.providers.iter().find(|x| x.id == p).map(|x| x.name.clone()).unwrap_or_else(|| p.to_string())).unwrap_or_else(|| "-".into())),
-        Kv::mono(l("上游模型", "Upstream model"), def_item.and_then(|m| get_str(m, "model")).unwrap_or_else(|| "-".into())),
-        Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
-        Kv::text(l("配置", "Config"), if legacy { l("旧版 Kimi CLI（~/.kimi）", "Legacy Kimi CLI (~/.kimi)") } else { "Kimi Code" }),
+        Kv::mono(l("Upstream model", "上游模型"), def_item.and_then(|m| get_str(m, "model")).unwrap_or_else(|| "-".into())),
+        Kv::text(lbl::visible_models(), tr!("{vis}", "{vis} 个")),
+        Kv::text(l("Config", "配置"), if legacy { l("Legacy Kimi CLI (~/.kimi)", "旧版 Kimi CLI（~/.kimi）") } else { "Kimi Code" }),
     ];
-    st.notes.push(l("/login 和 /model 会重写 config.toml 并丢掉注释", "/login and /model rewrite config.toml and drop its comments").into());
-    st.notes.push(l("改动对新开的 Kimi 会话生效；默认模型在 Kimi 里用 /model 切换。", "Changes apply to new Kimi sessions; switch the default model with /model in Kimi.").into());
+    st.notes.push(l("/login and /model rewrite config.toml and drop its comments", "/login 和 /model 会重写 config.toml 并丢掉注释").into());
+    st.notes.push(l("Changes apply to new Kimi sessions; switch the default model with /model in Kimi.", "改动对新开的 Kimi 会话生效；默认模型在 Kimi 里用 /model 切换。").into());
     if legacy {
         st.notes.push(
             l(
-                "这是旧版 Kimi CLI 的配置（~/.kimi）；新建的 Chat / Gemini 供应商写成 openai_legacy / gemini 类型。",
                 "This is a legacy Kimi CLI config (~/.kimi); new Chat / Gemini providers are written as openai_legacy / gemini types.",
+                "这是旧版 Kimi CLI 的配置（~/.kimi）；新建的 Chat / Gemini 供应商写成 openai_legacy / gemini 类型。",
             )
             .into(),
         );
     }
     if def.is_some() && def_item.is_none() {
-        st.notes.push(tr!("default_model = \"{}\" 在 [models] 里找不到。", "default_model = \"{}\" isn't in [models].", def.unwrap_or_default()));
+        st.notes.push(tr!("default_model = \"{}\" isn't in [models].", "default_model = \"{}\" 在 [models] 里找不到。", def.unwrap_or_default()));
     }
     st
 }
@@ -353,7 +353,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
         .cloned()
         .or_else(|| stashed.as_ref().and_then(|d| d.get("providers").and_then(|t| t.get(id)).cloned()))
         .ok_or_else(|| msg::no_provider(id))?;
-    let base = get_str(&item, "base_url").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
+    let base = get_str(&item, "base_url").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("Provider {id} has no base_url", "供应商 {id} 没有 base_url")))?;
     let key = get_str(&item, "api_key")
         .filter(|k| !k.is_empty())
         .or_else(|| get_str(&item, "api_key_env").and_then(|v| crate::env::agent_var(&v)));
@@ -393,8 +393,8 @@ fn edit_provider_in(doc: &mut DocumentMut, pid: &str, p: &ProviderInput, legacy:
     if let Some(k) = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
         if let Some(var) = t.get("api_key_env").and_then(|v| v.as_str()).filter(|v| !v.is_empty()) {
             return Err(anyhow!(tr!(
-                "「{pid}」用 api_key_env = \"{var}\" 读取密钥，请在环境变量 {var} 里设置，AgentPlus 不写入",
-                "\"{pid}\" reads its API key from api_key_env = \"{var}\"; set it in the {var} environment variable. AgentPlus doesn't write it"
+                "\"{pid}\" reads its API key from api_key_env = \"{var}\"; set it in the {var} environment variable. AgentPlus doesn't write it",
+                "「{pid}」用 api_key_env = \"{var}\" 读取密钥，请在环境变量 {var} 里设置，AgentPlus 不写入"
             )));
         }
         if t.get("api_key").and_then(|v| v.as_str()) != Some(k) {
@@ -423,7 +423,7 @@ fn edit_model_in(doc: &mut DocumentMut, key: &str, name: Option<&str>, ctx: Opti
     match extra.get("capabilities") {
         Some(Value::Null) => {
             if t.remove("capabilities").is_some() {
-                lines.push(tr!("[models.\"{key}\"] capabilities 删除", "[models.\"{key}\"] capabilities removed"));
+                lines.push(tr!("[models.\"{key}\"] capabilities removed", "[models.\"{key}\"] capabilities 删除"));
             }
         }
         Some(Value::Array(want)) => {
@@ -448,7 +448,7 @@ impl Ctx {
         if self.has_provider(pid) {
             Ok(())
         } else if store_obj(&self.root, "disabledProviders").contains_key(pid) {
-            Err(anyhow!(tr!("供应商 {pid} 已停用，先启用再调整模型", "Provider {pid} is disabled; enable it before changing its models")))
+            Err(anyhow!(tr!("Provider {pid} is disabled; enable it before changing its models", "供应商 {pid} 已停用，先启用再调整模型")))
         } else {
             Err(msg::no_provider(pid))
         }
@@ -499,7 +499,7 @@ impl Ctx {
             t.set_implicit(true);
             self.doc.insert(name, Item::Table(t));
         }
-        self.doc.get_mut(name).and_then(|i| i.as_table_mut()).ok_or_else(|| anyhow!(tr!("config.toml 的 {name} 不是 [{name}] 表的写法，AgentPlus 不修改它", "{name} in config.toml isn't written as a [{name}] table; AgentPlus won't change it")))
+        self.doc.get_mut(name).and_then(|i| i.as_table_mut()).ok_or_else(|| anyhow!(tr!("{name} in config.toml isn't written as a [{name}] table; AgentPlus won't change it", "config.toml 的 {name} 不是 [{name}] 表的写法，AgentPlus 不修改它")))
     }
 
     fn remove(&mut self, parent: &str, key: &str) -> Option<Item> {
@@ -517,7 +517,7 @@ impl Ctx {
         if now != name {
             names.insert(id.into(), json!(name));
             self.set_store("names", names);
-            self.diff.push(store_label(), tr!("「{id}」名称 = {name}", "\"{id}\" name = {name}"), true);
+            self.diff.push(store_label(), tr!("\"{id}\" name = {name}", "「{id}」名称 = {name}"), true);
         }
     }
 
@@ -588,7 +588,7 @@ impl Ctx {
                 rec["toml"] = json!(sd.to_string());
                 self.set_store("disabledProviders", d);
                 for l in lines {
-                    self.diff.push(store_label(), tr!("{l}（已停用）", "{l} (disabled)"), true);
+                    self.diff.push(store_label(), tr!("{l} (disabled)", "{l}（已停用）"), true);
                 }
             }
         }
@@ -603,15 +603,15 @@ impl Ctx {
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
             if let Some(d) = self.default_in(&keys) {
                 return Err(anyhow!(tr!(
-                    "「{d}」是 default_model，删除这个供应商前先在 Kimi 里用 /model 换一个默认模型",
-                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting this provider"
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting this provider",
+                    "「{d}」是 default_model，删除这个供应商前先在 Kimi 里用 /model 换一个默认模型"
                 )));
             }
             self.remove("providers", id);
             for k in &keys {
                 self.remove("models", k);
             }
-            self.diff.push(&self.file, trn!(keys.len(), "- [providers.{id}] 和它的 {n} 个模型（含密钥）", "- [providers.{id}] and its {n} model (API key included)", "- [providers.{id}] and its {n} models (API key included)"), false);
+            self.diff.push(&self.file, trn!(keys.len(), "- [providers.{id}] and its {n} model (API key included)", "- [providers.{id}] and its {n} models (API key included)", "- [providers.{id}] 和它的 {n} 个模型（含密钥）"), false);
             self.cfg_dirty = true;
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
@@ -619,13 +619,13 @@ impl Ctx {
                 return Err(msg::no_provider(id));
             }
             self.set_store("disabledProviders", d);
-            self.diff.push(store_label(), tr!("- 「{id}」（已停用，暂存的定义一并删除）", "- \"{id}\" (disabled; its stashed definition is deleted too)"), false);
+            self.diff.push(store_label(), tr!("- \"{id}\" (disabled; its stashed definition is deleted too)", "- 「{id}」（已停用，暂存的定义一并删除）"), false);
         }
         let mut hidden = store_obj(&self.root, "hiddenModels");
         let n = hidden.len();
         hidden.retain(|_, h| h.get("provider").and_then(|x| x.as_str()) != Some(id));
         if hidden.len() != n {
-            self.diff.push(store_label(), trn!(n - hidden.len(), "- 「{id}」暂存的 {n} 个隐藏模型", "- {n} hidden model stashed for \"{id}\"", "- {n} hidden models stashed for \"{id}\""), false);
+            self.diff.push(store_label(), trn!(n - hidden.len(), "- {n} hidden model stashed for \"{id}\"", "- {n} hidden models stashed for \"{id}\"", "- 「{id}」暂存的 {n} 个隐藏模型"), false);
             self.set_store("hiddenModels", hidden);
         }
         let mut names = store_obj(&self.root, "names");
@@ -644,8 +644,8 @@ impl Ctx {
             let keys: Vec<String> = self.live_models(id).into_iter().map(|(k, _)| k).collect();
             if let Some(d) = self.default_in(&keys) {
                 return Err(anyhow!(tr!(
-                    "「{d}」是 default_model，停用这个供应商前先在 Kimi 里用 /model 换一个默认模型",
-                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before disabling this provider"
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before disabling this provider",
+                    "「{d}」是 default_model，停用这个供应商前先在 Kimi 里用 /model 换一个默认模型"
                 )));
             }
             let prov = self.remove("providers", id).unwrap();
@@ -654,7 +654,7 @@ impl Ctx {
             parts.extend(models.iter().map(|(k, m)| ("models", k.as_str(), m)));
             d.insert(id.into(), json!({ "toml": to_text(&parts) }));
             self.set_store("disabledProviders", d);
-            self.diff.push(&self.file, trn!(models.len(), "- [providers.{id}] 和它的 {n} 个模型（暂存在 AgentPlus，可恢复）", "- [providers.{id}] and its {n} model (stashed in AgentPlus; can be restored)", "- [providers.{id}] and its {n} models (stashed in AgentPlus; can be restored)"), false);
+            self.diff.push(&self.file, trn!(models.len(), "- [providers.{id}] and its {n} model (stashed in AgentPlus; can be restored)", "- [providers.{id}] and its {n} models (stashed in AgentPlus; can be restored)", "- [providers.{id}] 和它的 {n} 个模型（暂存在 AgentPlus，可恢复）"), false);
             self.cfg_dirty = true;
         } else {
             let Some(rec) = d.remove(id) else {
@@ -663,23 +663,23 @@ impl Ctx {
             // A [providers.<id>] written meanwhile (by hand, /login) would be replaced, api_key and all.
             if self.has_provider(id) {
                 return Err(anyhow!(tr!(
-                    "config.toml 里已经有 [providers.{id}]，无法恢复停用的「{id}」",
-                    "config.toml already has [providers.{id}]; can't restore the disabled \"{id}\""
+                    "config.toml already has [providers.{id}]; can't restore the disabled \"{id}\"",
+                    "config.toml 里已经有 [providers.{id}]，无法恢复停用的「{id}」"
                 )));
             }
             let sd = from_text(stash_text(&rec))?;
-            let prov = sd.get("providers").and_then(|t| t.get(id)).ok_or_else(|| anyhow!(tr!("暂存的供应商 {id} 不完整", "Stashed provider {id} is incomplete")))?;
+            let prov = sd.get("providers").and_then(|t| t.get(id)).ok_or_else(|| anyhow!(tr!("Stashed provider {id} is incomplete", "暂存的供应商 {id} 不完整")))?;
             let models = table_items(&sd, "models");
             let live: HashSet<String> = table_items(&self.doc, "models").into_iter().map(|(k, _)| k).collect();
             if let Some((k, _)) = models.iter().find(|(k, _)| live.contains(k)) {
-                return Err(anyhow!(tr!("模型键 {k} 已被其他模型占用，无法恢复「{id}」", "Model key {k} is already used by another model; can't restore \"{id}\"")));
+                return Err(anyhow!(tr!("Model key {k} is already used by another model; can't restore \"{id}\"", "模型键 {k} 已被其他模型占用，无法恢复「{id}」")));
             }
             self.parent("providers")?.insert(id, fresh(prov));
             for (k, m) in &models {
                 self.parent("models")?.insert(k, fresh(m));
             }
             self.set_store("disabledProviders", d);
-            self.diff.push(&self.file, trn!(models.len(), "+ [providers.{id}] 和它的 {n} 个模型", "+ [providers.{id}] and its {n} model", "+ [providers.{id}] and its {n} models"), true);
+            self.diff.push(&self.file, trn!(models.len(), "+ [providers.{id}] and its {n} model", "+ [providers.{id}] and its {n} models", "+ [providers.{id}] 和它的 {n} 个模型"), true);
             self.cfg_dirty = true;
         }
         Ok(())
@@ -690,37 +690,37 @@ impl Ctx {
         let mut hidden = store_obj(&self.root, "hiddenModels");
         if !visible {
             if !self.is_live_model(pid, key) {
-                return if hidden.contains_key(key) { Ok(()) } else { Err(anyhow!(tr!("找不到模型 {key}", "Model not found: {key}"))) };
+                return if hidden.contains_key(key) { Ok(()) } else { Err(anyhow!(tr!("Model not found: {key}", "找不到模型 {key}"))) };
             }
             if let Some(d) = self.default_in(&[key.to_string()]) {
                 return Err(anyhow!(tr!(
-                    "「{d}」是 default_model，隐藏它前先在 Kimi 里用 /model 换一个默认模型",
-                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before hiding it"
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before hiding it",
+                    "「{d}」是 default_model，隐藏它前先在 Kimi 里用 /model 换一个默认模型"
                 )));
             }
             // The stash is keyed by models key: never overwrite another model stashed under it
             // (config.toml can bring a key back behind AgentPlus's back: /login, /model, by hand).
             if hidden.contains_key(key) {
                 return Err(anyhow!(tr!(
-                    "模型键 {key} 在 AgentPlus 里已暂存了一个隐藏模型，先在 config.toml 里给这个模型换个键",
-                    "Model key {key} already has a hidden model stashed in AgentPlus; give this model a different key in config.toml first"
+                    "Model key {key} already has a hidden model stashed in AgentPlus; give this model a different key in config.toml first",
+                    "模型键 {key} 在 AgentPlus 里已暂存了一个隐藏模型，先在 config.toml 里给这个模型换个键"
                 )));
             }
             let item = self.remove("models", key).unwrap();
             hidden.insert(key.into(), json!({ "provider": pid, "toml": to_text(&[("models", key, &item)]) }));
             self.set_store("hiddenModels", hidden);
-            self.diff.push(&self.file, tr!("- [models.\"{key}\"]（暂存在 AgentPlus）", "- [models.\"{key}\"] (stashed in AgentPlus)"), false);
+            self.diff.push(&self.file, tr!("- [models.\"{key}\"] (stashed in AgentPlus)", "- [models.\"{key}\"]（暂存在 AgentPlus）"), false);
             self.cfg_dirty = true;
         } else {
             if self.is_live_model(pid, key) {
                 return Ok(());
             }
-            let rec = hidden.remove(key).filter(|h| h.get("provider").and_then(|x| x.as_str()) == Some(pid)).ok_or_else(|| anyhow!(tr!("找不到模型 {key}", "Model not found: {key}")))?;
+            let rec = hidden.remove(key).filter(|h| h.get("provider").and_then(|x| x.as_str()) == Some(pid)).ok_or_else(|| anyhow!(tr!("Model not found: {key}", "找不到模型 {key}")))?;
             if self.doc.get("models").and_then(|t| t.get(key)).is_some() {
-                return Err(anyhow!(tr!("模型键 {key} 已被其他模型占用", "Model key {key} is already used by another model")));
+                return Err(anyhow!(tr!("Model key {key} is already used by another model", "模型键 {key} 已被其他模型占用")));
             }
             let sd = from_text(stash_text(&rec))?;
-            let item = sd.get("models").and_then(|t| t.get(key)).ok_or_else(|| anyhow!(tr!("暂存的模型 {key} 不完整", "Stashed model {key} is incomplete")))?;
+            let item = sd.get("models").and_then(|t| t.get(key)).ok_or_else(|| anyhow!(tr!("Stashed model {key} is incomplete", "暂存的模型 {key} 不完整")))?;
             self.parent("models")?.insert(key, fresh(item));
             self.set_store("hiddenModels", hidden);
             self.diff.push(&self.file, format!("+ [models.\"{key}\"]"), true);
@@ -754,7 +754,7 @@ impl Ctx {
                 rec["toml"] = json!(sd.to_string());
                 self.set_store("hiddenModels", hidden);
                 for l in lines {
-                    self.diff.push(store_label(), tr!("{l}（已隐藏）", "{l} (hidden)"), true);
+                    self.diff.push(store_label(), tr!("{l} (hidden)", "{l}（已隐藏）"), true);
                 }
             }
             return Ok(());
@@ -772,12 +772,12 @@ impl Ctx {
         if self.is_live_model(pid, key) {
             if let Some(d) = self.default_in(&[key.to_string()]) {
                 return Err(anyhow!(tr!(
-                    "「{d}」是 default_model，删除它前先在 Kimi 里用 /model 换一个默认模型",
-                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting it"
+                    "\"{d}\" is the default_model; switch to another default model with /model in Kimi before deleting it",
+                    "「{d}」是 default_model，删除它前先在 Kimi 里用 /model 换一个默认模型"
                 )));
             }
             self.remove("models", key);
-            self.diff.push(&self.file, tr!("- [models.\"{key}\"]（删除）", "- [models.\"{key}\"] (deleted)"), false);
+            self.diff.push(&self.file, tr!("- [models.\"{key}\"] (deleted)", "- [models.\"{key}\"]（删除）"), false);
             self.cfg_dirty = true;
             return Ok(());
         }
@@ -785,7 +785,7 @@ impl Ctx {
         if hidden.get(key).and_then(|h| h.get("provider")).and_then(|x| x.as_str()) == Some(pid) {
             hidden.remove(key);
             self.set_store("hiddenModels", hidden);
-            self.diff.push(store_label(), tr!("- 「{key}」（已隐藏，删除）", "- \"{key}\" (hidden; deleted)"), false);
+            self.diff.push(store_label(), tr!("- \"{key}\" (hidden; deleted)", "- 「{key}」（已隐藏，删除）"), false);
         }
         Ok(())
     }
@@ -845,7 +845,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::DeleteModel { provider, model } => cx.delete_model(provider, model)?,
             Op::SetProviderModels { provider, models } => cx.set_models(provider, models)?,
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Kimi Code 可以同时配置多个供应商，默认模型在 Kimi 里用 /model 切换", "Kimi Code can have several providers at once; switch the default model with /model in Kimi"))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Kimi Code can have several providers at once; switch the default model with /model in Kimi", "Kimi Code 可以同时配置多个供应商，默认模型在 Kimi 里用 /model 切换"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }

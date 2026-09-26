@@ -1,5 +1,7 @@
 // src/components/TemplatePicker.tsx
-export default {
+import type en from "../en/templatePicker";
+
+const zh: typeof en = {
   label: "模板",
   labelHint: "（选厂商，只需要填 API Key）",
   vendor: "厂商",
@@ -8,3 +10,5 @@ export default {
   billing: "计费方式",
   getKey: "去 {vendor} 获取 Key ↗",
 };
+
+export default zh;

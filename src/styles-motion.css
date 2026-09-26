@@ -1,4 +1,4 @@
-/* ------------------------------------------------------------ 动效 ·「过度」
+/* ------------------------------------------------------------ Motion · "Extra"
    Everything here is scoped to :root[data-motion="rich"]. The base vocabulary in
    styles-hub.css keeps working; this level only retunes its variables (longer,
    springier, farther, blurred) and layers extra feedback on top. The pieces that
@@ -31,14 +31,14 @@
 @keyframes ap-focus { from { outline-offset: 7px; outline-color: transparent; } }
 @keyframes ap-reveal { from { opacity: 0; transform: translateY(18px) scale(.985); } }
 @keyframes ap-ripple { 0% { transform: scale(0); opacity: .22; } 55% { opacity: .16; } 100% { transform: scale(1); opacity: 0; } }
-/* 退场（motion.ts 克隆被移除的浮层来播放） */
+/* Exits (motion.ts plays them on a clone of the removed popover) */
 @keyframes ap-out-fade { to { opacity: 0; } }
 @keyframes ap-out-backdrop { to { background-color: rgba(18, 23, 34, 0); backdrop-filter: blur(0); } }
 @keyframes ap-out-pop { to { opacity: 0; transform: translateY(10px) scale(.95); filter: blur(4px); } }
 @keyframes ap-out-menu { to { opacity: 0; transform: translateY(-6px) scale(.96); } }
 @keyframes ap-out-toast { to { opacity: 0; transform: translate(-50%, 14px) scale(.94); } }
 
-/* 页面与弹层 */
+/* Pages and overlays */
 :root[data-motion="rich"] .page-top { animation: ap-drop var(--t) var(--ease-out) backwards; }
 :root[data-motion="rich"] .page-body.slide-fwd { animation: ap-slide-fwd var(--t-slow) var(--ease-out) backwards; }
 :root[data-motion="rich"] .page-body.slide-back { animation: ap-slide-back var(--t-slow) var(--ease-out) backwards; }
@@ -50,11 +50,12 @@
 :root[data-motion="rich"] .tab-bar { transition: transform .5s var(--ease-spring), width .5s var(--ease-spring); }
 :root[data-motion="rich"] .agent-row.active::before { animation: ap-bar var(--t-slow) var(--ease-spring) backwards; }
 
-/* 逐个入场：更多列表、更长的错峰 */
+/* Staggered entrance: more lists, longer stagger */
 :root[data-motion="rich"] :is(.sgroup, .uses, .row-cards, .hub-stats, .sidebar) > * {
   animation: ap-rise var(--t) var(--ease-out) backwards;
 }
-/* 可滚动的浮层里从上往下落：往下平移会把最后一项推出底边，开出来时闪一下滚动条 */
+/* Scrollable popovers drop in from above: rising from below would push the last item
+   past the bottom edge and flash a scrollbar on open */
 :root[data-motion="rich"] :is(.dd-menu, .ctx-menu, .palette-list) > * {
   animation: ap-drop var(--t) var(--ease-out) backwards;
 }
@@ -74,14 +75,14 @@
 :root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(11) { --i: 10; }
 :root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(n+12) { --i: 11; }
 
-/* 长列表：滚动进入视口时浮现 */
+/* Long lists: items fade in as they scroll into view */
 @supports (animation-timeline: view()) {
   :root[data-motion="rich"] :is(.sess, .mrow:not(.mhead), .hrow, .proj-row, .kv-row) {
     animation: ap-reveal linear both; animation-timeline: view(); animation-range: entry 0% entry 70%;
   }
 }
 
-/* 悬停与按压 */
+/* Hover and press */
 :root[data-motion="rich"] .btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 14px -8px rgba(18, 23, 34, .35); }
 :root[data-motion="rich"] .btn.primary { position: relative; overflow: hidden; isolation: isolate; }
 :root[data-motion="rich"] .btn.primary:hover:not(:disabled) { box-shadow: 0 8px 20px -8px rgba(47, 84, 235, .65); }
@@ -102,7 +103,7 @@
 :root[data-motion="rich"] .srow { transition: background-color var(--t-fast) var(--ease-smooth); }
 :root[data-motion="rich"] .srow:hover { background-color: var(--surface-2); }
 
-/* 卡片：跟随指针倾斜 + 高光（--mx/--my 由 motion.ts 写入） */
+/* Cards: tilt toward the pointer + highlight (--mx/--my are set by motion.ts) */
 :root[data-motion="rich"] :is(.hcard, .pcard) { position: relative; }
 :root[data-motion="rich"] :is(.hcard, .pcard):not(.selected):hover {
   transform: perspective(900px) rotateX(calc((.5 - var(--my, .5)) * 6deg)) rotateY(calc((var(--mx, .5) - .5) * 7deg)) translateY(-4px);
@@ -114,7 +115,7 @@
   transition: opacity var(--t) var(--ease-smooth); }
 :root[data-motion="rich"] :is(.hcard, .pcard):hover::after { opacity: 1; }
 
-/* 选中与开关的状态反馈 */
+/* State feedback for selection and toggles */
 :root[data-motion="rich"] .seg button.on, :root[data-motion="rich"] .chip.on { animation: ap-pop-in var(--t) var(--ease-spring); }
 :root[data-motion="rich"] .switch.on { animation: ap-glow .7s var(--ease-smooth); }
 :root[data-motion="rich"] .switch span { transition: left var(--t) var(--ease-spring), width var(--t) var(--ease-spring); }
@@ -126,16 +127,16 @@
     box-shadow var(--t) var(--ease-out), outline-offset var(--t) var(--ease-spring), outline-color var(--t-fast) var(--ease-smooth); }
 :root[data-motion="rich"] :is(.input, .search-input):focus { outline-color: var(--accent-soft); outline-offset: 0; }
 
-/* ---- motion.ts 使用的类 ---- */
-/* 点击涟漪 */
+/* ---- Classes used by motion.ts ---- */
+/* Click ripple */
 .ap-ripple-host { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; z-index: 0; animation: none !important; }
 .ap-ripple { position: absolute; border-radius: 50%; background: currentColor; pointer-events: none; transform: scale(0); animation: ap-ripple .65s var(--ease-smooth) forwards !important; }
 
-/* 滚到边界时的橡皮筋回弹：宿主写 --ob，子元素跟着位移 */
+/* Rubber-band bounce at the scroll edge: the host sets --ob, children shift with it */
 .ap-ob > :not(.ap-glider) { translate: 0 var(--ob, 0px); transition: translate .6s var(--ease-spring) !important; }
 .ap-ob.ap-pulling > :not(.ap-glider) { transition: translate .09s linear !important; }
 
-/* 选中高亮在兄弟之间滑动 */
+/* Selection highlight gliding between siblings */
 :root[data-motion="rich"] .seg { position: relative; }
 :root[data-motion="rich"] .seg > button { position: relative; z-index: 1; }
 :root[data-motion="rich"] .sidebar { position: relative; }
@@ -145,7 +146,7 @@
 .sidebar > .ap-glider { border-radius: 10px; background: var(--surface); border: 1px solid var(--line-active); box-shadow: 0 1px 2px rgba(18, 23, 34, .06); }
 .ap-glide-to { background: transparent !important; border-color: transparent !important; box-shadow: none !important; transition: none !important; }
 
-/* 被移除的浮层的退场克隆 */
+/* Exit clone of a removed popover */
 .ap-ghost { pointer-events: none !important; }
 .ap-ghost *, .ap-ghost *::before, .ap-ghost *::after { animation: none !important; transition: none !important; }
 .ap-ghost.modal-bg { animation: ap-out-backdrop .26s var(--ease-smooth) forwards !important; }

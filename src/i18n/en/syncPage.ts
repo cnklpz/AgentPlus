@@ -1,6 +1,5 @@
-import type zh from "../zh/syncPage";
-
-const en: typeof zh = {
+// src/components/SyncPage.tsx
+export default {
   folderSaved: "Sync folder saved",
   upToDate: "The sync file matches this device; nothing to import",
   title: "Multi-device sync",
@@ -23,5 +22,3 @@ const en: typeof zh = {
   noKeyHint: "New providers have no API key; after importing, click \"Edit\" in the provider's details to add one.",
   adopt: "Add to pending ({n})",
 };
-
-export default en;

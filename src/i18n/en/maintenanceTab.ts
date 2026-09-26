@@ -1,6 +1,5 @@
-import type zh from "../zh/maintenanceTab";
-
-const en: typeof zh = {
+// src/components/MaintenanceTab.tsx
+export default {
   healthTitle: "Health check",
   recheck: "Check again",
   checking: "Checking…",
@@ -18,5 +17,3 @@ const en: typeof zh = {
   cleaning: "Cleaning…",
   clean: "Clean up",
 };
-
-export default en;

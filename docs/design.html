@@ -1,4 +1,4 @@
-<title>AgentPlus 设计方案</title>
+<title>AgentPlus Design</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap">
@@ -288,95 +288,95 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
 </style>
 
 <div class="page">
-  <nav class="toc" aria-label="目录">
+  <nav class="toc" aria-label="Contents">
     <a class="brand" href="#top">AgentPlus</a>
     <ol>
-      <li><a href="#goals">背景与目标</a></li>
-      <li><a href="#agents">支持的 Agent</a></li>
-      <li><a href="#model">核心概念</a></li>
-      <li><a href="#arch">架构</a></li>
-      <li><a href="#features">功能设计</a></li>
-      <li><a href="#multi">多端方案</a></li>
-      <li><a href="#ui">界面草图</a></li>
-      <li><a href="#safety">可靠性与密钥</a></li>
-      <li><a href="#stack">技术选型</a></li>
-      <li><a href="#repo">仓库结构</a></li>
-      <li><a href="#roadmap">路线图</a></li>
-      <li><a href="#risks">风险与待定</a></li>
+      <li><a href="#goals">Background and goals</a></li>
+      <li><a href="#agents">Supported agents</a></li>
+      <li><a href="#model">Core concepts</a></li>
+      <li><a href="#arch">Architecture</a></li>
+      <li><a href="#features">Features</a></li>
+      <li><a href="#multi">Multi-platform</a></li>
+      <li><a href="#ui">UI sketch</a></li>
+      <li><a href="#safety">Reliability and keys</a></li>
+      <li><a href="#stack">Tech stack</a></li>
+      <li><a href="#repo">Repository layout</a></li>
+      <li><a href="#roadmap">Roadmap</a></li>
+      <li><a href="#risks">Risks and open questions</a></li>
     </ol>
   </nav>
 
   <main id="top">
     <header class="doc">
-      <div class="eyebrow">产品与技术方案 · 草案 v0.1 · 2026-09-23</div>
+      <div class="eyebrow">Product and technical design · Draft v0.1 · 2026-09-23</div>
       <h1>Agent<span class="plus">Plus</span></h1>
-      <p class="lede">一个地方管理 Claude Code、Codex、Gemini CLI、OpenCode 等编码 Agent 的服务商和模型。一键切换，改动先预览、可回滚；顺带把 Codex Fast、当前服务商这类"看不见的状态"显示出来。</p>
+      <p class="lede">One place to manage the providers and models of coding agents such as Claude Code, Codex, Gemini CLI and OpenCode. Switch in one click, preview every change and roll it back; along the way, surface "invisible state" such as Codex Fast and the current provider.</p>
       <dl class="facts">
-        <div><dt>首批 Agent</dt><dd>Claude Code · Codex CLI</dd></div>
-        <div><dt>后续 Agent</dt><dd>Gemini CLI · OpenCode · Qwen Code</dd></div>
-        <div><dt>形态</dt><dd>桌面 GUI + 托盘 + CLI</dd></div>
-        <div><dt>平台</dt><dd>Windows · macOS · Linux · WSL</dd></div>
+        <div><dt>First agents</dt><dd>Claude Code · Codex CLI</dd></div>
+        <div><dt>Later agents</dt><dd>Gemini CLI · OpenCode · Qwen Code</dd></div>
+        <div><dt>Form</dt><dd>Desktop GUI + tray + CLI</dd></div>
+        <div><dt>Platforms</dt><dd>Windows · macOS · Linux · WSL</dd></div>
       </dl>
     </header>
 
     <!-- 1 -->
     <section id="goals">
-      <h2><span class="n">01</span>背景与目标</h2>
-      <p class="sub">各家编码 Agent 都能换服务商、换模型，但每家的配置文件、字段名、协议都不一样。</p>
+      <h2><span class="n">01</span>Background and goals</h2>
+      <p class="sub">Every coding agent lets you change the provider and model, but each one uses different config files, field names and protocols.</p>
 
       <div class="two">
         <div class="panel">
-          <h4>现在的麻烦</h4>
+          <h4>What hurts today</h4>
           <ul>
-            <li>JSON、TOML、环境变量三套写法，字段名各不相同，换一次中转要改好几个文件。</li>
-            <li>手改容易改坏：TOML 注释被覆盖，PowerShell 写出带 BOM 的文件导致解析失败。</li>
-            <li><code>/model</code> 选择器只列官方模型，自己服务商的模型选不到。</li>
-            <li>状态看不见：Codex 默认是否开了 Fast、Claude Code 这会儿走的是哪个服务商。</li>
-            <li>本机、WSL、服务器各一份配置，互相不同步。</li>
+            <li>Three styles (JSON, TOML, environment variables), each with its own field names; switching relays means editing several files.</li>
+            <li>Hand edits break things easily: TOML comments get overwritten, and PowerShell writes files with a BOM that then fail to parse.</li>
+            <li>The <code>/model</code> picker lists only official models, so models from your own provider can't be selected.</li>
+            <li>State is invisible: whether Codex has Fast on by default, which provider Claude Code is using right now.</li>
+            <li>The local machine, WSL and servers each have their own config, and none of them stay in sync.</li>
           </ul>
         </div>
         <div class="panel">
-          <h4>AgentPlus 要做到</h4>
+          <h4>What AgentPlus should do</h4>
           <ul>
-            <li>服务商和模型只录一次，按 Profile 一键应用到多个 Agent。</li>
-            <li>只改需要改的字段，其余内容（注释、顺序、换行风格）原样保留。</li>
-            <li>每次写入前给出 diff，写入后自动备份，随时回滚。</li>
-            <li>自定义模型列表能进入各 Agent 的模型选择流程。</li>
-            <li>桌面、命令行、WSL、多台设备用同一套配置。</li>
+            <li>Enter providers and models once, and apply them to several agents in one click through a Profile.</li>
+            <li>Change only the fields that need changing, and keep everything else (comments, order, line endings) as it was.</li>
+            <li>Show a diff before every write, back up automatically after writing, and allow rollback at any time.</li>
+            <li>Get custom model lists into each agent's model selection flow.</li>
+            <li>Use one set of configs across desktop, command line, WSL and multiple devices.</li>
           </ul>
         </div>
       </div>
 
       <div class="two">
         <div class="panel muted">
-          <h4>不做（首版）</h4>
+          <h4>Out of scope (first release)</h4>
           <ul>
-            <li>不做 Agent 本身，不包装、不替换 CLI。</li>
-            <li>不做 API 中转或计费平台。</li>
-            <li>不把密钥托管到任何云端。</li>
+            <li>Not an agent itself; it doesn't wrap or replace any CLI.</li>
+            <li>Not an API relay or billing platform.</li>
+            <li>Keys are never hosted in any cloud.</li>
           </ul>
         </div>
         <div class="panel muted">
-          <h4>和现有工具的区别</h4>
-          <p style="margin:0">开源的 cc-switch 已经做了 Claude Code / Codex 的服务商切换。AgentPlus 的差异在：更多 Agent 统一抽象、模型目录与选择器注入、状态可视化（Fast / 状态栏）、CLI + WSL + 多设备同步。</p>
+          <h4>How it differs from existing tools</h4>
+          <p style="margin:0">The open-source cc-switch already switches providers for Claude Code / Codex. AgentPlus differs in: a unified abstraction over more agents, a model catalog with picker injection, state visibility (Fast / status line), and CLI + WSL + multi-device sync.</p>
         </div>
       </div>
     </section>
 
     <!-- 2 -->
     <section id="agents">
-      <h2><span class="n">02</span>支持的 Agent 与配置落点</h2>
-      <p class="sub">每个 Agent 一个适配器。下表是适配器要读写的位置；带 <span class="tag q">待验证</span> 的字段需在开发时按当前版本核对。</p>
+      <h2><span class="n">02</span>Supported agents and where their config lives</h2>
+      <p class="sub">One adapter per agent. The table lists what each adapter reads and writes; fields marked <span class="tag q">to verify</span> must be checked against the current version during development.</p>
 
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Agent</th><th>配置文件</th><th>协议</th><th>模型相关字段</th><th>可增强</th><th>阶段</th></tr>
+            <tr><th>Agent</th><th>Config files</th><th>Protocol</th><th>Model-related fields</th><th>Extras</th><th>Phase</th></tr>
           </thead>
           <tbody>
             <tr>
               <td class="name">Claude Code</td>
-              <td><code>~/.claude/settings.json</code><br>项目 <code>.claude/settings.json</code></td>
+              <td><code>~/.claude/settings.json</code><br>Project <code>.claude/settings.json</code></td>
               <td>Anthropic Messages</td>
               <td><code>env.ANTHROPIC_BASE_URL</code><br><code>env.ANTHROPIC_MODEL</code><br><code>env.ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL</code><br><code>model</code></td>
               <td><code>apiKeyHelper</code> · <code>statusLine</code> · <code>availableModels</code></td>
@@ -385,7 +385,7 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
             <tr>
               <td class="name">Codex CLI</td>
               <td><code>~/.codex/config.toml</code><br><code>~/.codex/auth.json</code></td>
-              <td>OpenAI Responses<br><span class="caption">Chat Completions 已移除</span></td>
+              <td>OpenAI Responses<br><span class="caption">Chat Completions removed</span></td>
               <td><code>model</code> · <code>model_provider</code><br><code>[model_providers.*]</code><br><code>[profiles.*]</code><br><code>model_reasoning_effort</code></td>
               <td><code>service_tier</code> · <code>[features].fast_mode</code> · <code>[tui].status_line</code></td>
               <td><span class="tag m1">M1</span></td>
@@ -394,60 +394,60 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
               <td class="name">Gemini CLI</td>
               <td><code>~/.gemini/settings.json</code><br><code>~/.gemini/.env</code></td>
               <td>Gemini API</td>
-              <td>模型字段、<code>GEMINI_API_KEY</code>、自定义 base URL <span class="tag q">待验证</span></td>
+              <td>Model field, <code>GEMINI_API_KEY</code>, custom base URL <span class="tag q">to verify</span></td>
               <td>—</td>
               <td><span class="tag">M3</span></td>
             </tr>
             <tr>
               <td class="name">OpenCode</td>
               <td><code>~/.config/opencode/opencode.json</code></td>
-              <td>多协议（AI SDK）</td>
+              <td>Multiple protocols (AI SDK)</td>
               <td><code>model = "provider/model"</code><br><code>provider.&lt;id&gt;.models</code></td>
-              <td>原生支持自定义模型列表</td>
+              <td>Native support for custom model lists</td>
               <td><span class="tag">M3</span></td>
             </tr>
             <tr>
               <td class="name">Qwen Code</td>
               <td><code>~/.qwen/settings.json</code></td>
-              <td>OpenAI 兼容</td>
-              <td><code>OPENAI_BASE_URL</code> / <code>OPENAI_MODEL</code> <span class="tag q">待验证</span></td>
+              <td>OpenAI-compatible</td>
+              <td><code>OPENAI_BASE_URL</code> / <code>OPENAI_MODEL</code> <span class="tag q">to verify</span></td>
               <td>—</td>
               <td><span class="tag">M3</span></td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="caption">适配器按"检测到的 Agent 版本"选择写法；遇到不认识的字段一律原样保留，不删除。</p>
+      <p class="caption">Adapters choose how to write based on the detected agent version; unknown fields are always kept as they are, never deleted.</p>
     </section>
 
     <!-- 3 -->
     <section id="model">
-      <h2><span class="n">03</span>核心概念</h2>
-      <p class="sub">四个概念覆盖全部场景。关键设计：<strong>一个服务商可以有多个协议端点</strong>，适配器自己挑能用的那个。</p>
+      <h2><span class="n">03</span>Core concepts</h2>
+      <p class="sub">Four concepts cover every case. The key design choice: <strong>one provider can have several protocol endpoints</strong>, and each adapter picks the one it can use.</p>
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>概念</th><th>是什么</th><th>例子</th></tr></thead>
+          <thead><tr><th>Concept</th><th>What it is</th><th>Example</th></tr></thead>
           <tbody>
-            <tr><td class="name">Provider 服务商</td><td>一个账号 + 若干协议端点 + 一把密钥</td><td>官方 Anthropic、官方 OpenAI、某中转站（同时有 Anthropic 和 Responses 端点）</td></tr>
-            <tr><td class="name">Model 模型</td><td>挂在服务商下，带显示名、上下文长度、能力标签</td><td><code>claude-sonnet-5</code>，标签"编码 / 长上下文"</td></tr>
-            <tr><td class="name">Profile 方案</td><td>一组"Agent → 服务商 + 模型 + 选项"的绑定</td><td>"日常"：Claude 走中转 A，Codex 走官方并开 Fast</td></tr>
-            <tr><td class="name">Adapter 适配器</td><td>把绑定翻译成某个 Agent 的具体配置改动</td><td>Codex 适配器把绑定写成 <code>config.toml</code> 的几行</td></tr>
+            <tr><td class="name">Provider</td><td>One account + some protocol endpoints + one key</td><td>Official Anthropic, official OpenAI, a relay (with both Anthropic and Responses endpoints)</td></tr>
+            <tr><td class="name">Model</td><td>Belongs to a provider, with a display name, context length and capability tags</td><td><code>claude-sonnet-5</code>, tagged "coding / long context"</td></tr>
+            <tr><td class="name">Profile</td><td>A set of "agent → provider + model + options" bindings</td><td>"Daily": Claude through relay A, Codex through official OpenAI with Fast on</td></tr>
+            <tr><td class="name">Adapter</td><td>Translates a binding into concrete config changes for one agent</td><td>The Codex adapter turns a binding into a few lines of <code>config.toml</code></td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="code">
-        <div class="cap"><span>~/.agentplus/store.json（示例）</span><span>不含明文密钥</span></div>
+        <div class="cap"><span>~/.agentplus/store.json (example)</span><span>No plaintext keys</span></div>
 <pre>{
   <span class="k">"providers"</span>: [{
     <span class="k">"id"</span>: <span class="s">"relay-a"</span>,
-    <span class="k">"name"</span>: <span class="s">"中转 A"</span>,
+    <span class="k">"name"</span>: <span class="s">"Relay A"</span>,
     <span class="k">"endpoints"</span>: {
       <span class="k">"anthropic"</span>:        <span class="s">"https://relay-a.example.com"</span>,
       <span class="k">"openai_responses"</span>: <span class="s">"https://relay-a.example.com/v1"</span>
     },
-    <span class="k">"key"</span>: <span class="s">"keyring:agentplus/relay-a"</span>,      <span class="c">// 只存引用，密钥在系统钥匙串</span>
+    <span class="k">"key"</span>: <span class="s">"keyring:agentplus/relay-a"</span>,      <span class="c">// only a reference; the key lives in the system keychain</span>
     <span class="k">"models"</span>: [
       { <span class="k">"id"</span>: <span class="s">"claude-sonnet-5"</span>, <span class="k">"label"</span>: <span class="s">"Sonnet 5"</span>, <span class="k">"ctx"</span>: 200000, <span class="k">"tags"</span>: [<span class="s">"coding"</span>] },
       { <span class="k">"id"</span>: <span class="s">"gpt-5-codex"</span>,     <span class="k">"label"</span>: <span class="s">"GPT-5 Codex"</span>, <span class="k">"efforts"</span>: [<span class="s">"low"</span>, <span class="s">"medium"</span>, <span class="s">"high"</span>] }
@@ -464,41 +464,41 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
   }]
 }</pre>
       </div>
-      <p>应用 Profile 时，如果某个 Agent 需要的协议在该服务商下没有端点（比如 Codex 只认 Responses，而服务商只有 Anthropic 端点），界面直接置灰并说明原因，不让用户写出一份跑不起来的配置。</p>
+      <p>When applying a Profile, if the provider has no endpoint for the protocol an agent needs (for example, Codex only speaks Responses but the provider only has an Anthropic endpoint), the UI greys the option out and explains why, so the user can't write a config that won't run.</p>
     </section>
 
     <!-- 4 -->
     <section id="arch">
-      <h2><span class="n">04</span>架构</h2>
-      <p class="sub">一个 Rust 核心库，被桌面端和 CLI 共用；所有文件读写只经过适配器。</p>
+      <h2><span class="n">04</span>Architecture</h2>
+      <p class="sub">One Rust core library shared by the desktop app and the CLI; all file reads and writes go through adapters only.</p>
 
-      <div class="arch" role="img" aria-label="架构分层：入口层调用核心层，核心层通过适配器读写各 Agent 配置文件">
+      <div class="arch" role="img" aria-label="Architecture layers: entry points call the core, which reads and writes each agent's config files through adapters">
         <div class="layer">
-          <div class="lbl">入口<small>同一核心的不同外壳</small></div>
+          <div class="lbl">Entry points<small>Different shells over one core</small></div>
           <div class="chips">
-            <div class="chip">桌面 GUI<small>Tauri 2</small></div>
-            <div class="chip">系统托盘<small>快速切换</small></div>
+            <div class="chip">Desktop GUI<small>Tauri 2</small></div>
+            <div class="chip">System tray<small>Quick switch</small></div>
             <div class="chip">CLI<small>ap</small></div>
-            <div class="chip">移动端遥控<small>后期</small></div>
+            <div class="chip">Mobile remote<small>Later</small></div>
           </div>
         </div>
-        <div class="arrow">↓ 调用</div>
+        <div class="arrow">↓ calls</div>
         <div class="layer core">
-          <div class="lbl">核心<small>agentplus-core</small></div>
+          <div class="lbl">Core<small>agentplus-core</small></div>
           <div class="chips">
-            <div class="chip">服务商仓库</div>
-            <div class="chip">模型目录</div>
-            <div class="chip">Profile 引擎</div>
-            <div class="chip">密钥（系统钥匙串）</div>
-            <div class="chip">连通性检测</div>
-            <div class="chip">备份 / 回滚</div>
-            <div class="chip">冲突检测</div>
-            <div class="chip">同步</div>
+            <div class="chip">Provider store</div>
+            <div class="chip">Model catalog</div>
+            <div class="chip">Profile engine</div>
+            <div class="chip">Keys (system keychain)</div>
+            <div class="chip">Connectivity checks</div>
+            <div class="chip">Backup / rollback</div>
+            <div class="chip">Conflict detection</div>
+            <div class="chip">Sync</div>
           </div>
         </div>
         <div class="arrow">↓ plan / apply</div>
         <div class="layer">
-          <div class="lbl">适配器<small>每个 Agent 一个</small></div>
+          <div class="lbl">Adapters<small>One per agent</small></div>
           <div class="chips">
             <div class="chip">Claude Code</div>
             <div class="chip">Codex CLI</div>
@@ -507,9 +507,9 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
             <div class="chip">Qwen Code</div>
           </div>
         </div>
-        <div class="arrow">↓ 最小改动写入</div>
+        <div class="arrow">↓ minimal-change writes</div>
         <div class="layer">
-          <div class="lbl">主机<small>本机 / 每个 WSL 发行版</small></div>
+          <div class="lbl">Hosts<small>Local machine / each WSL distro</small></div>
           <div class="chips">
             <div class="chip"><small>~/.claude/settings.json</small></div>
             <div class="chip"><small>~/.codex/config.toml</small></div>
@@ -519,107 +519,107 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
         </div>
       </div>
 
-      <h3>适配器接口</h3>
-      <p>"计算改动"和"写入"分开，这样 GUI 能先展示 diff，CLI 能支持 <code>--dry-run</code>。</p>
+      <h3>Adapter interface</h3>
+      <p>"Compute the change" and "write it" are separate steps, so the GUI can show a diff first and the CLI can support <code>--dry-run</code>.</p>
       <div class="code">
         <div class="cap"><span>crates/core/src/adapter.rs</span></div>
 <pre><span class="k">pub trait</span> AgentAdapter {
     <span class="k">fn</span> id(&amp;self) -&gt; AgentId;
-    <span class="k">fn</span> detect(&amp;self, host: &amp;Host) -&gt; Option&lt;Installation&gt;;        <span class="c">// 安装路径、版本、所在主机（本机 / WSL）</span>
-    <span class="k">fn</span> read(&amp;self, inst: &amp;Installation) -&gt; Result&lt;AgentState&gt;;     <span class="c">// 当前服务商、模型、Fast 等</span>
-    <span class="k">fn</span> plan(&amp;self, inst: &amp;Installation, b: &amp;Binding) -&gt; Result&lt;Patch&gt;; <span class="c">// 只计算，不落盘</span>
-    <span class="k">fn</span> apply(&amp;self, patch: Patch) -&gt; Result&lt;Receipt&gt;;              <span class="c">// 备份 + 原子写 + 回读校验</span>
-    <span class="k">fn</span> capabilities(&amp;self) -&gt; Caps;                                  <span class="c">// 支持的协议、是否有 Fast、状态栏等</span>
+    <span class="k">fn</span> detect(&amp;self, host: &amp;Host) -&gt; Option&lt;Installation&gt;;        <span class="c">// install path, version, host (local / WSL)</span>
+    <span class="k">fn</span> read(&amp;self, inst: &amp;Installation) -&gt; Result&lt;AgentState&gt;;     <span class="c">// current provider, model, Fast, etc.</span>
+    <span class="k">fn</span> plan(&amp;self, inst: &amp;Installation, b: &amp;Binding) -&gt; Result&lt;Patch&gt;; <span class="c">// compute only, nothing written</span>
+    <span class="k">fn</span> apply(&amp;self, patch: Patch) -&gt; Result&lt;Receipt&gt;;              <span class="c">// backup + atomic write + read-back check</span>
+    <span class="k">fn</span> capabilities(&amp;self) -&gt; Caps;                                  <span class="c">// supported protocols, Fast, status line, etc.</span>
 }</pre>
       </div>
     </section>
 
     <!-- 5 -->
     <section id="features">
-      <h2><span class="n">05</span>功能设计</h2>
-      <p class="sub">五块：切换、模型列表、Codex Fast、状态栏、小工具。</p>
+      <h2><span class="n">05</span>Features</h2>
+      <p class="sub">Five parts: switching, model lists, Codex Fast, status lines, and small tools.</p>
 
-      <h3>5.1 一键切换 Profile</h3>
-      <p>两种应用方式，用户按场景选：</p>
+      <h3>5.1 One-click Profile switching</h3>
+      <p>Two ways to apply, depending on the situation:</p>
       <div class="two">
         <div class="panel">
-          <h4>写入模式（默认）</h4>
-          <p style="margin:0">把配置写进各 Agent 的配置文件，之后直接运行 <code>claude</code> / <code>codex</code> 就生效。适合"这段时间都用这个"。写完提示哪些正在运行的 Agent 需要重启。</p>
+          <h4>Write mode (default)</h4>
+          <p style="margin:0">Writes the config into each agent's config files, so running <code>claude</code> / <code>codex</code> afterwards just works. Suits "I'll use this for a while". After writing, it lists which running agents need a restart.</p>
         </div>
         <div class="panel">
-          <h4>启动器模式</h4>
-          <p style="margin:0"><code>ap run codex -p fast-relay</code> 只给这一个进程注入环境变量和 <code>-c</code> 覆盖参数，不改任何文件。适合两个终端同时用不同服务商。</p>
+          <h4>Launcher mode</h4>
+          <p style="margin:0"><code>ap run codex -p fast-relay</code> injects environment variables and <code>-c</code> overrides into that one process only, without touching any file. Suits two terminals using different providers at the same time.</p>
         </div>
       </div>
 
-      <h3>5.2 自定义模型列表</h3>
-      <p>模型目录有三个来源：手动添加、从服务商的 <code>/v1/models</code> 拉取、内置常用预设。目录支持改显示名、排序、隐藏、打标签（快 / 便宜 / 长上下文）。难点在于怎么让它出现在各 Agent 里：</p>
+      <h3>5.2 Custom model lists</h3>
+      <p>The model catalog has three sources: added by hand, fetched from the provider's <code>/v1/models</code>, and built-in common presets. Entries can be renamed, reordered, hidden and tagged (fast / cheap / long context). The hard part is getting them to show up in each agent:</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Agent</th><th>注入方式</th><th>限制</th></tr></thead>
+          <thead><tr><th>Agent</th><th>How to inject</th><th>Limits</th></tr></thead>
           <tbody>
             <tr>
               <td class="name">Claude Code</td>
-              <td>把 Opus / Sonnet / Haiku 三个槽位映射到 <code>ANTHROPIC_DEFAULT_*_MODEL</code>，在 <code>/model</code> 里选别名即落到自定义模型；需要整份列表时写 <code>availableModels</code>。额外单个模型可用 <code>ANTHROPIC_CUSTOM_MODEL_OPTION</code> <span class="tag q">待验证</span>。</td>
-              <td><code>availableModels</code> 是<strong>替换</strong>而非追加，写之前要把用户想保留的官方模型一并列进去。</td>
+              <td>Map the Opus / Sonnet / Haiku slots to <code>ANTHROPIC_DEFAULT_*_MODEL</code>, so picking an alias in <code>/model</code> lands on the custom model; write <code>availableModels</code> when a whole list is needed. A single extra model may use <code>ANTHROPIC_CUSTOM_MODEL_OPTION</code> <span class="tag q">to verify</span>.</td>
+              <td><code>availableModels</code> <strong>replaces</strong> the list rather than appending to it, so the official models the user wants to keep must be listed too.</td>
             </tr>
             <tr>
               <td class="name">Codex CLI</td>
-              <td>每个模型生成一个 <code>[profiles.&lt;名字&gt;]</code>，<code>codex -p &lt;名字&gt;</code> 切换；AgentPlus 的托盘和 <code>ap</code> 提供快速选择。</td>
-              <td>Codex 的 <code>/model</code> 选择器目前不显示自定义服务商的模型（openai/codex#22160）。</td>
+              <td>Generate one <code>[profiles.&lt;name&gt;]</code> per model and switch with <code>codex -p &lt;name&gt;</code>; the AgentPlus tray and <code>ap</code> offer a quick picker.</td>
+              <td>Codex's <code>/model</code> picker currently doesn't show models from custom providers (openai/codex#22160).</td>
             </tr>
             <tr>
               <td class="name">OpenCode</td>
-              <td>直接写 <code>provider.&lt;id&gt;.models</code>。</td>
-              <td>原生支持，无额外限制。</td>
+              <td>Write <code>provider.&lt;id&gt;.models</code> directly.</td>
+              <td>Supported natively, no extra limits.</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3>5.3 Codex Fast 显示与开关</h3>
-      <p>Fast 用更高的额度消耗换更快的响应。AgentPlus 负责三件事：读出默认状态、一键开关、让 Codex 自己的状态栏也显示出来。</p>
+      <h3>5.3 Showing and toggling Codex Fast</h3>
+      <p>Fast trades higher usage for faster responses. AgentPlus does three things: read the default, toggle it in one click, and make Codex's own status line show it too.</p>
       <div class="code">
-        <div class="cap"><span>~/.codex/config.toml — AgentPlus 只改这几处</span></div>
-<pre><span class="k">service_tier</span> = <span class="s">"fast"</span>          <span class="c"># 默认开启 Fast</span>
+        <div class="cap"><span>~/.codex/config.toml — AgentPlus changes only these lines</span></div>
+<pre><span class="k">service_tier</span> = <span class="s">"fast"</span>          <span class="c"># Fast on by default</span>
 
 <span class="k">[features]</span>
 <span class="k">fast_mode</span> = true
 
 <span class="k">[tui]</span>
-<span class="c"># 在用户已有条目后追加 "fast-mode"，不打乱原有顺序</span>
+<span class="c"># Append "fast-mode" after the user's existing items, keeping their order</span>
 <span class="k">status_line</span> = [<span class="s">"model-with-reasoning"</span>, <span class="s">"context-remaining"</span>, <span class="s">"git-branch"</span>, <span class="s">"fast-mode"</span>]</pre>
       </div>
       <ul>
-        <li><strong>界面徽标：</strong>侧栏 Codex 条目旁显示 <span class="tag fast">FAST</span>，悬停说明"默认开启，来自 config.toml"。</li>
-        <li><strong>开关前检查：</strong>当前服务商不是 OpenAI 官方时置灰——第三方端点可能拒绝 <code>service_tier</code>，写进去反而报错。</li>
-        <li><strong>成本提示：</strong>开启时提示额度消耗高于 Standard，具体倍率链接到 OpenAI 的 Speed 说明页。</li>
+        <li><strong>UI badge:</strong> a <span class="tag fast">FAST</span> badge next to Codex in the sidebar; hovering explains "On by default, from config.toml".</li>
+        <li><strong>Check before toggling:</strong> greyed out when the current provider isn't official OpenAI — third-party endpoints may reject <code>service_tier</code>, and writing it would only cause errors.</li>
+        <li><strong>Cost note:</strong> when turning it on, warn that usage is higher than Standard, linking to OpenAI's Speed page for the exact multiplier.</li>
       </ul>
       <div class="note warn">
-        <p>会话里用 <code>/fast</code> 临时切换是运行时状态，不写盘，AgentPlus 看不到。所以界面上统一写"默认值"，实时状态交给 Codex 状态栏里的 <code>fast-mode</code> 项显示。</p>
+        <p>Switching with <code>/fast</code> inside a session is runtime state that isn't written to disk, so AgentPlus can't see it. The UI therefore always says "default", and leaves the live state to the <code>fast-mode</code> item in Codex's status line.</p>
       </div>
 
-      <h3>5.4 状态栏注入</h3>
+      <h3>5.4 Status line injection</h3>
       <ul>
-        <li><strong>Claude Code：</strong>设置 <code>statusLine</code> 为 <code>ap statusline claude</code>，输出"服务商 · 模型 · 延迟"，一眼看出当前走哪条线路。</li>
-        <li><strong>Codex：</strong>状态栏只支持内置项，不能跑自定义命令（openai/codex#20244 仍在讨论）。AgentPlus 提供勾选列表，编辑 <code>[tui].status_line</code>。</li>
+        <li><strong>Claude Code:</strong> set <code>statusLine</code> to <code>ap statusline claude</code>, which prints "provider · model · latency", so you can see at a glance which route is in use.</li>
+        <li><strong>Codex:</strong> the status line only supports built-in items and can't run custom commands (openai/codex#20244 is still under discussion). AgentPlus offers a checklist that edits <code>[tui].status_line</code>.</li>
       </ul>
 
-      <h3>5.5 小工具</h3>
+      <h3>5.5 Small tools</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>功能</th><th>说明</th><th>阶段</th></tr></thead>
+          <thead><tr><th>Feature</th><th>Description</th><th>Phase</th></tr></thead>
           <tbody>
-            <tr><td class="name">导入现有配置</td><td>首次启动读取已有 Claude / Codex 配置，自动生成服务商和"当前"Profile，零迁移成本</td><td><span class="tag m1">M1</span></td></tr>
-            <tr><td class="name">冲突检测</td><td>系统环境变量 <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code>、<code>settings.local.json</code>、项目级配置会覆盖用户级设置，界面明确指出"实际生效的是哪一个"</td><td><span class="tag m1">M1</span></td></tr>
-            <tr><td class="name">编码守卫</td><td>写入统一 UTF-8 无 BOM，保留原文件的 CRLF / LF；TOML 用保留格式的编辑器，注释不丢</td><td><span class="tag m1">M1</span></td></tr>
-            <tr><td class="name">历史与回滚</td><td>每次应用生成一条记录，可按时间点一键恢复全部文件</td><td><span class="tag m1">M1</span></td></tr>
-            <tr><td class="name">连通性测试</td><td>对每个服务商 × 模型发最小请求，显示延迟和可用性</td><td><span class="tag">M2</span></td></tr>
-            <tr><td class="name">推理强度切换</td><td>Codex <code>model_reasoning_effort</code> 在托盘里一键切 low / medium / high</td><td><span class="tag">M2</span></td></tr>
-            <tr><td class="name">托盘 + 全局快捷键</td><td>不开主窗口就能换 Profile</td><td><span class="tag">M2</span></td></tr>
-            <tr><td class="name">余额 / 用量</td><td>对提供查询接口的服务商显示剩余额度</td><td><span class="tag">M2</span></td></tr>
-            <tr><td class="name">分享配置</td><td>导出 Profile 时自动去掉密钥，生成可发给同事的文件</td><td><span class="tag">M3</span></td></tr>
-            <tr><td class="name">MCP 同步</td><td>一份 MCP 服务器列表写到多个 Agent</td><td><span class="tag">M3</span></td></tr>
+            <tr><td class="name">Import existing config</td><td>On first launch, read the existing Claude / Codex config and generate providers and a "Current" Profile automatically — zero migration cost</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">Conflict detection</td><td>System environment variables <code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code>, <code>settings.local.json</code> and project-level config override user-level settings; the UI states clearly "which one actually takes effect"</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">Encoding guard</td><td>Always write UTF-8 without BOM and keep the original file's CRLF / LF; edit TOML with a format-preserving editor so comments aren't lost</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">History and rollback</td><td>Every apply creates a record, and all files can be restored to any point in one click</td><td><span class="tag m1">M1</span></td></tr>
+            <tr><td class="name">Connectivity test</td><td>Send a minimal request to each provider × model and show latency and availability</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">Reasoning effort switch</td><td>Switch Codex <code>model_reasoning_effort</code> between low / medium / high from the tray in one click</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">Tray + global hotkey</td><td>Change Profile without opening the main window</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">Balance / usage</td><td>Show remaining credit for providers that offer a query endpoint</td><td><span class="tag">M2</span></td></tr>
+            <tr><td class="name">Share config</td><td>Export a Profile with keys stripped automatically, producing a file you can send to a colleague</td><td><span class="tag">M3</span></td></tr>
+            <tr><td class="name">MCP sync</td><td>Write one MCP server list to several agents</td><td><span class="tag">M3</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -627,86 +627,86 @@ footer { margin-top: 48px; padding-top: 18px; border-top: 1px solid var(--line);
 
     <!-- 6 -->
     <section id="multi">
-      <h2><span class="n">06</span>多端方案</h2>
-      <p class="sub">"多端"分四层：多个桌面系统、无界面环境、Windows 里的 WSL、多台设备之间。</p>
+      <h2><span class="n">06</span>Multi-platform</h2>
+      <p class="sub">"Multi-platform" has four layers: several desktop OSes, headless environments, WSL inside Windows, and syncing across devices.</p>
 
       <div class="table-wrap">
         <table>
-          <thead><tr><th>端</th><th>做法</th><th>交付物</th></tr></thead>
+          <thead><tr><th>Platform</th><th>Approach</th><th>Deliverable</th></tr></thead>
           <tbody>
-            <tr><td class="name">桌面</td><td>Tauri 2 一套代码打三个平台</td><td>Windows MSI / NSIS，macOS dmg（Universal），Linux AppImage / deb</td></tr>
-            <tr><td class="name">命令行</td><td>同一个核心库编译出 <code>ap</code>，用于 SSH 服务器、容器、CI</td><td>单文件二进制，<code>cargo install</code> / npm 包装 / 各平台包管理器</td></tr>
-            <tr><td class="name">WSL</td><td>Windows 端枚举 WSL 发行版，把每个发行版当作独立"主机"，通过 <code>\\wsl.localhost\&lt;发行版&gt;\home\&lt;用户&gt;</code> 读写；也可在 WSL 里直接用 Linux 版 <code>ap</code></td><td>桌面端"主机"切换器</td></tr>
-            <tr><td class="name">多设备同步</td><td>服务商、模型目录、Profile 加密后同步到 WebDAV、私有 Git 仓库或网盘文件夹；密钥默认不同步，可选用口令端到端加密后同步</td><td>设置页"同步"</td></tr>
-            <tr><td class="name">手机（后期）</td><td>不在手机上跑 Agent，只做遥控器：看各设备当前配置、通过同步通道下发 Profile 切换。Tauri 2 支持 iOS / Android，复用前端</td><td>M4 评估</td></tr>
+            <tr><td class="name">Desktop</td><td>One Tauri 2 codebase builds for all three platforms</td><td>Windows MSI / NSIS, macOS dmg (Universal), Linux AppImage / deb</td></tr>
+            <tr><td class="name">Command line</td><td>The same core library compiles to <code>ap</code>, for SSH servers, containers and CI</td><td>Single-file binary, <code>cargo install</code> / npm wrapper / platform package managers</td></tr>
+            <tr><td class="name">WSL</td><td>The Windows app enumerates WSL distros and treats each as a separate "host", reading and writing through <code>\\wsl.localhost\&lt;distro&gt;\home\&lt;user&gt;</code>; the Linux build of <code>ap</code> can also be used directly inside WSL</td><td>A "host" switcher in the desktop app</td></tr>
+            <tr><td class="name">Multi-device sync</td><td>Providers, the model catalog and Profiles are encrypted and synced to WebDAV, a private Git repository or a cloud-drive folder; keys aren't synced by default, but can optionally be synced with passphrase-based end-to-end encryption</td><td>"Sync" in Settings</td></tr>
+            <tr><td class="name">Phone (later)</td><td>Agents don't run on the phone; it's only a remote: view each device's current config and push Profile switches through the sync channel. Tauri 2 supports iOS / Android, reusing the frontend</td><td>Evaluate in M4</td></tr>
           </tbody>
         </table>
       </div>
 
       <div class="code">
-        <div class="cap"><span>CLI 用法草案</span></div>
-<pre>ap ls                               <span class="c"># 列出检测到的 Agent 及当前服务商 / 模型 / Fast</span>
-ap use daily                        <span class="c"># 应用 Profile 到所有已绑定的 Agent</span>
-ap use daily --agent codex --dry-run  <span class="c"># 只看 diff</span>
+        <div class="cap"><span>Draft CLI usage</span></div>
+<pre>ap ls                               <span class="c"># list detected agents with current provider / model / Fast</span>
+ap use daily                        <span class="c"># apply a Profile to every bound agent</span>
+ap use daily --agent codex --dry-run  <span class="c"># show the diff only</span>
 ap model codex gpt-5-codex --effort high
-ap fast codex on                    <span class="c"># 写 service_tier + features + status_line</span>
-ap run claude -p relay-b            <span class="c"># 启动器模式，不改文件</span>
-ap rollback                         <span class="c"># 回到上一次应用前</span>
-ap --host wsl:Ubuntu ls             <span class="c"># 操作 WSL 里的配置</span></pre>
+ap fast codex on                    <span class="c"># write service_tier + features + status_line</span>
+ap run claude -p relay-b            <span class="c"># launcher mode, no files changed</span>
+ap rollback                         <span class="c"># go back to before the last apply</span>
+ap --host wsl:Ubuntu ls             <span class="c"># work on the config inside WSL</span></pre>
       </div>
     </section>
 
     <!-- 7 -->
     <section id="ui">
-      <h2><span class="n">07</span>界面草图</h2>
-      <p class="sub">三栏：左侧 Agent 列表和状态，中间编辑当前 Agent，右侧实时 diff。窄屏可横向滚动查看。</p>
+      <h2><span class="n">07</span>UI sketch</h2>
+      <p class="sub">Three columns: the agent list and status on the left, the current agent's editor in the middle, and a live diff on the right. Scroll sideways on narrow screens.</p>
 
       <div class="mock-wrap">
-        <div class="win" aria-label="主窗口草图">
+        <div class="win" aria-label="Main window sketch">
           <div class="titlebar"><i></i><i></i><i></i><span>AgentPlus</span></div>
           <div class="wbody">
             <aside class="side">
-              <div class="profile">日常 <small>Profile ▾</small></div>
-              <div class="grp">AGENT · 本机</div>
+              <div class="profile">Daily <small>Profile ▾</small></div>
+              <div class="grp">AGENTS · LOCAL</div>
               <div style="display:grid;gap:4px">
                 <div class="agent"><span class="dot"></span><div><b>Claude Code</b><small>relay-a · sonnet-5</small></div></div>
                 <div class="agent on"><span class="dot"></span><div><b>Codex CLI <span class="fastb">FAST</span></b><small>openai · gpt-5-codex</small></div></div>
-                <div class="agent"><span class="dot"></span><div><b>OpenCode</b><small>relay-a · 3 个模型</small></div></div>
-                <div class="agent dim"><span class="dot off"></span><div><b>Gemini CLI</b><small>未安装</small></div></div>
+                <div class="agent"><span class="dot"></span><div><b>OpenCode</b><small>relay-a · 3 models</small></div></div>
+                <div class="agent dim"><span class="dot off"></span><div><b>Gemini CLI</b><small>Not installed</small></div></div>
               </div>
-              <div class="grp">主机</div>
-              <div style="padding:0 6px;color:var(--muted)">本机 · WSL: Ubuntu</div>
-              <div class="nav"><span>服务商</span><span>模型目录</span><span>历史</span><span>同步</span></div>
+              <div class="grp">HOSTS</div>
+              <div style="padding:0 6px;color:var(--muted)">Local · WSL: Ubuntu</div>
+              <div class="nav"><span>Providers</span><span>Model catalog</span><span>History</span><span>Sync</span></div>
             </aside>
 
             <div class="center">
               <div class="hd"><b>Codex CLI</b><small>v0.146 · ~/.codex/config.toml</small></div>
-              <div class="field"><span>服务商</span>
-                <div class="seg"><em class="sel">OpenAI 官方</em><em>中转 A</em><em>本地 Ollama</em></div>
+              <div class="field"><span>Provider</span>
+                <div class="seg"><em class="sel">OpenAI (official)</em><em>Relay A</em><em>Local Ollama</em></div>
               </div>
-              <div class="field"><span>模型</span>
+              <div class="field"><span>Model</span>
                 <div class="models">
                   <div class="sel"><span class="r"></span><div>GPT-5 Codex <small>gpt-5-codex</small></div><span class="lat">312 ms</span></div>
                   <div><span class="r"></span><div>GPT-5 <small>gpt-5</small></div><span class="lat">295 ms</span></div>
-                  <div><span class="r"></span><div>GPT-5 mini <small>gpt-5-mini · 便宜</small></div><span class="lat">188 ms</span></div>
+                  <div><span class="r"></span><div>GPT-5 mini <small>gpt-5-mini · cheap</small></div><span class="lat">188 ms</span></div>
                 </div>
               </div>
-              <div class="field"><span>推理强度</span>
+              <div class="field"><span>Reasoning effort</span>
                 <div class="seg"><em>low</em><em>medium</em><em class="sel">high</em></div>
               </div>
               <div class="toggle-row">
-                <div><b>Fast 模式（默认值）</b><small>响应更快，额度消耗高于 Standard</small></div>
+                <div><b>Fast mode (default)</b><small>Faster responses, higher usage than Standard</small></div>
                 <span class="sw" aria-hidden="true"></span>
               </div>
-              <div class="field"><span>Codex 状态栏预览</span>
+              <div class="field"><span>Codex status line preview</span>
                 <div class="term">gpt-5-codex high <span class="d">·</span> 72% left <span class="d">·</span> main <span class="d">·</span> <span class="f">fast</span></div>
               </div>
             </div>
 
             <aside class="right">
-              <b>待写入 · config.toml</b>
+              <b>Pending · config.toml</b>
               <div class="diff">
-                <div class="h">@@ 顶层 @@</div>
+                <div class="h">@@ top level @@</div>
                 <div class="x">-model_reasoning_effort = "medium"</div>
                 <div class="a">+model_reasoning_effort = "high"</div>
                 <div class="a">+service_tier = "fast"</div>
@@ -716,57 +716,57 @@ ap --host wsl:Ubuntu ls             <span class="c"># 操作 WSL 里的配置</s
                 <div class="x">-status_line = ["model-with-reasoning", …]</div>
                 <div class="a">+status_line = [ …, "fast-mode"]</div>
               </div>
-              <div class="caption">注释和其余字段保持不变 · 写入前自动备份</div>
-              <div class="btns"><span class="btn">放弃</span><span class="btn pri">应用</span></div>
+              <div class="caption">Comments and other fields stay unchanged · Backed up automatically before writing</div>
+              <div class="btns"><span class="btn">Discard</span><span class="btn pri">Apply</span></div>
             </aside>
           </div>
         </div>
       </div>
-      <p class="caption">草图中的模型名和延迟是示意数据。</p>
+      <p class="caption">Model names and latencies in the sketch are placeholder data.</p>
     </section>
 
     <!-- 8 -->
     <section id="safety">
-      <h2><span class="n">08</span>可靠性与密钥</h2>
-      <p class="sub">配置工具最怕的是把用户能用的环境改坏。每次写入都走同一条管线。</p>
+      <h2><span class="n">08</span>Reliability and keys</h2>
+      <p class="sub">The worst thing a config tool can do is break a working setup. Every write goes through the same pipeline.</p>
 
-      <h3>写入管线</h3>
+      <h3>Write pipeline</h3>
       <ol class="steps">
-        <li><div><b>读取并解析</b>：保留格式地解析（TOML 用 <code>toml_edit</code>，JSON 保持键顺序），记下原编码、BOM、换行风格。</div></li>
-        <li><div><b>计算改动</b>：适配器只生成需要变化的字段，得到 Patch。</div></li>
-        <li><div><b>展示 diff</b>：GUI 右栏 / CLI <code>--dry-run</code>；检测到外部改动（文件监听）时重新计算。</div></li>
-        <li><div><b>备份</b>：原文件复制到 <code>~/.agentplus/backups/&lt;时间&gt;/</code>，保留最近 50 份。</div></li>
-        <li><div><b>原子写入</b>：先写同目录临时文件，再重命名替换，避免写到一半断电留下半个文件。</div></li>
-        <li><div><b>回读校验</b>：重新解析写好的文件，失败则自动从备份恢复并报告原因。</div></li>
-        <li><div><b>提示重启</b>：列出正在运行、需要重启才能生效的 Agent 进程。</div></li>
+        <li><div><b>Read and parse</b>: parse while preserving formatting (<code>toml_edit</code> for TOML, key order kept for JSON), and record the original encoding, BOM and line endings.</div></li>
+        <li><div><b>Compute the change</b>: the adapter generates only the fields that need to change, producing a Patch.</div></li>
+        <li><div><b>Show the diff</b>: in the GUI's right column / CLI <code>--dry-run</code>; recompute when an external change is detected (file watching).</div></li>
+        <li><div><b>Back up</b>: copy the original file to <code>~/.agentplus/backups/&lt;time&gt;/</code>, keeping the latest 50.</div></li>
+        <li><div><b>Atomic write</b>: write a temp file in the same folder first, then rename it over the original, so a power cut mid-write never leaves half a file.</div></li>
+        <li><div><b>Read-back check</b>: re-parse the written file; on failure, restore from the backup automatically and report why.</div></li>
+        <li><div><b>Restart prompt</b>: list running agent processes that need a restart for the change to take effect.</div></li>
       </ol>
 
-      <h3>密钥</h3>
+      <h3>Keys</h3>
       <ul>
-        <li>存放在系统钥匙串：Windows 凭据管理器、macOS Keychain、Linux Secret Service。AgentPlus 自己的文件里只有引用。</li>
-        <li><strong>Claude Code：</strong>写 <code>apiKeyHelper</code> 指向 <code>ap key get relay-a</code>，由 Claude Code 运行时取密钥，<code>settings.json</code> 里不出现明文。</li>
-        <li><strong>Codex：</strong>服务商配置用 <code>env_key</code> 引用环境变量，由启动器模式注入；如果用户坚持写入 <code>auth.json</code>，界面明确提示这是明文。</li>
-        <li>日志、导出、同步内容一律脱敏，只显示密钥末 4 位。</li>
+        <li>Stored in the system keychain: Windows Credential Manager, macOS Keychain, Linux Secret Service. AgentPlus's own files contain only references.</li>
+        <li><strong>Claude Code:</strong> write <code>apiKeyHelper</code> pointing to <code>ap key get relay-a</code>, so Claude Code fetches the key at runtime and no plaintext appears in <code>settings.json</code>.</li>
+        <li><strong>Codex:</strong> provider config references an environment variable through <code>env_key</code>, injected by launcher mode; if the user insists on writing <code>auth.json</code>, the UI states clearly that it's plaintext.</li>
+        <li>Logs, exports and synced content are always redacted, showing only the last 4 characters of a key.</li>
       </ul>
     </section>
 
     <!-- 9 -->
     <section id="stack">
-      <h2><span class="n">09</span>技术选型</h2>
+      <h2><span class="n">09</span>Tech stack</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>部分</th><th>选择</th><th>理由 / 备选</th></tr></thead>
+          <thead><tr><th>Part</th><th>Choice</th><th>Reason / alternatives</th></tr></thead>
           <tbody>
-            <tr><td class="name">桌面壳</td><td>Tauri 2</td><td>安装包小（约 10 MB 级，Electron 通常上百 MB）；Rust 核心可直接复用到 CLI；2.x 支持移动端，留出后路</td></tr>
-            <tr><td class="name">前端</td><td>React + TypeScript + Vite</td><td>生态最全；UI 组件用 shadcn/ui 类的无样式库，自己控制外观</td></tr>
-            <tr><td class="name">核心库</td><td>Rust workspace</td><td>桌面、CLI 共用；跨平台路径和钥匙串处理成熟</td></tr>
-            <tr><td class="name">TOML 编辑</td><td><code>toml_edit</code></td><td>保留注释、空行、键顺序，这是 Codex 适配器的关键</td></tr>
-            <tr><td class="name">JSON 编辑</td><td><code>serde_json</code>（preserve_order）</td><td>保持键顺序，diff 干净</td></tr>
-            <tr><td class="name">密钥</td><td><code>keyring</code></td><td>统一三平台钥匙串</td></tr>
-            <tr><td class="name">HTTP</td><td><code>reqwest</code></td><td>连通性测试、拉取模型列表</td></tr>
-            <tr><td class="name">文件监听</td><td><code>notify</code></td><td>用户在外部改了配置时刷新界面</td></tr>
-            <tr><td class="name">CLI</td><td><code>clap</code></td><td>子命令、补全脚本生成</td></tr>
-            <tr><td class="name">测试</td><td>快照测试 + 真实配置样本</td><td>每个适配器、每个支持的 Agent 版本各一组 fixture，输入 → 期望输出</td></tr>
+            <tr><td class="name">Desktop shell</td><td>Tauri 2</td><td>Small installer (around 10 MB, versus hundreds of MB for Electron); the Rust core can be reused directly for the CLI; 2.x supports mobile, keeping that door open</td></tr>
+            <tr><td class="name">Frontend</td><td>React + TypeScript + Vite</td><td>Richest ecosystem; UI components from an unstyled library in the style of shadcn/ui, with our own look</td></tr>
+            <tr><td class="name">Core library</td><td>Rust workspace</td><td>Shared by desktop and CLI; mature cross-platform path and keychain handling</td></tr>
+            <tr><td class="name">TOML editing</td><td><code>toml_edit</code></td><td>Keeps comments, blank lines and key order — essential for the Codex adapter</td></tr>
+            <tr><td class="name">JSON editing</td><td><code>serde_json</code> (preserve_order)</td><td>Keeps key order for clean diffs</td></tr>
+            <tr><td class="name">Keys</td><td><code>keyring</code></td><td>One API over the keychains of all three platforms</td></tr>
+            <tr><td class="name">HTTP</td><td><code>reqwest</code></td><td>Connectivity tests, fetching model lists</td></tr>
+            <tr><td class="name">File watching</td><td><code>notify</code></td><td>Refresh the UI when the user edits a config outside the app</td></tr>
+            <tr><td class="name">CLI</td><td><code>clap</code></td><td>Subcommands, shell completion generation</td></tr>
+            <tr><td class="name">Testing</td><td>Snapshot tests + real config samples</td><td>One set of fixtures per adapter and per supported agent version: input → expected output</td></tr>
           </tbody>
         </table>
       </div>
@@ -774,92 +774,92 @@ ap --host wsl:Ubuntu ls             <span class="c"># 操作 WSL 里的配置</s
 
     <!-- 10 -->
     <section id="repo">
-      <h2><span class="n">10</span>仓库结构</h2>
+      <h2><span class="n">10</span>Repository layout</h2>
       <div class="code">
         <div class="cap"><span>D:\xm\AgentPlus</span></div>
 <pre>AgentPlus/
 ├─ crates/
-│  ├─ core/                 <span class="c"># 数据模型、Profile 引擎、写入管线、钥匙串、同步</span>
+│  ├─ core/                 <span class="c"># data model, Profile engine, write pipeline, keychain, sync</span>
 │  ├─ adapters/
 │  │  ├─ claude_code/
 │  │  ├─ codex/
 │  │  ├─ gemini_cli/
 │  │  └─ opencode/
-│  └─ cli/                  <span class="c"># ap 命令</span>
+│  └─ cli/                  <span class="c"># the ap command</span>
 ├─ app/
-│  ├─ src-tauri/            <span class="c"># Tauri 命令层，调用 core</span>
-│  └─ src/                  <span class="c"># React 界面</span>
-├─ fixtures/                <span class="c"># 各 Agent 各版本的真实配置样本</span>
+│  ├─ src-tauri/            <span class="c"># Tauri command layer, calls core</span>
+│  └─ src/                  <span class="c"># React UI</span>
+├─ fixtures/                <span class="c"># real config samples for each agent and version</span>
 │  ├─ codex/0.146/
 │  └─ claude_code/2.x/
 ├─ docs/
-│  └─ design.html           <span class="c"># 本文档</span>
+│  └─ design.html           <span class="c"># this document</span>
 └─ Cargo.toml               <span class="c"># workspace</span></pre>
       </div>
     </section>
 
     <!-- 11 -->
     <section id="roadmap">
-      <h2><span class="n">11</span>路线图</h2>
-      <p class="sub">周期为一人全职的粗略估算，用于排序，不是承诺。</p>
+      <h2><span class="n">11</span>Roadmap</h2>
+      <p class="sub">Durations are rough estimates for one full-time person, meant for ordering, not as commitments.</p>
       <div class="road">
         <div>
-          <div class="ms">M0<small>约 1 周</small></div>
-          <div><h4>骨架</h4><ul><li>Rust workspace + Tauri 2 + CLI 空壳</li><li>数据模型、钥匙串、写入管线（备份 / 原子写 / 回读校验）</li></ul></div>
+          <div class="ms">M0<small>~1 week</small></div>
+          <div><h4>Skeleton</h4><ul><li>Rust workspace + Tauri 2 + empty CLI shell</li><li>Data model, keychain, write pipeline (backup / atomic write / read-back check)</li></ul></div>
         </div>
         <div>
-          <div class="ms">M1<small>约 2–3 周</small></div>
-          <div><h4>可用的 MVP</h4><ul><li>Claude Code、Codex 两个适配器</li><li>服务商 / Profile 管理，diff 预览，历史与回滚</li><li>导入现有配置、冲突检测、编码守卫</li></ul></div>
+          <div class="ms">M1<small>~2–3 weeks</small></div>
+          <div><h4>Usable MVP</h4><ul><li>Claude Code and Codex adapters</li><li>Provider / Profile management, diff preview, history and rollback</li><li>Import existing config, conflict detection, encoding guard</li></ul></div>
         </div>
         <div>
-          <div class="ms">M2<small>约 2 周</small></div>
-          <div><h4>模型与状态</h4><ul><li>自定义模型列表（拉取 <code>/v1/models</code>、槽位映射、Codex profiles）</li><li>Codex Fast 开关与状态栏、Claude Code 状态栏</li><li>托盘、启动器模式、连通性测试</li></ul></div>
+          <div class="ms">M2<small>~2 weeks</small></div>
+          <div><h4>Models and status</h4><ul><li>Custom model lists (fetch <code>/v1/models</code>, slot mapping, Codex profiles)</li><li>Codex Fast toggle and status line, Claude Code status line</li><li>Tray, launcher mode, connectivity tests</li></ul></div>
         </div>
         <div>
-          <div class="ms">M3<small>约 3 周</small></div>
-          <div><h4>更多 Agent 与多端</h4><ul><li>Gemini CLI、OpenCode、Qwen Code 适配器</li><li>WSL 主机、多设备同步、MCP 同步、分享配置</li></ul></div>
+          <div class="ms">M3<small>~3 weeks</small></div>
+          <div><h4>More agents and platforms</h4><ul><li>Gemini CLI, OpenCode and Qwen Code adapters</li><li>WSL hosts, multi-device sync, MCP sync, config sharing</li></ul></div>
         </div>
         <div>
-          <div class="ms">M4<small>待评估</small></div>
-          <div><h4>延伸</h4><ul><li>手机遥控端</li><li>可选的本地协议转换代理（让只支持 Responses 的 Codex 用上 Anthropic 端点的模型）</li></ul></div>
+          <div class="ms">M4<small>To evaluate</small></div>
+          <div><h4>Extensions</h4><ul><li>Mobile remote</li><li>Optional local protocol-translation proxy (lets Codex, which only speaks Responses, use models behind an Anthropic endpoint)</li></ul></div>
         </div>
       </div>
     </section>
 
     <!-- 12 -->
     <section id="risks">
-      <h2><span class="n">12</span>风险与待定</h2>
+      <h2><span class="n">12</span>Risks and open questions</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>风险</th><th>应对</th></tr></thead>
+          <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
           <tbody>
-            <tr><td class="name">Agent 配置格式变化快</td><td>适配器声明支持的版本范围；fixture 快照测试；不认识的字段原样保留；检测到未知版本时降级为只读并提示</td></tr>
-            <tr><td class="name">Codex 选择器不显示自定义模型</td><td>用 <code>[profiles.*]</code> + 托盘 / CLI 绕开；跟进 openai/codex#22160，官方支持后切换</td></tr>
-            <tr><td class="name">Fast 的会话态不可见</td><td>界面只称"默认值"，实时状态交给 Codex 状态栏</td></tr>
-            <tr><td class="name">第三方端点不认 <code>service_tier</code></td><td>非官方服务商时禁用 Fast 开关，并说明原因</td></tr>
-            <tr><td class="name">Agent 运行中改配置</td><td>检测进程，写后提示重启；启动器模式不受影响</td></tr>
+            <tr><td class="name">Agent config formats change quickly</td><td>Adapters declare the version range they support; fixture snapshot tests; unknown fields kept as they are; fall back to read-only with a notice when an unknown version is detected</td></tr>
+            <tr><td class="name">Codex picker doesn't show custom models</td><td>Work around it with <code>[profiles.*]</code> + tray / CLI; follow openai/codex#22160 and switch once it's officially supported</td></tr>
+            <tr><td class="name">Fast's in-session state is invisible</td><td>The UI only says "default"; live state is left to Codex's status line</td></tr>
+            <tr><td class="name">Third-party endpoints reject <code>service_tier</code></td><td>Disable the Fast toggle for unofficial providers and explain why</td></tr>
+            <tr><td class="name">Config changed while an agent is running</td><td>Detect processes and prompt for a restart after writing; launcher mode is unaffected</td></tr>
           </tbody>
         </table>
       </div>
 
-      <h3>需要你拍板</h3>
+      <h3>Decisions needed from you</h3>
       <div class="qa">
-        <div><b>首批只做 Claude Code + Codex，还是一开始就带上 OpenCode？</b><span>OpenCode 自带多服务商，适配成本低，但用户群和前两者重叠较少。</span></div>
-        <div><b>"多端"的重点是哪一层？</b><span>本方案按"三大桌面系统 + CLI + WSL + 多设备同步"设计，手机放在 M4。如果你更想要手机端或网页端，路线图要调整。</span></div>
-        <div><b>要不要做协议转换代理？</b><span>做了之后任何服务商都能给任何 Agent 用，但工具就从"配置管理"变成"网络服务"，复杂度和维护成本明显上升。</span></div>
-        <div><b>是否需要团队共享？</b><span>比如团队统一下发服务商和模型目录。需要的话同步层要从"个人加密"改成"带权限的共享"。</span></div>
+        <div><b>Start with only Claude Code + Codex, or include OpenCode from the beginning?</b><span>OpenCode has built-in multi-provider support, so adapting it is cheap, but its users overlap less with the other two.</span></div>
+        <div><b>Which layer of "multi-platform" matters most?</b><span>This design assumes "three desktop OSes + CLI + WSL + multi-device sync", with the phone in M4. If you'd rather have a mobile or web client, the roadmap needs to change.</span></div>
+        <div><b>Build a protocol-translation proxy?</b><span>With it, any provider could serve any agent, but the tool would turn from "config management" into "a network service", with clearly higher complexity and maintenance cost.</span></div>
+        <div><b>Is team sharing needed?</b><span>For example, a team pushing out a shared provider list and model catalog. If so, the sync layer has to change from "personal encryption" to "sharing with permissions".</span></div>
       </div>
 
-      <h3>参考资料</h3>
+      <h3>References</h3>
       <ul class="sources">
-        <li><a href="https://developers.openai.com/codex/speed">OpenAI · Codex Speed（Fast 模式说明）</a></li>
-        <li><a href="https://github.com/openai/codex/issues/13660">openai/codex#13660 · 状态栏显示 Fast</a> · <a href="https://github.com/openai/codex/issues/22160">#22160 · 选择器暴露自定义模型</a> · <a href="https://github.com/openai/codex/issues/20244">#20244 · 自定义命令状态栏</a> · <a href="https://github.com/openai/codex/issues/27297">#27297 · service_tier 被拒</a></li>
-        <li><a href="https://codex.danielvaughan.com/2026/05/05/codex-cli-tui-customisation-keymaps-themes-status-lines/">Codex CLI TUI 定制：状态栏条目</a> · <a href="https://codex.danielvaughan.com/2026/04/23/codex-cli-custom-model-providers-configuration-guide/">Codex 自定义服务商配置</a></li>
-        <li><a href="https://code.claude.com/docs/en/model-config">Claude Code 文档 · Model configuration</a></li>
+        <li><a href="https://developers.openai.com/codex/speed">OpenAI · Codex Speed (Fast mode)</a></li>
+        <li><a href="https://github.com/openai/codex/issues/13660">openai/codex#13660 · Show Fast in the status line</a> · <a href="https://github.com/openai/codex/issues/22160">#22160 · Expose custom models in the picker</a> · <a href="https://github.com/openai/codex/issues/20244">#20244 · Custom command status line</a> · <a href="https://github.com/openai/codex/issues/27297">#27297 · service_tier rejected</a></li>
+        <li><a href="https://codex.danielvaughan.com/2026/05/05/codex-cli-tui-customisation-keymaps-themes-status-lines/">Codex CLI TUI customisation: status line items</a> · <a href="https://codex.danielvaughan.com/2026/04/23/codex-cli-custom-model-providers-configuration-guide/">Codex custom provider configuration</a></li>
+        <li><a href="https://code.claude.com/docs/en/model-config">Claude Code docs · Model configuration</a></li>
         <li><a href="https://google-gemini.github.io/gemini-cli/docs/get-started/configuration.html">Gemini CLI Configuration</a> · <a href="https://opencode.ai/docs/models/">OpenCode Models</a></li>
       </ul>
     </section>
 
-    <footer>AgentPlus 设计方案 · 草案 v0.1 · 字段名以各 Agent 当时版本为准</footer>
+    <footer>AgentPlus design · Draft v0.1 · Field names follow each agent's version at the time of writing</footer>
   </main>
 </div>

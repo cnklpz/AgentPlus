@@ -1,5 +1,7 @@
 // src/components/GatewayAside.tsx
-export default {
+import type en from "../en/gatewayAside";
+
+const zh: typeof en = {
   reqTitle: "请求",
   perMinute: "每分钟",
   requests: "请求数",
@@ -37,3 +39,5 @@ export default {
   agentTokens: "输入 {input} · 输出 {output}",
   agentAria: "{name}：{calls}，{tokens}",
 };
+
+export default zh;

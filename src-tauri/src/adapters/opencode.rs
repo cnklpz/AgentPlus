@@ -64,7 +64,7 @@ pub(super) fn model_choices(providers: &[Provider]) -> Vec<String> {
 /// Read-only cards for the providers logged in with `opencode auth` that have no config
 /// entry (built into OpenCode, models from models.dev).
 pub(super) fn auth_only(f: &Fmt, known: &[Provider], off: &[String]) -> Vec<Provider> {
-    let about = l("OpenCode 内置的供应商，模型列表来自 models.dev，在 OpenCode 里用 /models 选择", "A provider built into OpenCode. Its model list comes from models.dev; pick models with /models in OpenCode.");
+    let about = l("A provider built into OpenCode. Its model list comes from models.dev; pick models with /models in OpenCode.", "OpenCode 内置的供应商，模型列表来自 models.dev，在 OpenCode 里用 /models 选择");
     f.auth_only(known, "opencode auth", about, off)
 }
 
@@ -104,7 +104,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetSetting { key, value } => {
                 dirty.cfg |= ocsettings::apply(&mut cfg, key, value, Scope::Global, &mut diff, &ef)?;
             }
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenCode 按启用/停用管理供应商，在 OpenCode 里用 /models 选择模型", "OpenCode manages providers by enabling/disabling them. Pick models with /models in OpenCode."))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("OpenCode manages providers by enabling/disabling them. Pick models with /models in OpenCode.", "OpenCode 按启用/停用管理供应商，在 OpenCode 里用 /models 选择模型"))),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),

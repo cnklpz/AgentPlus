@@ -1,6 +1,5 @@
-import type zh from "../zh/agentPage";
-
-const en: typeof zh = {
+// src/components/AgentPage.tsx
+export default {
   tabModels: "Model list",
   tabSessions: "Sessions",
   tabMaint: "Maintenance",
@@ -56,5 +55,3 @@ const en: typeof zh = {
   selectedCount: "{n} / {total} selected",
   onePerLine: "One per line",
 };
-
-export default en;

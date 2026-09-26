@@ -1,5 +1,7 @@
 // src/components/SettingsPage.tsx
-export default {
+import type en from "../en/settingsPage";
+
+const zh: typeof en = {
   title: "AgentPlus 设置",
   subtitle: "AgentPlus 自己的选项；各 Agent 的配置在它们自己的页面里",
   closeSettings: "关闭设置",
@@ -124,3 +126,5 @@ export default {
   detectedHere: "本机已识别",
   supportedHint: "绿点表示在当前环境里已识别。没装的 Agent 装好后会自动出现在侧边栏。",
 };
+
+export default zh;

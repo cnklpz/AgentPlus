@@ -1,6 +1,5 @@
-import type zh from "../zh/providerCard";
-
-const en: typeof zh = {
+// src/components/ProviderCard.tsx
+export default {
   incompatible: "Incompatible",
   offNoTest: "Disabled, not tested",
   accountLogin: "Account sign-in",
@@ -21,5 +20,3 @@ const en: typeof zh = {
   switchOnApply: "Switches on apply",
   setCurrent: "Use this",
 };
-
-export default en;

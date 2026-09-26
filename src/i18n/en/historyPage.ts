@@ -1,6 +1,5 @@
-import type zh from "../zh/historyPage";
-
-const en: typeof zh = {
+// src/components/HistoryPage.tsx
+export default {
   agentCodexCleanup: "Codex cleanup",
   agentCodexRepair: "Codex session repair",
   fileGone: "Original file no longer exists",
@@ -36,5 +35,3 @@ const en: typeof zh = {
   modifiedAt: " · modified {time}",
   truncated: "Diff too long; showing only the first part",
 };
-
-export default en;

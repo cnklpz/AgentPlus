@@ -1,5 +1,7 @@
 // src/components/GatewayPage.tsx
-export default {
+import type en from "../en/gatewayPage";
+
+const zh: typeof en = {
   // time / breaker
   minSec: "{m} 分 {s} 秒",
   sec: "{n} 秒",
@@ -123,3 +125,5 @@ export default {
   cooldownLabel: "暂停秒数",
   breakerSaved: "熔断设置已保存",
 };
+
+export default zh;

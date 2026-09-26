@@ -45,7 +45,7 @@ function secs(n: number) {
   return n >= 60 ? t("gatewayPage.minSec", { m: Math.floor(n / 60), s: n % 60 }) : t("gatewayPage.sec", { n });
 }
 
-/** "15:41:52 起 · 42 秒后重试" */
+/** "Since 15:41:52 · retry in 42s" */
 function breakerWhen(b: GatewayBreakerView) {
   return b.state === "open"
     ? t("gatewayPage.breakerOpen", { at: b.at ?? "", wait: secs(b.remainingSecs) })

@@ -1,5 +1,7 @@
 // src/components/SessionsTab.tsx
-export default {
+import type en from "../en/sessionsTab";
+
+const zh: typeof en = {
   kindUser: "对话",
   kindAutomation: "自动化",
   kindSubagent: "子代理",
@@ -47,3 +49,5 @@ export default {
   noMatch: "没有符合条件的会话",
   footer: "显示 {shown} / {total} 个会话",
 };
+
+export default zh;

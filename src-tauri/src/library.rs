@@ -1,4 +1,4 @@
-//! The shared provider library ("总供应商"): name, address, key, protocol and known
+//! The shared provider library: name, address, key, protocol and known
 //! models kept by AgentPlus itself, independent of any agent and of the Windows/WSL
 //! target. Lives in `~/.agentplus/store.json` under "library". Keys never leave the backend.
 
@@ -76,10 +76,10 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
         return Err(msg::name_required());
     }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err(anyhow!(crate::i18n::l("地址需要以 http:// 或 https:// 开头", "Base URL must start with http:// or https://")));
+        return Err(anyhow!(crate::i18n::l("Base URL must start with http:// or https://", "地址需要以 http:// 或 https:// 开头")));
     }
     if !["responses", "chat", "anthropic"].contains(&input.api.as_str()) {
-        return Err(anyhow!(tr!("未知接口类型 {}", "Unknown API type {}", input.api)));
+        return Err(anyhow!(tr!("Unknown API type {}", "未知接口类型 {}", input.api)));
     }
     // Read before taking the store lock: agent adapters may touch the store themselves.
     let adopted = input.adopt_from.as_ref().and_then(|(agent, provider)| crate::adapters::provider_endpoint(agent, provider).ok()).and_then(|(_, k, _)| k);
@@ -87,7 +87,7 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
         let mut list = entries(root);
         let pos = input.id.as_ref().and_then(|id| list.iter().position(|e| str_field(e, "id") == *id));
         if input.id.is_some() && pos.is_none() {
-            return Err(anyhow!(crate::i18n::l("供应商库里没有这一项", "This entry is not in the provider library")));
+            return Err(anyhow!(crate::i18n::l("This entry is not in the provider library", "供应商库里没有这一项")));
         }
         let mut e = pos.map(|i| list[i].clone()).unwrap_or_else(|| json!({ "id": unique_id(&slug(name), |c| list.iter().any(|e| str_field(e, "id") == c)) }));
         e["name"] = json!(name);
@@ -138,7 +138,7 @@ pub fn endpoint(id: &str) -> Result<LibEndpoint> {
 
 /// `endpoint` from an already loaded store.
 pub fn endpoint_in(root: &Value, id: &str) -> Result<LibEndpoint> {
-    let e = entries(root).into_iter().find(|e| str_field(e, "id") == id).ok_or_else(|| anyhow!(tr!("供应商库里没有 {id}", "Not in the provider library: {id}")))?;
+    let e = entries(root).into_iter().find(|e| str_field(e, "id") == id).ok_or_else(|| anyhow!(tr!("Not in the provider library: {id}", "供应商库里没有 {id}")))?;
     let key = str_field(&e, "apiKey");
     Ok(LibEndpoint {
         name: str_field(&e, "name"),

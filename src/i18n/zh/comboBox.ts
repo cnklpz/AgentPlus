@@ -1,4 +1,8 @@
 // src/components/ComboBox.tsx
-export default {
+import type en from "../en/comboBox";
+
+const zh: typeof en = {
   expand: "展开列表",
 };
+
+export default zh;

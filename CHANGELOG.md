@@ -1,8 +1,6 @@
-# 更新日志 / Changelog
+# Changelog / 更新日志
 
-每个版本一节，标题写 `## 版本号`。发布时这一节会成为 GitHub Release 的说明，也会显示在 AgentPlus 的更新提示里，所以中英文都写上。
-
-Each version gets a `## <version>` section. On release it becomes the GitHub release text and is shown in AgentPlus's update prompt, so write it in both languages.
+Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
 ## 0.1.7
 

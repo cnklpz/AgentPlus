@@ -1,12 +1,12 @@
-// UI language. Chinese (zh/) is the source dictionary; every other language must have
-// exactly the same keys (en/ is type-checked against zh/). The backend renders its own
+// UI language. English (en/) is the source dictionary; every other language must have
+// exactly the same keys (zh/ is type-checked against en/). The backend renders its own
 // text in the same language: `setLang` tells it via `set_locale`, and every `api` call
 // waits for that first.
 import { createElement, Fragment, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { scrubVar } from "../privacy";
-import zh from "./zh";
 import en from "./en";
+import zh from "./zh";
 import { inTauri } from "../tauri";
 import { createStore } from "../store";
 
@@ -20,10 +20,10 @@ export const LANGS: { id: Lang; label: string }[] = [
   { id: "en", label: "English" },
 ];
 
-type Dict = typeof zh;
+type Dict = typeof en;
 const DICTS: Record<Lang, Dict> = { zh, en };
 
-/** "namespace.key", checked against the Chinese dictionary. */
+/** "namespace.key", checked against the English (source) dictionary. */
 export type TKey = { [N in keyof Dict]: `${N & string}.${keyof Dict[N] & string}` }[keyof Dict];
 export type Vars = Record<string, string | number>;
 
@@ -68,10 +68,10 @@ function lookup(key: string): string {
   const dot = key.indexOf(".");
   const ns = key.slice(0, dot), k = key.slice(dot + 1);
   const get = (d: Dict) => (d as unknown as Record<string, Record<string, string> | undefined>)[ns]?.[k];
-  return get(DICTS[lang]) ?? get(zh) ?? key;
+  return get(DICTS[lang]) ?? get(en) ?? key;
 }
 
-// Placeholder values can carry addresses and paths: masked while 隐私模式 is on.
+// Placeholder values can carry addresses and paths: masked while privacy mode is on.
 const fill = (s: string, vars?: Vars) =>
   vars ? s.replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? scrubVar(n, String(vars[n])) : m)) : s;
 

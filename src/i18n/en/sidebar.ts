@@ -1,6 +1,5 @@
-import type zh from "../zh/sidebar";
-
-const en: typeof zh = {
+// src/components/Sidebar.tsx
+export default {
   notInstalled: "Not installed",
   singleSub: "Provider {provider} · {n} model|Provider {provider} · {n} models",
   gateway: "Local gateway",
@@ -24,5 +23,3 @@ const en: typeof zh = {
   pending: "{n} unapplied change|{n} unapplied changes",
   backupsAt: "Backups are saved in ~/.agentplus/backups",
 };
-
-export default en;

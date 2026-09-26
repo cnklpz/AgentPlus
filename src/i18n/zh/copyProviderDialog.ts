@@ -1,5 +1,7 @@
 // src/components/CopyProviderDialog.tsx
-export default {
+import type en from "../en/copyProviderDialog";
+
+const zh: typeof en = {
   globalOpenCode: "全局 OpenCode",
   library: "供应商库",
   ariaTitle: "复制供应商到项目",
@@ -12,3 +14,5 @@ export default {
   disableInherited: "在这个项目里停用被复制的全局供应商（免得选择器里出现两份）",
   copyN: "复制 {n} 个",
 };
+
+export default zh;

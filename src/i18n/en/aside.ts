@@ -1,6 +1,5 @@
-import type zh from "../zh/aside";
-
-const en: typeof zh = {
+// src/components/Aside.tsx
+export default {
   aria: "Config and changes",
   current: "Current config",
   fromFiles: "Read from config files",
@@ -17,5 +16,3 @@ const en: typeof zh = {
   uiInactive: "UI enhancements (Fast, full model names…) take effect once {name} is restarted from AgentPlus",
   footNewSession: "Original files are backed up before writing · New {name} sessions pick it up",
 };
-
-export default en;

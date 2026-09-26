@@ -1,6 +1,5 @@
-import type zh from "../zh/common";
-
-const en: typeof zh = {
+// Shared words. Only add a key here when several files need it.
+export default {
   save: "Save",
   cancel: "Cancel",
   delete: "Delete",
@@ -81,5 +80,3 @@ const en: typeof zh = {
   apiHintChat: "OpenAI-compatible Chat Completions (/v1/chat/completions)",
   apiHintAnthropic: "Anthropic Messages API (/v1/messages)",
 };
-
-export default en;

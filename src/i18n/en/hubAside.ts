@@ -1,6 +1,5 @@
-import type zh from "../zh/hubAside";
-
-const en: typeof zh = {
+// src/components/HubAside.tsx
+export default {
   aria: "Provider details and changes",
   library: "Provider library",
   savedIn: "Stored in ~/.agentplus",
@@ -13,5 +12,3 @@ const en: typeof zh = {
   applyTo: "Apply to {n} agent|Apply to {n} agents",
   backupNote: "Original files are backed up before writing",
 };
-
-export default en;

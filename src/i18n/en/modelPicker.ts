@@ -1,8 +1,5 @@
-import type zh from "../zh/modelPicker";
-
-const en: typeof zh = {
+// src/components/ModelPicker.tsx
+export default {
   selectedN: "{n} selected",
   manualPlaceholder: "Add model IDs manually, separated by spaces",
 };
-
-export default en;

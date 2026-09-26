@@ -1,5 +1,7 @@
 // src/components/AgentPage.tsx
-export default {
+import type en from "../en/agentPage";
+
+const zh: typeof en = {
   tabModels: "模型列表",
   tabSessions: "会话",
   tabMaint: "维护",
@@ -55,3 +57,5 @@ export default {
   selectedCount: "已选 {n} / {total}",
   onePerLine: "每行一个",
 };
+
+export default zh;

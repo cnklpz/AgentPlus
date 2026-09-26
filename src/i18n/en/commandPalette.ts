@@ -1,6 +1,5 @@
-import type zh from "../zh/commandPalette";
-
-const en: typeof zh = {
+// src/components/CommandPalette.tsx
+export default {
   groupAgent: "Agent",
   groupPage: "Page",
   groupSetting: "Setting",
@@ -28,5 +27,3 @@ const en: typeof zh = {
   noResults: "Nothing found for \"{q}\"",
   foot: "↑↓ select · Enter open · Esc close",
 };
-
-export default en;

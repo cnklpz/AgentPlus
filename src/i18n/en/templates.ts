@@ -1,6 +1,5 @@
-import type zh from "../zh/templates";
-
-const en: typeof zh = {
+// src/templates.ts
+export default {
   groupCn: "China",
   groupIntl: "Global · aggregators",
 
@@ -40,5 +39,3 @@ const en: typeof zh = {
   noteOpencodeGo: "Each model is served on one protocol, so the model list follows the protocol: Chat for GLM, Kimi, DeepSeek and MiMo, Anthropic for MiniMax and Qwen, Responses for GPT and Grok",
   noteOpencodeZen: "Billed per use from your balance. Each model is served on one protocol, so the model list follows the protocol: Anthropic for Claude, Responses for GPT and Grok, Chat for the rest",
 };
-
-export default en;

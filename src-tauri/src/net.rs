@@ -45,7 +45,7 @@ fn same_host_redirects() -> reqwest::redirect::Policy {
         let origin = |u: &url::Url| (u.scheme().to_string(), u.host_str().map(String::from), u.port_or_known_default());
         let same = a.previous().first().map(|u| origin(u) == origin(a.url())).unwrap_or(false);
         if a.previous().len() > 5 {
-            a.error(crate::i18n::l("重定向次数过多", "Too many redirects"))
+            a.error(crate::i18n::l("Too many redirects", "重定向次数过多"))
         } else if same {
             a.follow()
         } else {
@@ -65,7 +65,7 @@ fn moved_to(resp: &reqwest::blocking::Response) -> Option<String> {
         return None;
     }
     let to = resp.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("?");
-    Some(tr!("地址被重定向到 {to}（HTTP {}），为保护密钥没有跟随；请直接填写新地址", "The URL redirects to {to} (HTTP {}); not followed to protect the API key. Use the new URL directly", resp.status().as_u16()))
+    Some(tr!("The URL redirects to {to} (HTTP {}); not followed to protect the API key. Use the new URL directly", "地址被重定向到 {to}（HTTP {}），为保护密钥没有跟随；请直接填写新地址", resp.status().as_u16()))
 }
 
 /// The body as text, read up to `cap` bytes.
@@ -73,7 +73,7 @@ fn body_text(resp: reqwest::blocking::Response, cap: u64) -> Result<String, Stri
     let mut buf = Vec::new();
     std::io::Read::read_to_end(&mut std::io::Read::take(resp, cap + 1), &mut buf).map_err(|e| e.to_string())?;
     if buf.len() as u64 > cap {
-        return Err(tr!("响应太大（超过 {} MB）", "Response too large (over {} MB)", cap >> 20));
+        return Err(tr!("Response too large (over {} MB)", "响应太大（超过 {} MB）", cap >> 20));
     }
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
@@ -94,14 +94,14 @@ fn models_url(base_url: &str) -> String {
 /// Native Gemini defaults to v1beta, retaining an explicit version and proxy prefix.
 /// Model names are one URL segment after the optional `models/` resource prefix.
 fn gemini_url(base_url: &str, model: Option<&str>) -> Result<url::Url, String> {
-    let invalid = || crate::i18n::l("Gemini 地址无效，请填写 HTTP 或 HTTPS 地址", "Invalid Gemini URL; use an HTTP or HTTPS URL").to_string();
+    let invalid = || crate::i18n::l("Invalid Gemini URL; use an HTTP or HTTPS URL", "Gemini 地址无效，请填写 HTTP 或 HTTPS 地址").to_string();
     let mut url = url::Url::parse(base_url.trim_end_matches('/')).map_err(|_| invalid())?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
         return Err(invalid());
     }
     let model = model.map(|m| m.strip_prefix("models/").unwrap_or(m));
     if model.is_some_and(|m| m.is_empty() || matches!(m, "." | "..") || m.contains('/')) {
-        return Err(crate::i18n::l("Gemini 模型名无效", "Invalid Gemini model name").into());
+        return Err(crate::i18n::l("Invalid Gemini model name", "Gemini 模型名无效").into());
     }
     let versioned = matches!(url.path().trim_end_matches('/').rsplit('/').next(), Some("v1" | "v1beta" | "v1alpha"));
     let mut path = url.path_segments_mut().map_err(|_| invalid())?;
@@ -128,7 +128,7 @@ pub fn latency(base_url: &str) -> Result<u64, String> {
     }
     let t0 = Instant::now();
     req.send()
-        .map_err(|e| if e.is_timeout() { crate::i18n::l("超时", "Timed out").to_string() } else { crate::i18n::l("连接失败", "Connection failed").to_string() })?;
+        .map_err(|e| if e.is_timeout() { crate::i18n::l("Timed out", "超时").to_string() } else { crate::i18n::l("Connection failed", "连接失败").to_string() })?;
     Ok(t0.elapsed().as_millis() as u64)
 }
 
@@ -143,32 +143,32 @@ pub fn list_models(base_url: &str, key: Option<&str>, api: &str) -> Result<Vec<S
     let mut tokens = std::collections::BTreeSet::new();
     let mut bytes = 0;
     loop {
-        let timeout = deadline.checked_duration_since(Instant::now()).ok_or_else(|| crate::i18n::l("请求超时", "Request timed out").to_string())?;
+        let timeout = deadline.checked_duration_since(Instant::now()).ok_or_else(|| crate::i18n::l("Request timed out", "请求超时").to_string())?;
         let req = with_api_key(client.get(&url).timeout(timeout), api, key);
-        let resp = req.send().map_err(|e| if e.is_timeout() { crate::i18n::l("请求超时", "Request timed out").to_string() } else { tr!("连接失败：{e}", "Connection failed: {e}") })?;
+        let resp = req.send().map_err(|e| if e.is_timeout() { crate::i18n::l("Request timed out", "请求超时").to_string() } else { tr!("Connection failed: {e}", "连接失败：{e}") })?;
         let status = resp.status();
         if let Some(to) = moved_to(&resp) { return Err(to); }
         let text = body_text(resp, MAX_MODELS_BODY)?;
         bytes += text.len() as u64;
         if bytes > MAX_MODELS_BODY {
-            return Err(tr!("响应太大（超过 {} MB）", "Response too large (over {} MB)", MAX_MODELS_BODY >> 20));
+            return Err(tr!("Response too large (over {} MB)", "响应太大（超过 {} MB）", MAX_MODELS_BODY >> 20));
         }
         if !status.is_success() {
             return Err(match status.as_u16() {
-                401 | 403 => tr!("密钥无效或没有权限（HTTP {}）", "Invalid API key or no permission (HTTP {})", status.as_str()),
-                404 => crate::i18n::l("这个地址没有 /models 接口（HTTP 404）", "This URL has no /models endpoint (HTTP 404)").to_string(),
+                401 | 403 => tr!("Invalid API key or no permission (HTTP {})", "密钥无效或没有权限（HTTP {}）", status.as_str()),
+                404 => crate::i18n::l("This URL has no /models endpoint (HTTP 404)", "这个地址没有 /models 接口（HTTP 404）").to_string(),
                 _ => format!("HTTP {status}"),
             });
         }
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| crate::i18n::l("返回的不是 JSON", "Response is not JSON").to_string())?;
-        let list = v.get("data").or_else(|| v.get("models")).and_then(|d| d.as_array()).ok_or(crate::i18n::l("返回里没有模型列表", "No model list in the response"))?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| crate::i18n::l("Response is not JSON", "返回的不是 JSON").to_string())?;
+        let list = v.get("data").or_else(|| v.get("models")).and_then(|d| d.as_array()).ok_or(crate::i18n::l("No model list in the response", "返回里没有模型列表"))?;
         ids.extend(list.iter().filter_map(|m| m.get("id").or_else(|| m.get("name")).and_then(|x| x.as_str())).map(|id| {
             if api == "gemini" { id.strip_prefix("models/").unwrap_or(id) } else { id }.to_string()
         }));
         let next = (api == "gemini").then(|| v.get("nextPageToken").and_then(|t| t.as_str()).filter(|t| !t.is_empty())).flatten();
         let Some(token) = next else { break };
         if !tokens.insert(token.to_string()) || tokens.len() >= 100 {
-            return Err(crate::i18n::l("模型列表分页异常，请检查上游接口", "Invalid model list pagination; check the upstream API").into());
+            return Err(crate::i18n::l("Invalid model list pagination; check the upstream API", "模型列表分页异常，请检查上游接口").into());
         }
         let mut next_url = url::Url::parse(&base).map_err(|e| e.to_string())?;
         let query: Vec<_> = next_url.query_pairs().filter(|(k, _)| k != "pageToken").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
@@ -319,7 +319,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
             Ok(x) => x,
             Err(e) => {
                 r.ms = t0.elapsed().as_millis() as u64;
-                r.error = Some(if e.is_timeout() { crate::i18n::l("请求超时（45 秒）", "Request timed out (45 s)").into() } else if e.is_connect() { crate::i18n::l("连接失败：地址不可达", "Connection failed: URL unreachable").into() } else { tr!("请求失败：{e}", "Request failed: {e}") });
+                r.error = Some(if e.is_timeout() { crate::i18n::l("Request timed out (45 s)", "请求超时（45 秒）").into() } else if e.is_connect() { crate::i18n::l("Connection failed: URL unreachable", "连接失败：地址不可达").into() } else { tr!("Request failed: {e}", "请求失败：{e}") });
                 return r;
             }
         };
@@ -350,24 +350,24 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     if !status.is_success() {
         let msg = v.as_ref().and_then(crate::gateway::convert::error_message).unwrap_or_else(|| clip(text.trim(), 160));
         let hint = match status.as_u16() {
-            401 | 403 => crate::i18n::l("密钥无效或没有权限", "Invalid API key or no permission"),
-            404 => crate::i18n::l("地址或接口类型不对，或者没有这个模型", "Wrong base URL or API type, or no such model"),
-            429 => crate::i18n::l("请求太频繁或额度用完", "Too many requests or quota exhausted"),
-            400 | 422 => crate::i18n::l("请求被拒绝，可能是模型名不对或接口类型不匹配", "Request rejected; the model name may be wrong or the API type mismatched"),
-            s if s >= 500 => crate::i18n::l("服务端出错", "Server error"),
-            _ => crate::i18n::l("请求失败", "Request failed"),
+            401 | 403 => crate::i18n::l("Invalid API key or no permission", "密钥无效或没有权限"),
+            404 => crate::i18n::l("Wrong base URL or API type, or no such model", "地址或接口类型不对，或者没有这个模型"),
+            429 => crate::i18n::l("Too many requests or quota exhausted", "请求太频繁或额度用完"),
+            400 | 422 => crate::i18n::l("Request rejected; the model name may be wrong or the API type mismatched", "请求被拒绝，可能是模型名不对或接口类型不匹配"),
+            s if s >= 500 => crate::i18n::l("Server error", "服务端出错"),
+            _ => crate::i18n::l("Request failed", "请求失败"),
         };
-        r.error = Some(if msg.is_empty() { tr!("{hint}（HTTP {status}）", "{hint} (HTTP {status})") } else { tr!("{hint}（HTTP {}）：{}", "{hint} (HTTP {}): {}", status.as_u16(), clip(msg.trim(), 200)) });
+        r.error = Some(if msg.is_empty() { tr!("{hint} (HTTP {status})", "{hint}（HTTP {status}）") } else { tr!("{hint} (HTTP {}): {}", "{hint}（HTTP {}）：{}", status.as_u16(), clip(msg.trim(), 200)) });
         return r;
     }
     let v = match v.map(Ok).or_else(|| from_sse(api, &text)) {
         Some(Ok(v)) => v,
         Some(Err(e)) => {
-            r.error = Some(tr!("流式响应中返回了错误：{}", "The stream returned an error: {}", clip(e.trim(), 200)));
+            r.error = Some(tr!("The stream returned an error: {}", "流式响应中返回了错误：{}", clip(e.trim(), 200)));
             return r;
         }
         None => {
-            r.error = Some(tr!("返回的不是 JSON：{}", "Response is not JSON: {}", clip(text.trim(), 120)));
+            r.error = Some(tr!("Response is not JSON: {}", "返回的不是 JSON：{}", clip(text.trim(), 120)));
             return r;
         }
     };
@@ -402,12 +402,12 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
         let finish = v.pointer("/candidates/0/finishReason").and_then(|f| f.as_str());
         let rejected = finish.filter(|f| !matches!(*f, "STOP" | "MAX_TOKENS" | "FINISH_REASON_UNSPECIFIED" | ""));
         if let Some(reason) = block.or(rejected) {
-            r.error = Some(tr!("Gemini 未完成生成：{reason}", "Gemini did not complete generation: {reason}"));
+            r.error = Some(tr!("Gemini did not complete generation: {reason}", "Gemini 未完成生成：{reason}"));
             return r;
         }
         if v.get("error").is_some() || r.reply.is_none() {
-            let reason = crate::gateway::convert::error_message(&v).or_else(|| finish.map(String::from)).unwrap_or_else(|| crate::i18n::l("响应中没有文本", "No text in the response").into());
-            r.error = Some(tr!("Gemini 测试失败：{}", "Gemini test failed: {}", clip(&reason, 200)));
+            let reason = crate::gateway::convert::error_message(&v).or_else(|| finish.map(String::from)).unwrap_or_else(|| crate::i18n::l("No text in the response", "响应中没有文本").into());
+            r.error = Some(tr!("Gemini test failed: {}", "Gemini 测试失败：{}", clip(&reason, 200)));
             return r;
         }
     }

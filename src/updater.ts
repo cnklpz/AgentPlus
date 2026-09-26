@@ -1,5 +1,5 @@
 // App self-update (GitHub Releases, see src-tauri/src/update.rs). One shared state, so the
-// startup check in App and the 设置 › 关于 section show the same thing.
+// startup check in App and the Settings › About section show the same thing.
 import { api, type UpdateInfo } from "./api";
 import { createStore } from "./store";
 import { errText } from "./util";
@@ -35,7 +35,7 @@ export const updateBusy = (s: UpdateState) => s.kind === "checking" || s.kind ==
 
 /**
  * Asks GitHub for a newer release. `quiet` (the startup check) leaves a failure as "idle":
- * being offline at launch is not worth an error in 设置.
+ * being offline at launch is not worth an error in Settings.
  */
 export async function checkUpdate(quiet = false): Promise<UpdateInfo | null> {
   if (updateBusy(state)) return null;

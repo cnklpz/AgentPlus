@@ -1,5 +1,7 @@
 // src/App.tsx
-export default {
+import type en from "../en/app";
+
+const zh: typeof en = {
   // Window controls and top bar
   minimize: "最小化",
   maximize: "最大化",
@@ -133,3 +135,5 @@ export default {
   gatewayKeysItem: "{agent}：{provider}",
   gatewayKeysConfirm: "更新并写入",
 };
+
+export default zh;

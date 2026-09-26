@@ -21,11 +21,11 @@ pub const NAME: &str = "Codex";
 const EFFORTS: [&str; 7] = ["low", "medium", "high", "xhigh", "persistent", "ultra", "max"];
 
 fn inject_file() -> &'static str {
-    l("AgentPlus · Codex 界面注入", "AgentPlus · Codex UI injection")
+    l("AgentPlus · Codex UI injection", "AgentPlus · Codex 界面注入")
 }
 
 /// A UI injection AgentPlus applies when it restarts the desktop app: the setting key,
-/// the store flag, and the (zh, en) diff lines for turning it on and off.
+/// the store flag, and the (en, zh) diff lines for turning it on and off.
 pub struct Injection {
     pub key: &'static str,
     flag: &'static str,
@@ -38,26 +38,26 @@ pub const INJECTIONS: [Injection; 4] = [
     Injection {
         key: "fast_inject",
         flag: "fastInject",
-        on: ("+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable Fast display injection (takes effect after restarting Codex via AgentPlus)"),
-        off: ("- 停用 Fast 显示注入", "- Disable Fast display injection"),
+        on: ("+ Enable Fast display injection (takes effect after restarting Codex via AgentPlus)", "+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）"),
+        off: ("- Disable Fast display injection", "- 停用 Fast 显示注入"),
     },
     Injection {
         key: "full_names",
         flag: "fullModelNames",
-        on: ("+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)"),
-        off: ("- 停用完整模型名注入", "- Disable full model name injection"),
+        on: ("+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)", "+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）"),
+        off: ("- Disable full model name injection", "- 停用完整模型名注入"),
     },
     Injection {
         key: "quota_unlock",
         flag: "quotaUnlock",
-        on: ("+ 启用额度用完仍可发送注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable send-after-quota injection (takes effect after restarting Codex via AgentPlus)"),
-        off: ("- 停用额度用完仍可发送注入", "- Disable send-after-quota injection"),
+        on: ("+ Enable send-after-quota injection (takes effect after restarting Codex via AgentPlus)", "+ 启用额度用完仍可发送注入（通过 AgentPlus 重启 Codex 后生效）"),
+        off: ("- Disable send-after-quota injection", "- 停用额度用完仍可发送注入"),
     },
     Injection {
         key: "hide_usage_banner",
         flag: "hideUsageBanner",
-        on: ("+ 启用隐藏用量提示横幅注入（通过 AgentPlus 重启 Codex 后生效）", "+ Enable hide-usage-banner injection (takes effect after restarting Codex via AgentPlus)"),
-        off: ("- 停用隐藏用量提示横幅注入", "- Disable hide-usage-banner injection"),
+        on: ("+ Enable hide-usage-banner injection (takes effect after restarting Codex via AgentPlus)", "+ 启用隐藏用量提示横幅注入（通过 AgentPlus 重启 Codex 后生效）"),
+        off: ("- Disable hide-usage-banner injection", "- 停用隐藏用量提示横幅注入"),
     },
 ];
 
@@ -97,7 +97,7 @@ fn env_path() -> PathBuf {
 
 pub(crate) fn load_doc() -> Result<(DocumentMut, TextMeta)> {
     let (text, meta) = read_text(&config_path())?;
-    let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("config.toml 解析失败：{e}", "Couldn't parse config.toml: {e}")))?;
+    let doc = text.parse::<DocumentMut>().map_err(|e| anyhow!(tr!("Couldn't parse config.toml: {e}", "config.toml 解析失败：{e}")))?;
     Ok((doc, meta))
 }
 
@@ -163,7 +163,7 @@ fn provider_mut<'a>(doc: &'a mut DocumentMut, id: &str) -> Result<&'a mut dyn Ta
 }
 
 fn not_a_table(name: &str) -> anyhow::Error {
-    anyhow!(tr!("config.toml 里的 {name} 不是表", "{name} in config.toml is not a table"))
+    anyhow!(tr!("{name} in config.toml is not a table", "config.toml 里的 {name} 不是表"))
 }
 
 /// A top-level section (`[tui]`, `[desktop]`) to edit: an existing table or inline table as
@@ -200,7 +200,7 @@ fn put_provider(doc: &mut DocumentMut, id: &str, item: Item) -> Result<()> {
             let v = match item {
                 Item::Table(t) => toml_edit::Value::InlineTable(t.into_inline_table()),
                 Item::Value(v) => v,
-                _ => return Err(anyhow!(tr!("供应商 {id} 的配置无效", "The config of provider {id} is invalid"))),
+                _ => return Err(anyhow!(tr!("The config of provider {id} is invalid", "供应商 {id} 的配置无效"))),
             };
             it.insert(id, v);
         }
@@ -252,7 +252,7 @@ fn push_field_diff(diff: &mut Diff, file: &str, id: &str, old: &[(String, String
 /// `model_provider` at it. Returns whether config.toml changed.
 fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut Diff, cfg_file: &str) -> Result<bool> {
     if provider == "openai" {
-        return Err(anyhow!(l("OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商", "The OpenAI official account can't use the fixed ID; switch to a custom provider first")));
+        return Err(anyhow!(l("The OpenAI official account can't use the fixed ID; switch to a custom provider first", "OpenAI 官方账号不能使用固定 ID，请先切换到自定义供应商")));
     }
     let mut table = provider_item(doc, provider).cloned().ok_or_else(|| msg::no_provider(provider))?;
     if let Some(t) = table.as_table_like_mut() {
@@ -270,7 +270,7 @@ fn mirror(doc: &mut DocumentMut, provider: &str, store: &mut Value, diff: &mut D
         changed = true;
     }
     if fresh {
-        diff.push(cfg_file, tr!("+ [model_providers.{FIXED_ID}]（复制自「{provider}」）", "+ [model_providers.{FIXED_ID}] (copied from \"{provider}\")"), true);
+        diff.push(cfg_file, tr!("+ [model_providers.{FIXED_ID}] (copied from \"{provider}\")", "+ [model_providers.{FIXED_ID}]（复制自「{provider}」）"), true);
     }
     if push_field_diff(diff, cfg_file, FIXED_ID, &old, &new) {
         put_provider(doc, FIXED_ID, table)?;
@@ -350,12 +350,12 @@ fn key_status(name: &str) -> &'static str {
     match env_lookup(name) {
         Some((v, from_file)) if !v.is_empty() => {
             if from_file {
-                l("已在 ~/.codex/.env 配置", "set in ~/.codex/.env")
+                l("set in ~/.codex/.env", "已在 ~/.codex/.env 配置")
             } else {
-                l("已在系统环境变量配置", "set in system environment variables")
+                l("set in system environment variables", "已在系统环境变量配置")
             }
         }
-        _ => l("未找到，请求会失败", "not found; requests will fail"),
+        _ => l("not found; requests will fail", "未找到，请求会失败"),
     }
 }
 
@@ -403,14 +403,14 @@ fn sign_in_from(v: &Value) -> SignIn {
 fn providers(doc: &DocumentMut) -> Vec<Provider> {
     let mut out = vec![Provider::builtin(
         "openai",
-        l("OpenAI 官方", "OpenAI official"),
-        l("ChatGPT 账号登录", "ChatGPT account sign-in"),
+        l("OpenAI official", "OpenAI 官方"),
+        l("ChatGPT account sign-in", "ChatGPT 账号登录"),
         "responses",
         api_label("responses"),
         vec![
-            Kv::text(lbl::auth(), l("ChatGPT 账号登录（~/.codex/auth.json）", "ChatGPT account sign-in (~/.codex/auth.json)")),
-            Kv::text("Fast", l("账号登录时 Codex 原生显示", "Shown natively by Codex when signed in with an account")),
-            Kv::mono(lbl::config_id(), l("openai（内置）", "openai (built-in)")),
+            Kv::text(lbl::auth(), l("ChatGPT account sign-in (~/.codex/auth.json)", "ChatGPT 账号登录（~/.codex/auth.json）")),
+            Kv::text("Fast", l("Shown natively by Codex when signed in with an account", "账号登录时 Codex 原生显示")),
+            Kv::mono(lbl::config_id(), l("openai (built-in)", "openai（内置）")),
         ],
     )];
     if let Some(t) = doc.get("model_providers").and_then(|i| i.as_table_like()) {
@@ -430,13 +430,13 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 Kv::mono("wire_api", format!("\"{wire}\"")),
             ];
             if official_auth {
-                details.push(Kv::text(l("官方登录混用", "Official sign-in mix"), l("已开启 · Codex 用 ChatGPT 账号登录，对话请求发往此供应商并使用它的密钥", "On · Codex stays signed in with ChatGPT; requests go to this provider with its own API key")));
+                details.push(Kv::text(l("Official sign-in mix", "官方登录混用"), l("On · Codex stays signed in with ChatGPT; requests go to this provider with its own API key", "已开启 · Codex 用 ChatGPT 账号登录，对话请求发往此供应商并使用它的密钥")));
             }
             match &env_key {
-                Some(k) => details.push(Kv::text(lbl::api_key(), tr!("环境变量 {k} · {}", "Environment variable {k} · {}", key_status(k)))),
-                None => details.push(Kv::text(lbl::api_key(), l("未设置 env_key", "env_key not set"))),
+                Some(k) => details.push(Kv::text(lbl::api_key(), tr!("Environment variable {k} · {}", "环境变量 {k} · {}", key_status(k)))),
+                None => details.push(Kv::text(lbl::api_key(), l("env_key not set", "未设置 env_key"))),
             }
-            details.push(Kv::text("Fast", l("Codex 默认隐藏（可在「其他设置」注入显示）", "Hidden by Codex by default (can be shown via injection in \"Other settings\")")));
+            details.push(Kv::text("Fast", l("Hidden by Codex by default (can be shown via injection in \"Other settings\")", "Codex 默认隐藏（可在「其他设置」注入显示）")));
             out.push(Provider {
                 details,
                 id: id.to_string(),
@@ -446,7 +446,7 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 apis: vec![api_label(api).into()],
                 enabled: true,
                 compatible: !chat,
-                reason: if chat { Some(l("Codex 已不支持 Chat 接口", "Codex no longer supports the Chat API").into()) } else { None },
+                reason: if chat { Some(l("Codex no longer supports the Chat API", "Codex 已不支持 Chat 接口").into()) } else { None },
                 editable: true,
                 api: api.into(),
                 has_key: env_key.as_deref().and_then(env_value).is_some(),
@@ -507,8 +507,8 @@ fn visible_slugs(v: &Value) -> Vec<String> {
 
 /// Adds a user model to the catalog, cloning an existing entry so Codex gets every field.
 fn add_custom_model(v: &mut Value, store: &mut Value, id: &str, name: Option<&str>, context: Option<u64>) -> Result<String> {
-    let models = v.get_mut("models").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!(l("模型目录格式不对", "The model catalog has an unexpected format")))?;
-    let mut entry = models.iter().find(|m| m.is_object()).cloned().ok_or_else(|| anyhow!(l("模型目录是空的，没有可参照的条目", "The model catalog is empty; no entry to copy from")))?;
+    let models = v.get_mut("models").and_then(|x| x.as_array_mut()).ok_or_else(|| anyhow!(l("The model catalog has an unexpected format", "模型目录格式不对")))?;
+    let mut entry = models.iter().find(|m| m.is_object()).cloned().ok_or_else(|| anyhow!(l("The model catalog is empty; no entry to copy from", "模型目录是空的，没有可参照的条目")))?;
     let prio = models.iter().filter_map(|x| x.get("priority").and_then(|p| p.as_i64())).max().unwrap_or(0) + 1;
     let name = name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(id).to_string();
     entry["slug"] = Value::from(id);
@@ -528,8 +528,8 @@ fn add_custom_model(v: &mut Value, store: &mut Value, id: &str, name: Option<&st
     let mut custom = custom_models(store);
     custom.push(id.to_string());
     set_custom_models(store, &custom);
-    let ctx = context.map(|c| tr!("，上下文 {}", ", context {}", fmt_ctx(c))).unwrap_or_default();
-    Ok(tr!("+ {id}（{name}{ctx}）", "+ {id} ({name}{ctx})"))
+    let ctx = context.map(|c| tr!(", context {}", "，上下文 {}", fmt_ctx(c))).unwrap_or_default();
+    Ok(tr!("+ {id} ({name}{ctx})", "+ {id}（{name}{ctx}）"))
 }
 
 /// Makes exactly `list` visible in the catalog (adding unknown slugs as custom models).
@@ -559,7 +559,7 @@ fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff
     if shown + hidden + added.len() == 0 {
         return Ok(false);
     }
-    diff.push(cat_file, trn!(list.len(), "模型列表换成「{who}」的 {n} 个模型（显示 {shown} 个，隐藏 {hidden} 个）", "Model list replaced with \"{who}\"'s {n} model ({shown} shown, {hidden} hidden)", "Model list replaced with \"{who}\"'s {n} models ({shown} shown, {hidden} hidden)"), true);
+    diff.push(cat_file, trn!(list.len(), "Model list replaced with \"{who}\"'s {n} model ({shown} shown, {hidden} hidden)", "Model list replaced with \"{who}\"'s {n} models ({shown} shown, {hidden} hidden)", "模型列表换成「{who}」的 {n} 个模型（显示 {shown} 个，隐藏 {hidden} 个）"), true);
     for a in added {
         diff.push(cat_file, a, true);
     }
@@ -583,7 +583,7 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
                 tags.push(Tag::new("fast", "Fast"));
             }
             if is_custom {
-                tags.push(Tag::new("custom", l("自定义", "Custom")));
+                tags.push(Tag::new("custom", l("Custom", "自定义")));
             }
             let context = m.get("context_window").and_then(|x| x.as_u64());
             Some(Model {
@@ -635,7 +635,7 @@ pub fn state(inst: &Install) -> AgentState {
                 .collect();
         }
     } else {
-        st.notes.push(l("config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。", "config.toml has no model_catalog_json, so Codex fetches the model list online and it can't be edited here.").into());
+        st.notes.push(l("config.toml has no model_catalog_json, so Codex fetches the model list online and it can't be edited here.", "config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。").into());
     }
 
     let [inject, full_names, quota, hide_banner] = injections_on(&store);
@@ -643,40 +643,40 @@ pub fn state(inst: &Install) -> AgentState {
     let sl = status_line(&doc);
     let effs = efforts(&doc);
     st.settings = vec![
-        bool_setting("fixed_id", l("供应商切换", "Provider switching"), l("固定供应商 ID（推荐开启）", "Fixed provider ID (recommended)"),
-            l("开启后 model_provider 固定为 agentplus，切换供应商只改它的地址和密钥，会话不会因为切换而从 Codex 的最近列表和归档里消失。开启时会把当前供应商复制过去；关闭时 model_provider 改回当前供应商。",
-              "When on, model_provider stays agentplus and switching providers only changes its base URL and API key, so sessions don't disappear from Codex's recent list and archive after a switch. Turning it on copies the current provider over; turning it off points model_provider back at the current provider."), fixed),
-        bool_setting("fast_inject", "Fast", l("在 Codex 中显示 Fast", "Show Fast in Codex"),
-            l("Codex 只在 ChatGPT 账号登录时显示 Fast，用自定义供应商会被隐藏。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制。",
-              "Codex only shows Fast when signed in with a ChatGPT account and hides it for custom providers. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads."), inject),
-        bool_setting("fast_default", "Fast", l("默认使用 Fast", "Use Fast by default"),
-            l("写入 service_tier = \"priority\"（与 Codex 自己切换 Fast 时写入的值相同）。供应商需要支持 priority 档位。",
-              "Writes service_tier = \"priority\" (the same value Codex writes when you pick Fast). The provider must support the priority tier."), is_fast_tier(&tier)),
-        bool_setting("fast_cli", "Fast", l("Codex CLI 状态栏显示 fast-mode", "Show fast-mode in the Codex CLI status line"),
-            l("CLI 与桌面版共用配置，在 [tui].status_line 里追加 fast-mode。", "The CLI shares its config with the desktop app; appends fast-mode to [tui].status_line."), sl.as_ref().map(|x| x.iter().any(|x| x == "fast-mode")).unwrap_or(false)),
-        chips_setting("efforts", l("推理强度", "Reasoning effort"), l("选择器里可选的推理强度", "Reasoning efforts offered in the picker"),
-            l("勾选的档位会出现在 Codex 桌面版的推理强度菜单里（[desktop] enabled-reasoning-efforts）。模型不支持的档位不会显示。",
-              "Checked levels appear in the Codex desktop reasoning effort menu ([desktop] enabled-reasoning-efforts). Levels a model doesn't support are not shown."), effs.clone(), &EFFORTS)
+        bool_setting("fixed_id", l("Provider switching", "供应商切换"), l("Fixed provider ID (recommended)", "固定供应商 ID（推荐开启）"),
+            l("When on, model_provider stays agentplus and switching providers only changes its base URL and API key, so sessions don't disappear from Codex's recent list and archive after a switch. Turning it on copies the current provider over; turning it off points model_provider back at the current provider.",
+              "开启后 model_provider 固定为 agentplus，切换供应商只改它的地址和密钥，会话不会因为切换而从 Codex 的最近列表和归档里消失。开启时会把当前供应商复制过去；关闭时 model_provider 改回当前供应商。"), fixed),
+        bool_setting("fast_inject", "Fast", l("Show Fast in Codex", "在 Codex 中显示 Fast"),
+            l("Codex only shows Fast when signed in with a ChatGPT account and hides it for custom providers. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads.",
+              "Codex 只在 ChatGPT 账号登录时显示 Fast，用自定义供应商会被隐藏。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制。"), inject),
+        bool_setting("fast_default", "Fast", l("Use Fast by default", "默认使用 Fast"),
+            l("Writes service_tier = \"priority\" (the same value Codex writes when you pick Fast). The provider must support the priority tier.",
+              "写入 service_tier = \"priority\"（与 Codex 自己切换 Fast 时写入的值相同）。供应商需要支持 priority 档位。"), is_fast_tier(&tier)),
+        bool_setting("fast_cli", "Fast", l("Show fast-mode in the Codex CLI status line", "Codex CLI 状态栏显示 fast-mode"),
+            l("The CLI shares its config with the desktop app; appends fast-mode to [tui].status_line.", "CLI 与桌面版共用配置，在 [tui].status_line 里追加 fast-mode。"), sl.as_ref().map(|x| x.iter().any(|x| x == "fast-mode")).unwrap_or(false)),
+        chips_setting("efforts", l("Reasoning effort", "推理强度"), l("Reasoning efforts offered in the picker", "选择器里可选的推理强度"),
+            l("Checked levels appear in the Codex desktop reasoning effort menu ([desktop] enabled-reasoning-efforts). Levels a model doesn't support are not shown.",
+              "勾选的档位会出现在 Codex 桌面版的推理强度菜单里（[desktop] enabled-reasoning-efforts）。模型不支持的档位不会显示。"), effs.clone(), &EFFORTS)
             .with_hints(&[
-                l("回复最快，推理较浅", "Fastest replies, light reasoning"),
-                l("速度和深度平衡，适合日常任务", "Balances speed and depth; good for everyday tasks"),
-                l("推理更深，适合复杂问题", "Deeper reasoning for complex problems"),
-                l("比 high 更深的推理", "Deeper reasoning than high"),
-                l("持久模式：做完请求后继续主动做后续有用的工作，直到没有可做的", "Persistent mode: after the request, keeps doing useful follow-up work until nothing is left"),
-                l("最高推理，并自动把任务拆给子代理（部分模型支持）", "Maximum reasoning, automatically splitting tasks across subagents (some models)"),
-                l("最高推理深度，适合最难的问题", "Maximum reasoning depth for the hardest problems"),
+                l("Fastest replies, light reasoning", "回复最快，推理较浅"),
+                l("Balances speed and depth; good for everyday tasks", "速度和深度平衡，适合日常任务"),
+                l("Deeper reasoning for complex problems", "推理更深，适合复杂问题"),
+                l("Deeper reasoning than high", "比 high 更深的推理"),
+                l("Persistent mode: after the request, keeps doing useful follow-up work until nothing is left", "持久模式：做完请求后继续主动做后续有用的工作，直到没有可做的"),
+                l("Maximum reasoning, automatically splitting tasks across subagents (some models)", "最高推理，并自动把任务拆给子代理（部分模型支持）"),
+                l("Maximum reasoning depth for the hardest problems", "最高推理深度，适合最难的问题"),
             ]),
-        bool_setting("full_names", l("界面", "Interface"), l("显示完整模型名", "Show full model names"),
-            l("Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。",
-              "Codex shows full model names only when signed in with a ChatGPT account; with custom providers it drops the \"GPT-\" prefix (GPT-6 Sol shows as 6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and turns this shortening off when the UI loads."), full_names),
-        bool_setting("quota_unlock", l("官方登录混用", "Official sign-in mix"), l("ChatGPT 额度用完后仍可发送", "Keep sending after the ChatGPT quota runs out"),
-            l("用 ChatGPT 账号登录时，账号额度用完后 Codex 会禁用发送按钮，即使开启了官方登录混用、请求其实发往中转站。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制（额度提示横幅用下一项隐藏）。",
-              "Signed in with a ChatGPT account, Codex disables the send button once the account's quota runs out, even with the official sign-in mix on and requests actually going to the relay. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads (hide the usage banner with the next option)."), quota),
-        bool_setting("hide_usage_banner", l("官方登录混用", "Official sign-in mix"), l("隐藏用量提示横幅", "Hide usage banners"),
-            l("用 ChatGPT 账号登录时，输入框上方会显示这个账号的额度横幅（「Codex 和工作使用额度已用完」、即将用完的提醒、升级和重置使用量按钮），与中转站的额度无关。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这些横幅。",
-              "Signed in with a ChatGPT account, Codex shows that account's usage banners above the composer (\"You're out of Codex and Work usage\", running-low warnings, upgrade and reset-usage buttons), which have nothing to do with the relay's quota. When on, restarting Codex through AgentPlus launches it with a debug port and removes these banners when the UI loads."), hide_banner),
-        bool_setting("ctx_usage", l("界面", "Interface"), l("显示上下文用量", "Show context usage"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
-        bool_setting("plain", l("界面", "Interface"), l("纯文本输入框", "Plain text composer"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
+        bool_setting("full_names", l("Interface", "界面"), l("Show full model names", "显示完整模型名"),
+            l("Codex shows full model names only when signed in with a ChatGPT account; with custom providers it drops the \"GPT-\" prefix (GPT-6 Sol shows as 6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and turns this shortening off when the UI loads.",
+              "Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。"), full_names),
+        bool_setting("quota_unlock", l("Official sign-in mix", "官方登录混用"), l("Keep sending after the ChatGPT quota runs out", "ChatGPT 额度用完后仍可发送"),
+            l("Signed in with a ChatGPT account, Codex disables the send button once the account's quota runs out, even with the official sign-in mix on and requests actually going to the relay. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads (hide the usage banner with the next option).",
+              "用 ChatGPT 账号登录时，账号额度用完后 Codex 会禁用发送按钮，即使开启了官方登录混用、请求其实发往中转站。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制（额度提示横幅用下一项隐藏）。"), quota),
+        bool_setting("hide_usage_banner", l("Official sign-in mix", "官方登录混用"), l("Hide usage banners", "隐藏用量提示横幅"),
+            l("Signed in with a ChatGPT account, Codex shows that account's usage banners above the composer (\"You're out of Codex and Work usage\", running-low warnings, upgrade and reset-usage buttons), which have nothing to do with the relay's quota. When on, restarting Codex through AgentPlus launches it with a debug port and removes these banners when the UI loads.",
+              "用 ChatGPT 账号登录时，输入框上方会显示这个账号的额度横幅（「Codex 和工作使用额度已用完」、即将用完的提醒、升级和重置使用量按钮），与中转站的额度无关。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这些横幅。"), hide_banner),
+        bool_setting("ctx_usage", l("Interface", "界面"), l("Show context usage", "显示上下文用量"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
+        bool_setting("plain", l("Interface", "界面"), l("Plain text composer", "纯文本输入框"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
     ];
 
     let prov = st.providers.iter().find(|p| p.id == cur);
@@ -684,42 +684,42 @@ pub fn state(inst: &Install) -> AgentState {
     let mixed = prov.is_some_and(|p| p.official_auth);
     let signed = mixed.then(|| sign_in(&doc));
     match signed {
-        Some(SignIn::None) => st.notes.push(l("当前供应商开启了官方登录混用，但 Codex 还没有登录 ChatGPT 账号：在 Codex 里登录后，对话才会发往中转站。", "The current provider uses the official sign-in mix, but Codex isn't signed in with a ChatGPT account yet. Sign in in Codex so requests can go to the relay.").into()),
-        Some(SignIn::ApiKey) => st.notes.push(l("当前供应商开启了官方登录混用，但 Codex 现在是 API Key 登录（~/.codex/auth.json），官方账号功能不会解锁：在 Codex 里退出后改用 ChatGPT 账号登录。", "The current provider uses the official sign-in mix, but Codex is signed in with an API key (~/.codex/auth.json), so account features stay locked. Sign out in Codex and sign in with a ChatGPT account.").into()),
+        Some(SignIn::None) => st.notes.push(l("The current provider uses the official sign-in mix, but Codex isn't signed in with a ChatGPT account yet. Sign in in Codex so requests can go to the relay.", "当前供应商开启了官方登录混用，但 Codex 还没有登录 ChatGPT 账号：在 Codex 里登录后，对话才会发往中转站。").into()),
+        Some(SignIn::ApiKey) => st.notes.push(l("The current provider uses the official sign-in mix, but Codex is signed in with an API key (~/.codex/auth.json), so account features stay locked. Sign out in Codex and sign in with a ChatGPT account.", "当前供应商开启了官方登录混用，但 Codex 现在是 API Key 登录（~/.codex/auth.json），官方账号功能不会解锁：在 Codex 里退出后改用 ChatGPT 账号登录。").into()),
         _ => {}
     }
     st.current_model = doc.get("model").and_then(|v| v.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(String::from);
     st.current = vec![
         Kv::mono("model_provider", format!("\"{raw}\"")),
         Kv::text(
-            l("固定 ID", "Fixed ID"),
+            l("Fixed ID", "固定 ID"),
             if fixed {
-                tr!("已开启 · 指向「{cur}」", "On · points at \"{cur}\"")
+                tr!("On · points at \"{cur}\"", "已开启 · 指向「{cur}」")
             } else if st.fixed_prompt {
-                l("预开启 · 切换供应商时写入", "Pre-enabled · written on provider switch").to_string()
+                l("Pre-enabled · written on provider switch", "预开启 · 切换供应商时写入").to_string()
             } else {
-                l("未开启", "Off").to_string()
+                l("Off", "未开启").to_string()
             },
         ),
-        Kv::mono("base_url", prov.and_then(|p| p.base_url.clone()).unwrap_or_else(|| l("ChatGPT 账号", "ChatGPT account").into())),
+        Kv::mono("base_url", prov.and_then(|p| p.base_url.clone()).unwrap_or_else(|| l("ChatGPT account", "ChatGPT 账号").into())),
         Kv::text(
-            l("官方登录混用", "Official sign-in mix"),
+            l("Official sign-in mix", "官方登录混用"),
             match signed {
-                None => l("未开启", "Off"),
-                Some(SignIn::ChatGpt) => l("已开启 · ChatGPT 已登录", "On · signed in with ChatGPT"),
-                Some(SignIn::ApiKey) => l("已开启 · 但当前是 API Key 登录", "On · but signed in with an API key"),
-                Some(SignIn::None) => l("已开启 · ChatGPT 未登录", "On · not signed in with ChatGPT"),
-                Some(SignIn::Unknown) => l("已开启 · 登录凭据在系统钥匙串", "On · credentials are in the system keyring"),
+                None => l("Off", "未开启"),
+                Some(SignIn::ChatGpt) => l("On · signed in with ChatGPT", "已开启 · ChatGPT 已登录"),
+                Some(SignIn::ApiKey) => l("On · but signed in with an API key", "已开启 · 但当前是 API Key 登录"),
+                Some(SignIn::None) => l("On · not signed in with ChatGPT", "已开启 · ChatGPT 未登录"),
+                Some(SignIn::Unknown) => l("On · credentials are in the system keyring", "已开启 · 登录凭据在系统钥匙串"),
             },
         ),
         Kv::mono("model", doc.get("model").and_then(|v| v.as_str()).unwrap_or("-").to_string()),
         Kv::mono("service_tier", format!("\"{tier}\"")),
-        Kv::text(l("Fast 选项", "Fast option"), if inject { l("注入显示（经 AgentPlus 启动时生效）", "Injected (takes effect when launched via AgentPlus)") } else if custom { l("被 Codex 隐藏", "Hidden by Codex") } else { l("官方账号可见", "Visible with the official account") }),
-        Kv::mono(l("模型目录", "Model catalog"), match &st.catalog {
-            Some(c) => tr!("{}/{} 可见", "{}/{} visible", c.iter().filter(|m| m.visible).count(), c.len()),
-            None => l("在线获取", "Fetched online").into(),
+        Kv::text(l("Fast option", "Fast 选项"), if inject { l("Injected (takes effect when launched via AgentPlus)", "注入显示（经 AgentPlus 启动时生效）") } else if custom { l("Hidden by Codex", "被 Codex 隐藏") } else { l("Visible with the official account", "官方账号可见") }),
+        Kv::mono(l("Model catalog", "模型目录"), match &st.catalog {
+            Some(c) => tr!("{}/{} visible", "{}/{} 可见", c.iter().filter(|m| m.visible).count(), c.len()),
+            None => l("Fetched online", "在线获取").into(),
         }),
-        Kv::mono(l("推理强度", "Reasoning effort"), effs.join(" ")),
+        Kv::mono(l("Reasoning effort", "推理强度"), effs.join(" ")),
     ];
     st
 }
@@ -727,7 +727,7 @@ pub fn state(inst: &Install) -> AgentState {
 /// Base URL + key of a provider, for fetching its model list.
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load_doc()?;
-    let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
+    let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!(tr!("Provider {id} has no base_url", "供应商 {id} 没有 base_url")))?;
     let key = provider_str(&doc, id, "env_key").and_then(|k| env_value(&k));
     let api = provider_item(&doc, id).map(wire_api).unwrap_or("responses");
     Ok((base, key, api.into()))
@@ -742,7 +742,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> {
     // Codex treats a provider named exactly "OpenAI" as its own backend (server-side compaction etc.), which relays don't support.
     if on && provider_str(doc, id, "name").as_deref() == Some("OpenAI") {
-        return Err(anyhow!(l("开启官方登录混用时，供应商名称不能是 OpenAI（Codex 会把它当成官方后端），请换个名称", "With official sign-in mix on, the provider can't be named OpenAI (Codex treats that name as its own backend); pick another name")));
+        return Err(anyhow!(l("With official sign-in mix on, the provider can't be named OpenAI (Codex treats that name as its own backend); pick another name", "开启官方登录混用时，供应商名称不能是 OpenAI（Codex 会把它当成官方后端），请换个名称")));
     }
     let t = provider_mut(doc, id)?;
     let old = t.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -760,7 +760,7 @@ fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> 
 /// Applies `ops` in memory, records the diff, and writes files unless `dry_run`.
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if crate::official::active() {
-        return Err(anyhow!(l("正在获取官方模型列表，config.toml 是临时状态；先在「模型列表」里完成或取消获取", "Fetching the official model list; config.toml is in a temporary state. Finish or cancel the fetch in \"Model list\" first")));
+        return Err(anyhow!(l("Fetching the official model list; config.toml is in a temporary state. Finish or cancel the fetch in \"Model list\" first", "正在获取官方模型列表，config.toml 是临时状态；先在「模型列表」里完成或取消获取")));
     }
     let (mut doc, meta) = load_doc()?;
     let cfg_file = display_path(&config_path());
@@ -797,7 +797,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         match op {
             Op::UpsertProvider { provider: p } => {
                 if p.api != "responses" {
-                    return Err(anyhow!(l("Codex 只支持 Responses 接口", "Codex only supports the Responses API")));
+                    return Err(anyhow!(l("Codex only supports the Responses API", "Codex 只支持 Responses 接口")));
                 }
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
                     return Err(msg::name_and_url_required());
@@ -847,15 +847,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     if set_official_auth(&mut doc, &id, on)? {
                         cfg_dirty = true;
                         if on {
-                            diff.push(&cfg_file, tr!("[model_providers.{id}] requires_openai_auth = true（官方登录混用：保留 ChatGPT 登录，请求发往此供应商）", "[model_providers.{id}] requires_openai_auth = true (official sign-in mix: keep the ChatGPT sign-in, send requests to this provider)"), true);
+                            diff.push(&cfg_file, tr!("[model_providers.{id}] requires_openai_auth = true (official sign-in mix: keep the ChatGPT sign-in, send requests to this provider)", "[model_providers.{id}] requires_openai_auth = true（官方登录混用：保留 ChatGPT 登录，请求发往此供应商）"), true);
                         } else {
-                            diff.push(&cfg_file, tr!("[model_providers.{id}] - requires_openai_auth（关闭官方登录混用）", "[model_providers.{id}] - requires_openai_auth (official sign-in mix off)"), false);
+                            diff.push(&cfg_file, tr!("[model_providers.{id}] - requires_openai_auth (official sign-in mix off)", "[model_providers.{id}] - requires_openai_auth（关闭官方登录混用）"), false);
                         }
                     }
                 }
                 if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
                     if codex_ignores_in_file(&env_key) {
-                        return Err(anyhow!(tr!("Codex 不读取 ~/.codex/.env 里以 CODEX_ 开头的变量：请把 env_key 改成别的名字，或在系统环境变量里设置 {env_key}", "Codex ignores ~/.codex/.env variables starting with CODEX_: rename env_key, or set {env_key} as a system environment variable")));
+                        return Err(anyhow!(tr!("Codex ignores ~/.codex/.env variables starting with CODEX_: rename env_key, or set {env_key} as a system environment variable", "Codex 不读取 ~/.codex/.env 里以 CODEX_ 开头的变量：请把 env_key 改成别的名字，或在系统环境变量里设置 {env_key}")));
                     }
                     set_env(&mut env_lines, &env_key, k.trim());
                     diff.push(&env_file, format!("{env_key} = {}", mask_key(k.trim())), true);
@@ -879,7 +879,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     .and_then(|t| t.remove(provider))
                     .is_some();
                 if removed {
-                    diff.push(&cfg_file, tr!("- [model_providers.{provider}]（~/.codex/.env 里的密钥保留）", "- [model_providers.{provider}] (API key in ~/.codex/.env is kept)"), false);
+                    diff.push(&cfg_file, tr!("- [model_providers.{provider}] (API key in ~/.codex/.env is kept)", "- [model_providers.{provider}]（~/.codex/.env 里的密钥保留）"), false);
                     cfg_dirty = true;
                 }
             }
@@ -916,7 +916,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetModelVisible { model, visible, .. } => {
                 let v = catalog_mut(&mut catalog)?;
-                let entry = catalog_entry(v, model).ok_or_else(|| anyhow!(tr!("模型目录里没有 {model}", "{model} is not in the model catalog")))?;
+                let entry = catalog_entry(v, model).ok_or_else(|| anyhow!(tr!("{model} is not in the model catalog", "模型目录里没有 {model}")))?;
                 let want = if *visible { "list" } else { "hide" };
                 let old = entry.get("visibility").and_then(|s| s.as_str()).unwrap_or("list").to_string();
                 if old != want {
@@ -965,7 +965,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::DeleteModel { model, .. } => {
                 let mut custom = custom_models(&store);
                 if !custom.contains(model) {
-                    return Err(anyhow!(tr!("{model} 是 Codex 自带的模型，只能隐藏不能删除", "{model} is a built-in Codex model; it can be hidden but not deleted")));
+                    return Err(anyhow!(tr!("{model} is a built-in Codex model; it can be hidden but not deleted", "{model} 是 Codex 自带的模型，只能隐藏不能删除")));
                 }
                 let v = catalog_mut(&mut catalog)?;
                 if let Some(models) = v.get_mut("models").and_then(|x| x.as_array_mut()) {
@@ -987,7 +987,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         store_dirty = true;
                     } else if !on && raw == FIXED_ID {
                         doc["model_provider"] = value(cur.as_str());
-                        diff.push(&cfg_file, tr!("model_provider = \"{FIXED_ID}\" → \"{cur}\"（关闭固定 ID）", "model_provider = \"{FIXED_ID}\" → \"{cur}\" (fixed ID off)"), false);
+                        diff.push(&cfg_file, tr!("model_provider = \"{FIXED_ID}\" → \"{cur}\" (fixed ID off)", "model_provider = \"{FIXED_ID}\" → \"{cur}\"（关闭固定 ID）"), false);
                         cfg_dirty = true;
                     }
                 }
@@ -1043,8 +1043,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     let on = v.as_bool().unwrap_or(false);
                     if store::get_flag(&store, ID, inj.flag) != on {
                         store::set_flag(&mut store, ID, inj.flag, on);
-                        let (zh, en) = if on { inj.on } else { inj.off };
-                        diff.push(inject_file(), l(zh, en), on);
+                        let (en, zh) = if on { inj.on } else { inj.off };
+                        diff.push(inject_file(), l(en, zh), on);
                         store_dirty = true;
                     }
                 }
@@ -1060,11 +1060,11 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         store_dirty = true;
                     }
                 } else if set_stored_list(&mut store, provider, &list) {
-                    diff.push(l("AgentPlus · 各供应商的模型列表", "AgentPlus · per-provider model lists"), tr!("「{provider}」的模型列表：{} 个（切换到它时生效）", "\"{provider}\" model list: {} (takes effect when you switch to it)", list.len()), true);
+                    diff.push(l("AgentPlus · per-provider model lists", "AgentPlus · 各供应商的模型列表"), tr!("\"{provider}\" model list: {} (takes effect when you switch to it)", "「{provider}」的模型列表：{} 个（切换到它时生效）", list.len()), true);
                     store_dirty = true;
                 }
             }
-            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex 同时只能使用一个供应商", "Codex can only use one provider at a time"))),
+            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex can only use one provider at a time", "Codex 同时只能使用一个供应商"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
@@ -1119,7 +1119,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
 }
 
 fn catalog_mut(c: &mut Option<(PathBuf, Value, TextMeta)>) -> Result<&mut Value> {
-    c.as_mut().map(|(_, v, _)| v).ok_or_else(|| anyhow!(l("没有可编辑的模型目录", "No editable model catalog")))
+    c.as_mut().map(|(_, v, _)| v).ok_or_else(|| anyhow!(l("No editable model catalog", "没有可编辑的模型目录")))
 }
 
 fn catalog_entry<'a>(v: &'a mut Value, slug: &str) -> Option<&'a mut Value> {
@@ -1474,7 +1474,7 @@ http_headers = { X = \"1\" }
         let _h = codex_home_with("codex-inject", "", None);
         for (i, inj) in INJECTIONS.iter().enumerate() {
             let (diff, _, _) = plan(&[setting(inj.key, true)], false).unwrap();
-            assert_eq!(diff_lines(&diff), [("AgentPlus · Codex 界面注入".to_string(), inj.on.0.to_string())]);
+            assert_eq!(diff_lines(&diff), [("AgentPlus · Codex 界面注入".to_string(), inj.on.1.to_string())]);
             let mut want = [false; 4];
             want[..=i].fill(true);
             assert_eq!(injections_on(&store::load()), want);

@@ -1,5 +1,7 @@
 // src/components/Aside.tsx
-export default {
+import type en from "../en/aside";
+
+const zh: typeof en = {
   aria: "配置与改动",
   current: "当前配置",
   fromFiles: "读取自配置文件",
@@ -16,3 +18,5 @@ export default {
   uiInactive: "界面增强（Fast、完整模型名等）要在 AgentPlus 里重启 {name} 才会生效",
   footNewSession: "写入前自动备份原文件 · 新开的 {name} 会话就会读取",
 };
+
+export default zh;

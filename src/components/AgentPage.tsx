@@ -49,7 +49,7 @@ interface Props {
   head?: ReactNode;
   /** Shows a "copy a provider from elsewhere" card next to "add". */
   onCopyProvider?: () => void;
-  /** OpenCode: body of the 项目 tab (per-folder configs) and how many projects there are. */
+  /** OpenCode: body of the Projects tab (per-folder configs) and how many projects there are. */
   projectsTab?: { body: ReactNode; count: number };
 }
 

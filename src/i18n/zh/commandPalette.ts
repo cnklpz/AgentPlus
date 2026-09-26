@@ -1,5 +1,7 @@
 // src/components/CommandPalette.tsx
-export default {
+import type en from "../en/commandPalette";
+
+const zh: typeof en = {
   groupAgent: "Agent",
   groupPage: "页面",
   groupSetting: "设置",
@@ -27,3 +29,5 @@ export default {
   noResults: "没有找到「{q}」",
   foot: "↑↓ 选择 · Enter 打开 · Esc 关闭",
 };
+
+export default zh;

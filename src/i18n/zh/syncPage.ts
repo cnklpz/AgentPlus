@@ -1,5 +1,7 @@
 // src/components/SyncPage.tsx
-export default {
+import type en from "../en/syncPage";
+
+const zh: typeof en = {
   folderSaved: "同步文件夹已保存",
   upToDate: "同步文件和本机一致，没有需要导入的",
   title: "多设备同步",
@@ -22,3 +24,5 @@ export default {
   noKeyHint: "新增的供应商没有密钥，导入后在供应商详情里点「编辑」补上。",
   adopt: "加入待写入（{n}）",
 };
+
+export default zh;

@@ -1,6 +1,5 @@
-import type zh from "../zh/settingsPage";
-
-const en: typeof zh = {
+// src/components/SettingsPage.tsx
+export default {
   title: "AgentPlus settings",
   subtitle: "AgentPlus's own options; each agent's configuration lives on its own page",
   closeSettings: "Close settings",
@@ -125,5 +124,3 @@ const en: typeof zh = {
   detectedHere: "Detected on this machine",
   supportedHint: "A green dot means it's detected in the current environment. Agents that aren't installed show up in the sidebar automatically once installed.",
 };
-
-export default en;

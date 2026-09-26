@@ -1,5 +1,7 @@
 // src/components/HistoryPage.tsx
-export default {
+import type en from "../en/historyPage";
+
+const zh: typeof en = {
   agentCodexCleanup: "Codex 清理",
   agentCodexRepair: "Codex 会话修复",
   fileGone: "原文件已不存在",
@@ -35,3 +37,5 @@ export default {
   modifiedAt: " · 修改于 {time}",
   truncated: "差异太长，只显示前一部分",
 };
+
+export default zh;

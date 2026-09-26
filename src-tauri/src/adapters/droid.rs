@@ -94,7 +94,7 @@ fn provider_for(api: &str) -> Result<&'static str> {
         "chat" => Ok("generic-chat-completion-api"),
         "responses" => Ok("openai"),
         "anthropic" => Ok("anthropic"),
-        other => Err(anyhow!(tr!("Droid 不支持 {other} 接口（只有 Chat / Responses / Anthropic）", "Droid doesn't support the {other} API (only Chat / Responses / Anthropic)"))),
+        other => Err(anyhow!(tr!("Droid doesn't support the {other} API (only Chat / Responses / Anthropic)", "Droid 不支持 {other} 接口（只有 Chat / Responses / Anthropic）"))),
     }
 }
 
@@ -202,7 +202,7 @@ fn legacy_groups(active: &[Value]) -> Vec<(Group, Vec<Value>)> {
             continue;
         }
         let id = unique_id(&format!("legacy-{}", slug(&host(&k.0))), |c| out.iter().any(|(g, _)| g.id == c));
-        out.push((Group { id, name: tr!("{}（旧版 config.json）", "{} (legacy config.json)", host(&k.0)), key: k }, vec![e]));
+        out.push((Group { id, name: tr!("{} (legacy config.json)", "{}（旧版 config.json）", host(&k.0)), key: k }, vec![e]));
     }
     out
 }
@@ -214,7 +214,7 @@ fn model_of(e: &Value, visible: bool, readonly: bool) -> Model {
         id: str_field(e, "model"),
         visible,
         readonly,
-        tags: out.map(|n| vec![Tag::new("output", tr!("输出 {}", "Output {}", fmt_ctx(n)))]).unwrap_or_default(),
+        tags: out.map(|n| vec![Tag::new("output", tr!("Output {}", "输出 {}", fmt_ctx(n)))]).unwrap_or_default(),
         name: (!d.trim().is_empty() && d != str_field(e, "model")).then_some(d),
         deletable: !readonly,
         extra: crate::mfields::read(e, crate::mfields::DROID),
@@ -252,9 +252,9 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], readonly: bool) -
         models,
         details: vec![
             Kv::mono("provider", if g.key.1.is_empty() { "-".into() } else { g.key.1.clone() }),
-            Kv::text(l("条目", "Entries"), trn!(active.len(), "customModels 里 {n} 个模型条目（每个条目自带地址和密钥）", "{n} model entry in customModels (it carries its own base URL and API key)", "{n} model entries in customModels (each carries its own base URL and API key)")),
+            Kv::text(l("Entries", "条目"), trn!(active.len(), "{n} model entry in customModels (it carries its own base URL and API key)", "{n} model entries in customModels (each carries its own base URL and API key)", "customModels 里 {n} 个模型条目（每个条目自带地址和密钥）")),
             Kv::text(lbl::api_key(), keyref::key_note(&g.key.2, "settings.json")),
-            Kv::text(lbl::status(), if readonly { l("旧版 config.json · 只读", "Legacy config.json · read-only") } else if disabled { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") } else { l("已启用", "Enabled") }),
+            Kv::text(lbl::status(), if readonly { l("Legacy config.json · read-only", "旧版 config.json · 只读") } else if disabled { l("Disabled · entries parked in AgentPlus", "已停用 · 条目暂存在 AgentPlus") } else { l("Enabled", "已启用") }),
         ],
         editable: !readonly,
         api: api.into(),
@@ -288,7 +288,7 @@ pub fn state(inst: &Install) -> AgentState {
     let legacy = legacy_groups(&entries);
     if !legacy.is_empty() {
         st.files.push(display_path(&legacy_path()));
-        st.notes.push(l("旧版 ~/.factory/config.json 里的 custom_models 只读显示；settings.json 里有同名条目时以 settings.json 为准。", "custom_models from the legacy ~/.factory/config.json are shown read-only; when settings.json has the same entry, settings.json wins.").into());
+        st.notes.push(l("custom_models from the legacy ~/.factory/config.json are shown read-only; when settings.json has the same entry, settings.json wins.", "旧版 ~/.factory/config.json 里的 custom_models 只读显示；settings.json 里有同名条目时以 settings.json 为准。").into());
     }
     for (g, es) in &legacy {
         st.providers.push(provider_of(g, es, &[], true));
@@ -297,20 +297,20 @@ pub fn state(inst: &Install) -> AgentState {
     let model = cfg.get("model").and_then(|x| x.as_str()).map(String::from);
     let selected = model.as_deref().and_then(|m| entries.iter().enumerate().find(|(i, e)| entry_id(e, *i) == m));
     st.current = vec![
-        Kv::mono(lbl::current_model(), model.clone().unwrap_or_else(|| l("-（Droid 默认）", "- (Droid default)").into())),
+        Kv::mono(lbl::current_model(), model.clone().unwrap_or_else(|| l("- (Droid default)", "-（Droid 默认）").into())),
         Kv::text(
-            l("对应条目", "Matching entry"),
+            l("Matching entry", "对应条目"),
             match selected {
                 Some((_, e)) => format!("{} · {}", display(e), groups.iter().find(|g| g.key == key_of(e)).map(|g| g.name.clone()).unwrap_or_default()),
-                None if model.as_deref().map(|m| m.starts_with("custom:")).unwrap_or(false) => l("找不到对应的自定义模型", "No matching custom model").into(),
-                None => l("内置模型", "Built-in model").into(),
+                None if model.as_deref().map(|m| m.starts_with("custom:")).unwrap_or(false) => l("No matching custom model", "找不到对应的自定义模型").into(),
+                None => l("Built-in model", "内置模型").into(),
             },
         ),
-        Kv::text(lbl::custom_models(), tr!("{} 个", "{}", entries.len())),
+        Kv::text(lbl::custom_models(), tr!("{}", "{} 个", entries.len())),
         Kv::mono(lbl::config_file(), display_path(&settings_path())),
     ];
-    st.notes.push(l("Droid 运行时会改写 settings.json；AgentPlus 只改 customModels 和 model，改动对新会话生效。", "Droid rewrites settings.json while running; AgentPlus only changes customModels and model, and changes apply to new sessions.").into());
-    st.notes.push(l("自定义模型按列表位置编号（custom:名称-序号）；增删或隐藏条目后 AgentPlus 会同步修正当前选中的 model。", "Custom models are numbered by list position (custom:name-index); after adding, removing or hiding entries AgentPlus fixes up the selected model.").into());
+    st.notes.push(l("Droid rewrites settings.json while running; AgentPlus only changes customModels and model, and changes apply to new sessions.", "Droid 运行时会改写 settings.json；AgentPlus 只改 customModels 和 model，改动对新会话生效。").into());
+    st.notes.push(l("Custom models are numbered by list position (custom:name-index); after adding, removing or hiding entries AgentPlus fixes up the selected model.", "自定义模型按列表位置编号（custom:名称-序号）；增删或隐藏条目后 AgentPlus 会同步修正当前选中的 model。").into());
     st
 }
 
@@ -324,7 +324,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
         None => legacy_groups(&entries).into_iter().find(|(g, _)| g.id == id).map(|(g, _)| g.key).ok_or_else(|| msg::no_provider(id))?,
     };
     if key.0.is_empty() {
-        return Err(anyhow!(tr!("供应商 {id} 没有 baseUrl", "Provider {id} has no baseUrl")));
+        return Err(anyhow!(tr!("Provider {id} has no baseUrl", "供应商 {id} 没有 baseUrl")));
     }
     Ok((key.0, resolve_key(&key.2), api_of(&key.1).into()))
 }
@@ -343,7 +343,7 @@ struct Work {
 impl Work {
     fn group(&self, id: &str) -> Result<Group> {
         if self.legacy.iter().any(|l| l == id) {
-            return Err(anyhow!(l("旧版 config.json 里的条目只读；请在 Droid 里迁移到 settings.json 后再编辑", "Entries in the legacy config.json are read-only; migrate them to settings.json in Droid before editing")));
+            return Err(anyhow!(l("Entries in the legacy config.json are read-only; migrate them to settings.json in Droid before editing", "旧版 config.json 里的条目只读；请在 Droid 里迁移到 settings.json 后再编辑")));
         }
         self.groups.iter().find(|g| g.id == id).cloned().ok_or_else(|| msg::no_provider(id))
     }
@@ -377,7 +377,7 @@ impl Work {
     fn add_model(&mut self, g: &Group, model: &str, name: Option<&str>) {
         self.entries.push(Self::new_entry(g, model, name));
         let file = self.file.clone();
-        self.diff.push(&file, tr!("customModels + {model}（{}）", "customModels + {model} ({})", g.name), true);
+        self.diff.push(&file, tr!("customModels + {model} ({})", "customModels + {model}（{}）", g.name), true);
     }
 
     fn apply(&mut self, op: &Op) -> Result<()> {
@@ -394,7 +394,7 @@ impl Work {
                     None => {
                         let models = clean_ids(&p.models);
                         if models.is_empty() {
-                            return Err(anyhow!(l("Droid 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型", "Each Droid model entry carries its own base URL and API key: add at least one model when creating a provider")));
+                            return Err(anyhow!(l("Each Droid model entry carries its own base URL and API key: add at least one model when creating a provider", "Droid 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型")));
                         }
                         let key: Key = (base.clone(), prov.to_string(), new_key.clone().unwrap_or_default());
                         let g = match self.groups.iter().find(|g| g.key == key) {
@@ -415,7 +415,7 @@ impl Work {
                         self.names.insert(fp(&key), json!(p.name.trim()));
                         // Adding to an existing provider under another name renames it.
                         if p.name.trim() != g.name {
-                            self.diff.push(STORE_LABEL, tr!("供应商名称「{}」→「{}」", "Provider name \"{}\" → \"{}\"", g.name, p.name.trim()), true);
+                            self.diff.push(STORE_LABEL, tr!("Provider name \"{}\" → \"{}\"", "供应商名称「{}」→「{}」", g.name, p.name.trim()), true);
                             if let Some(x) = self.groups.iter_mut().find(|x| x.id == g.id) {
                                 x.name = p.name.trim().to_string();
                             }
@@ -423,7 +423,7 @@ impl Work {
                         // A hidden (parked) model is already there: it stays hidden.
                         let added: Vec<&String> = models.iter().filter(|m| !self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == key && str_field(e, "model") == **m)).collect();
                         if !added.is_empty() {
-                            self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), msg::key_suffix(new_key.as_deref())), true);
+                            self.diff.push(&file, trn!(added.len(), "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", "+ 「{}」{n} 个模型条目（{base} · {}{}）", p.name.trim(), api_label(&p.api), msg::key_suffix(new_key.as_deref())), true);
                         }
                         let added: Vec<String> = added.into_iter().cloned().collect();
                         let new: Vec<Value> = added.iter().map(|m| Self::new_entry(&g, m, None)).collect();
@@ -436,7 +436,7 @@ impl Work {
                         let g = self.group(id)?;
                         let key: Key = (base.clone(), prov.to_string(), new_key.clone().unwrap_or_else(|| g.key.2.clone()));
                         if key != g.key && self.groups.iter().any(|o| o.id != g.id && o.key == key) {
-                            return Err(anyhow!(l("已经有地址、协议和密钥都相同的供应商", "A provider with the same base URL, protocol and API key already exists")));
+                            return Err(anyhow!(l("A provider with the same base URL, protocol and API key already exists", "已经有地址、协议和密钥都相同的供应商")));
                         }
                         let mut lines = vec![];
                         if key.0 != g.key.0 {
@@ -446,7 +446,7 @@ impl Work {
                             lines.push(format!("provider = {}", key.1));
                         }
                         if key.2 != g.key.2 {
-                            lines.push(format!("apiKey = {}", if key.2.is_empty() { l("（空）", "(empty)").into() } else { mask_key(&key.2) }));
+                            lines.push(format!("apiKey = {}", if key.2.is_empty() { l("(empty)", "（空）").into() } else { mask_key(&key.2) }));
                         }
                         if key != g.key {
                             // Only the changed fields: a keyless entry gets no `"apiKey": ""`.
@@ -466,13 +466,13 @@ impl Work {
                             self.entries.iter_mut().for_each(set);
                             self.parked.iter_mut().filter_map(|p| p.get_mut("entry")).for_each(set);
                             for line in lines {
-                                self.diff.push(&file, tr!("「{}」所有条目 {line}", "\"{}\" all entries {line}", g.name), true);
+                                self.diff.push(&file, tr!("\"{}\" all entries {line}", "「{}」所有条目 {line}", g.name), true);
                             }
                         }
                         self.names.remove(&fp(&g.key));
                         self.names.insert(fp(&key), json!(p.name.trim()));
                         if p.name.trim() != g.name {
-                            self.diff.push(STORE_LABEL, tr!("供应商名称「{}」→「{}」", "Provider name \"{}\" → \"{}\"", g.name, p.name.trim()), true);
+                            self.diff.push(STORE_LABEL, tr!("Provider name \"{}\" → \"{}\"", "供应商名称「{}」→「{}」", g.name, p.name.trim()), true);
                         }
                         if let Some(x) = self.groups.iter_mut().find(|x| x.id == g.id) {
                             x.key = key;
@@ -489,7 +489,7 @@ impl Work {
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
                 self.names.remove(&fp(&g.key));
                 self.groups.retain(|x| x.id != g.id);
-                self.diff.push(&file, trn!(removed, "- 「{}」（{n} 个模型条目，含地址和密钥）", "- \"{}\" ({n} model entry, with base URL and API key)", "- \"{}\" ({n} model entries, with base URL and API key)", g.name), false);
+                self.diff.push(&file, trn!(removed, "- \"{}\" ({n} model entry, with base URL and API key)", "- \"{}\" ({n} model entries, with base URL and API key)", "- 「{}」（{n} 个模型条目，含地址和密钥）", g.name), false);
             }
             Op::SetProviderEnabled { provider, enabled } => {
                 let g = self.group(provider)?;
@@ -497,14 +497,14 @@ impl Work {
                     let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| parked_why(p) == "disabled" && p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false));
                     self.parked = keep;
                     if !back.is_empty() {
-                        self.diff.push(&file, trn!(back.len(), "+ 「{}」{n} 个模型条目（从 AgentPlus 恢复）", "+ \"{}\" {n} model entry (restored from AgentPlus)", "+ \"{}\" {n} model entries (restored from AgentPlus)", g.name), true);
+                        self.diff.push(&file, trn!(back.len(), "+ \"{}\" {n} model entry (restored from AgentPlus)", "+ \"{}\" {n} model entries (restored from AgentPlus)", "+ 「{}」{n} 个模型条目（从 AgentPlus 恢复）", g.name), true);
                         self.entries.extend(back.into_iter().filter_map(|p| p.get("entry").cloned()));
                     }
                 } else {
                     let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key);
                     self.entries = keep;
                     if !out.is_empty() {
-                        self.diff.push(&file, trn!(out.len(), "- 「{}」{n} 个模型条目（暂存在 AgentPlus，可恢复）", "- \"{}\" {n} model entry (parked in AgentPlus, restorable)", "- \"{}\" {n} model entries (parked in AgentPlus, restorable)", g.name), false);
+                        self.diff.push(&file, trn!(out.len(), "- \"{}\" {n} model entry (parked in AgentPlus, restorable)", "- \"{}\" {n} model entries (parked in AgentPlus, restorable)", "- 「{}」{n} 个模型条目（暂存在 AgentPlus，可恢复）", g.name), false);
                         for e in out {
                             self.park(e, "disabled");
                         }
@@ -519,13 +519,13 @@ impl Work {
                     self.parked = keep;
                     if !back.is_empty() {
                         self.entries.extend(back.into_iter().filter_map(|p| p.get("entry").cloned()));
-                        self.diff.push(&file, tr!("customModels + {model}（{}，显示）", "customModels + {model} ({}, shown)", g.name), true);
+                        self.diff.push(&file, tr!("customModels + {model} ({}, shown)", "customModels + {model}（{}，显示）", g.name), true);
                     }
                 } else {
                     let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key && &str_field(e, "model") == model);
                     self.entries = keep;
                     if !out.is_empty() {
-                        self.diff.push(&file, tr!("customModels - {model}（{}，隐藏，条目暂存在 AgentPlus）", "customModels - {model} ({}, hidden, entry parked in AgentPlus)", g.name), false);
+                        self.diff.push(&file, tr!("customModels - {model} ({}, hidden, entry parked in AgentPlus)", "customModels - {model}（{}，隐藏，条目暂存在 AgentPlus）", g.name), false);
                         for e in out {
                             self.park(e, "hidden");
                         }
@@ -562,7 +562,7 @@ impl Work {
                         changed |= set(e);
                     }
                     if changed {
-                        self.diff.push(&file, tr!("customModels {mid}（{}）displayName = {n}", "customModels {mid} ({}) displayName = {n}", g.name), true);
+                        self.diff.push(&file, tr!("customModels {mid} ({}) displayName = {n}", "customModels {mid}（{}）displayName = {n}", g.name), true);
                     }
                 }
                 // Droid has no context-window field for custom models; `context` is ignored.
@@ -574,7 +574,7 @@ impl Work {
                 }
                 lines.dedup();
                 for line in lines {
-                    self.diff.push(&file, tr!("customModels {mid}（{}）{line}", "customModels {mid} ({}) {line}", g.name), true);
+                    self.diff.push(&file, tr!("customModels {mid} ({}) {line}", "customModels {mid}（{}）{line}", g.name), true);
                 }
             }
             Op::DeleteModel { provider, model } => {
@@ -583,7 +583,7 @@ impl Work {
                 self.entries.retain(|e| !(key_of(e) == g.key && &str_field(e, "model") == model));
                 self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &str_field(e, "model") == model).unwrap_or(false));
                 if self.entries.len() + self.parked.len() != n {
-                    self.diff.push(&file, tr!("customModels - {model}（{}，删除）", "customModels - {model} ({}, deleted)", g.name), false);
+                    self.diff.push(&file, tr!("customModels - {model} ({}, deleted)", "customModels - {model}（{}，删除）", g.name), false);
                 }
             }
             Op::SetProviderModels { provider, models } => {
@@ -591,14 +591,14 @@ impl Work {
                 self.require_enabled(&g)?;
                 let want = clean_ids(models);
                 if want.is_empty() {
-                    return Err(anyhow!(l("至少保留一个模型；不要这个供应商的话请直接删除", "Keep at least one model; delete the provider if you don't need it")));
+                    return Err(anyhow!(l("Keep at least one model; delete the provider if you don't need it", "至少保留一个模型；不要这个供应商的话请直接删除")));
                 }
                 let keep = |e: &Value| key_of(e) != g.key || want.contains(&str_field(e, "model"));
                 let gone: Vec<String> = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).filter(|e| !keep(e)).map(|e| str_field(e, "model")).collect();
                 self.entries.retain(|e| keep(e));
                 self.parked.retain(|p| p.get("entry").map(keep).unwrap_or(true));
                 for m in gone {
-                    self.diff.push(&file, tr!("customModels - {m}（{}）", "customModels - {m} ({})", g.name), false);
+                    self.diff.push(&file, tr!("customModels - {m} ({})", "customModels - {m}（{}）", g.name), false);
                 }
                 for m in &want {
                     let has = self.entries.iter().chain(self.parked.iter().filter_map(|p| p.get("entry"))).any(|e| key_of(e) == g.key && &str_field(e, "model") == m);
@@ -607,7 +607,7 @@ impl Work {
                     }
                 }
             }
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Droid 的自定义模型可以同时存在，在 Droid 里用 /model 切换", "Droid custom models can all coexist; switch with /model inside Droid"))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Droid custom models can all coexist; switch with /model inside Droid", "Droid 的自定义模型可以同时存在，在 Droid 里用 /model 切换"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
@@ -662,12 +662,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         Some(i) => {
             let id = entry_id(&w.entries[i], i);
             if model0.as_deref() != Some(id.as_str()) {
-                w.diff.push(&file, tr!("model = {id}（跟随所选模型的新位置）", "model = {id} (follows the selected model's new position)"), true);
+                w.diff.push(&file, tr!("model = {id} (follows the selected model's new position)", "model = {id}（跟随所选模型的新位置）"), true);
                 model1 = Some(id);
             }
         }
         None if selected_custom => {
-            w.diff.push(&file, tr!("- model（所选的 {} 已移出列表，Droid 会回到默认模型）", "- model (the selected {} left the list; Droid falls back to its default model)", model0.clone().unwrap_or_default()), false);
+            w.diff.push(&file, tr!("- model (the selected {} left the list; Droid falls back to its default model)", "- model（所选的 {} 已移出列表，Droid 会回到默认模型）", model0.clone().unwrap_or_default()), false);
             model1 = None;
         }
         None => {}

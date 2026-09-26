@@ -1,5 +1,7 @@
 // src/components/ServiceDialog.tsx
-export default {
+import type en from "../en/serviceDialog";
+
+const zh: typeof en = {
   hintResponses: "OpenAI Responses 接口（/v1/responses），Codex 只支持这种",
   blockedGateway: "{agent} 只支持 Google Gemini 协议，本地网关不能转换成它",
   blockedProto: "{agent} 只支持 {api} 接口；打开「使用本地网关」可以转换后接入",
@@ -24,3 +26,5 @@ export default {
   noneRequired: "都不勾也可以，只保存到供应商库，之后随时添加。",
   footNote: "供应商库立即保存；写入 Agent 的部分会先进入「待写入的改动」。",
 };
+
+export default zh;

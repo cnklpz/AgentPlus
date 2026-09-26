@@ -52,17 +52,17 @@ jobs:
             if (!hits.length) return;
 
             const lines = hits.map(({ i, score }) =>
-              `- #${i.number}${i.state === "closed" ? "（已关闭 / closed）" : ""} ${Math.round(score * 100)}%`);
+              `- #${i.number}${i.state === "closed" ? " (closed / 已关闭)" : ""} ${Math.round(score * 100)}%`);
             await github.rest.issues.createComment({
               ...context.repo,
               issue_number: issue.number,
               body: [
-                "找到了标题相似的 issue，请看看是不是同一个问题：",
                 "These existing issues look similar — please check whether yours is a duplicate:",
+                "找到了标题相似的 issue，请看看是不是同一个问题：",
                 "",
                 ...lines,
                 "",
-                "如果是，可以在原 issue 下补充信息并关闭这个；如果不是，请忽略这条评论。",
                 "If it is, add your details there and close this one; otherwise just ignore this comment.",
+                "如果是，可以在原 issue 下补充信息并关闭这个；如果不是，请忽略这条评论。",
               ].join("\n"),
             });

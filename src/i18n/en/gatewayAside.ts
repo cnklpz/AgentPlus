@@ -1,6 +1,5 @@
-import type zh from "../zh/gatewayAside";
-
-const en: typeof zh = {
+// src/components/GatewayAside.tsx
+export default {
   reqTitle: "Requests",
   perMinute: "per minute",
   requests: "Requests",
@@ -38,5 +37,3 @@ const en: typeof zh = {
   agentTokens: "In {input} · Out {output}",
   agentAria: "{name}: {calls}, {tokens}",
 };
-
-export default en;

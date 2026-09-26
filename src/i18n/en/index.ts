@@ -1,4 +1,4 @@
-import type zh from "../zh";
+// Source dictionary: one namespace per source file (see the comment at the top of each).
 import common from "./common";
 import app from "./app";
 import api from "./api";
@@ -38,7 +38,7 @@ import providerTest from "./providerTest";
 import restartDialog from "./restartDialog";
 import format from "./format";
 
-const en: typeof zh = {
+export default {
   common,
   app,
   api,
@@ -78,5 +78,3 @@ const en: typeof zh = {
   restartDialog,
   format,
 };
-
-export default en;

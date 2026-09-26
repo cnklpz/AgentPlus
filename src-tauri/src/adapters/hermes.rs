@@ -179,11 +179,11 @@ fn load() -> Result<(Y, String, TextMeta)> {
         return Ok((Y::Mapping(Mapping::new()), String::new(), TextMeta::NEW));
     }
     let (text, meta) = read_text(&p)?;
-    let v: Y = serde_yaml::from_str(&text).map_err(|e| anyhow!(tr!("config.yaml 解析失败：{e}", "Failed to parse config.yaml: {e}")))?;
+    let v: Y = serde_yaml::from_str(&text).map_err(|e| anyhow!(tr!("Failed to parse config.yaml: {e}", "config.yaml 解析失败：{e}")))?;
     let v = match v {
         Y::Null => Y::Mapping(Mapping::new()),
         Y::Mapping(_) => v,
-        _ => return Err(anyhow!(l("config.yaml 顶层不是映射", "The top level of config.yaml is not a mapping"))),
+        _ => return Err(anyhow!(l("The top level of config.yaml is not a mapping", "config.yaml 顶层不是映射"))),
     };
     Ok((v, text, meta))
 }
@@ -295,7 +295,7 @@ fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<String> {
     for (key, v) in changes {
         let found: Vec<&Block> = all.iter().filter(|b| b.key == *key).collect();
         if found.len() > 1 {
-            return Err(anyhow!(tr!("config.yaml 里有重复的 {key}:，不写入", "config.yaml has more than one {key}: block; not writing it")));
+            return Err(anyhow!(tr!("config.yaml has more than one {key}: block; not writing it", "config.yaml 里有重复的 {key}:，不写入")));
         }
         let new_lines = match v {
             Some(v) => emit_top(key, v)?,
@@ -305,8 +305,8 @@ fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<String> {
             Some(b) => {
                 if has_extras(&lines[b.start..b.end]) {
                     return Err(anyhow!(tr!(
-                        "config.yaml 的 {key}: 段里有注释（或锚点），为避免丢失不写入；请先手动删掉这些注释",
-                        "The {key}: block in config.yaml has comments (or anchors); not writing it so they aren't lost. Remove them by hand first"
+                        "The {key}: block in config.yaml has comments (or anchors); not writing it so they aren't lost. Remove them by hand first",
+                        "config.yaml 的 {key}: 段里有注释（或锚点），为避免丢失不写入；请先手动删掉这些注释"
                     )));
                 }
                 edits.push((b.start, b.end, new_lines));
@@ -380,7 +380,7 @@ fn scalar(v: &Y) -> Result<String> {
         Y::String(s) => quote(s),
         Y::Mapping(m) if m.is_empty() => "{}".into(),
         Y::Sequence(s) if s.is_empty() => "[]".into(),
-        _ => return Err(anyhow!(l("无法写出这个 YAML 值", "Can't write this YAML value"))),
+        _ => return Err(anyhow!(l("Can't write this YAML value", "无法写出这个 YAML 值"))),
     })
 }
 
@@ -399,7 +399,7 @@ fn emit_entry(out: &mut Vec<String>, indent: usize, key: &Y, v: &Y) -> Result<()
             out.push(format!("{pad}{k}:"));
             emit_seq(out, indent + 2, s)?;
         }
-        Y::Tagged(_) => return Err(anyhow!(tr!("{k} 带 YAML 标签，不写入", "{k} has a YAML tag; not writing it"))),
+        Y::Tagged(_) => return Err(anyhow!(tr!("{k} has a YAML tag; not writing it", "{k} 带 YAML 标签，不写入"))),
         _ => out.push(format!("{pad}{k}: {}", scalar(v)?)),
     }
     Ok(())
@@ -419,7 +419,7 @@ fn emit_seq(out: &mut Vec<String>, indent: usize, s: &[Y]) -> Result<()> {
         match item {
             Y::Mapping(m) if !m.is_empty() => emit_map(&mut sub, indent + 2, m)?,
             Y::Sequence(ss) if !ss.is_empty() => emit_seq(&mut sub, indent + 2, ss)?,
-            Y::Tagged(_) => return Err(anyhow!(l("列表项带 YAML 标签，不写入", "A list item has a YAML tag; not writing it"))),
+            Y::Tagged(_) => return Err(anyhow!(l("A list item has a YAML tag; not writing it", "列表项带 YAML 标签，不写入"))),
             _ => {
                 out.push(format!("{pad}- {}", scalar(item)?));
                 continue;
@@ -435,9 +435,9 @@ fn emit_seq(out: &mut Vec<String>, indent: usize, s: &[Y]) -> Result<()> {
 fn emit_top(key: &str, v: &Y) -> Result<Vec<String>> {
     let mut out = vec![];
     emit_entry(&mut out, 0, &yk(key), v)?;
-    let back: Y = serde_yaml::from_str(&out.join("\n")).map_err(|e| anyhow!(tr!("生成的 YAML 无法解析：{e}", "The generated YAML can't be parsed: {e}")))?;
+    let back: Y = serde_yaml::from_str(&out.join("\n")).map_err(|e| anyhow!(tr!("The generated YAML can't be parsed: {e}", "生成的 YAML 无法解析：{e}")))?;
     if back.get(key) != Some(v) {
-        return Err(anyhow!(tr!("生成的 {key}: 段校验失败，不写入", "The generated {key}: block failed verification; not writing it")));
+        return Err(anyhow!(tr!("The generated {key}: block failed verification; not writing it", "生成的 {key}: 段校验失败，不写入")));
     }
     Ok(out)
 }
@@ -627,7 +627,7 @@ fn mode_for(api: &str) -> Result<&'static str> {
         "chat" => Ok("chat_completions"),
         "responses" => Ok("codex_responses"),
         "anthropic" => Ok("anthropic_messages"),
-        other => Err(anyhow!(tr!("Hermes 不支持 {other} 协议（可选 Chat / Responses / Anthropic）", "Hermes doesn't support the {other} protocol (choose Chat / Responses / Anthropic)"))),
+        other => Err(anyhow!(tr!("Hermes doesn't support the {other} protocol (choose Chat / Responses / Anthropic)", "Hermes 不支持 {other} 协议（可选 Chat / Responses / Anthropic）"))),
     }
 }
 
@@ -776,11 +776,11 @@ fn is_pinned(cfg: &Y, src: &Src, provider: &str, model: &str) -> bool {
 // ---------------------------------------------------------------- state
 
 fn mode_kv(mode: Option<&str>) -> Kv {
-    Kv::mono("api_mode", mode.map(String::from).unwrap_or_else(|| l("（自动，按地址判断）", "(auto, based on the URL)").into()))
+    Kv::mono("api_mode", mode.map(String::from).unwrap_or_else(|| l("(auto, based on the URL)", "（自动，按地址判断）").into()))
 }
 
 fn mode_reason(mode: Option<&str>) -> String {
-    tr!("api_mode = {}，AgentPlus 只能查看", "api_mode = {}; AgentPlus can only view it", mode.unwrap_or_default())
+    tr!("api_mode = {}; AgentPlus can only view it", "api_mode = {}，AgentPlus 只能查看", mode.unwrap_or_default())
 }
 
 /// The single read-only default model the inline and built-in providers show.
@@ -789,11 +789,11 @@ fn default_row(dflt: Option<&str>) -> Vec<Model> {
 }
 
 fn no_inline() -> anyhow::Error {
-    anyhow!(l("找不到直连配置", "Direct config not found"))
+    anyhow!(l("Direct config not found", "找不到直连配置"))
 }
 
 fn unsupported_mode() -> anyhow::Error {
-    anyhow!(l("这个供应商的 api_mode AgentPlus 不支持", "AgentPlus doesn't support this provider's api_mode"))
+    anyhow!(l("AgentPlus doesn't support this provider's api_mode", "这个供应商的 api_mode AgentPlus 不支持"))
 }
 
 fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &str, cur: Option<&str>) -> Provider {
@@ -828,11 +828,11 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
     let key_env = key_env_of(&def);
     let key = key_of(&def, env);
     let key_note = match (&key_env, &key, ystr(&def, "api_key").is_some()) {
-        (Some(v), Some(k), _) if dotenv::get(env, v).is_some() => tr!("{v}（.env）· {}", "{v} (.env) · {}", mask_key(k)),
-        (Some(v), Some(k), _) if env_key(env, v).is_some() => tr!("{v}（系统环境变量）· {}", "{v} (system environment variable) · {}", mask_key(k)),
-        (_, Some(k), true) => tr!("api_key · 明文保存在 config.yaml · {}", "api_key · stored in plain text in config.yaml · {}", mask_key(k)),
-        (Some(v), _, _) => tr!("{v}（.env 里没有设置）", "{v} (not set in .env)"),
-        _ => l("未填写", "Not set").into(),
+        (Some(v), Some(k), _) if dotenv::get(env, v).is_some() => tr!("{v} (.env) · {}", "{v}（.env）· {}", mask_key(k)),
+        (Some(v), Some(k), _) if env_key(env, v).is_some() => tr!("{v} (system environment variable) · {}", "{v}（系统环境变量）· {}", mask_key(k)),
+        (_, Some(k), true) => tr!("api_key · stored in plain text in config.yaml · {}", "api_key · 明文保存在 config.yaml · {}", mask_key(k)),
+        (Some(v), _, _) => tr!("{v} (not set in .env)", "{v}（.env 里没有设置）"),
+        _ => l("Not set", "未填写").into(),
     };
     let enabled = def.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
     let mut details = vec![
@@ -847,11 +847,11 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
     if !enabled {
         details.push(Kv::text(
             lbl::status(),
-            l("enabled: false（Hermes 忽略它；设为当前时会重新启用）", "enabled: false (Hermes ignores it; making it current re-enables it)"),
+            l("enabled: false (Hermes ignores it; making it current re-enables it)", "enabled: false（Hermes 忽略它；设为当前时会重新启用）"),
         ));
     }
     let reason = if base.is_none() {
-        Some(l("没有 base_url，Hermes 会忽略这一项", "No base_url; Hermes ignores this entry").to_string())
+        Some(l("No base_url; Hermes ignores this entry", "没有 base_url，Hermes 会忽略这一项").to_string())
     } else if api.is_none() {
         Some(mode_reason(mode.as_deref()))
     } else {
@@ -862,7 +862,7 @@ fn entry_provider(cfg: &Y, id: &str, src: &Src, hidden: &JMap<String, J>, env: &
         name: ystr(&def, "name").unwrap_or_else(|| id.to_string()),
         host: base.as_deref().map(host_of).unwrap_or_default(),
         base_url: base,
-        apis: vec![api.map(api_label).unwrap_or(l("其他", "Other")).into()],
+        apis: vec![api.map(api_label).unwrap_or(l("Other", "其他")).into()],
         enabled,
         compatible: reason.is_none(),
         reason,
@@ -904,21 +904,21 @@ fn inline_provider(vals: &Inline, same_as: Option<String>) -> Provider {
     let mut details = vec![
         Kv::mono(
             lbl::config_location(),
-            l("model.provider: custom（model.base_url / model.api_key）", "model.provider: custom (model.base_url / model.api_key)"),
+            l("model.provider: custom (model.base_url / model.api_key)", "model.provider: custom（model.base_url / model.api_key）"),
         ),
         Kv::mono(lbl::base_url(), base.clone()),
         mode_kv(mode.as_deref()),
-        Kv::text(lbl::api_key(), key.as_deref().map(|k| format!("model.api_key · {}", mask_key(k))).unwrap_or_else(|| l("未填写", "Not set").into())),
+        Kv::text(lbl::api_key(), key.as_deref().map(|k| format!("model.api_key · {}", mask_key(k))).unwrap_or_else(|| l("Not set", "未填写").into())),
     ];
     if let Some(n) = same_as {
-        details.push(Kv::text(lbl::note(), tr!("地址和「{n}」相同；密钥写在 model 里", "Same base URL as \"{n}\"; the API key is in model")));
+        details.push(Kv::text(lbl::note(), tr!("Same base URL as \"{n}\"; the API key is in model", "地址和「{n}」相同；密钥写在 model 里")));
     }
     Provider {
         id: INLINE.into(),
-        name: l("直连（model 里的 custom）", "Direct (custom in model)").into(),
+        name: l("Direct (custom in model)", "直连（model 里的 custom）").into(),
         host: host_of(base),
         base_url: Some(base.clone()),
-        apis: vec![api.map(api_label).unwrap_or(l("其他", "Other")).into()],
+        apis: vec![api.map(api_label).unwrap_or(l("Other", "其他")).into()],
         enabled: true,
         compatible: api.is_some(),
         reason: api.is_none().then(|| mode_reason(mode.as_deref())),
@@ -934,21 +934,21 @@ fn inline_provider(vals: &Inline, same_as: Option<String>) -> Provider {
 fn builtin_provider(name: &str, dflt: Option<String>, known: bool) -> Provider {
     Provider {
         compatible: known,
-        reason: (!known).then(|| l("config.yaml 里找不到这个自定义供应商", "This custom provider isn't in config.yaml").to_string()),
+        reason: (!known).then(|| l("This custom provider isn't in config.yaml", "config.yaml 里找不到这个自定义供应商").to_string()),
         models: default_row(dflt.as_deref()),
         ..Provider::builtin(
             format!("{BUILTIN}{name}"),
-            tr!("内置 · {name}", "Built-in · {name}"),
-            l("Hermes 内置供应商", "Hermes built-in provider"),
+            tr!("Built-in · {name}", "内置 · {name}"),
+            l("Hermes built-in provider", "Hermes 内置供应商"),
             "chat",
-            l("内置", "Built-in"),
+            l("Built-in", "内置"),
             vec![
                 Kv::mono("model.provider", name.to_string()),
                 Kv::text(
                     lbl::note(),
                     l(
-                        "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
                         "A provider built into Hermes (credentials live in .env / auth.json; manage them with hermes model / hermes auth)",
+                        "Hermes 内置的供应商（凭据在 .env / auth.json，用 hermes model / hermes auth 管理）",
                     ),
                 ),
             ],
@@ -958,7 +958,7 @@ fn builtin_provider(name: &str, dflt: Option<String>, known: bool) -> Provider {
 
 pub fn state(inst: &Install) -> AgentState {
     let mut st = super::new_state(ID, NAME, inst, "single", &dir(), vec![display_path(&config_path()), display_path(&env_path())]);
-    st.notes.push(l("Hermes 的改动对新会话生效；gateway（消息平台）需要重启。", "Hermes changes apply to new sessions; the gateway (messaging platforms) needs a restart.").into());
+    st.notes.push(l("Hermes changes apply to new sessions; the gateway (messaging platforms) needs a restart.", "Hermes 的改动对新会话生效；gateway（消息平台）需要重启。").into());
     let (cfg, text, _) = match load() {
         Ok(x) => x,
         Err(e) => {
@@ -1003,16 +1003,16 @@ pub fn state(inst: &Install) -> AgentState {
     if !commented.is_empty() {
         st.readonly = true;
         st.notes.push(tr!(
-            "config.yaml 的 {} 段里有注释或锚点，写回会丢失，已切换为只读。",
             "The {} block(s) in config.yaml have comments or anchors, which would be lost on write, so it's read-only.",
+            "config.yaml 的 {} 段里有注释或锚点，写回会丢失，已切换为只读。",
             crate::i18n::join(&commented)
         ));
     }
     if std::fs::read_to_string(auth_path()).map(|t| t.contains("\"custom:")).unwrap_or(false) {
         st.notes.push(
             l(
-                "改了自定义供应商的密钥后，如果 Hermes 仍报认证失败，运行 hermes doctor 刷新 auth.json 里的凭据池。",
                 "If Hermes still reports an auth failure after you change a custom provider's API key, run hermes doctor to refresh the credential pool in auth.json.",
+                "改了自定义供应商的密钥后，如果 Hermes 仍报认证失败，运行 hermes doctor 刷新 auth.json 里的凭据池。",
             )
             .into(),
         );
@@ -1023,7 +1023,7 @@ pub fn state(inst: &Install) -> AgentState {
     st.current = vec![
         Kv::text(lbl::provider(), cur_name),
         Kv::mono("model.provider", model_provider(&cfg)),
-        Kv::mono(l("模型", "Model"), cur_model.unwrap_or_else(|| "-".into())),
+        Kv::mono(l("Model", "模型"), cur_model.unwrap_or_else(|| "-".into())),
     ];
     let base = match &cur_src {
         Src::Inline => m.and_then(|m| ystr(m, "base_url")),
@@ -1044,7 +1044,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (env, _) = dotenv::load(&env_path());
     let src = find(&cfg, id).ok_or_else(|| msg::no_provider(id))?;
     match &src {
-        Src::Builtin(_) => Err(anyhow!(l("Hermes 内置供应商没有可用的地址", "Hermes built-in providers have no usable base URL"))),
+        Src::Builtin(_) => Err(anyhow!(l("Hermes built-in providers have no usable base URL", "Hermes 内置供应商没有可用的地址"))),
         Src::Inline => {
             let active = current(&cfg).1 == Src::Inline;
             let Inline { base, key, mode, .. } = inline_values(&cfg, &store::load(), active).ok_or_else(no_inline)?;
@@ -1053,7 +1053,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
         }
         _ => {
             let def = def_of(&cfg, &src).ok_or_else(|| msg::no_provider(id))?;
-            let base = ystr(def, url_key(def)).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 base_url", "Provider {id} has no base_url")))?;
+            let base = ystr(def, url_key(def)).ok_or_else(|| anyhow!(tr!("Provider {id} has no base_url", "供应商 {id} 没有 base_url")))?;
             let api = api_of(mode_of(def).as_deref()).ok_or_else(unsupported_mode)?;
             Ok((base, key_of(def, &env), api.into()))
         }
@@ -1109,7 +1109,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let mut env = env0.clone();
     let mut diff = Diff::default();
     let mut store_dirty = false;
-    let cx = Ctx { diff: &mut diff, file: display_path(&config_path()), envfile: display_path(&env_path()), store_label: l("AgentPlus · Hermes 暂存", "AgentPlus · Hermes stash") };
+    let cx = Ctx { diff: &mut diff, file: display_path(&config_path()), envfile: display_path(&env_path()), store_label: l("AgentPlus · Hermes stash", "AgentPlus · Hermes 暂存") };
 
     for op in ops {
         match op {
@@ -1118,7 +1118,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let base = p.base_url.trim();
                 let name = p.name.trim();
                 if base.is_empty() {
-                    return Err(anyhow!(l("地址不能为空", "Base URL is required")));
+                    return Err(anyhow!(l("Base URL is required", "地址不能为空")));
                 }
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
                 match p.id.as_deref() {
@@ -1151,19 +1151,19 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         let rootm = cfg.as_mapping_mut().unwrap();
                         let provs = rootm.entry(yk("providers")).or_insert(Y::Mapping(Mapping::new()));
                         if !provs.is_mapping() {
-                            return Err(anyhow!(l("config.yaml 的 providers 不是映射", "providers in config.yaml is not a mapping")));
+                            return Err(anyhow!(l("providers in config.yaml is not a mapping", "config.yaml 的 providers 不是映射")));
                         }
                         provs.as_mapping_mut().unwrap().insert(yk(&id), Y::Mapping(e));
                         cx.diff.push(
                             &cx.file,
-                            trn!(ids.len(), "+ providers.{id}（{base} · {} · {n} 个模型{}）", "+ providers.{id} ({base} · {} · {n} model{})", "+ providers.{id} ({base} · {} · {n} models{})", api_label(&p.api), msg::key_suffix(key)),
+                            trn!(ids.len(), "+ providers.{id} ({base} · {} · {n} model{})", "+ providers.{id} ({base} · {} · {n} models{})", "+ providers.{id}（{base} · {} · {n} 个模型{}）", api_label(&p.api), msg::key_suffix(key)),
                             true,
                         );
                     }
                     Some(id) => {
                         let src = find(&cfg, id).ok_or_else(|| msg::no_provider(id))?;
                         if matches!(src, Src::Builtin(_)) {
-                            return Err(anyhow!(l("Hermes 内置供应商不能在这里编辑，用 hermes model 管理", "Hermes built-in providers can't be edited here; manage them with hermes model")));
+                            return Err(anyhow!(l("Hermes built-in providers can't be edited here; manage them with hermes model", "Hermes 内置供应商不能在这里编辑，用 hermes model 管理")));
                         }
                         if src == Src::Inline {
                             let active = current(&cfg).1 == Src::Inline;
@@ -1191,7 +1191,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                                 if let Some(k) = key {
                                     s.insert("apiKey".into(), json!(k));
                                 }
-                                cx.diff.push(cx.store_label, tr!("直连配置：{base} · {}{}", "Direct config: {base} · {}{}", api_label(&p.api), msg::key_suffix(key)), true);
+                                cx.diff.push(cx.store_label, tr!("Direct config: {base} · {}{}", "直连配置：{base} · {}{}", api_label(&p.api), msg::key_suffix(key)), true);
                                 store_dirty = true;
                             }
                             continue;
@@ -1255,18 +1255,18 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if let Some(s) = cfg.get_mut("custom_providers").and_then(|p| p.as_sequence_mut()) {
                             s.remove(*i);
                         }
-                        cx.diff.push(&cx.file, tr!("- custom_providers[{i}]（{provider}）", "- custom_providers[{i}] ({provider})"), false);
+                        cx.diff.push(&cx.file, tr!("- custom_providers[{i}] ({provider})", "- custom_providers[{i}]（{provider}）"), false);
                     }
                     Src::Inline => {
                         store::set_value(&mut root, ID, "inline", J::Null);
-                        cx.diff.push(cx.store_label, l("- 直连配置", "- Direct config"), false);
+                        cx.diff.push(cx.store_label, l("- Direct config", "- 直连配置"), false);
                         store_dirty = true;
                     }
                     Src::Builtin(b) => {
                         if store::section(&mut root, ID, "builtins").remove(b).is_none() {
-                            return Err(anyhow!(l("这一项不能删除", "This entry can't be deleted")));
+                            return Err(anyhow!(l("This entry can't be deleted", "这一项不能删除")));
                         }
-                        cx.diff.push(cx.store_label, tr!("- 内置 · {b}（只是从列表移除）", "- Built-in · {b} (only removed from the list)"), false);
+                        cx.diff.push(cx.store_label, tr!("- Built-in · {b} (only removed from the list)", "- 内置 · {b}（只是从列表移除）"), false);
                         store_dirty = true;
                     }
                 }
@@ -1283,7 +1283,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     Src::Dict(_) | Src::List(_) => {
                         let def = def_of(&cfg, &src).unwrap();
                         let (_, rows) = model_rows(def);
-                        let dflt = default_of(def).or_else(|| rows.first().map(|r| r.0.clone())).ok_or_else(|| anyhow!(tr!("「{provider}」还没有模型，先添加一个", "\"{provider}\" has no models yet; add one first")))?;
+                        let dflt = default_of(def).or_else(|| rows.first().map(|r| r.0.clone())).ok_or_else(|| anyhow!(tr!("\"{provider}\" has no models yet; add one first", "「{provider}」还没有模型，先添加一个")))?;
                         (slug_of(&cfg, &src), Some(dflt), mode_of(def), None)
                     }
                     Src::Inline => {
@@ -1312,7 +1312,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         }
                         cx.diff.push(
                             cx.store_label,
-                            l("暂存直连配置（model.base_url / api_key），可切换回来", "Stash the direct config (model.base_url / api_key) so you can switch back"),
+                            l("Stash the direct config (model.base_url / api_key) so you can switch back", "暂存直连配置（model.base_url / api_key），可切换回来"),
                             true,
                         );
                         store_dirty = true;
@@ -1327,7 +1327,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     if let Some(d) = def_mut(&mut cfg, &src).and_then(|d| d.as_mapping_mut()) {
                         if d.get("enabled").and_then(|x| x.as_bool()) == Some(false) {
                             d.shift_remove("enabled");
-                            cx.diff.push(&cx.file, tr!("providers.{k}.enabled（删除，重新启用）", "providers.{k}.enabled (removed; re-enabled)"), true);
+                            cx.diff.push(&cx.file, tr!("providers.{k}.enabled (removed; re-enabled)", "providers.{k}.enabled（删除，重新启用）"), true);
                         }
                     }
                 }
@@ -1398,14 +1398,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 } else if let Some(i) = rows.iter().position(|r| &r.0 == model) {
                     if pinned {
                         return Err(anyhow!(tr!(
-                            "{model} 是默认 / 当前模型，不能隐藏；先换一个默认模型",
-                            "{model} is the default / current model and can't be hidden; pick another default model first"
+                            "{model} is the default / current model and can't be hidden; pick another default model first",
+                            "{model} 是默认 / 当前模型，不能隐藏；先换一个默认模型"
                         )));
                     }
                     let (_, d) = rows.remove(i);
                     hidden.insert(key, y2j(&d));
                     set_model_rows(def, shape, &rows);
-                    cx.diff.push(&cx.file, tr!("{provider}.models - {model}（定义暂存在 AgentPlus）", "{provider}.models - {model} (definition kept in AgentPlus)"), false);
+                    cx.diff.push(&cx.file, tr!("{provider}.models - {model} (definition kept in AgentPlus)", "{provider}.models - {model}（定义暂存在 AgentPlus）"), false);
                     store_dirty = true;
                 }
             }
@@ -1424,7 +1424,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     if apply_model_meta(&mut d, mi) {
                         *h = y2j(&d);
-                        cx.diff.push(cx.store_label, tr!("{provider}.models.{mid}（隐藏中）已修改", "{provider}.models.{mid} (hidden) changed"), true);
+                        cx.diff.push(cx.store_label, tr!("{provider}.models.{mid} (hidden) changed", "{provider}.models.{mid}（隐藏中）已修改"), true);
                         store_dirty = true;
                     }
                     continue;
@@ -1445,7 +1445,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         if !apply_model_meta(&mut rows[i].1, mi) && before == rows {
                             continue;
                         }
-                        cx.diff.push(&cx.file, tr!("{provider}.models.{mid} 已修改", "{provider}.models.{mid} changed"), true);
+                        cx.diff.push(&cx.file, tr!("{provider}.models.{mid} changed", "{provider}.models.{mid} 已修改"), true);
                     }
                     None => {
                         let mut d = if shape == Shape::Map || wants_meta { Y::Mapping(Mapping::new()) } else { Y::Null };
@@ -1460,8 +1460,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 let src = entry_src(&cfg, provider)?;
                 if is_pinned(&cfg, &src, provider, model) {
                     return Err(anyhow!(tr!(
-                        "{model} 是默认 / 当前模型，不能删除；先换一个默认模型",
-                        "{model} is the default / current model and can't be deleted; pick another default model first"
+                        "{model} is the default / current model and can't be deleted; pick another default model first",
+                        "{model} 是默认 / 当前模型，不能删除；先换一个默认模型"
                     )));
                 }
                 let def = def_mut(&mut cfg, &src).unwrap();
@@ -1470,12 +1470,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 rows.retain(|r| &r.0 != model);
                 if rows.len() != n {
                     set_model_rows(def, shape, &rows);
-                    cx.diff.push(&cx.file, tr!("{provider}.models - {model}（删除）", "{provider}.models - {model} (deleted)"), false);
+                    cx.diff.push(&cx.file, tr!("{provider}.models - {model} (deleted)", "{provider}.models - {model}（删除）"), false);
                 }
                 if store::section(&mut root, ID, "hiddenModels").remove(&hidden_key(provider, model)).is_some() {
                     store_dirty = true;
                     if rows.len() == n {
-                        cx.diff.push(cx.store_label, tr!("{provider}.models - {model}（删除）", "{provider}.models - {model} (deleted)"), false);
+                        cx.diff.push(cx.store_label, tr!("{provider}.models - {model} (deleted)", "{provider}.models - {model}（删除）"), false);
                     }
                 }
             }
@@ -1492,7 +1492,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     .collect();
                 if new != rows {
                     set_model_rows(def, shape, &new);
-                    cx.diff.push(&cx.file, trn!(new.len(), "{provider}.models：{n} 个模型", "{provider}.models: {n} model", "{provider}.models: {n} models"), true);
+                    cx.diff.push(&cx.file, trn!(new.len(), "{provider}.models: {n} model", "{provider}.models: {n} models", "{provider}.models：{n} 个模型"), true);
                 }
                 store_dirty |= drop_hidden(&mut root, provider);
             }
@@ -1500,7 +1500,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 // Hermes has one role: the default model (the entry's default_model / model,
                 // and model.default when the provider is active).
                 if roles.keys().any(|k| k != "default") {
-                    return Err(anyhow!(l("Hermes 只有「默认模型」一个角色", "Hermes has only one role: \"Default model\"")));
+                    return Err(anyhow!(l("Hermes has only one role: \"Default model\"", "Hermes 只有「默认模型」一个角色")));
                 }
                 let Some(m) = roles.get("default").map(|m| m.trim().to_string()).filter(|m| !m.is_empty()) else { continue };
                 let src = find(&cfg, provider).ok_or_else(|| msg::no_provider(provider))?;
@@ -1516,12 +1516,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     }
                     Src::Inline if !is_current => {
                         store::section(&mut root, ID, "inline").insert("default".into(), json!(m));
-                        cx.diff.push(cx.store_label, tr!("直连配置默认模型 = {m}", "Direct config default model = {m}"), true);
+                        cx.diff.push(cx.store_label, tr!("Direct config default model = {m}", "直连配置默认模型 = {m}"), true);
                         store_dirty = true;
                     }
                     Src::Builtin(b) if !is_current => {
                         store::section(&mut root, ID, "builtins").insert(b.clone(), json!({ "default": m }));
-                        cx.diff.push(cx.store_label, tr!("内置 · {b} 默认模型 = {m}", "Built-in · {b} default model = {m}"), true);
+                        cx.diff.push(cx.store_label, tr!("Built-in · {b} default model = {m}", "内置 · {b} 默认模型 = {m}"), true);
                         store_dirty = true;
                     }
                     _ => {}
@@ -1530,7 +1530,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     cx.diff.push(&cx.file, format!("model.default = {m}"), true);
                 }
             }
-            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Hermes 同时只用一个供应商，请用「设为当前」", "Hermes uses one provider at a time; use \"Set as current\""))),
+            Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Hermes uses one provider at a time; use \"Set as current\"", "Hermes 同时只用一个供应商，请用「设为当前」"))),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
         }
@@ -1558,10 +1558,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let new_text = if changes.is_empty() { None } else { Some(rewrite(&text, &changes)?) };
     if let Some(t) = &new_text {
         // The whole file must still read back as exactly what we meant.
-        let back: Y = serde_yaml::from_str(t).map_err(|e| anyhow!(tr!("写回的 config.yaml 无法解析：{e}", "The rewritten config.yaml can't be parsed: {e}")))?;
+        let back: Y = serde_yaml::from_str(t).map_err(|e| anyhow!(tr!("The rewritten config.yaml can't be parsed: {e}", "写回的 config.yaml 无法解析：{e}")))?;
         let back = if back.is_null() { Y::Mapping(Mapping::new()) } else { back };
         if back != cfg {
-            return Err(anyhow!(l("写回的 config.yaml 校验失败，不写入", "The rewritten config.yaml failed verification; not writing it")));
+            return Err(anyhow!(l("The rewritten config.yaml failed verification; not writing it", "写回的 config.yaml 校验失败，不写入")));
         }
     }
     let env_dirty = env != env0;
@@ -1600,10 +1600,10 @@ fn entry_src(cfg: &Y, provider: &str) -> Result<Src> {
     match find(cfg, provider) {
         Some(s @ (Src::Dict(_) | Src::List(_))) => Ok(s),
         Some(Src::Inline) => Err(anyhow!(l(
-            "直连配置（model 里的 custom）没有模型列表；可以在 config.yaml 里改 model.default，或新建一个供应商",
-            "The direct config (custom in model) has no model list; change model.default in config.yaml, or add a new provider"
+            "The direct config (custom in model) has no model list; change model.default in config.yaml, or add a new provider",
+            "直连配置（model 里的 custom）没有模型列表；可以在 config.yaml 里改 model.default，或新建一个供应商"
         ))),
-        Some(Src::Builtin(_)) => Err(anyhow!(l("Hermes 内置供应商的模型用 hermes model 选择", "Pick models for Hermes built-in providers with hermes model"))),
+        Some(Src::Builtin(_)) => Err(anyhow!(l("Pick models for Hermes built-in providers with hermes model", "Hermes 内置供应商的模型用 hermes model 选择"))),
         None => Err(msg::no_provider(provider)),
     }
 }

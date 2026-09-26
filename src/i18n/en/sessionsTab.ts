@@ -1,6 +1,5 @@
-import type zh from "../zh/sessionsTab";
-
-const en: typeof zh = {
+// src/components/SessionsTab.tsx
+export default {
   kindUser: "Chat",
   kindAutomation: "Automation",
   kindSubagent: "Subagent",
@@ -48,5 +47,3 @@ const en: typeof zh = {
   noMatch: "No matching sessions",
   footer: "Showing {shown} of {total} sessions",
 };
-
-export default en;

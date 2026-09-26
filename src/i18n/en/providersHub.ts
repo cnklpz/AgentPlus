@@ -1,6 +1,5 @@
-import type zh from "../zh/providersHub";
-
-const en: typeof zh = {
+// src/components/ProvidersHub.tsx
+export default {
   intro: "Providers are grouped into relays by service URL; a relay can have several groups (different protocols, paths or API keys). Manage URLs and API keys here, and set models in each agent's \"Model list\". Current environment: {env}",
   testLatency: "Test latency",
   filterAll: "All",
@@ -20,5 +19,3 @@ const en: typeof zh = {
   noMatch: "No matching providers",
   accounts: "Account sign-in · built into each agent",
 };
-
-export default en;

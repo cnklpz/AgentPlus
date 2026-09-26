@@ -1,6 +1,5 @@
-import type zh from "../zh/providerDialog";
-
-const en: typeof zh = {
+// src/components/ProviderDialog.tsx
+export default {
   apiResponsesHint: "OpenAI Responses API (/v1/responses)",
   apiGeminiHint: "Google Gemini protocol (generateContent)",
   roleDefault: "Default",
@@ -89,5 +88,3 @@ const en: typeof zh = {
   deleted: "Deleted",
   fwdNote: "Once selected, traffic is split by model and weight among these forwards only, failing over on errors; a forward whose circuit breaker trips after repeated errors is skipped automatically.",
 };
-
-export default en;

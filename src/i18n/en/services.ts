@@ -1,6 +1,5 @@
-import type zh from "../zh/services";
-
-const en: typeof zh = {
+// src/services.ts
+export default {
   gatewayStation: "Local gateway",
   geminiOnly: "{agent} only supports the Google Gemini protocol, which the local gateway can't convert to",
   apiOnly: "{agent} only supports the {only} API; this group uses {api} (the local gateway can convert it)",
@@ -12,5 +11,3 @@ const en: typeof zh = {
   useRemoving: "To be removed",
   useNew: "New · not applied",
 };
-
-export default en;

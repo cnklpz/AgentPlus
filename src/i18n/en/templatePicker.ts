@@ -1,6 +1,5 @@
-import type zh from "../zh/templatePicker";
-
-const en: typeof zh = {
+// src/components/TemplatePicker.tsx
+export default {
   label: "Template",
   labelHint: "(pick a vendor, then just enter the API key)",
   vendor: "Vendor",
@@ -9,5 +8,3 @@ const en: typeof zh = {
   billing: "Billing",
   getKey: "Get a key from {vendor} ↗",
 };
-
-export default en;

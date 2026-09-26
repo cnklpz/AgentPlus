@@ -106,18 +106,18 @@ pub enum Outcome {
 /// Why a paused forward refused a call.
 fn refusal(id: &str, s: &State) -> String {
     let left = s.open_until.map(|u| u.saturating_duration_since(Instant::now())).unwrap_or_default();
-    let why = s.reason.as_deref().unwrap_or(l("上游出错", "upstream error"));
+    let why = s.reason.as_deref().unwrap_or(l("upstream error", "上游出错"));
     if !left.is_zero() {
         let left = left.as_secs() + 1;
         tr!(
-            "转发「{id}」因连续出错已暂停（熔断）：{why}。约 {left} 秒后自动重试；也可以在 AgentPlus「本地网关」里立即恢复。",
-            "Forward \"{id}\" is paused after repeated errors (circuit breaker): {why}. It retries automatically in about {left} s; you can also resume it now in AgentPlus › Local gateway."
+            "Forward \"{id}\" is paused after repeated errors (circuit breaker): {why}. It retries automatically in about {left} s; you can also resume it now in AgentPlus › Local gateway.",
+            "转发「{id}」因连续出错已暂停（熔断）：{why}。约 {left} 秒后自动重试；也可以在 AgentPlus「本地网关」里立即恢复。"
         )
     } else {
         // Pause over, a probe request is on its way.
         tr!(
-            "转发「{id}」因连续出错已暂停（熔断）：{why}。正在用一个请求试探是否恢复，请稍后再试。",
-            "Forward \"{id}\" is paused after repeated errors (circuit breaker): {why}. A trial request is checking whether it has recovered; try again shortly."
+            "Forward \"{id}\" is paused after repeated errors (circuit breaker): {why}. A trial request is checking whether it has recovered; try again shortly.",
+            "转发「{id}」因连续出错已暂停（熔断）：{why}。正在用一个请求试探是否恢复，请稍后再试。"
         )
     }
 }
@@ -191,9 +191,9 @@ pub fn record(cfg: &Config, id: &str, outcome: Outcome, ticket: Ticket) -> Optio
             let n = s.fails;
             s.fails = 0;
             Some(if probe_failed {
-                tr!("恢复试探失败，转发再暂停 {secs} 秒", "Recovery probe failed; forward paused again for {secs} s")
+                tr!("Recovery probe failed; forward paused again for {secs} s", "恢复试探失败，转发再暂停 {secs} 秒")
             } else {
-                tr!("连续 {n} 次出错，转发暂停 {secs} 秒", "{n} errors in a row; forward paused for {secs} s")
+                tr!("{n} errors in a row; forward paused for {secs} s", "连续 {n} 次出错，转发暂停 {secs} 秒")
             })
         }
     }
@@ -254,20 +254,21 @@ pub fn is_fault_status(status: u16) -> bool {
     status >= 500 || matches!(status, 401 | 402 | 403 | 408 | 429)
 }
 
-/// "HTTP 401 密钥无效：invalid api key" from a status and the upstream's error body.
+/// "HTTP 401 invalid key or unauthorized: invalid api key" from a status and the
+/// upstream's error body.
 pub fn describe(status: u16, body: &str) -> String {
     let label = match status {
-        401 => l(" 密钥无效或未授权", " invalid key or unauthorized"),
-        402 => l(" 余额不足", " insufficient balance"),
-        403 => l(" 没有权限", " forbidden"),
-        408 => l(" 上游超时", " upstream timeout"),
-        429 => l(" 请求过多（被限流）", " too many requests (rate limited)"),
-        502..=504 => l(" 上游不可用", " upstream unavailable"),
-        500..=599 => l(" 上游服务出错", " upstream server error"),
+        401 => l(" invalid key or unauthorized", " 密钥无效或未授权"),
+        402 => l(" insufficient balance", " 余额不足"),
+        403 => l(" forbidden", " 没有权限"),
+        408 => l(" upstream timeout", " 上游超时"),
+        429 => l(" too many requests (rate limited)", " 请求过多（被限流）"),
+        502..=504 => l(" upstream unavailable", " 上游不可用"),
+        500..=599 => l(" upstream server error", " 上游服务出错"),
         _ => "",
     };
     let msg = brief(body);
-    if msg.is_empty() { format!("HTTP {status}{label}") } else { tr!("HTTP {status}{label}：{msg}", "HTTP {status}{label}: {msg}") }
+    if msg.is_empty() { format!("HTTP {status}{label}") } else { tr!("HTTP {status}{label}: {msg}", "HTTP {status}{label}：{msg}") }
 }
 
 /// The message out of an error body (see `convert::error_message`), on one line and

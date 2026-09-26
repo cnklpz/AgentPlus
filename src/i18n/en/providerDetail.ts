@@ -1,6 +1,5 @@
-import type zh from "../zh/providerDetail";
-
-const en: typeof zh = {
+// src/components/ProviderDetail.tsx
+export default {
   statusDeleting: "To be deleted (on apply)",
   statusNew: "New (takes effect on apply)",
   statusIncompatible: "Incompatible",
@@ -24,5 +23,3 @@ const en: typeof zh = {
   enableThis: "Enable this provider",
   deleteInUse: "In use. Switch to another provider first.",
 };
-
-export default en;

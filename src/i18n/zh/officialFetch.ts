@@ -1,5 +1,7 @@
 // src/components/OfficialFetch.tsx
-export default {
+import type en from "../en/officialFetch";
+
+const zh: typeof en = {
   startedFlash: "已备份 config.toml，并临时切到 OpenAI 官方账号",
   cancelledFlash: "已取消，config.toml 已还原",
   finishedFlash: "已写入 {n} 个官方模型，config.toml 已还原",
@@ -37,3 +39,5 @@ export default {
   hiddenByDefault: "官方默认隐藏",
   adjustHint: "在上面的表格里可以继续调整显示哪些模型。",
 };
+
+export default zh;

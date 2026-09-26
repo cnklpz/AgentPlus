@@ -6,8 +6,8 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
-const SHOW: (&str, &str) = ("显示主窗口", "Show AgentPlus");
-const QUIT: (&str, &str) = ("退出 AgentPlus", "Quit AgentPlus");
+const SHOW: (&str, &str) = ("Show AgentPlus", "显示主窗口");
+const QUIT: (&str, &str) = ("Quit AgentPlus", "退出 AgentPlus");
 
 /// Menu items whose text follows the UI language.
 struct TrayMenu {

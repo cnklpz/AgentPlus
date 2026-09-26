@@ -1,5 +1,7 @@
 // src/components/Sidebar.tsx
-export default {
+import type en from "../en/sidebar";
+
+const zh: typeof en = {
   notInstalled: "未检测到安装",
   singleSub: "供应商 {provider} · {n} 个模型",
   gateway: "本地网关",
@@ -23,3 +25,5 @@ export default {
   pending: "{n} 项改动未应用",
   backupsAt: "备份保存在 ~/.agentplus/backups",
 };
+
+export default zh;

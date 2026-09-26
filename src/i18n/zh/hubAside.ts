@@ -1,5 +1,7 @@
 // src/components/HubAside.tsx
-export default {
+import type en from "../en/hubAside";
+
+const zh: typeof en = {
   aria: "供应商详情与改动",
   library: "供应商库",
   savedIn: "保存在 ~/.agentplus",
@@ -12,3 +14,5 @@ export default {
   applyTo: "应用到 {n} 个 Agent",
   backupNote: "写入前自动备份原文件",
 };
+
+export default zh;

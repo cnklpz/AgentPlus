@@ -1,6 +1,5 @@
-import type zh from "../zh/copyProviderDialog";
-
-const en: typeof zh = {
+// src/components/CopyProviderDialog.tsx
+export default {
   globalOpenCode: "Global OpenCode",
   library: "Provider library",
   ariaTitle: "Copy providers to project",
@@ -13,5 +12,3 @@ const en: typeof zh = {
   disableInherited: "Disable the copied global providers in this project (so the picker doesn't show them twice)",
   copyN: "Copy {n}",
 };
-
-export default en;

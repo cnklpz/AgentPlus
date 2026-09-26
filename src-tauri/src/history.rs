@@ -48,7 +48,7 @@ pub fn backup_profiles(dir: &Path, scope: &str, root: &Value) -> Result<()> {
     write_private_atomic(&dir.join(name), &serde_json::to_vec_pretty(value)?)?;
     let path = agentplus_dir().join("store.json");
     let mut manifest = read_json(&dir.join("manifest.json"))?.0;
-    manifest["files"].as_array_mut().ok_or_else(|| anyhow!(l("无效的备份清单", "Invalid backup manifest")))?
+    manifest["files"].as_array_mut().ok_or_else(|| anyhow!(l("Invalid backup manifest", "无效的备份清单")))?
         .push(serde_json::json!({ "name": name, "path": path, "profileScope": scope }));
     write_private_atomic(&dir.join("manifest.json"), &serde_json::to_vec_pretty(&manifest)?)
 }
@@ -57,12 +57,12 @@ fn root() -> PathBuf {
     agentplus_dir().join("backups")
 }
 
-/// Fixed backup reasons, (zh, en). A reason is stored in the language of the moment and
+/// Fixed backup reasons, (en, zh). A reason is stored in the language of the moment and
 /// shown in the current one (`reason_text`), so both sides use these same pairs.
-pub const REASON_APPLY: (&str, &str) = ("应用配置", "Apply config");
-pub const REASON_OFFICIAL: (&str, &str) = ("获取官方模型列表前", "Before fetching official model list");
-const REASON_CLEANUP: (&str, &str) = ("Codex 清理", "Codex cleanup");
-const REASON_REPAIR: (&str, &str) = ("会话修复", "Session repair");
+pub const REASON_APPLY: (&str, &str) = ("Apply config", "应用配置");
+pub const REASON_OFFICIAL: (&str, &str) = ("Before fetching official model list", "获取官方模型列表前");
+const REASON_CLEANUP: (&str, &str) = ("Codex cleanup", "Codex 清理");
+const REASON_REPAIR: (&str, &str) = ("Session repair", "会话修复");
 
 fn read_manifest(dir: &Path) -> Option<Value> {
     fs::read_to_string(dir.join("manifest.json")).ok().and_then(|s| serde_json::from_str(&s).ok())
@@ -119,26 +119,26 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
         .as_ref()
         .and_then(|m| m["reason"].as_str().map(reason_text))
         .unwrap_or_else(|| {
-            let (zh, en) = match agent.as_str() {
+            let (en, zh) = match agent.as_str() {
                 "codex-cleanup" => REASON_CLEANUP,
                 "codex-repair" => REASON_REPAIR,
                 _ => REASON_APPLY,
             };
-            l(zh, en).into()
+            l(en, zh).into()
         });
     let missing: Vec<&str> = files.iter().filter(|f| f.profile_scope.is_none() && f.path.as_ref().is_some_and(|p| !Path::new(p).is_file())).map(|f| f.name.as_str()).collect();
     let mut blocked_missing = false;
     let blocked = if agent.starts_with("codex-") {
-        Some(l("数据库类备份，请在「会话」页撤销或手动处理", "Database backup: undo it on the Sessions page or handle it manually").to_string())
+        Some(l("Database backup: undo it on the Sessions page or handle it manually", "数据库类备份，请在「会话」页撤销或手动处理").to_string())
     } else if PROFILE_AGENTS.contains(&agent.as_str()) && !files.iter().any(|f| f.profile_scope.is_some()) {
         let name = crate::adapters::display_name(&agent);
-        Some(tr!("备份缺少 {name} 配置档，请手动恢复并核对配置", "The backup has no {name} profiles. Restore it manually and check the config"))
+        Some(tr!("The backup has no {name} profiles. Restore it manually and check the config", "备份缺少 {name} 配置档，请手动恢复并核对配置"))
     } else if files.is_empty() || files.iter().any(|f| f.path.is_none()) {
-        Some(l("不知道原文件放在哪", "Unknown original file location").to_string())
+        Some(l("Unknown original file location", "不知道原文件放在哪").to_string())
     } else if !missing.is_empty() {
         // Rolling back would recreate files nobody uses any more (e.g. a deleted temp dir).
         blocked_missing = true;
-        Some(tr!("原文件已不存在：{}", "Original file no longer exists: {}", crate::i18n::join(&missing)))
+        Some(tr!("Original file no longer exists: {}", "原文件已不存在：{}", crate::i18n::join(&missing)))
     } else {
         None
     };
@@ -150,13 +150,13 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
 fn reason_text(r: &str) -> String {
     const KNOWN: &[(&str, &str)] = &[REASON_APPLY, REASON_OFFICIAL, REASON_CLEANUP, REASON_REPAIR];
     const PREFIX: &[(&str, &str, &str, &str)] = &[
-        ("回滚到 ", " 之前", "Before rolling back to ", ""),
-        ("项目配置 · ", "", "Project config · ", ""),
+        ("Before rolling back to ", "", "回滚到 ", " 之前"),
+        ("Project config · ", "", "项目配置 · ", ""),
     ];
-    if let Some((zh, en)) = KNOWN.iter().find(|(zh, en)| r == *zh || r == *en) {
-        return l(zh, en).into();
+    if let Some((en, zh)) = KNOWN.iter().find(|(en, zh)| r == *en || r == *zh) {
+        return l(en, zh).into();
     }
-    for (zp, zs, ep, es) in PREFIX {
+    for (ep, es, zp, zs) in PREFIX {
         let mid = r.strip_prefix(zp).and_then(|x| x.strip_suffix(zs)).or_else(|| r.strip_prefix(ep).and_then(|x| x.strip_suffix(es)));
         if let Some(mid) = mid {
             return if crate::i18n::is_en() { format!("{ep}{mid}{es}") } else { format!("{zp}{mid}{zs}") };
@@ -189,7 +189,7 @@ pub fn list() -> Result<Vec<BackupEntry>> {
 fn backup_dir(id: &str) -> Result<(&str, &str, PathBuf)> {
     match id.split_once('/') {
         Some((stamp, agent)) if plain_name(stamp) && plain_name(agent) => Ok((stamp, agent, root().join(stamp).join(agent))),
-        _ => Err(anyhow!(l("无效的备份", "Invalid backup"))),
+        _ => Err(anyhow!(l("Invalid backup", "无效的备份"))),
     }
 }
 
@@ -201,9 +201,9 @@ pub fn restore(id: &str) -> Result<String> {
 
 fn restore_in(id: &str) -> Result<String> {
     let (stamp, agent, dir) = backup_dir(id)?;
-    let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("找不到备份 {id}", "Backup not found: {id}")))?;
+    let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("Backup not found: {id}", "找不到备份 {id}")))?;
     if !entry.restorable {
-        return Err(anyhow!(tr!("这份备份不能自动回滚：{}", "This backup can't be rolled back automatically: {}", entry.blocked.unwrap_or(entry.reason))));
+        return Err(anyhow!(tr!("This backup can't be rolled back automatically: {}", "这份备份不能自动回滚：{}", entry.blocked.unwrap_or(entry.reason))));
     }
     // Decode every profile snapshot before writing any files. Only profiles are restored;
     // library entries, gateway keys and other agents' settings keep their current values.
@@ -212,13 +212,13 @@ fn restore_in(id: &str) -> Result<String> {
         if let Some(scope) = &f.profile_scope {
             let value = read_json(&dir.join(&f.name))?.0;
             if !value.is_object() && !value.is_null() {
-                return Err(anyhow!(l("备份中的配置档无法读取，没有回滚", "Can't read the backed-up profiles; nothing was restored")));
+                return Err(anyhow!(l("Can't read the backed-up profiles; nothing was restored", "备份中的配置档无法读取，没有回滚")));
             }
             profiles.push((scope.clone(), value));
         }
     }
     let targets: Vec<PathBuf> = entry.files.iter().filter(|f| f.profile_scope.is_none()).filter_map(|f| f.path.as_ref().map(PathBuf::from)).collect();
-    let safety = backup_tagged(agent, &targets, &tr!("回滚到 {stamp} 之前", "Before rolling back to {stamp}"))?;
+    let safety = backup_tagged(agent, &targets, &tr!("Before rolling back to {stamp}", "回滚到 {stamp} 之前"))?;
     for (scope, _) in &profiles {
         backup_profiles(&safety, scope, &crate::store::load())?;
     }
@@ -239,7 +239,7 @@ fn restore_in(id: &str) -> Result<String> {
             replace_file(&tmp, &target, &to)
         };
         if let Err(e) = put_back() {
-            return Err(anyhow!(tr!("恢复 {} 失败：{e}（回滚前的文件备份在 {}）", "Failed to restore {}: {e} (the pre-rollback files are backed up in {})", to.display(), display_path(&safety))));
+            return Err(anyhow!(tr!("Failed to restore {}: {e} (the pre-rollback files are backed up in {})", "恢复 {} 失败：{e}（回滚前的文件备份在 {}）", to.display(), display_path(&safety))));
         }
     }
     let restored_profiles = !profiles.is_empty();
@@ -255,7 +255,7 @@ fn restore_in(id: &str) -> Result<String> {
                 }
             }
             Ok(())
-        }).map_err(|e| anyhow!(tr!("恢复配置档失败：{e}（回滚前的备份在 {}）", "Failed to restore profiles: {e} (the pre-rollback backup is in {})", display_path(&safety))))?;
+        }).map_err(|e| anyhow!(tr!("Failed to restore profiles: {e} (the pre-rollback backup is in {})", "恢复配置档失败：{e}（回滚前的备份在 {}）", display_path(&safety))))?;
     }
     Ok(restored_message(targets.len(), restored_profiles, stamp, &display_path(&safety)))
 }
@@ -263,9 +263,9 @@ fn restore_in(id: &str) -> Result<String> {
 /// The profile snapshot is not a file of the agent's: it is named apart from the count.
 fn restored_message(files: usize, profiles: bool, stamp: &str, safety: &str) -> String {
     match (files, profiles) {
-        (0, true) => tr!("已回滚 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）", "Rolled back the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})"),
-        (n, true) => tr!("已回滚 {n} 个文件和 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）", "Rolled back {n} file(s) and the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})"),
-        (n, false) => tr!("已回滚 {n} 个文件到 {stamp} 的状态（回滚前的文件备份在 {safety}）", "Rolled back {n} file(s) to their state at {stamp} (the pre-rollback files are backed up in {safety})"),
+        (0, true) => tr!("Rolled back the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})", "已回滚 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）"),
+        (n, true) => tr!("Rolled back {n} file(s) and the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})", "已回滚 {n} 个文件和 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）"),
+        (n, false) => tr!("Rolled back {n} file(s) to their state at {stamp} (the pre-rollback files are backed up in {safety})", "已回滚 {n} 个文件到 {stamp} 的状态（回滚前的文件备份在 {safety}）"),
     }
 }
 
@@ -343,7 +343,7 @@ fn same_content(a: &Path, b: &Path) -> bool {
 
 pub fn detail(id: &str) -> Result<BackupDetail> {
     let (stamp, _, dir) = backup_dir(id)?;
-    let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("找不到备份 {id}", "Backup not found: {id}")))?;
+    let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("Backup not found: {id}", "找不到备份 {id}")))?;
     let manifest = read_manifest(&dir);
     let files = entry.files.into_iter().map(|f| file_detail(&dir, f)).collect();
     Ok(BackupDetail {
@@ -461,14 +461,14 @@ fn line_diff(a: &str, b: &str) -> (Vec<DiffRow>, u32, u32) {
             continue;
         }
         if folded > 0 {
-            rows.push(DiffRow { kind: "…", text: tr!("{folded} 行未变", "{folded} unchanged line(s)"), old: None, new: None });
+            rows.push(DiffRow { kind: "…", text: tr!("{folded} unchanged line(s)", "{folded} 行未变"), old: None, new: None });
             folded = 0;
         }
         let text = if kind == "+" { b[n.unwrap()] } else { a[o.unwrap()] };
         rows.push(DiffRow { kind, text: mask_secrets(text), old: o.map(|x| x as u32 + 1), new: n.map(|x| x as u32 + 1) });
     }
     if folded > 0 {
-        rows.push(DiffRow { kind: "…", text: tr!("{folded} 行未变", "{folded} unchanged line(s)"), old: None, new: None });
+        rows.push(DiffRow { kind: "…", text: tr!("{folded} unchanged line(s)", "{folded} 行未变"), old: None, new: None });
     }
     (rows, added, removed)
 }

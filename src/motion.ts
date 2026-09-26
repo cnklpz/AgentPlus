@@ -1,4 +1,4 @@
-// The 「过度」 motion level: effects that need pointer or DOM state, which CSS alone
+// The "Extra" motion level: effects that need pointer or DOM state, which CSS alone
 // can't do. Installed once at startup; every handler is a no-op unless
 // <html data-motion="rich"> and the system isn't asking for reduced motion.
 // Styles for the classes used here live in styles-motion.css.
@@ -8,7 +8,7 @@ const SPRING =
 const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
 const rich = () => document.documentElement.dataset.motion === "rich" && !reduce.matches;
 
-// ---------------------------------------------------------------- 点击涟漪
+// ---------------------------------------------------------------- Click ripple
 const RIPPLE = [
   ".btn", ".icon-btn", ".pbtn", ".seg > button", ".tab", ".agent-row", ".side-link", ".rail-item", ".dd-item", ".ctx-item",
   ".palette-item", ".opt", ".chip", ".env-card", ".env-btn", ".apick", ".hcard", ".pcard", ".hcard-add", ".pcard-add", ".acct",
@@ -40,7 +40,7 @@ function ripple(e: PointerEvent) {
   }, 700);
 }
 
-// ---------------------------------------------------------------- 滚动边界回弹
+// ---------------------------------------------------------------- Overscroll bounce
 function overflowing(el: HTMLElement) {
   const oy = getComputedStyle(el).overflowY;
   return (oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1;
@@ -96,7 +96,7 @@ function settle(now: boolean) {
   else obClear = window.setTimeout(clear, 650);
 }
 
-// ---------------------------------------------------------------- 边界：键盘到头、点了禁用项
+// ---------------------------------------------------------------- Edges: keyboard runs out, a disabled item is clicked
 const HI = ".palette-list .palette-item.on, .dd-menu .dd-item.hi, .ctx-menu .ctx-item.hi";
 
 function keyEdge(e: KeyboardEvent) {
@@ -116,7 +116,7 @@ function nope(e: PointerEvent) {
   el.animate([{ translate: "0" }, { translate: "-5px" }, { translate: "4px" }, { translate: "-3px" }, { translate: "2px" }, { translate: "0" }], { duration: 380, easing: "ease-out" });
 }
 
-// ---------------------------------------------------------------- 卡片倾斜
+// ---------------------------------------------------------------- Card tilt
 let tiltEl: HTMLElement | null = null;
 let tiltFrame = 0;
 
@@ -137,7 +137,7 @@ function tilt(e: PointerEvent) {
   });
 }
 
-// ---------------------------------------------------------------- 选中高亮滑动
+// ---------------------------------------------------------------- Sliding selection highlight
 const GLIDE: { item: string; cls: string }[] = [
   { item: ".seg > button", cls: "on" },
   { item: ".sidebar > .agent-row", cls: "active" },
@@ -188,7 +188,7 @@ function glide(records: MutationRecord[]) {
   }
 }
 
-// ---------------------------------------------------------------- 退场
+// ---------------------------------------------------------------- Exits
 const EXIT = ".modal-bg, .toast, .dd-menu, .ctx-menu";
 const EXIT_MS = 320;
 

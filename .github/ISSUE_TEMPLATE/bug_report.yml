@@ -1,26 +1,26 @@
-name: 问题反馈 / Bug report
-description: AgentPlus 报错或不正常 / Something in AgentPlus doesn't work
+name: Bug report / 问题反馈
+description: Something in AgentPlus doesn't work / AgentPlus 报错或不正常
 labels: ["bug"]
 body:
   - type: checkboxes
     id: checks
     attributes:
-      label: 提交前确认 / Before submitting
-      description: issue 是公开的，请不要贴出 API 密钥、令牌或中转地址 / Issues are public — keep keys, tokens and relay URLs out
+      label: Before submitting / 提交前确认
+      description: Issues are public — keep keys, tokens and relay URLs out / issue 是公开的，请不要贴出 API 密钥、令牌或中转地址
       options:
-        - label: 已确认 [最新版本](https://github.com/cnklpz/AgentPlus/releases/latest) 存在此问题 / The problem still happens on the latest version
+        - label: The problem still happens on the [latest version](https://github.com/cnklpz/AgentPlus/releases/latest) / 已确认 [最新版本](https://github.com/cnklpz/AgentPlus/releases/latest) 存在此问题
           required: true
-        - label: 已搜索过 [已有 issue](https://github.com/cnklpz/AgentPlus/issues?q=is%3Aissue)，没有重复 / I searched existing issues
+        - label: I searched [existing issues](https://github.com/cnklpz/AgentPlus/issues?q=is%3Aissue) and found no duplicate / 已搜索过 [已有 issue](https://github.com/cnklpz/AgentPlus/issues?q=is%3Aissue)，没有重复
           required: true
-        - label: 截图前已开启隐私模式（`Ctrl+Shift+H`，macOS `⇧⌘H`），贴出的内容已脱敏 / Screenshots were taken in Privacy mode and pasted content is redacted
+        - label: Screenshots were taken in Privacy mode (`Ctrl+Shift+H`, macOS `⇧⌘H`) and pasted content is redacted / 截图前已开启隐私模式（`Ctrl+Shift+H`，macOS `⇧⌘H`），贴出的内容已脱敏
           required: true
-        - label: 已附上诊断日志（设置 → 通用 → 诊断日志：打开记录，复现一次，点「导出」）/ I attached the diagnostic log (Settings → General → Diagnostic log → Export)
+        - label: 'I attached the diagnostic log (Settings → General → Diagnostic log: turn it on, reproduce once, click "Export") / 已附上诊断日志（设置 → 通用 → 诊断日志：打开记录，复现一次，点「导出」）'
 
   - type: input
     id: env
     attributes:
-      label: 版本与系统 / Version and OS
-      description: AgentPlus 版本（设置 → 通用 → 关于）、系统、相关 Agent 及其版本 / AgentPlus version, OS, and the Agent involved
+      label: Version and OS / 版本与系统
+      description: AgentPlus version (Settings → General → About), OS, and the Agent involved with its version / AgentPlus 版本（设置 → 通用 → 关于）、系统、相关 Agent 及其版本
       placeholder: "AgentPlus 0.1.6 · Windows 11 · Codex 26.924"
     validations:
       required: true
@@ -28,11 +28,11 @@ body:
   - type: textarea
     id: what
     attributes:
-      label: 问题描述 / What happened
-      description: 发生了什么、怎样复现；把日志文件（下载文件夹里的 `AgentPlus-log-*.txt`）和截图拖到这里 / What happened and how to reproduce it; drop the log file and screenshots here
+      label: What happened / 问题描述
+      description: What happened and how to reproduce it; drop the log file (`AgentPlus-log-*.txt` in your Downloads folder) and screenshots here / 发生了什么、怎样复现；把日志文件（下载文件夹里的 `AgentPlus-log-*.txt`）和截图拖到这里
       placeholder: |
-        1. 打开 …
-        2. 点击 …
-        3. 看到 …
+        1. Open … / 打开 …
+        2. Click … / 点击 …
+        3. See … / 看到 …
     validations:
       required: true

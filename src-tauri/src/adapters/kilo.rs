@@ -111,7 +111,7 @@ pub fn state(inst: &Install) -> AgentState {
     st.providers = f.providers(&cfg, &root);
 
     // Logged in with `kilo auth` (Kilo account or a built-in provider) but not configured here.
-    let about = l("Kilo Code 内置的供应商，模型列表来自 models.dev / Kilo 网关，在 Kilo 里用 /models 选择", "A provider built into Kilo Code. Its model list comes from models.dev / the Kilo gateway; pick models with /models in Kilo.");
+    let about = l("A provider built into Kilo Code. Its model list comes from models.dev / the Kilo gateway; pick models with /models in Kilo.", "Kilo Code 内置的供应商，模型列表来自 models.dev / Kilo 网关，在 Kilo 里用 /models 选择");
     let extra = f.auth_only(&st.providers, "kilo auth", about, &f.disabled(&cfg));
     st.providers.extend(extra);
 
@@ -122,8 +122,8 @@ pub fn state(inst: &Install) -> AgentState {
     st.current = f.summary(&cfg, &st.providers);
     st.notes.push(
         l(
-            "Kilo Code CLI 与 VS Code 扩展共用这份配置；改动对新会话生效。",
             "The Kilo Code CLI and VS Code extension share this config; changes apply to new sessions.",
+            "Kilo Code CLI 与 VS Code 扩展共用这份配置；改动对新会话生效。",
         )
         .into(),
     );
@@ -161,8 +161,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::SetCurrentProvider { .. } => {
                 return Err(anyhow!(l(
-                    "Kilo Code 按启用/停用管理供应商，在 Kilo 里用 /models 选择模型",
-                    "Kilo Code manages providers by enabling and disabling them; pick a model with /models in Kilo"
+                    "Kilo Code manages providers by enabling and disabling them; pick a model with /models in Kilo",
+                    "Kilo Code 按启用/停用管理供应商，在 Kilo 里用 /models 选择模型"
                 )))
             }
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),

@@ -66,9 +66,9 @@ impl Patches {
     fn names() -> [&'static str; 4] {
         [
             "Fast",
-            crate::i18n::l("完整模型名", "Full model names"),
-            crate::i18n::l("额度用完仍可发送", "Send after quota runs out"),
-            crate::i18n::l("隐藏用量提示横幅", "Hide usage banners"),
+            crate::i18n::l("Full model names", "完整模型名"),
+            crate::i18n::l("Send after quota runs out", "额度用完仍可发送"),
+            crate::i18n::l("Hide usage banners", "隐藏用量提示横幅"),
         ]
     }
 
@@ -170,8 +170,8 @@ fn check_missing(want: Patches, missing: Vec<&'static str>) -> Result<Vec<&'stat
 
 fn not_found(missing: &[&str]) -> anyhow::Error {
     anyhow!(tr!(
-        "在 Codex 界面代码里没找到「{}」的注入位置，可能是版本变了",
         "Couldn't find where to patch {} in the Codex UI code; the version may have changed",
+        "在 Codex 界面代码里没找到「{}」的注入位置，可能是版本变了",
         join(missing)
     ))
 }
@@ -215,7 +215,7 @@ impl Session {
             if let Some(msg) = self.read()? {
                 if msg.get("id").and_then(|x| x.as_u64()) == Some(id) {
                     if let Some(err) = msg.get("error") {
-                        return Err(anyhow!(tr!("{method} 失败：{err}", "{method} failed: {err}")));
+                        return Err(anyhow!(tr!("{method} failed: {err}", "{method} 失败：{err}")));
                     }
                     return Ok(msg.get("result").cloned().unwrap_or(Value::Null));
                 }
@@ -224,7 +224,7 @@ impl Session {
                 }
             }
         }
-        Err(anyhow!(tr!("{method} 超时", "{method} timed out")))
+        Err(anyhow!(tr!("{method} timed out", "{method} 超时")))
     }
 
     fn next_event(&mut self, method: &str, deadline: Instant) -> Result<Option<Value>> {
@@ -401,11 +401,11 @@ fn via_live_edit(s: &mut Session, want: Patches) -> Result<Option<Patched>> {
             let Some(patched) = patched else { continue };
             let r = s.call("Debugger.setScriptSource", json!({ "scriptId": id, "scriptSource": patched }))?;
             if let Some(ex) = r.get("exceptionDetails") {
-                return Err(anyhow!(tr!("热替换失败：{ex}", "Live patch failed: {ex}")));
+                return Err(anyhow!(tr!("Live patch failed: {ex}", "热替换失败：{ex}")));
             }
             if let Some(st) = r.get("status").and_then(|x| x.as_str()) {
                 if st != "Ok" {
-                    return Err(anyhow!(tr!("热替换失败：{st}", "Live patch failed: {st}")));
+                    return Err(anyhow!(tr!("Live patch failed: {st}", "热替换失败：{st}")));
                 }
             }
         }
@@ -426,14 +426,14 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
             }
         }
         if t0.elapsed() > Duration::from_secs(60) {
-            return Err(anyhow!(tr!("60 秒内没有连上 Codex 的调试端口 {port}", "Couldn't connect to Codex's debug port {port} within 60 seconds")));
+            return Err(anyhow!(tr!("Couldn't connect to Codex's debug port {port} within 60 seconds", "60 秒内没有连上 Codex 的调试端口 {port}")));
         }
         crate::process::pause(Duration::from_millis(500))?;
     };
-    on(Progress::step("port", "done", Some(tr!("{} 个窗口", "{} window(s)", pages.len()))));
+    on(Progress::step("port", "done", Some(tr!("{} window(s)", "{} 个窗口", pages.len()))));
     crate::applog::info("inject", format!("debug port up after {:.1}s, {} window(s)", t0.elapsed().as_secs_f32(), pages.len()));
     // Let the first render settle before reloading.
-    on(Progress::step("patch", "active", Some(crate::i18n::l("等待界面加载", "Waiting for the UI to load").into())));
+    on(Progress::step("patch", "active", Some(crate::i18n::l("Waiting for the UI to load", "等待界面加载").into())));
     crate::process::pause(Duration::from_secs(2))?;
     // Main windows first: overlay windows never load app-primary, so once a main window
     // has had every bundle there's no point waiting long for it elsewhere.
@@ -447,9 +447,9 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
         // A window being patched is finished first: its requests are paused until then.
         crate::process::check_cancel()?;
         let t1 = Instant::now();
-        on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}", "Window {}/{}", i + 1, total))));
+        on(Progress::step("patch", "active", Some(tr!("Window {}/{}", "窗口 {}/{}", i + 1, total))));
         let url = page["url"].as_str().unwrap_or_default();
-        let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("调试目标缺少 WebSocket 地址", "Debug target has no WebSocket URL")))?;
+        let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("Debug target has no WebSocket URL", "调试目标缺少 WebSocket 地址")))?;
         let mut s = Session::open(ws)?;
         // A secondary window (overlay, detached) only ever loads what it has already: reload it
         // just for those, and not at all without any. Waiting for the rest took 5-10 s each.
@@ -459,13 +459,13 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
             crate::applog::info("inject", format!("{url}: no UI bundle loaded, skipped"));
             continue;
         }
-        let waiting = || on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}：等待其余界面脚本加载", "Window {}/{}: waiting for the rest of the UI scripts", i + 1, total))));
+        let waiting = || on(Progress::step("patch", "active", Some(tr!("Window {}/{}: waiting for the rest of the UI scripts", "窗口 {}/{}：等待其余界面脚本加载", i + 1, total))));
         let fetched = via_fetch(&mut s, want, expect.as_deref(), lazy, &waiting)?;
         crate::applog::info("inject", format!("{url}: {} in {:.1}s", if fetched.is_some() { "patched" } else { "no bundle request seen" }, t1.elapsed().as_secs_f32()));
         let (how, r) = match fetched {
-            Some(r) => (crate::i18n::l("响应拦截", "response interception"), r),
+            Some(r) => (crate::i18n::l("response interception", "响应拦截"), r),
             None => match via_live_edit(&mut s, want)? {
-                Some(r) => (crate::i18n::l("热替换", "live patch"), r),
+                Some(r) => (crate::i18n::l("live patch", "热替换"), r),
                 // No UI bundle in this window: nothing to patch.
                 None => continue,
             },
@@ -478,18 +478,18 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
         missing = Some(still_missing(missing.take(), r.missing));
     }
     let Some(missing) = missing else {
-        return Err(anyhow!(crate::i18n::l("没有找到 Codex 界面脚本", "Codex UI script not found")));
+        return Err(anyhow!(crate::i18n::l("Codex UI script not found", "没有找到 Codex 界面脚本")));
     };
     let missing = check_missing(want, missing)?;
     let what: Vec<&str> = want.wanted().into_iter().filter(|w| !missing.contains(w)).collect();
     on(if missing.is_empty() {
         Progress::step("patch", "done", Some(join(&what)))
     } else {
-        Progress::step("patch", "warn", Some(tr!("没找到：{}", "Not found: {}", join(&missing))))
+        Progress::step("patch", "warn", Some(tr!("Not found: {}", "没找到：{}", join(&missing))))
     });
-    let mut msg = tr!("界面已注入：{}（{}，{} 个窗口）", "UI patched: {} ({}; {} window(s))", join(&what), join(&done), done.len());
+    let mut msg = tr!("UI patched: {} ({}; {} window(s))", "界面已注入：{}（{}，{} 个窗口）", join(&what), join(&done), done.len());
     if !missing.is_empty() {
-        msg.push_str(&tr!("；没找到「{}」的注入位置，可能是 Codex 版本变了", "; couldn't find where to patch {}, the Codex version may have changed", join(&missing)));
+        msg.push_str(&tr!("; couldn't find where to patch {}, the Codex version may have changed", "；没找到「{}」的注入位置，可能是 Codex 版本变了", join(&missing)));
     }
     Ok(msg)
 }
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(patch_source(&out, QUOTA), (None, vec![]));
         // A different atom without the rate-limit check is left alone.
         let other = "x=Hs(Ir,({get:e})=>{let t=e(Zx),n=e(iT).data;if(t.authMethod!==`chatgpt`||t.authLoading)return!1;";
-        assert_eq!(patch_source(other, QUOTA), (None, vec![crate::i18n::l("额度用完仍可发送", "Send after quota runs out")]));
+        assert_eq!(patch_source(other, QUOTA), (None, vec![crate::i18n::l("Send after quota runs out", "额度用完仍可发送")]));
     }
 
     #[test]

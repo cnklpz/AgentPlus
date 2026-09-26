@@ -20,7 +20,7 @@ export function fmtSize(bytes: number): string {
 }
 
 /**
- * "刚刚" / "3 分钟前" / "昨天" / "9月20日" for a time in ms (or an ISO string); "" when missing
+ * "just now" / "3 minutes ago" / "yesterday" / a short date for a time in ms (or an ISO string); "" when missing
  * or unreadable. Times in the future (clock skew) count as just now.
  */
 export function fmtAgo(when: number | string | null | undefined, now = Date.now()): string {

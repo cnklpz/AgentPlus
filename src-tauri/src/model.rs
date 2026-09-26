@@ -184,61 +184,61 @@ pub(crate) mod lbl {
     use crate::i18n::l;
 
     pub fn api_key() -> &'static str {
-        l("密钥", "API key")
+        l("API key", "密钥")
     }
     pub fn auth() -> &'static str {
-        l("认证方式", "Authentication")
+        l("Authentication", "认证方式")
     }
     pub fn base_url() -> &'static str {
-        l("地址", "Base URL")
+        l("Base URL", "地址")
     }
     pub fn config_file() -> &'static str {
-        l("配置文件", "Config file")
+        l("Config file", "配置文件")
     }
     pub fn config_id() -> &'static str {
-        l("配置 ID", "Config ID")
+        l("Config ID", "配置 ID")
     }
     pub fn config_location() -> &'static str {
-        l("配置位置", "Config location")
+        l("Config location", "配置位置")
     }
     pub fn credentials() -> &'static str {
-        l("凭据", "Credentials")
+        l("Credentials", "凭据")
     }
     pub fn current_model() -> &'static str {
-        l("当前模型", "Current model")
+        l("Current model", "当前模型")
     }
     pub fn custom_models() -> &'static str {
-        l("自定义模型", "Custom models")
+        l("Custom models", "自定义模型")
     }
     pub fn custom_providers() -> &'static str {
-        l("自定义供应商", "Custom providers")
+        l("Custom providers", "自定义供应商")
     }
     pub fn default_model() -> &'static str {
-        l("默认模型", "Default model")
+        l("Default model", "默认模型")
     }
     pub fn note() -> &'static str {
-        l("说明", "Note")
+        l("Note", "说明")
     }
     pub fn provider() -> &'static str {
-        l("供应商", "Provider")
+        l("Provider", "供应商")
     }
     pub fn small_model() -> &'static str {
-        l("小模型", "Small model")
+        l("Small model", "小模型")
     }
     pub fn source() -> &'static str {
-        l("来源", "Source")
+        l("Source", "来源")
     }
     pub fn status() -> &'static str {
-        l("状态", "Status")
+        l("Status", "状态")
     }
     pub fn visible_models() -> &'static str {
-        l("可见模型", "Visible models")
+        l("Visible models", "可见模型")
     }
 
-    /// A summary row's list of names ("A、B" / "A, B"), or "None".
+    /// A summary row's list of names ("A, B", joined per language), or "None".
     pub fn names_or_none<S: AsRef<str>>(names: impl IntoIterator<Item = S>) -> String {
         let names: Vec<String> = names.into_iter().map(|s| s.as_ref().to_string()).collect();
-        if names.is_empty() { l("无", "None").into() } else { crate::i18n::join(&names) }
+        if names.is_empty() { l("None", "无").into() } else { crate::i18n::join(&names) }
     }
 }
 
@@ -331,12 +331,12 @@ impl Tag {
 
     /// A model the agent uses by default.
     pub fn default_model() -> Self {
-        Tag::new("role:default", crate::i18n::l("默认", "Default"))
+        Tag::new("role:default", crate::i18n::l("Default", "默认"))
     }
 
     /// The model currently selected in the agent.
     pub fn current() -> Self {
-        Tag::new("current", crate::i18n::l("当前", "Current"))
+        Tag::new("current", crate::i18n::l("Current", "当前"))
     }
 }
 
@@ -351,7 +351,7 @@ pub fn mask_key(k: &str) -> String {
 }
 
 /// Turns a display name into a config-safe id ("My Relay" -> "my-relay"; Chinese is
-/// spelled in pinyin: "中转站" -> "zhong-zhuan-zhan").
+/// spelled in pinyin, e.g. the word for "relay station" -> "zhong-zhuan-zhan").
 pub fn slug(name: &str) -> String {
     let s: String = deunicode::deunicode(name)
         .to_lowercase()

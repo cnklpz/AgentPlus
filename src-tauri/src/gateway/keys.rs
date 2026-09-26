@@ -39,7 +39,7 @@ fn stored_in(root: &Value) -> Vec<(String, String)> {
 
 fn random_key() -> Result<String> {
     let mut b = [0u8; 20];
-    getrandom::getrandom(&mut b).map_err(|e| anyhow!(tr!("生成网关密钥失败：{e}", "Couldn't create a gateway key: {e}")))?;
+    getrandom::getrandom(&mut b).map_err(|e| anyhow!(tr!("Couldn't create a gateway key: {e}", "生成网关密钥失败：{e}")))?;
     Ok(format!("agp-{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>()))
 }
 

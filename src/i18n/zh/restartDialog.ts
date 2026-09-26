@@ -1,5 +1,7 @@
 // src/components/RestartDialog.tsx
-export default {
+import type en from "../en/restartDialog";
+
+const zh: typeof en = {
   titleRestart: "正在重启 {name}",
   titleStart: "正在启动 {name}",
   doneRestart: "{name} 已重启",
@@ -18,3 +20,5 @@ export default {
   cancelStart: "取消启动",
   cancelRestart: "取消重启",
 };
+
+export default zh;

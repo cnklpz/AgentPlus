@@ -116,7 +116,7 @@ export default function App() {
   // The window starts hidden (tauri.conf.json) so the WebView's blank white never shows;
   // reveal it once the first frame is committed with theme and styles in place.
   useEffect(() => { if (inTauri) getCurrentWindow().show().catch(() => {}); }, []);
-  // Closing the window (× or Alt+F4) hides it in the tray or quits, per 设置 › 界面 › 关闭窗口时.
+  // Closing the window (× or Alt+F4) hides it in the tray or quits, per Settings › Interface › When closing the window.
   // macOS works the Mac way instead: the red button / ⌘W only hides the window, the app
   // (and its gateway) stays in the Dock, a Dock click brings it back and ⌘Q quits.
   const [closeAsk, setCloseAsk] = useState<((c: CloseChoice | null) => void) | null>(null);
@@ -153,7 +153,7 @@ export default function App() {
   }, []);
   // Re-render on a language switch, and reload what the backend rendered in the old one.
   const lang = useLang();
-  // Re-render everything that masks text when 隐私模式 is switched.
+  // Re-render everything that masks text when Privacy mode is switched.
   usePrivacy();
 
   // Per-agent page state, kept here so the detail panel and search can drive it.
@@ -163,12 +163,12 @@ export default function App() {
 
   // Agents that were not found in this environment are not shown anywhere.
   const shown = useMemo(() => agents.filter((a) => a.installed), [agents]);
-  /** Detected agents minus the ones hidden in 设置 › Agent 识别 (sidebar, search, agent pages). */
+  /** Detected agents minus the ones hidden in Settings › Agent detection (sidebar, search, agent pages). */
   const listed = useMemo(() => shown.filter((a) => !prefs.hiddenAgents.includes(a.id)), [shown, prefs.hiddenAgents]);
   const agentSt = listed.find((a) => a.id === selected) ?? listed[0];
   useEffect(() => { if (agentSt && agentSt.id !== selected) setSelected(agentSt.id); }, [agentSt?.id]);
   const projEntry = projects.find((p) => p.path === projPath);
-  /** A project opened from OpenCode's 项目 tab replaces the OpenCode page until "back". */
+  /** A project opened from OpenCode's Projects tab replaces the OpenCode page until "back". */
   const projSt = !page && agentSt?.id === "opencode" && projEntry ? projStates[projEntry.agent] : undefined;
   /** The page's subject: the selected agent, or the open project's OpenCode config. */
   const st = projSt ?? agentSt;
@@ -187,7 +187,7 @@ export default function App() {
   /** A notice that stays until the next one (a restart running in the background). */
   const showSticky = (text: string) => setToast({ id: ++toastSeq.current, text });
 
-  // A new release: look once shortly after startup (设置 › 关于 › 启动时检查更新).
+  // A new release: look once shortly after startup (Settings › About › Check for updates at startup).
   const update = useUpdate();
   // First start after an in-app update: say it is done.
   useEffect(() => {
@@ -302,7 +302,7 @@ export default function App() {
   const totalPending = pendingTotal(drafts);
   const curEnv = envs.find((e) => e.current);
 
-  // Ctrl+K opens search from anywhere; Ctrl+Shift+H switches 隐私模式.
+  // Ctrl+K opens search from anywhere; Ctrl+Shift+H switches Privacy mode.
   const togglePrivacy = () => {
     const next = { ...prefsRef.current, privacy: !prefsRef.current.privacy };
     setPrefs(next);
@@ -423,7 +423,7 @@ export default function App() {
     ? setProjStates((m) => ({ ...m, [next.id]: next }))
     : setAgents((list) => list.map((a) => (a.id === next.id ? next : a))));
 
-  /** Restarts an agent, or starts it when it isn't running; progress as chosen in 设置 › 界面. */
+  /** Restarts an agent, or starts it when it isn't running; progress as chosen in Settings › Interface. */
   const restartAgent = async (a: AgentState) => {
     const starting = !a.running;
     const showDialog = prefs.restartProgress === "dialog";

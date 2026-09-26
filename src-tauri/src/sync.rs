@@ -28,7 +28,7 @@ pub fn set_folder(path: &str) -> Result<()> {
 }
 
 fn sync_path() -> Result<PathBuf> {
-    Ok(PathBuf::from(folder().ok_or_else(|| anyhow!(crate::i18n::l("先设置同步文件夹", "Set a sync folder first")))?).join(FILE))
+    Ok(PathBuf::from(folder().ok_or_else(|| anyhow!(crate::i18n::l("Set a sync folder first", "先设置同步文件夹")))?).join(FILE))
 }
 
 fn export_agent(st: &AgentState) -> Value {
@@ -89,7 +89,7 @@ pub fn export() -> Result<String> {
     });
     // A sync client may upload the file at any moment: never let it see half of it.
     write_text_atomic(&path, &serde_json::to_string_pretty(&doc)?, TextMeta::NEW)?;
-    Ok(tr!("已导出 {n} 个供应商到 {}（不含密钥）", "Exported {n} provider(s) to {} (API keys not included)", display_path(&path)))
+    Ok(tr!("Exported {n} provider(s) to {} (API keys not included)", "已导出 {n} 个供应商到 {}（不含密钥）", display_path(&path)))
 }
 
 #[derive(Serialize)]
@@ -106,7 +106,7 @@ pub struct Suggestion {
 pub fn preview_import() -> Result<Vec<Suggestion>> {
     let path = sync_path()?;
     if !path.exists() {
-        anyhow::bail!("{}", tr!("同步文件夹里还没有 {FILE}，先在另一台设备导出", "No {FILE} in the sync folder yet. Export from another device first"));
+        anyhow::bail!("{}", tr!("No {FILE} in the sync folder yet. Export from another device first", "同步文件夹里还没有 {FILE}，先在另一台设备导出"));
     }
     let (doc, _) = read_json(&path)?;
     let mut out = vec![];
@@ -126,8 +126,8 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                     let key = format!("pu:sync-{a}-{}-{}", slug(name), slug(base));
                     out.push(Suggestion {
                         agent: a.into(),
-                        title: tr!("添加供应商「{name}」", "Add provider \"{name}\""),
-                        detail: trn!(ids.len(), "{base} · {n} 个模型 · 密钥需要在本机填写", "{base} · {n} model · API key must be entered on this device", "{base} · {n} models · API key must be entered on this device"),
+                        title: tr!("Add provider \"{name}\"", "添加供应商「{name}」"),
+                        detail: trn!(ids.len(), "{base} · {n} model · API key must be entered on this device", "{base} · {n} models · API key must be entered on this device", "{base} · {n} 个模型 · 密钥需要在本机填写"),
                         ops: vec![(key, json!({ "op": "upsert_provider", "provider": { "id": null, "name": name, "baseUrl": base, "api": api, "apiKey": null, "models": ids } }))],
                     });
                 }
@@ -146,7 +146,7 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                             .collect();
                         out.push(Suggestion {
                             agent: a.into(),
-                            title: trn!(missing.len(), "「{}」补充 {n} 个模型", "Add {n} model to \"{}\"", "Add {n} models to \"{}\"", lp.name),
+                            title: trn!(missing.len(), "Add {n} model to \"{}\"", "Add {n} models to \"{}\"", "「{}」补充 {n} 个模型", lp.name),
                             detail: crate::i18n::join(&missing.iter().filter_map(|m| m["id"].as_str()).take(6).collect::<Vec<_>>()),
                             ops,
                         });
@@ -166,7 +166,7 @@ pub fn preview_import() -> Result<Vec<Suggestion>> {
                     .collect();
                 out.push(Suggestion {
                     agent: a.into(),
-                    title: trn!(missing.len(), "Codex 模型目录补充 {n} 个自定义模型", "Add {n} custom model to the Codex model catalog", "Add {n} custom models to the Codex model catalog"),
+                    title: trn!(missing.len(), "Add {n} custom model to the Codex model catalog", "Add {n} custom models to the Codex model catalog", "Codex 模型目录补充 {n} 个自定义模型"),
                     detail: crate::i18n::join(&missing.iter().filter_map(|m| m["id"].as_str()).collect::<Vec<_>>()),
                     ops,
                 });

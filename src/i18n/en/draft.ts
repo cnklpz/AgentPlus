@@ -1,7 +1,4 @@
-import type zh from "../zh/draft";
-
-const en: typeof zh = {
+// src/draft.ts
+export default {
   copiedFrom: "Copied from {from}",
 };
-
-export default en;

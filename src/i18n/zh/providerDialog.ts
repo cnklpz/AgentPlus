@@ -1,5 +1,7 @@
 // src/components/ProviderDialog.tsx
-export default {
+import type en from "../en/providerDialog";
+
+const zh: typeof en = {
   apiResponsesHint: "OpenAI Responses 接口（/v1/responses）",
   apiGeminiHint: "Google Gemini 协议（generateContent）",
   roleDefault: "默认",
@@ -88,3 +90,5 @@ export default {
   deleted: "已删除",
   fwdNote: "选了之后只在这些转发之间按模型和权重分流、出错切换；某个转发因连续出错被熔断时，会自动跳过它。",
 };
+
+export default zh;

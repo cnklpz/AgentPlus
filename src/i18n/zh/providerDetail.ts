@@ -1,5 +1,7 @@
 // src/components/ProviderDetail.tsx
-export default {
+import type en from "../en/providerDetail";
+
+const zh: typeof en = {
   statusDeleting: "将删除（应用后生效）",
   statusNew: "新增（应用后生效）",
   statusIncompatible: "不兼容",
@@ -23,3 +25,5 @@ export default {
   enableThis: "启用这个供应商",
   deleteInUse: "正在使用，先切换到其他供应商",
 };
+
+export default zh;

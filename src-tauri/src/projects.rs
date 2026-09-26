@@ -86,7 +86,7 @@ pub fn list() -> Vec<ProjectEntry> {
 pub fn open(path: &str) -> Result<ProjectEntry> {
     let path = normalize(path);
     if path.is_empty() {
-        return Err(anyhow!(crate::i18n::l("请输入文件夹路径", "Enter a folder path")));
+        return Err(anyhow!(crate::i18n::l("Enter a folder path", "请输入文件夹路径")));
     }
     require_dir(&crate::env::resolve_path(&path))?;
     let now = chrono::Local::now().to_rfc3339();
@@ -127,7 +127,7 @@ pub fn pick_folder(owner: isize, start: Option<&str>) -> Result<Option<String>> 
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
         dlg.SetOptions(dlg.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
-        dlg.SetTitle(&HSTRING::from(crate::i18n::l("选择项目文件夹", "Choose project folder")))?;
+        dlg.SetTitle(&HSTRING::from(crate::i18n::l("Choose project folder", "选择项目文件夹")))?;
         if let Some(s) = start.map(crate::env::resolve_path).filter(|p| p.is_dir()) {
             if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(s.as_os_str()), None) {
                 let _ = dlg.SetFolder(&item);
@@ -161,7 +161,7 @@ pub fn pick_folder(_owner: isize, start: Option<&str>) -> Result<Option<String>>
   end try
 end run";
     let mut cmd = std::process::Command::new("osascript");
-    cmd.args(["-e", SCRIPT, crate::i18n::l("选择项目文件夹", "Choose project folder")]);
+    cmd.args(["-e", SCRIPT, crate::i18n::l("Choose project folder", "选择项目文件夹")]);
     if let Some(s) = start.map(crate::env::resolve_path).filter(|p| p.is_dir()) {
         cmd.arg(s);
     }
@@ -176,7 +176,7 @@ end run";
 
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn pick_folder(_owner: isize, _start: Option<&str>) -> Result<Option<String>> {
-    Err(anyhow!(crate::i18n::l("当前系统不支持选择文件夹，请直接输入路径", "Folder picking isn't supported on this system. Enter the path directly")))
+    Err(anyhow!(crate::i18n::l("Folder picking isn't supported on this system. Enter the path directly", "当前系统不支持选择文件夹，请直接输入路径")))
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
-import type zh from "../zh/serviceDialog";
-
-const en: typeof zh = {
+// src/components/ServiceDialog.tsx
+export default {
   hintResponses: "OpenAI Responses API (/v1/responses), the only one Codex supports",
   blockedGateway: "{agent} only supports the Google Gemini protocol, which the local gateway can't convert to",
   blockedProto: "{agent} only supports the {api} API; turn on \"Use local gateway\" to connect it with conversion",
@@ -25,5 +24,3 @@ const en: typeof zh = {
   noneRequired: "You can leave them all unchecked: it's saved to the provider library only, and you can add it anytime.",
   footNote: "The provider library is saved right away; changes to agents go to \"Pending changes\" first.",
 };
-
-export default en;

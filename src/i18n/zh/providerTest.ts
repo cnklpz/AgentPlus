@@ -1,5 +1,7 @@
 // src/components/ProviderTest.tsx
-export default {
+import type en from "../en/providerTest";
+
+const zh: typeof en = {
   noSource: "没有可用的地址和密钥",
   title: "测试供应商",
   hint: "发一条很短的真实请求（关闭思考），会用掉几个 token",
@@ -13,3 +15,5 @@ export default {
   noText: "请求成功，模型没有返回文字（推理模型可能把额度用在了思考上）",
   tokens: "{input} → {output} tokens",
 };
+
+export default zh;

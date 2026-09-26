@@ -1,5 +1,7 @@
 // src/components/ServiceDetail.tsx
-export default {
+import type en from "../en/serviceDetail";
+
+const zh: typeof en = {
   builtinNoDelete: "内置供应商不能删除",
   inUse: "正在使用，先在 Codex 里切换到别的供应商",
   detailsAria: "{name} 详情",
@@ -24,3 +26,5 @@ export default {
   viaGatewayTitle: "经本地网关转发：可以转换协议、统一密钥、查看请求记录",
   viaGateway: "经网关",
 };
+
+export default zh;

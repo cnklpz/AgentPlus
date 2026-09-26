@@ -1,6 +1,3 @@
-import type zh from "../zh/api";
-
-const en: typeof zh = {
+// src/api.ts
+export default {
 };
-
-export default en;

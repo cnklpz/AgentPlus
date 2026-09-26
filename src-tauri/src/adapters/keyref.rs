@@ -42,9 +42,9 @@ pub(super) fn has_key(k: &str) -> bool {
 /// Where the key comes from, for the provider details; `file` holds the entries.
 pub(super) fn key_note(k: &str, file: &str) -> String {
     match env_ref(k) {
-        Some(var) => if resolve_key(k).is_some() { tr!("环境变量 ${{{var}}}（已设置）", "Environment variable ${{{var}}} (set)") } else { tr!("环境变量 ${{{var}}}（未设置）", "Environment variable ${{{var}}} (not set)") },
-        None if k.trim().is_empty() => l("未填写", "Not set").into(),
-        None => tr!("明文保存在 {file}", "Stored in plain text in {file}"),
+        Some(var) => if resolve_key(k).is_some() { tr!("Environment variable ${{{var}}} (set)", "环境变量 ${{{var}}}（已设置）") } else { tr!("Environment variable ${{{var}}} (not set)", "环境变量 ${{{var}}}（未设置）") },
+        None if k.trim().is_empty() => l("Not set", "未填写").into(),
+        None => tr!("Stored in plain text in {file}", "明文保存在 {file}"),
     }
 }
 
@@ -55,7 +55,7 @@ pub(super) fn host(base: &str) -> String {
 
 /// Changing the models of a disabled provider (its entries are parked in the store).
 pub(super) fn require_enabled(g: &Group, enabled: bool) -> Result<()> {
-    if enabled { Ok(()) } else { Err(anyhow!(tr!("供应商「{}」已停用，先启用再调整模型", "Provider \"{}\" is disabled; enable it before changing its models", g.name))) }
+    if enabled { Ok(()) } else { Err(anyhow!(tr!("Provider \"{}\" is disabled; enable it before changing its models", "供应商「{}」已停用，先启用再调整模型", g.name))) }
 }
 
 /// Sets a string field of an entry, or removes it when `v` is empty (an entry without a key

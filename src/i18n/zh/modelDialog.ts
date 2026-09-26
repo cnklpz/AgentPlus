@@ -1,5 +1,7 @@
 // src/components/ModelDialog.tsx
-export default {
+import type en from "../en/modelDialog";
+
+const zh: typeof en = {
   editTitle: "编辑模型",
   editHead: "编辑模型 {id}",
   addHead: "添加模型到 {agent}",
@@ -30,3 +32,5 @@ export default {
   matchNothingNew: "「{id}」的资料里没有可补的项",
   matchNone: "没找到这个模型的资料",
 };
+
+export default zh;

@@ -1,5 +1,7 @@
 // src/components/MaintenanceTab.tsx
-export default {
+import type en from "../en/maintenanceTab";
+
+const zh: typeof en = {
   healthTitle: "健康检查",
   recheck: "重新检查",
   checking: "正在检查…",
@@ -17,3 +19,5 @@ export default {
   cleaning: "清理中…",
   clean: "清理",
 };
+
+export default zh;

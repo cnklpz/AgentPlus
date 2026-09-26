@@ -160,10 +160,10 @@ fn model_of(e: &Value, visible: bool) -> Model {
     let ctx = e.get("maxInputTokens").and_then(|x| x.as_u64());
     let mut tags = vec![];
     if e.get("supportsImages").and_then(|x| x.as_bool()) == Some(true) {
-        tags.push(Tag::new("cap:image", l("图片", "Images")));
+        tags.push(Tag::new("cap:image", l("Images", "图片")));
     }
     if e.get("supportsReasoning").and_then(|x| x.as_bool()) == Some(true) {
-        tags.push(Tag::new("cap:reasoning", l("推理", "Reasoning")));
+        tags.push(Tag::new("cap:reasoning", l("Reasoning", "推理")));
     }
     let name = str_field(e, "name");
     Model {
@@ -204,7 +204,7 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
             Kv::mono("vendor", if g.key.2.is_empty() { "-".into() } else { g.key.2.clone() }),
             Kv::mono("url", url_of(&g.key.0)),
             Kv::text(lbl::api_key(), keyref::key_note(&g.key.1, "models.json")),
-            Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { l("已停用 · 条目暂存在 AgentPlus", "Disabled · entries parked in AgentPlus") }),
+            Kv::text(lbl::status(), if enabled { l("Enabled", "已启用") } else { l("Disabled · entries parked in AgentPlus", "已停用 · 条目暂存在 AgentPlus") }),
         ],
         editable: true,
         api: "chat".into(),
@@ -236,17 +236,17 @@ pub fn state(inst: &Install) -> AgentState {
         st.providers.push(provider_of(&g, &entries, &parked, avail.as_ref()));
     }
     st.current = vec![
-        Kv::mono(lbl::default_model(), default_model().unwrap_or_else(|| l("-（CodeBuddy 默认）", "- (CodeBuddy default)").into())),
-        Kv::text(lbl::custom_models(), tr!("{} 个", "{}", entries.len())),
+        Kv::mono(lbl::default_model(), default_model().unwrap_or_else(|| l("- (CodeBuddy default)", "-（CodeBuddy 默认）").into())),
+        Kv::text(lbl::custom_models(), tr!("{}", "{} 个", entries.len())),
         Kv::text("availableModels", match &avail {
-            Some(a) => tr!("{} 个（只显示列出的模型）", "{} (only listed models are shown)", a.len()),
-            None => l("未设置（全部显示）", "Not set (all shown)").into(),
+            Some(a) => tr!("{} (only listed models are shown)", "{} 个（只显示列出的模型）", a.len()),
+            None => l("Not set (all shown)", "未设置（全部显示）").into(),
         }),
         Kv::mono(lbl::config_file(), display_path(&models_path())),
     ];
-    st.notes.push(l("CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；其他协议可经 AgentPlus 本地网关转换后接入。", "CodeBuddy custom models only support the OpenAI Chat Completions API; other protocols can be converted through the AgentPlus local gateway.").into());
-    st.notes.push(l("models.json 改动约 1 秒后自动生效（CLI 与 IDE 共用）。", "Changes to models.json take effect in about a second (shared by the CLI and the IDE).").into());
-    st.notes.push(l("项目里的 availableModels 会整体覆盖用户列表。", "A project's availableModels replaces the user list entirely.").into());
+    st.notes.push(l("CodeBuddy custom models only support the OpenAI Chat Completions API; other protocols can be converted through the AgentPlus local gateway.", "CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；其他协议可经 AgentPlus 本地网关转换后接入。").into());
+    st.notes.push(l("Changes to models.json take effect in about a second (shared by the CLI and the IDE).", "models.json 改动约 1 秒后自动生效（CLI 与 IDE 共用）。").into());
+    st.notes.push(l("A project's availableModels replaces the user list entirely.", "项目里的 availableModels 会整体覆盖用户列表。").into());
     st
 }
 
@@ -254,7 +254,7 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (cfg, _, _) = load_models()?;
     let g = groups_of(&entries_of(&cfg), &parked_of(&store::load())).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
     if g.key.0.is_empty() {
-        return Err(anyhow!(tr!("供应商 {id} 没有 url", "Provider {id} has no url")));
+        return Err(anyhow!(tr!("Provider {id} has no url", "供应商 {id} 没有 url")));
     }
     Ok((g.key.0, resolve_key(&g.key.1), "chat".into()))
 }
@@ -263,7 +263,7 @@ fn chat_only(api: &str) -> Result<()> {
     if api == "chat" {
         Ok(())
     } else {
-        Err(anyhow!(tr!("CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；{api} 协议的中转请先接入 AgentPlus 本地网关，再以 Chat 接口添加", "CodeBuddy custom models only support the OpenAI Chat Completions API; connect {api} relays to the AgentPlus local gateway first, then add them with the Chat API")))
+        Err(anyhow!(tr!("CodeBuddy custom models only support the OpenAI Chat Completions API; connect {api} relays to the AgentPlus local gateway first, then add them with the Chat API", "CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；{api} 协议的中转请先接入 AgentPlus 本地网关，再以 Chat 接口添加")))
     }
 }
 
@@ -298,7 +298,7 @@ impl Work {
         match self.owner_of(mid) {
             Some(k) if k != g.key => {
                 let other = self.groups.iter().find(|x| x.key == k).map(|x| x.name.clone()).unwrap_or_default();
-                Err(anyhow!(tr!("模型 ID {mid} 已被供应商「{other}」使用；CodeBuddy 的模型 ID 必须唯一", "Model ID {mid} is already used by provider \"{other}\"; CodeBuddy model IDs must be unique")))
+                Err(anyhow!(tr!("Model ID {mid} is already used by provider \"{other}\"; CodeBuddy model IDs must be unique", "模型 ID {mid} 已被供应商「{other}」使用；CodeBuddy 的模型 ID 必须唯一")))
             }
             _ => Ok(()),
         }
@@ -340,7 +340,7 @@ impl Work {
         self.entries.push(Self::new_entry(&g.key, mid, name, context));
         self.show(mid);
         let file = self.file.clone();
-        self.diff.push(&file, tr!("models + {mid}（{}）", "models + {mid} ({})", g.name), true);
+        self.diff.push(&file, tr!("models + {mid} ({})", "models + {mid}（{}）", g.name), true);
         Ok(())
     }
 
@@ -359,7 +359,7 @@ impl Work {
                         let vendor = p.name.trim().to_string();
                         let models = clean_ids(&p.models);
                         if models.is_empty() {
-                            return Err(anyhow!(l("CodeBuddy 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型", "Each CodeBuddy model entry carries its own base URL and API key: add at least one model when creating a provider")));
+                            return Err(anyhow!(l("Each CodeBuddy model entry carries its own base URL and API key: add at least one model when creating a provider", "CodeBuddy 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型")));
                         }
                         let key: Key = (base.clone(), new_key.clone().unwrap_or_default(), vendor.clone());
                         let g = match self.groups.iter().find(|g| g.key == key) {
@@ -383,7 +383,7 @@ impl Work {
                         // Models the provider already has are left as they are.
                         let added: Vec<String> = models.iter().filter(|m| self.owner_of(m).is_none()).cloned().collect();
                         if !added.is_empty() {
-                            self.diff.push(&file, trn!(added.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), msg::key_suffix(new_key.as_deref())), true);
+                            self.diff.push(&file, trn!(added.len(), "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", "+ 「{vendor}」{n} 个模型（{}{}）", url_of(&base), msg::key_suffix(new_key.as_deref())), true);
                         }
                         for m in &added {
                             self.entries.push(Self::new_entry(&key, m, None, None));
@@ -404,16 +404,16 @@ impl Work {
                             return Ok(());
                         }
                         if self.groups.iter().any(|o| o.id != g.id && o.key == key) {
-                            return Err(anyhow!(l("已经有名称、地址和密钥都相同的供应商", "A provider with the same name, base URL and API key already exists")));
+                            return Err(anyhow!(l("A provider with the same name, base URL and API key already exists", "已经有名称、地址和密钥都相同的供应商")));
                         }
                         if key.0 != g.key.0 {
-                            self.diff.push(&file, tr!("「{}」所有模型 url = {}", "\"{}\" all models url = {}", g.name, url_of(&key.0)), true);
+                            self.diff.push(&file, tr!("\"{}\" all models url = {}", "「{}」所有模型 url = {}", g.name, url_of(&key.0)), true);
                         }
                         if key.1 != g.key.1 {
-                            self.diff.push(&file, tr!("「{}」所有模型 apiKey = {}", "\"{}\" all models apiKey = {}", g.name, mask_key(&key.1)), true);
+                            self.diff.push(&file, tr!("\"{}\" all models apiKey = {}", "「{}」所有模型 apiKey = {}", g.name, mask_key(&key.1)), true);
                         }
                         if key.2 != g.key.2 {
-                            self.diff.push(&file, tr!("「{}」所有模型 vendor = {}", "\"{}\" all models vendor = {}", g.name, key.2), true);
+                            self.diff.push(&file, tr!("\"{}\" all models vendor = {}", "「{}」所有模型 vendor = {}", g.name, key.2), true);
                         }
                         // Only the changed fields: no `"apiKey": ""` / `"vendor": ""` appears.
                         let set = |e: &mut Value| {
@@ -450,7 +450,7 @@ impl Work {
                 let n = self.parked.len();
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
                 let label = if gone.is_empty() && n != self.parked.len() { STORE_LABEL.to_string() } else { file.clone() };
-                self.diff.push(&label, trn!(gone.len().max(n - self.parked.len()), "- 「{}」（{n} 个模型，含地址和密钥）", "- \"{}\" ({n} model, with base URL and API key)", "- \"{}\" ({n} models, with base URL and API key)", g.name), false);
+                self.diff.push(&label, trn!(gone.len().max(n - self.parked.len()), "- \"{}\" ({n} model, with base URL and API key)", "- \"{}\" ({n} models, with base URL and API key)", "- 「{}」（{n} 个模型，含地址和密钥）", g.name), false);
                 self.groups.retain(|x| x.id != g.id);
             }
             Op::SetProviderEnabled { provider, enabled } => {
@@ -459,13 +459,13 @@ impl Work {
                     let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false));
                     self.parked = keep;
                     if !back.is_empty() {
-                        self.diff.push(&file, trn!(back.len(), "+ 「{}」{n} 个模型（从 AgentPlus 恢复）", "+ \"{}\" {n} model (restored from AgentPlus)", "+ \"{}\" {n} models (restored from AgentPlus)", g.name), true);
+                        self.diff.push(&file, trn!(back.len(), "+ \"{}\" {n} model (restored from AgentPlus)", "+ \"{}\" {n} models (restored from AgentPlus)", "+ 「{}」{n} 个模型（从 AgentPlus 恢复）", g.name), true);
                     }
                     for p in back {
                         let Some(e) = p.get("entry").cloned() else { continue };
                         let mid = str_field(&e, "id");
                         if self.owner_of(&mid).is_some() {
-                            return Err(anyhow!(tr!("模型 ID {mid} 已被其他供应商使用，无法恢复「{}」", "Model ID {mid} is used by another provider; can't restore \"{}\"", g.name)));
+                            return Err(anyhow!(tr!("Model ID {mid} is used by another provider; can't restore \"{}\"", "模型 ID {mid} 已被其他供应商使用，无法恢复「{}」", g.name)));
                         }
                         if p.get("visible").and_then(|x| x.as_bool()).unwrap_or(true) {
                             self.show(&mid);
@@ -476,7 +476,7 @@ impl Work {
                     let (out, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.entries).into_iter().partition(|e| key_of(e) == g.key);
                     self.entries = keep;
                     if !out.is_empty() {
-                        self.diff.push(&file, trn!(out.len(), "- 「{}」{n} 个模型（暂存在 AgentPlus，可恢复）", "- \"{}\" {n} model (parked in AgentPlus, restorable)", "- \"{}\" {n} models (parked in AgentPlus, restorable)", g.name), false);
+                        self.diff.push(&file, trn!(out.len(), "- \"{}\" {n} model (parked in AgentPlus, restorable)", "- \"{}\" {n} models (parked in AgentPlus, restorable)", "- 「{}」{n} 个模型（暂存在 AgentPlus，可恢复）", g.name), false);
                     }
                     for e in out {
                         let mid = str_field(&e, "id");
@@ -490,7 +490,7 @@ impl Work {
                 let g = self.group(provider)?;
                 self.require_enabled(&g)?;
                 if !self.entries.iter().any(|e| key_of(e) == g.key && &str_field(e, "id") == model) {
-                    return Err(anyhow!(tr!("「{}」里没有模型 {model}", "\"{}\" has no model {model}", g.name)));
+                    return Err(anyhow!(tr!("\"{}\" has no model {model}", "「{}」里没有模型 {model}", g.name)));
                 }
                 let now = self.avail.as_ref().map(|a| a.contains(model)).unwrap_or(true);
                 if now == *visible {
@@ -503,10 +503,10 @@ impl Work {
                     if self.avail.is_none() {
                         // First hide: create the list with every custom model that shows today.
                         self.avail = Some(self.entries.iter().map(|e| str_field(e, "id")).collect());
-                        self.diff.push(&file, l("+ availableModels（之后只显示列出的模型；内置模型如需显示请手动加入）", "+ availableModels (from now on only listed models show; add built-in models by hand if you want them)"), true);
+                        self.diff.push(&file, l("+ availableModels (from now on only listed models show; add built-in models by hand if you want them)", "+ availableModels（之后只显示列出的模型；内置模型如需显示请手动加入）"), true);
                     }
                     self.unlist(model);
-                    self.diff.push(&file, tr!("availableModels - {model}（隐藏，条目保留）", "availableModels - {model} (hidden, entry kept)"), false);
+                    self.diff.push(&file, tr!("availableModels - {model} (hidden, entry kept)", "availableModels - {model}（隐藏，条目保留）"), false);
                 }
             }
             Op::UpsertModel { provider, model: m } => {
@@ -565,7 +565,7 @@ impl Work {
                 self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &str_field(e, "id") == model).unwrap_or(false));
                 if self.entries.len() + self.parked.len() != n {
                     self.unlist(model);
-                    self.diff.push(&file, tr!("models - {model}（{}，删除）", "models - {model} ({}, deleted)", g.name), false);
+                    self.diff.push(&file, tr!("models - {model} ({}, deleted)", "models - {model}（{}，删除）", g.name), false);
                 }
             }
             Op::SetProviderModels { provider, models } => {
@@ -573,7 +573,7 @@ impl Work {
                 self.require_enabled(&g)?;
                 let want = clean_ids(models);
                 if want.is_empty() {
-                    return Err(anyhow!(l("至少保留一个模型；不要这个供应商的话请直接删除", "Keep at least one model; delete the provider if you don't need it")));
+                    return Err(anyhow!(l("Keep at least one model; delete the provider if you don't need it", "至少保留一个模型；不要这个供应商的话请直接删除")));
                 }
                 for m in &want {
                     self.check_free(&g, m)?;
@@ -582,7 +582,7 @@ impl Work {
                 self.entries.retain(|e| key_of(e) != g.key || want.contains(&str_field(e, "id")));
                 for m in gone {
                     self.unlist(&m);
-                    self.diff.push(&file, tr!("models - {m}（{}）", "models - {m} ({})", g.name), false);
+                    self.diff.push(&file, tr!("models - {m} ({})", "models - {m}（{}）", g.name), false);
                 }
                 for m in &want {
                     if self.owner_of(m).is_none() {
@@ -590,7 +590,7 @@ impl Work {
                     }
                 }
             }
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("CodeBuddy 的自定义模型可以同时启用，在 CodeBuddy 里切换模型", "CodeBuddy custom models can all be enabled at once; switch models inside CodeBuddy"))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("CodeBuddy custom models can all be enabled at once; switch models inside CodeBuddy", "CodeBuddy 的自定义模型可以同时启用，在 CodeBuddy 里切换模型"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),

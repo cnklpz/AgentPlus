@@ -74,7 +74,7 @@ fn open_ro(p: &Path) -> Result<Connection> {
         return open_snapshot(p);
     }
     Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .with_context(|| tr!("打开 {} 失败", "Failed to open {}", p.display()))
+        .with_context(|| tr!("Failed to open {}", "打开 {} 失败", p.display()))
 }
 
 /// SQLite cannot lock over the WSL file share, so WSL databases are read from a
@@ -96,20 +96,20 @@ fn open_snapshot(p: &Path) -> Result<Connection> {
         }
     }
     fs::create_dir_all(&dir)?;
-    let name = p.file_name().ok_or_else(|| anyhow!(l("路径无效", "Invalid path")))?;
+    let name = p.file_name().ok_or_else(|| anyhow!(l("Invalid path", "路径无效")))?;
     let dst = dir.join(name);
     let dst_wal = wal_of(&dst);
-    fs::copy(p, &dst).with_context(|| tr!("复制 {} 失败", "Failed to copy {}", p.display()))?;
+    fs::copy(p, &dst).with_context(|| tr!("Failed to copy {}", "复制 {} 失败", p.display()))?;
     if wal_of(p).exists() {
         fs::copy(wal_of(p), &dst_wal)?;
     }
-    Connection::open(&dst).with_context(|| tr!("打开 {} 失败", "Failed to open {}", dst.display()))
+    Connection::open(&dst).with_context(|| tr!("Failed to open {}", "打开 {} 失败", dst.display()))
 }
 
 /// Writes need real locks; refuse them for WSL.
 fn deny_wsl() -> Result<()> {
     if crate::env::is_wsl() {
-        return Err(anyhow!(l("WSL 里的会话数据库目前只读：Windows 侧无法对 WSL 文件加锁，写入不安全", "Session databases in WSL are read-only for now: Windows can't lock files in WSL, so writing isn't safe")));
+        return Err(anyhow!(l("Session databases in WSL are read-only for now: Windows can't lock files in WSL, so writing isn't safe", "WSL 里的会话数据库目前只读：Windows 侧无法对 WSL 文件加锁，写入不安全")));
     }
     Ok(())
 }
@@ -218,20 +218,20 @@ pub fn list() -> Result<SessionList> {
         let kind = kind_of(&source, &tsrc);
         let mut hidden = vec![];
         if archived != 0 {
-            hidden.push(l("已归档", "Archived").to_string());
+            hidden.push(l("Archived", "已归档").to_string());
         }
         if !matches!(kind, "user" | "automation") {
-            hidden.push(l("子代理 / 审查 / exec 会话不进侧边栏", "Subagent / review / exec sessions don't appear in the sidebar").to_string());
+            hidden.push(l("Subagent / review / exec sessions don't appear in the sidebar", "子代理 / 审查 / exec 会话不进侧边栏").to_string());
         } else if preview.is_empty() {
-            hidden.push(l("没有内容，桌面端不显示", "Empty; the desktop app doesn't show it").to_string());
+            hidden.push(l("Empty; the desktop app doesn't show it", "没有内容，桌面端不显示").to_string());
         }
         if !provider.is_empty() && provider != cur {
-            hidden.push(tr!("属于「{provider}」，当前是「{cur}」：最近列表和归档里可能看不到", "Belongs to \"{provider}\" but the current provider is \"{cur}\": may not appear in Recent or Archived"));
+            hidden.push(tr!("Belongs to \"{provider}\" but the current provider is \"{cur}\": may not appear in Recent or Archived", "属于「{provider}」，当前是「{cur}」：最近列表和归档里可能看不到"));
         }
         if meta.is_none() {
-            hidden.push(l("会话文件缺失，无法恢复", "Session file is missing and can't be restored").to_string());
+            hidden.push(l("Session file is missing and can't be restored", "会话文件缺失，无法恢复").to_string());
         }
-        let shown_title = [name, title, preview].into_iter().find(|s| !s.trim().is_empty()).unwrap_or_else(|| l("(无标题)", "(Untitled)").into());
+        let shown_title = [name, title, preview].into_iter().find(|s| !s.trim().is_empty()).unwrap_or_else(|| l("(Untitled)", "(无标题)").into());
         *counts.entry(provider.clone()).or_default() += 1;
         sessions.push(SessionRow {
             id,
@@ -258,7 +258,7 @@ pub fn list() -> Result<SessionList> {
         targets: defined_providers(),
         codex_running: codex_busy(),
         writable,
-        note: if writable { None } else if crate::env::is_wsl() { Some(l("WSL 里的会话只能浏览：Windows 侧无法对 WSL 里的数据库加锁，修复、迁移和清理暂不提供。", "Sessions in WSL can only be browsed: Windows can't lock the databases in WSL, so repair, migration and cleanup aren't available.").into()) } else { Some(tr!("state_5.sqlite 版本是 {version:?}，不是已验证的 {STATE_VERSION}，只读显示。", "state_5.sqlite is version {version:?}, not the verified {STATE_VERSION}; shown read-only.")) },
+        note: if writable { None } else if crate::env::is_wsl() { Some(l("Sessions in WSL can only be browsed: Windows can't lock the databases in WSL, so repair, migration and cleanup aren't available.", "WSL 里的会话只能浏览：Windows 侧无法对 WSL 里的数据库加锁，修复、迁移和清理暂不提供。").into()) } else { Some(tr!("state_5.sqlite is version {version:?}, not the verified {STATE_VERSION}; shown read-only.", "state_5.sqlite 版本是 {version:?}，不是已验证的 {STATE_VERSION}，只读显示。")) },
         last_repair: last_repair(),
     })
 }
@@ -304,37 +304,37 @@ pub fn health() -> Result<Vec<HealthItem>> {
     let state = open_ro(&state_path())?;
     let v = migration_version(&state);
     out.push(if v == Some(STATE_VERSION) {
-        item("schema", l("数据库版本", "Database version"), "ok", tr!("state_5 v{STATE_VERSION}，已验证", "state_5 v{STATE_VERSION}, verified"))
+        item("schema", l("Database version", "数据库版本"), "ok", tr!("state_5 v{STATE_VERSION}, verified", "state_5 v{STATE_VERSION}，已验证"))
     } else {
-        item("schema", l("数据库版本", "Database version"), "warn", tr!("state_5 版本 {v:?} 未验证，写入类操作已禁用", "state_5 version {v:?} is unverified; write operations are disabled"))
+        item("schema", l("Database version", "数据库版本"), "warn", tr!("state_5 version {v:?} is unverified; write operations are disabled", "state_5 版本 {v:?} 未验证，写入类操作已禁用"))
     });
 
     // Integrity (quick_check is read-only)
     let qc: String = state.query_row("PRAGMA quick_check", [], |r| r.get(0)).unwrap_or_else(|e| e.to_string());
-    out.push(if qc == "ok" { item("integrity", l("会话索引完整性", "Session index integrity"), "ok", l("quick_check 通过", "quick_check passed")) } else { item("integrity", l("会话索引完整性", "Session index integrity"), "error", qc) });
+    out.push(if qc == "ok" { item("integrity", l("Session index integrity", "会话索引完整性"), "ok", l("quick_check passed", "quick_check 通过")) } else { item("integrity", l("Session index integrity", "会话索引完整性"), "error", qc) });
 
     // Rollout files
     let list = list()?;
     let missing = list.sessions.iter().filter(|s| !s.rollout_exists).count();
     out.push(if missing == 0 {
-        item("rollout", l("会话文件", "Session files"), "ok", tr!("{} 个会话的文件都在", "Files for all {} session(s) are present", list.sessions.len()))
+        item("rollout", l("Session files", "会话文件"), "ok", tr!("Files for all {} session(s) are present", "{} 个会话的文件都在", list.sessions.len()))
     } else {
-        item("rollout", l("会话文件", "Session files"), "error", tr!("{missing} 个会话的文件不见了，无法恢复", "Files for {missing} session(s) are missing and can't be restored"))
+        item("rollout", l("Session files", "会话文件"), "error", tr!("Files for {missing} session(s) are missing and can't be restored", "{missing} 个会话的文件不见了，无法恢复"))
     });
 
     // Other providers
-    let others: Vec<String> = list.providers.iter().filter(|(p, _)| p != &list.current_provider && !p.is_empty()).map(|(p, n)| tr!("{p} {n} 个", "{p}: {n}")).collect();
+    let others: Vec<String> = list.providers.iter().filter(|(p, _)| p != &list.current_provider && !p.is_empty()).map(|(p, n)| tr!("{p}: {n}", "{p} {n} 个")).collect();
     out.push(if others.is_empty() {
-        item("provider", l("会话供应商", "Session providers"), "ok", tr!("全部属于当前供应商「{}」", "All belong to the current provider \"{}\"", list.current_provider))
+        item("provider", l("Session providers", "会话供应商"), "ok", tr!("All belong to the current provider \"{}\"", "全部属于当前供应商「{}」", list.current_provider))
     } else {
-        item("provider", l("会话供应商", "Session providers"), "warn", tr!("{}，切换后在最近列表和归档里可能看不到，可在「会话」里一键修复", "{}. After switching they may not appear in Recent or Archived; fix them in one click under Sessions", crate::i18n::join(&others)))
+        item("provider", l("Session providers", "会话供应商"), "warn", tr!("{}. After switching they may not appear in Recent or Archived; fix them in one click under Sessions", "{}，切换后在最近列表和归档里可能看不到，可在「会话」里一键修复", crate::i18n::join(&others)))
     });
 
     // Providers used by sessions but missing from config
     let defined = defined_providers();
     let undefined: Vec<String> = list.providers.iter().map(|(p, _)| p.clone()).filter(|p| !p.is_empty() && !defined.contains(p)).collect();
     if !undefined.is_empty() {
-        out.push(item("undefined", l("缺少供应商配置", "Missing provider config"), "warn", tr!("会话用到的 {} 在 config.toml 里没有定义，恢复这些会话会失败", "{} used by sessions is not defined in config.toml; resuming those sessions will fail", crate::i18n::join(&undefined))));
+        out.push(item("undefined", l("Missing provider config", "缺少供应商配置"), "warn", tr!("{} used by sessions is not defined in config.toml; resuming those sessions will fail", "会话用到的 {} 在 config.toml 里没有定义，恢复这些会话会失败", crate::i18n::join(&undefined))));
     }
 
     // Projection progress (thread_history)
@@ -353,18 +353,18 @@ pub fn health() -> Result<Vec<HealthItem>> {
             }
         }
         out.push(if behind == 0 {
-            item("projection", l("历史投影", "History projection"), "ok", l("所有会话的历史都已同步", "History for all sessions is synced"))
+            item("projection", l("History projection", "历史投影"), "ok", l("History for all sessions is synced", "所有会话的历史都已同步"))
         } else {
-            item("projection", l("历史投影", "History projection"), "info", tr!("{behind} 个会话的历史还没同步完，打开该会话时 Codex 会继续处理", "History for {behind} session(s) isn't fully synced yet; Codex continues when the session is opened"))
+            item("projection", l("History projection", "历史投影"), "info", tr!("History for {behind} session(s) isn't fully synced yet; Codex continues when the session is opened", "{behind} 个会话的历史还没同步完，打开该会话时 Codex 会继续处理"))
         });
     }
 
     // Leftover temp files
     let tmps = tmp_leftovers();
     out.push(if tmps.is_empty() {
-        item("tmp", l("残留临时文件", "Leftover temp files"), "ok", l("没有", "None"))
+        item("tmp", l("Leftover temp files", "残留临时文件"), "ok", l("None", "没有"))
     } else {
-        item("tmp", l("残留临时文件", "Leftover temp files"), "warn", tr!("{} 个中断写入留下的文件，共 {}", "{} file(s) left by interrupted writes, {} in total", tmps.len(), mb(tmps.iter().map(|t| t.1).sum())))
+        item("tmp", l("Leftover temp files", "残留临时文件"), "warn", tr!("{} file(s) left by interrupted writes, {} in total", "{} 个中断写入留下的文件，共 {}", tmps.len(), mb(tmps.iter().map(|t| t.1).sum())))
     });
 
     // Global state JSON
@@ -372,17 +372,17 @@ pub fn health() -> Result<Vec<HealthItem>> {
     if gs.exists() {
         let ok = fs::read_to_string(&gs).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()).is_some();
         out.push(if ok {
-            item("globalstate", l("桌面端界面状态", "Desktop UI state"), "ok", tr!("可以解析，{}", "Parses fine, {}", mb(file_len(&gs))))
+            item("globalstate", l("Desktop UI state", "桌面端界面状态"), "ok", tr!("Parses fine, {}", "可以解析，{}", mb(file_len(&gs))))
         } else {
-            item("globalstate", l("桌面端界面状态", "Desktop UI state"), "error", l("无法解析，可从 .bak 恢复", "Can't be parsed; restore it from .bak"))
+            item("globalstate", l("Desktop UI state", "桌面端界面状态"), "error", l("Can't be parsed; restore it from .bak", "无法解析，可从 .bak 恢复"))
         });
     }
 
     // Logs size
     let logs = home.join(LOGS_DB);
     if let Ok(db) = open_ro(&logs) {
-        out.push(item("logs", l("日志库", "Log database"), if file_len(&logs) > 50 * 1_048_576 { "warn" } else { "ok" },
-            tr!("{}，其中可回收空闲 {}；可在下方清理", "{}, of which {} is reclaimable free space; clean it up below", mb(file_len(&logs)), mb(free_bytes(&db)))));
+        out.push(item("logs", l("Log database", "日志库"), if file_len(&logs) > 50 * 1_048_576 { "warn" } else { "ok" },
+            tr!("{}, of which {} is reclaimable free space; clean it up below", "{}，其中可回收空闲 {}；可在下方清理", mb(file_len(&logs)), mb(free_bytes(&db)))));
     }
     Ok(out)
 }
@@ -466,7 +466,7 @@ fn copy_db(p: &Path, dir: &Path) -> Result<()> {
 pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
     deny_wsl()?;
     if codex_busy() {
-        return Err(anyhow!(l("Codex 正在运行，请先退出 Codex（包括 CLI）再清理", "Codex is running. Quit Codex (including the CLI) before cleaning up")));
+        return Err(anyhow!(l("Codex is running. Quit Codex (including the CLI) before cleaning up", "Codex 正在运行，请先退出 Codex（包括 CLI）再清理")));
     }
     let before = disk_usage();
     let dir = new_backup_dir("codex-cleanup")?;
@@ -476,7 +476,7 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
         for (p, _) in &tmps {
             fs::rename(p, dir.join(p.file_name().unwrap())).or_else(|_| fs::copy(p, dir.join(p.file_name().unwrap())).and_then(|_| fs::remove_file(p)))?;
         }
-        done.push(tr!("移走 {} 个临时文件", "moved {} temp file(s)", tmps.len()));
+        done.push(tr!("moved {} temp file(s)", "移走 {} 个临时文件", tmps.len()));
     }
     if let Some(days) = logs_days.filter(|_| codex_home().join(LOGS_DB).is_file()) {
         let logs = codex_home().join(LOGS_DB);
@@ -484,7 +484,7 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
         let c = Connection::open(&logs)?;
         let n = c.execute("DELETE FROM logs WHERE ts < ?1", params![cutoff(days)])?;
         c.execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
-        done.push(tr!("删除 {n} 条 {days} 天前的日志并压缩", "deleted {n} log entries older than {days} days and compacted"));
+        done.push(tr!("deleted {n} log entries older than {days} days and compacted", "删除 {n} 条 {days} 天前的日志并压缩"));
     }
     if wal {
         let mut n = 0;
@@ -495,10 +495,10 @@ pub fn cleanup(tmp: bool, logs_days: Option<u32>, wal: bool) -> Result<String> {
                 n += 1;
             }
         }
-        done.push(tr!("截断 {n} 个 WAL 文件", "truncated {n} WAL file(s)"));
+        done.push(tr!("truncated {n} WAL file(s)", "截断 {n} 个 WAL 文件"));
     }
     let after = disk_usage();
-    Ok(tr!("{}，释放 {}（备份在 {}）", "{}; freed {} (backup in {})", done.join(l("，", ", ")), mb(before.saturating_sub(after)), display_path(&dir)))
+    Ok(tr!("{}; freed {} (backup in {})", "{}，释放 {}（备份在 {}）", done.join(l(", ", "，")), mb(before.saturating_sub(after)), display_path(&dir)))
 }
 
 // ---------------------------------------------------------------- repair
@@ -589,7 +589,7 @@ fn rewrite_first_line(path: &Path, edit: impl Fn(&str) -> Option<String>) -> Res
     })();
     if let Err(e) = written {
         let _ = fs::remove_file(&tmp);
-        return Err(e).with_context(|| tr!("改写 {} 失败", "Failed to rewrite {}", path.display()));
+        return Err(e).with_context(|| tr!("Failed to rewrite {}", "改写 {} 失败", path.display()));
     }
     Ok(Some(body))
 }
@@ -638,19 +638,19 @@ fn write_repair_log(content: &str) -> Result<PathBuf> {
             Err(e) => return Err(e.into()),
         }
     }
-    Err(anyhow!(l("无法创建修复记录", "Couldn't create the repair log")))
+    Err(anyhow!(l("Couldn't create the repair log", "无法创建修复记录")))
 }
 
 /// Moves sessions to `target` provider (DB row + every rollout segment's session_meta).
 pub fn repair(ids: &[String], target: &str) -> Result<String> {
     deny_wsl()?;
     if codex_busy() {
-        return Err(anyhow!(l("Codex 正在运行，请先退出 Codex（包括 CLI）再修复", "Codex is running. Quit Codex (including the CLI) before repairing")));
+        return Err(anyhow!(l("Codex is running. Quit Codex (including the CLI) before repairing", "Codex 正在运行，请先退出 Codex（包括 CLI）再修复")));
     }
     let db = state_path();
     let conn = Connection::open(&db)?;
     if migration_version(&conn) != Some(STATE_VERSION) {
-        return Err(anyhow!(l("state_5.sqlite 版本未验证，不修改", "state_5.sqlite version is unverified; not modifying it")));
+        return Err(anyhow!(l("state_5.sqlite version is unverified; not modifying it", "state_5.sqlite 版本未验证，不修改")));
     }
     let dir = new_backup_dir("codex-repair")?;
     copy_db(&db, &dir)?;
@@ -684,24 +684,24 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
     }
     let n = entries.len();
     if n == 0 {
-        return Ok(tr!("选中的会话已经属于「{target}」，没有需要迁移的", "The selected sessions already belong to \"{target}\"; nothing to migrate"));
+        return Ok(tr!("The selected sessions already belong to \"{target}\"; nothing to migrate", "选中的会话已经属于「{target}」，没有需要迁移的"));
     }
     write_repair_log(&serde_json::to_string(&json!({ "target": target, "backup": dir.to_string_lossy(), "entries": entries, "undone": false }))?)?;
-    Ok(tr!("已把 {n} 个会话迁移到「{target}」，重启 Codex 后生效（可撤销）", "Migrated {n} session(s) to \"{target}\". Takes effect after restarting Codex (can be undone)"))
+    Ok(tr!("Migrated {n} session(s) to \"{target}\". Takes effect after restarting Codex (can be undone)", "已把 {n} 个会话迁移到「{target}」，重启 Codex 后生效（可撤销）"))
 }
 
 pub fn undo_repair(stamp: &str) -> Result<String> {
     deny_wsl()?;
     if !plain_name(stamp) {
-        return Err(anyhow!(l("无效的修复记录", "Invalid repair record")));
+        return Err(anyhow!(l("Invalid repair record", "无效的修复记录")));
     }
     if codex_busy() {
-        return Err(anyhow!(l("Codex 正在运行，请先退出 Codex 再撤销", "Codex is running. Quit Codex before undoing")));
+        return Err(anyhow!(l("Codex is running. Quit Codex before undoing", "Codex 正在运行，请先退出 Codex 再撤销")));
     }
     let p = repairs_dir().join(format!("{stamp}.json"));
     let mut log: Value = serde_json::from_str(&fs::read_to_string(&p)?)?;
     if log["undone"].as_bool().unwrap_or(false) {
-        return Err(anyhow!(l("这次修复已经撤销过了", "This repair has already been undone")));
+        return Err(anyhow!(l("This repair has already been undone", "这次修复已经撤销过了")));
     }
     let conn = Connection::open(state_path())?;
     let tx = conn.unchecked_transaction()?;
@@ -730,7 +730,7 @@ pub fn undo_repair(stamp: &str) -> Result<String> {
     }
     log["undone"] = json!(true);
     fs::write(&p, serde_json::to_string(&log)?)?;
-    Ok(tr!("已撤销，{n} 个会话恢复到原来的供应商", "Undone: {n} session(s) restored to their original provider"))
+    Ok(tr!("Undone: {n} session(s) restored to their original provider", "已撤销，{n} 个会话恢复到原来的供应商"))
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ export function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Copies `text` and says so (`ok`, default "已复制"), or that copying failed. */
+/** Copies `text` and says so (`ok`, default "Copied"), or that copying failed. */
 export function copyText(text: string, flash: Flash, ok: string = t("common.copied")): Promise<void> {
   return navigator.clipboard.writeText(text).then(() => flash(ok)).catch(() => flash(t("common.copyFailed"), true));
 }

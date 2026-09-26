@@ -1,5 +1,7 @@
 // src/components/ProjectsPage.tsx
-export default {
+import type en from "../en/projectsPage";
+
+const zh: typeof en = {
   intro: "给单个项目文件夹单独配置 OpenCode：项目里的 opencode.json 会和全局配置合并，同名的键以项目为准。",
   pickFolder: "选择文件夹…",
   or: "或",
@@ -24,3 +26,5 @@ export default {
   switchProject: "切换项目",
   openFolder: "打开文件夹",
 };
+
+export default zh;

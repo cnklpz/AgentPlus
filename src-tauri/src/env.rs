@@ -42,11 +42,11 @@ fn wsl_id(distro: &str) -> String {
 fn windows_label() -> &'static str {
     use crate::i18n::l;
     if cfg!(windows) {
-        l("本机 · Windows", "This PC · Windows")
+        l("This PC · Windows", "本机 · Windows")
     } else if cfg!(target_os = "macos") {
-        l("本机 · macOS", "This Mac · macOS")
+        l("This Mac · macOS", "本机 · macOS")
     } else {
-        l("本机 · Linux", "This PC · Linux")
+        l("This PC · Linux", "本机 · Linux")
     }
 }
 
@@ -179,8 +179,8 @@ pub fn list() -> Vec<EnvInfo> {
             id,
             label: wsl_label(&d),
             detail: crate::i18n::l(
-                "CLI Agent（Codex、Claude Code、OpenCode 等）的配置与 Codex 会话；ZCode、MiMo Desktop 只在 Windows 上",
                 "Configs of CLI agents (Codex, Claude Code, OpenCode…) and Codex sessions; ZCode and MiMo Desktop are Windows-only",
+                "CLI Agent（Codex、Claude Code、OpenCode 等）的配置与 Codex 会话；ZCode、MiMo Desktop 只在 Windows 上",
             )
             .into(),
         });
@@ -194,18 +194,18 @@ pub fn set(id: &str) -> Result<()> {
         Target::Windows
     } else if let Some(d) = id.strip_prefix(WSL_PREFIX) {
         if !distros().iter().any(|x| x == d) {
-            return Err(anyhow!(tr!("没有找到 WSL 发行版 {d}", "WSL distro not found: {d}")));
+            return Err(anyhow!(tr!("WSL distro not found: {d}", "没有找到 WSL 发行版 {d}")));
         }
         // The exit status is not checked: only a printed absolute path counts.
         let out = wsl_run(d, "printf %s \"$HOME\"")
-            .ok_or_else(|| anyhow!(tr!("启动 WSL 发行版 {d} 失败或超时", "WSL distro {d} failed to start or timed out")))?;
+            .ok_or_else(|| anyhow!(tr!("WSL distro {d} failed to start or timed out", "启动 WSL 发行版 {d} 失败或超时")))?;
         let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !h.starts_with('/') {
-            return Err(anyhow!(tr!("读取 {d} 的 HOME 失败", "Failed to read HOME in {d}")));
+            return Err(anyhow!(tr!("Failed to read HOME in {d}", "读取 {d} 的 HOME 失败")));
         }
         Target::Wsl { distro: d.into(), unix_home: h }
     } else {
-        return Err(anyhow!(tr!("未知环境 {id}", "Unknown environment {id}")));
+        return Err(anyhow!(tr!("Unknown environment {id}", "未知环境 {id}")));
     };
     // Runs off the main thread (set_env is async), so load and save under the store lock.
     crate::store::update(|s| {

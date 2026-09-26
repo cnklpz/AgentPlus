@@ -61,11 +61,11 @@ fn complete_model(def: &mut Value) -> Vec<String> {
         match (l.contains_key("context"), l.contains_key("output")) {
             (true, false) => {
                 l.insert("output".into(), json!(32000));
-                out.push(tr!("limit.output = 32000（OpenCode 要求和 limit.context 一起写）", "limit.output = 32000 (OpenCode requires it together with limit.context)"));
+                out.push(tr!("limit.output = 32000 (OpenCode requires it together with limit.context)", "limit.output = 32000（OpenCode 要求和 limit.context 一起写）"));
             }
             (false, true) => {
                 l.insert("context".into(), json!(128000));
-                out.push(tr!("limit.context = 128000（OpenCode 要求和 limit.output 一起写）", "limit.context = 128000 (OpenCode requires it together with limit.output)"));
+                out.push(tr!("limit.context = 128000 (OpenCode requires it together with limit.output)", "limit.context = 128000（OpenCode 要求和 limit.output 一起写）"));
             }
             _ => {}
         }
@@ -129,11 +129,11 @@ pub(crate) fn auth_cards(auth: Option<&Value>, known: &[Provider], login: &str, 
                 ..Provider::builtin(
                     id.clone(),
                     id.clone(),
-                    if oauth { tr!("账号登录（{login}）", "Account sign-in ({login})") } else { l("内置供应商 · API Key", "Built-in provider · API key").into() },
+                    if oauth { tr!("Account sign-in ({login})", "账号登录（{login}）") } else { l("Built-in provider · API key", "内置供应商 · API Key").into() },
                     "chat",
-                    l("内置", "Built-in"),
+                    l("Built-in", "内置"),
                     vec![
-                        Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth 登录", "OAuth sign-in") } else { l("API Key", "API key") })),
+                        Kv::mono(lbl::credentials(), format!("auth.json · {id} · {}", if oauth { l("OAuth sign-in", "OAuth 登录") } else { l("API key", "API Key") })),
                         Kv::text(lbl::note(), about),
                     ],
                 )
@@ -144,7 +144,7 @@ pub(crate) fn auth_cards(auth: Option<&Value>, known: &[Provider], login: &str, 
 
 /// Writes a credentials file in place (not tmp + rename) so it keeps its owner-only permissions.
 pub(crate) fn write_auth(path: &Path, auth: &Value) -> Result<()> {
-    let failed = || tr!("写入 {} 失败", "Failed to write {}", display_path(path));
+    let failed = || tr!("Failed to write {}", "写入 {} 失败", display_path(path));
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).with_context(failed)?;
     }
@@ -249,19 +249,19 @@ impl Fmt {
         let in_auth = Self::auth_key(auth, id).is_some();
         let key_note = if let Some(k) = in_cfg {
             match key_ref(k) {
-                Some(("env", n)) => tr!("API Key · 环境变量 {n}", "API key · environment variable {n}"),
-                Some((_, p)) => tr!("API Key · 读取文件 {p}", "API key · read from file {p}"),
-                None => tr!("API Key · 明文保存在 {}", "API key · stored in plain text in {}", self.name()),
+                Some(("env", n)) => tr!("API key · environment variable {n}", "API Key · 环境变量 {n}"),
+                Some((_, p)) => tr!("API key · read from file {p}", "API Key · 读取文件 {p}"),
+                None => tr!("API key · stored in plain text in {}", "API Key · 明文保存在 {}", self.name()),
             }
         } else if in_auth {
-            l("API Key · 保存在 auth.json", "API key · stored in auth.json").into()
+            l("API key · stored in auth.json", "API Key · 保存在 auth.json").into()
         } else {
-            l("未填写", "Not set").into()
+            l("Not set", "未填写").into()
         };
         let parked = if self.native_disable {
-            l("已停用（disabled_providers）", "Disabled (disabled_providers)")
+            l("Disabled (disabled_providers)", "已停用（disabled_providers）")
         } else {
-            l("已停用 · 定义暂存在 AgentPlus", "Disabled · definition kept in AgentPlus")
+            l("Disabled · definition kept in AgentPlus", "已停用 · 定义暂存在 AgentPlus")
         };
         Provider {
             id: id.into(),
@@ -276,7 +276,7 @@ impl Fmt {
                 Kv::mono(lbl::config_id(), format!("provider.{id}")),
                 Kv::mono("npm", if npm.is_empty() { "-".into() } else { npm.to_string() }),
                 Kv::text(lbl::api_key(), key_note),
-                Kv::text(lbl::status(), if enabled { l("已启用", "Enabled") } else { parked }),
+                Kv::text(lbl::status(), if enabled { l("Enabled", "已启用") } else { parked }),
             ],
             editable: true,
             api: api.into(),
@@ -314,7 +314,7 @@ impl Fmt {
         // Only a config without a native disabled list parks providers in the store.
         let parked = || if self.native_disable { None } else { store::get_obj(&store::load(), &self.agent, "disabledProviders").get(id).cloned() };
         let def = cfg.pointer(&jptr(&["provider", id])).cloned().or_else(parked).ok_or_else(|| msg::no_provider(id))?;
-        let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("供应商 {id} 没有 baseURL", "Provider {id} has no baseURL")))?.to_string();
+        let base = def.pointer("/options/baseURL").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(tr!("Provider {id} has no baseURL", "供应商 {id} 没有 baseURL")))?.to_string();
         let auth = self.load_auth().map(|x| x.0);
         let key = cfg_key(&def).and_then(|k| self.resolve_key(k)).or_else(|| Self::auth_key(auth.as_ref(), id).map(String::from));
         Ok((base, key, api_of(def.get("npm").and_then(|x| x.as_str()).unwrap_or("")).into()))
@@ -353,7 +353,7 @@ impl Fmt {
             Kv::text(lbl::custom_providers(), lbl::names_or_none(on.iter().map(|p| &p.name))),
             Kv::mono(lbl::default_model(), get_s("model")),
             Kv::mono(lbl::small_model(), get_s("small_model")),
-            Kv::text(lbl::visible_models(), tr!("{vis} 个", "{vis}")),
+            Kv::text(lbl::visible_models(), tr!("{vis}", "{vis} 个")),
             Kv::mono(lbl::config_file(), self.file()),
         ]
     }
@@ -396,11 +396,11 @@ impl Fmt {
 
     fn providers_obj<'a>(&self, cfg: &'a mut Value) -> Result<&'a mut Map<String, Value>> {
         cfg.as_object_mut()
-            .ok_or_else(|| anyhow!(tr!("{} 顶层不是对象", "The top level of {} is not an object", self.name())))?
+            .ok_or_else(|| anyhow!(tr!("The top level of {} is not an object", "{} 顶层不是对象", self.name())))?
             .entry("provider")
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .ok_or_else(|| anyhow!(l("provider 不是对象", "provider is not an object")))
+            .ok_or_else(|| anyhow!(l("provider is not an object", "provider 不是对象")))
     }
 
     /// Edits a model definition wherever it lives (active config or the hidden stash).
@@ -417,7 +417,7 @@ impl Fmt {
         // The agent keeps keys in auth.json but it can't be read: never fall back to the config
         // (a project's opencode.json is usually committed).
         if let (Some(p), None, false) = (&self.auth, auth.as_ref(), in_cfg) {
-            return Err(anyhow!(tr!("{} 无法读取，没有写入密钥", "{} can't be read, so the API key was not written", display_path(p))));
+            return Err(anyhow!(tr!("{} can't be read, so the API key was not written", "{} 无法读取，没有写入密钥", display_path(p))));
         }
         if let (Some((a, _)), false) = (auth.as_mut(), in_cfg) {
             a[id] = json!({ "type": "api", "key": key });
@@ -462,7 +462,7 @@ impl Fmt {
                         }));
                         diff.push(
                             &ef,
-                            trn!(n, "+ provider.{id}（{} · {label} · {n} 个模型）", "+ provider.{id} ({} · {label} · {n} model)", "+ provider.{id} ({} · {label} · {n} models)", p.base_url.trim()),
+                            trn!(n, "+ provider.{id} ({} · {label} · {n} model)", "+ provider.{id} ({} · {label} · {n} models)", "+ provider.{id}（{} · {label} · {n} 个模型）", p.base_url.trim()),
                             true,
                         );
                         dirty.cfg = true;
@@ -529,11 +529,11 @@ impl Fmt {
                 // The auth.json entry stays (it may be a login OpenCode uses without a config entry).
                 let entry = auth.as_ref().and_then(|(a, _)| a.get(provider));
                 let line = if entry.and_then(|e| e.get("type")).and_then(|t| t.as_str()) == Some("oauth") {
-                    tr!("- provider.{provider}（含它的模型；auth.json 里的登录保留）", "- provider.{provider} (with its models; the sign-in in auth.json is kept)")
+                    tr!("- provider.{provider} (with its models; the sign-in in auth.json is kept)", "- provider.{provider}（含它的模型；auth.json 里的登录保留）")
                 } else if Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some() {
-                    tr!("- provider.{provider}（含它的模型；auth.json 里的密钥保留）", "- provider.{provider} (with its models; the API key in auth.json is kept)")
+                    tr!("- provider.{provider} (with its models; the API key in auth.json is kept)", "- provider.{provider}（含它的模型；auth.json 里的密钥保留）")
                 } else {
-                    tr!("- provider.{provider}（含它的模型和密钥）", "- provider.{provider} (with its models and API key)")
+                    tr!("- provider.{provider} (with its models and API key)", "- provider.{provider}（含它的模型和密钥）")
                 };
                 diff.push(&ef, line, false);
                 dirty.cfg |= removed_cfg;
@@ -561,7 +561,7 @@ impl Fmt {
                         }
                     } else if let Some(def) = providers.remove(provider) {
                         parked.insert(provider.clone(), def);
-                        diff.push(&ef, tr!("- provider.{provider}（定义暂存在 AgentPlus，可恢复）", "- provider.{provider} (definition kept in AgentPlus; can be restored)"), false);
+                        diff.push(&ef, tr!("- provider.{provider} (definition kept in AgentPlus; can be restored)", "- provider.{provider}（定义暂存在 AgentPlus，可恢复）"), false);
                         dirty.cfg = true;
                         dirty.store = true;
                     }
@@ -572,10 +572,10 @@ impl Fmt {
                 let models = cfg
                     .pointer_mut(&jptr(&["provider", provider]))
                     .and_then(|p| p.as_object_mut())
-                    .ok_or_else(|| anyhow!(tr!("供应商 {provider} 未启用，先启用再调整模型", "Provider {provider} is disabled; enable it before changing its models")))?
+                    .ok_or_else(|| anyhow!(tr!("Provider {provider} is disabled; enable it before changing its models", "供应商 {provider} 未启用，先启用再调整模型")))?
                     .entry("models")
                     .or_insert_with(|| json!({}));
-                let models = models.as_object_mut().ok_or_else(|| anyhow!(l("models 不是对象", "models is not an object")))?;
+                let models = models.as_object_mut().ok_or_else(|| anyhow!(l("models is not an object", "models 不是对象")))?;
                 let hidden = store::section(root, &self.agent, "hiddenModels");
                 if *visible {
                     if !models.contains_key(model) {
@@ -603,15 +603,15 @@ impl Fmt {
                     let models = cfg
                         .pointer_mut(&jptr(&["provider", provider]))
                         .and_then(|p| p.as_object_mut())
-                        .ok_or_else(|| anyhow!(tr!("供应商 {provider} 未启用，先启用再添加模型", "Provider {provider} is disabled; enable it before adding models")))?
+                        .ok_or_else(|| anyhow!(tr!("Provider {provider} is disabled; enable it before adding models", "供应商 {provider} 未启用，先启用再添加模型")))?
                         .entry("models")
                         .or_insert_with(|| json!({}));
-                    models.as_object_mut().ok_or_else(|| anyhow!(l("models 不是对象", "models is not an object")))?.insert(mid.clone(), json!({}));
+                    models.as_object_mut().ok_or_else(|| anyhow!(l("models is not an object", "models 不是对象")))?.insert(mid.clone(), json!({}));
                     diff.push(&ef, format!("provider.{provider}.models + \"{mid}\""), true);
                     dirty.cfg = true;
                 }
                 let in_cfg = cfg.pointer(&jptr(&["provider", provider, "models", &mid])).is_some();
-                let def = self.model_def_mut(cfg, root, provider, &mid).ok_or_else(|| anyhow!(tr!("找不到模型 {mid}", "Model not found: {mid}")))?;
+                let def = self.model_def_mut(cfg, root, provider, &mid).ok_or_else(|| anyhow!(tr!("Model not found: {mid}", "找不到模型 {mid}")))?;
                 let mut changed = vec![];
                 if let Some(n) = m.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                     if def.get("name").and_then(|x| x.as_str()) != Some(n) {
@@ -643,7 +643,7 @@ impl Fmt {
                     .is_some();
                 let stashed = store::section(root, &self.agent, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
                 if removed || stashed {
-                    diff.push(&ef, tr!("provider.{provider}.models - \"{model}\"（删除）", "provider.{provider}.models - \"{model}\" (deleted)"), false);
+                    diff.push(&ef, tr!("provider.{provider}.models - \"{model}\" (deleted)", "provider.{provider}.models - \"{model}\"（删除）"), false);
                     dirty.cfg |= removed;
                     dirty.store |= stashed;
                 }
