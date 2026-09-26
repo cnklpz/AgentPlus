@@ -18,10 +18,6 @@ English | [简体中文](README.zh-CN.md)
   <img src="docs/images/codex-en.png" alt="AgentPlus main window">
 </picture>
 
-Each agent stores its API settings in its own way: Codex in `config.toml`, Claude Code in the `env` block of `settings.json`, OpenCode in its own jsonc. Add one provider and you're editing several files by hand, each in a different format. AgentPlus is a desktop app that keeps providers, keys and model lists in one place, and writes those files for you.
-
-Fill in a provider once, then attach it to whichever agents you want. Model lists are per agent. You see the diff before anything is written, and the file being replaced is backed up in case you want it back. Which model to run is still your call inside each agent.
-
 ## Features
 
 - **Provider library.** Put an API URL and key in once and every agent can use it. There are 21 templates for common providers and coding plans; most need nothing from you but a key.

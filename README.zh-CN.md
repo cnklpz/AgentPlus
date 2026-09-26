@@ -18,10 +18,6 @@
   <img src="docs/images/codex-zh.png" alt="AgentPlus 主界面">
 </picture>
 
-每个 Agent 存 API 配置的方式都不一样：Codex 用 `config.toml`，Claude Code 塞在 `settings.json` 的 `env` 里，OpenCode 又是自己一套 jsonc。加一家供应商，就得挨个文件改一遍，格式还不能写错。AgentPlus 是个桌面应用，把这些供应商、密钥和模型列表集中在一处，配置文件由它来写。
-
-供应商填一次，想给哪几个 Agent 用就挂到哪几个。模型列表按 Agent 分开设置，写入之前你能看到 diff，被替换的文件会先备份，想还原随时可以。至于用哪个模型，仍然是在各个 Agent 里自己决定。
-
 ## 主要功能
 
 - **供应商库**：API 地址和密钥填一次，所有 Agent 共用。内置 21 套模板，覆盖常见厂商和编程套餐，多数只要贴一个 Key。
