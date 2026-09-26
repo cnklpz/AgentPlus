@@ -106,7 +106,7 @@ fn write_in(dir: &Path, v: &Value) -> anyhow::Result<()> {
 }
 
 /// Per-agent entries are kept apart per environment: "codex" on Windows, "codex@wsl:Ubuntu" in WSL.
-fn scoped(agent: &str) -> String {
+pub(crate) fn scoped(agent: &str) -> String {
     if crate::env::is_wsl() && crate::adapters::ALL.contains(&agent) {
         format!("{agent}@{}", crate::env::id())
     } else {
