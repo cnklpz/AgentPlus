@@ -4,6 +4,32 @@
 
 Each version gets a `## <version>` section. On release it becomes the GitHub release text and is shown in AgentPlus's update prompt, so write it in both languages.
 
+## 0.1.7
+
+网关不再接受旧的共用密钥；回滚 Claude Code、Gemini CLI 配置后模型不再变回去；Gemini 供应商可以获取模型列表和测试。
+
+- 网关不再接受旧的共用密钥 `agentplus-gateway`。升级后如果网关页提示有 Agent 还在用旧密钥，点「更新密钥」，否则这些 Agent 连不上网关
+- 回滚 Claude Code、Gemini CLI 的配置时，AgentPlus 里的配置档一起恢复，之后再改设置不会又把新模型写回去。这两个 Agent 升级前的旧备份只能手动恢复
+- 只改配置档（比如隐藏某个模型）不再生成备份，历史页清爽些
+- Gemini 协议的供应商改用 Gemini 原生接口获取模型列表和测试连接（支持分页，被拦截或没有文本的回复会报错）
+- 在网关页添加的供应商获取模型列表时，网关内部密钥只留在后端
+- macOS：AgentPlus 写入的配置和密钥文件只有自己能读（新文件 0600、数据目录 0700），已有配置保留原来的权限
+- 写配置时中断留下的临时文件会自动清理
+- 诊断日志：路径里和你用户名开头相同的其他用户名，不再被错当成你的主目录
+- Windows 安装程序支持简体中文
+
+The gateway no longer accepts the old shared key; rolling back Claude Code or Gemini CLI configs no longer drifts back to the newer model; Gemini providers can list models and be tested.
+
+- The gateway no longer accepts the old shared key `agentplus-gateway`. If the gateway page says an agent still uses the old key after the update, click "Update keys", or that agent can't connect
+- Rolling back a Claude Code or Gemini CLI config also restores its AgentPlus profiles, so the next change no longer writes the newer model back. Backups of these two agents made before this version can only be restored manually
+- Editing only profiles (e.g. hiding a model) no longer creates a backup, keeping the history page tidy
+- Providers using the Gemini protocol list models and test connections through the native Gemini API (with pagination; blocked or empty replies are reported)
+- When you add a provider on the gateway page, the gateway's internal key stays in the backend while models are listed
+- macOS: config and key files AgentPlus writes are readable only by you (new files 0600, data folder 0700); existing configs keep their permissions
+- Temp files left by an interrupted config write are cleaned up
+- Diagnostic log: another user name that merely starts with yours is no longer mistaken for your home folder
+- The Windows installer is available in Simplified Chinese
+
 ## 0.1.6
 
 适配 Codex 26.924；重启 Agent 更快；更新完成后会提示。
