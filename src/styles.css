@@ -438,6 +438,16 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 @keyframes hz-fly-a { from { transform: rotate(28deg) translateX(-110%); } }
 @keyframes hz-fly-b { from { transform: rotate(-28deg) translateX(110%); } }
 @keyframes hz-pop { from { opacity: 0; transform: scale(.7) rotate(-3deg); } }
+/* Exit: the card drops away, then the tapes carry on in the direction they came from and
+   the backdrop clears (SyncPage waits HAZARD_EXIT_MS before closing). */
+.hz-screen.out { animation: hz-undim .34s .22s ease-in forwards; }
+.hz-screen.out .hz-card { animation: hz-pop-out .2s cubic-bezier(.5, 0, .75, 0) forwards; }
+.hz-screen.out .hz-tape.a { animation: hz-leave-a .42s .1s cubic-bezier(.55, 0, .8, .2) forwards; }
+.hz-screen.out .hz-tape.b { animation: hz-leave-b .42s .04s cubic-bezier(.55, 0, .8, .2) forwards; }
+@keyframes hz-undim { to { background-color: rgba(12, 10, 4, 0); } }
+@keyframes hz-pop-out { to { opacity: 0; transform: scale(.82) rotate(2deg); } }
+@keyframes hz-leave-a { to { transform: rotate(28deg) translateX(110%); } }
+@keyframes hz-leave-b { to { transform: rotate(-28deg) translateX(-110%); } }
 @keyframes hz-march { to { background-position: 73.5px 0; } }
 @keyframes hz-march-rev { to { background-position: -73.5px 0; } }
 @media (prefers-reduced-motion: reduce) { .hz-screen, .hz-screen * { animation: none !important; } }

@@ -382,10 +382,22 @@ function PlainKeysWarning(props: PlainKeysProps) {
 }
 
 /** Two hazard tapes fly in from opposite sides and cross over the whole window, then the question pops up. */
+/** How long the exit plays (card out, tapes fly on, backdrop clears) before the choice goes through. */
+const HAZARD_EXIT_MS = 560;
+
 function HazardScreen({ onCancel, onSetPassword, onContinue }: PlainKeysProps) {
-  useEscape(onCancel);
+  const [leaving, setLeaving] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  /** Plays the exit, then runs the choice; a second click while leaving is ignored. */
+  const leave = (then: () => void) => () => {
+    if (leaving) return;
+    setLeaving(true);
+    timer.current = window.setTimeout(then, HAZARD_EXIT_MS);
+  };
+  useEscape(leave(onCancel));
   return (
-    <div className="hz-screen" role="alertdialog" aria-modal="true" aria-labelledby="hz-title" aria-describedby="hz-text">
+    <div className={`hz-screen${leaving ? " out" : ""}`} role="alertdialog" aria-modal="true" aria-labelledby="hz-title" aria-describedby="hz-text">
       <div className="hz-tape a" />
       <div className="hz-tape b" />
       <div className="hz-card">
@@ -393,10 +405,10 @@ function HazardScreen({ onCancel, onSetPassword, onContinue }: PlainKeysProps) {
         <h2 id="hz-title">{t("syncPage.hazardTitle")}</h2>
         <p id="hz-text">{t("syncPage.hazardText")}</p>
         <div className="hz-actions">
-          <button className="btn hz-btn" onClick={onContinue}>{t("syncPage.hazardContinue")}</button>
+          <button className="btn hz-btn" disabled={leaving} onClick={leave(onContinue)}>{t("syncPage.hazardContinue")}</button>
           <span className="grow" />
-          <button className="btn hz-btn" onClick={onSetPassword}>{t("syncPage.setPassword")}</button>
-          <button className="btn hz-btn solid" autoFocus onClick={onCancel}>{t("common.cancel")}</button>
+          <button className="btn hz-btn" disabled={leaving} onClick={leave(onSetPassword)}>{t("syncPage.setPassword")}</button>
+          <button className="btn hz-btn solid" autoFocus disabled={leaving} onClick={leave(onCancel)}>{t("common.cancel")}</button>
         </div>
       </div>
     </div>
