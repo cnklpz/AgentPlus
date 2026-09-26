@@ -4,6 +4,26 @@
 
 Each version gets a `## <version>` section. On release it becomes the GitHub release text and is shown in AgentPlus's update prompt, so write it in both languages.
 
+## 0.1.5
+
+修复 Codex 自动更新后 AgentPlus 显示它没在运行的问题；新增诊断日志、启动方式提示和简约提示。
+
+- Codex 自动更新后，AgentPlus 不用重启也能认出新版本和它的运行状态
+- 诊断日志（设置 → 通用）：记录报错、网关失败的请求、重启和识别过程，出问题时一键导出分析；只存在本机，写入前去掉密钥、令牌、中转地址、IP、邮箱和路径里的用户名；按保留天数自动清理，最多 50 MB
+- 右侧「当前配置」显示 Agent 是否由 AgentPlus 启动；Codex 的界面增强（Fast、完整模型名等）没生效时，会提示在 AgentPlus 里重启 Codex
+- 设置 → 界面 → 提示文字：选「简约」后只显示选项名，隐藏说明文字
+- 打开 AgentPlus 时各 Agent 同时检测，列表出来得更快
+- macOS（实验性）：改进启动 Codex 后要等十几秒才识别到的问题（重启期间不让 AgentPlus 被系统节能挂起；窗口重新显示时立刻检查）。如果还慢，请导出诊断日志反馈
+
+Fixes AgentPlus showing Codex as not running after Codex updated itself; adds a diagnostic log, a launch indicator and brief hints.
+
+- After Codex updates itself, AgentPlus picks up the new version and its running state without a restart
+- Diagnostic log (Settings → General): records errors, failed gateway requests, restarts and detection, and exports in one click for analysis. It stays on this computer; keys, tokens, relay addresses, IPs, emails and the user name in paths are removed before writing. Old logs are deleted after the days you choose, 50 MB at most
+- The "Current config" panel shows whether the agent was launched by AgentPlus; when Codex's UI enhancements (Fast, full model names…) aren't active, it tells you to restart Codex from AgentPlus
+- Settings → Interface → Hint text: "Brief" shows only option names, without descriptions
+- Agents are detected in parallel when AgentPlus opens, so the list appears sooner
+- macOS (experimental): works on Codex taking 10+ seconds to be detected after it starts (AgentPlus no longer gets napped by the system during a restart, and checks again as soon as its window shows). If it's still slow, please send an exported diagnostic log
+
 ## 0.1.3
 
 模型参数智能匹配：添加模型时按模型 ID 自动填上上下文窗口、最大输出、能读的输入类型（图片、PDF 等）、是否推理和工具调用，和 ZCode 的做法类似。OpenCode Go / Zen 模板支持多协议。
