@@ -425,8 +425,12 @@ impl Work {
                         if !added.is_empty() {
                             self.diff.push(&file, trn!(added.len(), "+ 「{}」{n} 个模型条目（{base} · {}{}）", "+ \"{}\" {n} model entry ({base} · {}{})", "+ \"{}\" {n} model entries ({base} · {}{})", p.name.trim(), api_label(&p.api), msg::key_suffix(new_key.as_deref())), true);
                         }
-                        let new: Vec<Value> = added.into_iter().map(|m| Self::new_entry(&g, m, None)).collect();
+                        let added: Vec<String> = added.into_iter().cloned().collect();
+                        let new: Vec<Value> = added.iter().map(|m| Self::new_entry(&g, m, None)).collect();
                         self.entries.extend(new);
+                        for op in crate::modelinfo::seed_ops(ID, &g.id, &added) {
+                            self.apply(&op)?;
+                        }
                     }
                     Some(id) => {
                         let g = self.group(id)?;

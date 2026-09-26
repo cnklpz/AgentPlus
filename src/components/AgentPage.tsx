@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
+import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
-  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, deleteModel, isEnabled, isVisible, keys, mergeExtra, opCount,
+  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, deleteModel, guessedModel, isEnabled, isVisible, keys, mergeExtra, opCount,
   providerModelCount, setModelVisible, setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
@@ -322,12 +322,22 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
     }
   };
 
-  const addPicked = () => {
-    let d = draft;
-    for (const id of pick) d = upsertModel(d, pid, { id, name: null, context: null });
+  // The draft as of now, for code that continues after an await.
+  const latest = useRef(draft);
+  latest.current = draft;
+  const [adding, setAdding] = useState(false);
+  const addPicked = async () => {
+    const ids = [...pick];
+    setAdding(true);
+    // Context window and settings from the model catalogs; unknown models are added bare.
+    const guesses = await api.guessModels(st.id, ids).catch(() => ({}) as Record<string, ModelGuess>);
+    setAdding(false);
+    if (source.current.pid !== pid) return;
+    let d = latest.current;
+    for (const id of ids) d = upsertModel(d, pid, guessedModel(id, guesses[id]));
     setDraft(d);
     setFetched(null);
-    flash(tn("agentPage.addedModels", pick.size));
+    flash(tn("agentPage.addedModels", ids.length));
   };
 
   /** Puts a dialog save into the draft; an edit that ends up where it started drops the op. */
@@ -378,7 +388,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
             <span className="row gap6">
               <button className="link tiny" onClick={() => setPick(new Set(pick.size === fetched.length ? [] : fetched))}>{pick.size === fetched.length ? t("common.selectNone") : t("common.selectAll")}</button>
               <button className="btn small" onClick={() => setFetched(null)}>{t("agentPage.collapse")}</button>
-              <button className="btn small primary" disabled={pick.size === 0} onClick={addPicked}>{tn("agentPage.addPicked", pick.size)}</button>
+              <button className="btn small primary" disabled={pick.size === 0 || adding} onClick={addPicked}>{tn("agentPage.addPicked", pick.size)}</button>
             </span>
           </div>
           <div className="pick-list wide">
@@ -394,7 +404,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
 
       <div className="mrow mhead"><span /><span>{t("common.model")}</span><span>{t("agentPage.colContext")}</span><span className="right">{t("agentPage.colShown")}</span></div>
       {(editing === "__new" || editingModel) && (
-        <ModelDialog agentName={st.name} hasNames={hasNames} nameIsUpstream={st.id === "kimi"} hasContext={hasContext} fields={fields} initial={editingModel}
+        <ModelDialog agent={st.id} agentName={st.name} hasNames={hasNames} nameIsUpstream={st.id === "kimi"} hasContext={hasContext} fields={fields} initial={editingModel}
           onClose={() => setEditing(null)}
           onSave={(input) => { if (saveModel(input, editingModel)) setEditing(null); }} />
       )}

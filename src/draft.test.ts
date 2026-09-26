@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentState, Model, Op, Provider, Setting } from "./api";
 import {
-  type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, importProvider, keys, mergeExtra, opCount, opsToWrite,
+  type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setModelVisible, setProviderEnabled, setSetting, settingOn, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp,
 } from "./draft";
@@ -111,6 +111,15 @@ describe("settingOn / shouldAutoRestart", () => {
   it("never when the switch is off or the agent isn't running", () => {
     expect(shouldAutoRestart(st(false), [other])).toBe(false);
     expect(shouldAutoRestart(st(true, false), [other])).toBe(false);
+  });
+});
+
+describe("guessedModel", () => {
+  it("fills in what the catalogs know, and nothing for unknown models", () => {
+    const g = { context: 64000, extra: { "/reasoning": true }, matched: "acme", source: "modelsDev" as const };
+    expect(guessedModel("acme", g)).toEqual({ id: "acme", name: null, context: 64000, extra: { "/reasoning": true } });
+    expect(guessedModel("x", undefined)).toEqual({ id: "x", name: null, context: null });
+    expect(guessedModel("y", { ...g, extra: {} })).toEqual({ id: "y", name: null, context: 64000 });
   });
 });
 

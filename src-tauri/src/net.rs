@@ -70,6 +70,15 @@ fn body_text(resp: reqwest::blocking::Response, cap: u64) -> Result<String, Stri
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
+/// `GET url` without credentials; the body as text (up to `cap` bytes) on a 2xx.
+pub fn get_text(url: &str, timeout: Duration, cap: u64) -> Result<String, String> {
+    let resp = client_with(timeout)?.get(url).send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+    body_text(resp, cap)
+}
+
 fn models_url(base_url: &str) -> String {
     format!("{}/models", base_url.trim_end_matches('/'))
 }

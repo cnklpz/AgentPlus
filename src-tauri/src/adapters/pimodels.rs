@@ -488,6 +488,9 @@ impl Fmt {
                             None if self.flavor == Flavor::Pi => diff.push(&ef, tr!("（{id} 没填密钥：pi 里它的模型用不了，可以填 $环境变量名）", "({id} has no API key: its models won't work in pi. You can enter $ENV_VAR_NAME.)"), false),
                             None => {}
                         }
+                        for op in crate::modelinfo::seed_ops(agent, &id, &ids) {
+                            self.apply(&op, cfg, root, auth, diff, dirty)?;
+                        }
                     }
                     Some(id) => {
                         let in_cfg = self.providers_of(cfg).map(|p| p.contains_key(id)).unwrap_or(false);

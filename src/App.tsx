@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
 import {
-  CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, importProvider, isEnabled, isVisible, keys, opCount,
+  CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, guessedModel, importProvider, isEnabled, isVisible, keys, opCount,
   opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
@@ -1038,6 +1038,9 @@ export default function App() {
         return;
       }
     }
+    // Models added to an existing provider: context window and settings from the model catalogs.
+    const added = editing && sv.models ? sv.models.added : [];
+    const guesses = added.length ? await api.guessModels(st.id, added).catch(() => ({}) as Record<string, ModelGuess>) : {};
     if (stale()) return;
     const agentId = st.id;
     const build = (d0: Draft): Draft => {
@@ -1056,7 +1059,7 @@ export default function App() {
           const want = sv.models.visible[m.id];
           if (want !== undefined) d = setModelVisible(d, editing.id, m, want);
         }
-        for (const id of sv.models.added) d = upsertModel(d, editing.id, { id, name: null, context: null });
+        for (const id of sv.models.added) d = upsertModel(d, editing.id, guessedModel(id, guesses[id]));
       }
       for (const k of sv.settingsOn ?? []) {
         const s = st.settings.find((x) => x.key === k);

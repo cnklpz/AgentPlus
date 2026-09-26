@@ -548,7 +548,12 @@ fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff
     let mut added = vec![];
     for id in list {
         if catalog_entry(v, id).is_none() {
-            added.push(add_custom_model(v, store, id, None, None)?);
+            // The copied entry carries another model's context and input kinds: use what is known about this one.
+            let g = crate::modelinfo::guess(ID, id);
+            added.push(add_custom_model(v, store, id, None, g.as_ref().and_then(|g| g.context))?);
+            if let (Some(g), Some(entry)) = (&g, catalog_entry(v, id)) {
+                added.extend(crate::mfields::write(entry, crate::mfields::CODEX, &g.extra)?.into_iter().map(|l| format!("{id}  {l}")));
+            }
         }
     }
     if shown + hidden + added.len() == 0 {
@@ -1140,6 +1145,20 @@ pub fn ui_patches() -> crate::cdp::Patches {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn listed_custom_models_are_filled_in_from_the_catalog() {
+        let _h = crate::util::TestHome::new("codex-seed");
+        crate::modelinfo::test_cache_acme();
+        let mut v = json!({ "models": [{ "slug": "gpt-x", "display_name": "GPT X", "context_window": 1050000, "input_modalities": ["text", "image"], "visibility": "list", "priority": 1 }] });
+        let mut store = json!({});
+        let mut diff = Diff::default();
+        assert!(apply_list(&mut v, &mut store, &["acme-vision-9".into(), "mystery-x".into()], &mut diff, "models.json", "relay").unwrap());
+        let e = catalog_entry(&mut v, "acme-vision-9").unwrap();
+        assert_eq!((&e["context_window"], &e["input_modalities"]), (&json!(64000), &json!(["text", "image"])));
+        assert_eq!(catalog_entry(&mut v, "mystery-x").unwrap()["context_window"], 1050000, "nothing known: the copied entry's values stay");
+        assert_eq!(custom_models(&store), ["acme-vision-9", "mystery-x"]);
+    }
 
     #[test]
     fn official_auth_toggles_requires_openai_auth() {

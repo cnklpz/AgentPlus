@@ -1,5 +1,5 @@
 // Pending edits per agent, keyed so a toggle back to the original drops the op.
-import type { AgentState, ApiKind, Model, ModelFieldValue, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
+import type { AgentState, ApiKind, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
 import { t } from "./i18n";
 
 export type Draft = Record<string, Op>;
@@ -216,6 +216,11 @@ export function upsertProvider(d: Draft, input: ProviderInput, draftKey?: string
 
 export function upsertModel(d: Draft, pid: string, input: ModelInput): Draft {
   return withOp(d, keys.upsertModel(pid, input.id), { op: "upsert_model", provider: pid, model: input });
+}
+
+/** A new model with what the catalogs know about it (`api.guessModels`) filled in. */
+export function guessedModel(id: string, g: ModelGuess | undefined): ModelInput {
+  return { id, name: null, context: g?.context ?? null, ...(g && Object.keys(g.extra).length ? { extra: { ...g.extra } } : {}) };
 }
 
 export function deleteProvider(d: Draft, pid: string): Draft {

@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { ModelField, ModelFieldValue, ModelInput } from "../api";
+import { type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, api } from "../api";
 import { type ViewModel, fmtCtx, parseCtx } from "../draft";
 import { Dropdown } from "./Dropdown";
 import { Modal } from "./Modal";
 import { Seg } from "./controls";
 import { OptCheck } from "./icons";
-import { locale, t, tx } from "../i18n";
+import { locale, t, tn, tx } from "../i18n";
 import { toggledIn } from "../util";
 
 interface Props {
+  /** Agent id (or OpenCode project id), for looking the model up in the catalogs. */
+  agent: string;
   agentName: string;
   /** The agent stores a display name per model. */
   hasNames: boolean;
@@ -27,12 +29,19 @@ type Values = Record<string, ModelFieldValue | undefined>;
 
 const same = (a: ModelFieldValue | undefined, b: ModelFieldValue | undefined) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
+/** The context window's key among the auto-filled / touched keys (field keys are JSON pointers or names, never this). */
+const CTX = "#context";
+
+const lookUp = async (agent: string, id: string): Promise<ModelGuess | null> =>
+  (await api.guessModels(agent, [id]).catch(() => ({}) as Record<string, ModelGuess>))[id] ?? null;
+
 /**
  * Adds or edits one model: id, display name, context window, plus the per-model settings
  * the agent declares (input kinds, reasoning, max output…). Unset settings stay out of
- * the config, so the agent's own default applies.
+ * the config, so the agent's own default applies. A new model's settings are filled in from
+ * the model catalogs as its id is typed (like ZCode does); an existing one can ask for it.
  */
-export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasContext, fields, initial, onSave, onClose }: Props) {
+export function ModelDialog({ agent, agentName, hasNames, nameIsUpstream = false, hasContext, fields, initial, onSave, onClose }: Props) {
   const [id, setId] = useState(initial?.id ?? "");
   const [name, setName] = useState(initial?.name ?? "");
   const [ctx, setCtx] = useState(initial?.context ? String(initial.context) : "");
@@ -43,6 +52,69 @@ export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasCo
   );
   const first = useRef<HTMLInputElement>(null);
   useEffect(() => { first.current?.focus(); }, []);
+
+  // ZCode matches models against its own rules; an agent with nothing per model has nothing to fill.
+  const canGuess = agent !== "zcode" && (hasContext || fields.length > 0);
+  const [guess, setGuess] = useState<ModelGuess | null>(null);
+  /** Keys whose value came from `guess` and hasn't been edited since. */
+  const [auto, setAuto] = useState<Set<string>>(new Set());
+  /** Keys the user has edited: a later guess leaves them alone. */
+  const touched = useRef(new Set<string>());
+  const [matchNote, setMatchNote] = useState<string | null>(null);
+  const touch = (k: string) => {
+    touched.current.add(k);
+    setAuto((a) => (a.has(k) ? new Set([...a].filter((x) => x !== k)) : a));
+  };
+
+  /** Puts `g` into the keys `may` allows (clearing them when `g` lacks a value); returns the keys it filled. */
+  const fill = (g: ModelGuess | null, may: (k: string) => boolean): Set<string> => {
+    const filled = new Set<string>();
+    if (hasContext && may(CTX)) {
+      setCtx(g?.context ? String(g.context) : "");
+      if (g?.context) filled.add(CTX);
+    }
+    const nv: Values = {};
+    const nn: Record<string, string> = {};
+    for (const f of fields.filter((f) => may(f.key))) {
+      const v = g?.extra[f.key];
+      if (f.kind === "number") nn[f.key] = typeof v === "number" ? String(v) : "";
+      else nv[f.key] = v;
+      if (v !== undefined) filled.add(f.key);
+    }
+    setVals((x) => ({ ...x, ...nv }));
+    setNums((x) => ({ ...x, ...nn }));
+    return filled;
+  };
+
+  // New model: look the id up as it is typed; a later match replaces what an earlier one filled in.
+  useEffect(() => {
+    if (initial || !canGuess) return;
+    const q = id.trim();
+    let live = true;
+    const timer = setTimeout(async () => {
+      const g = q ? await lookUp(agent, q) : null;
+      if (!live) return;
+      setGuess(g);
+      setAuto(fill(g, (k) => !touched.current.has(k)));
+    }, q ? 300 : 0);
+    return () => { live = false; clearTimeout(timer); };
+  }, [id]); // only a new id starts a lookup
+
+  // Existing model: fill in only what isn't set yet.
+  const matchNow = async () => {
+    const q = id.trim();
+    const g = await lookUp(agent, q);
+    setGuess(g);
+    if (!g) { setMatchNote(t("modelDialog.matchNone")); return; }
+    const unset = (k: string) => {
+      if (k === CTX) return ctx.trim() === "";
+      const f = fields.find((x) => x.key === k);
+      return f?.kind === "number" ? (nums[k] ?? "").trim() === "" : vals[k] === undefined;
+    };
+    const filled = fill(g, unset);
+    setAuto(filled);
+    setMatchNote(filled.size ? tn("modelDialog.matchFilled", filled.size, { id: g.matched }) : t("modelDialog.matchNothingNew", { id: g.matched }));
+  };
 
   const ctxVal = parseCtx(ctx);
   const ctxBad = ctx.trim() !== "" && ctxVal === null;
@@ -85,6 +157,17 @@ export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasCo
         <input id="md-id" ref={initial ? undefined : first} className="input mono" value={id} disabled={!!initial}
           onChange={(e) => setId(e.target.value)} placeholder={t("modelDialog.modelIdPlaceholder")} />
         {initial && <em className="muted tiny">{t("modelDialog.idLocked")}</em>}
+        {initial && canGuess && (
+          <div className="row gap6">
+            <button type="button" className="link tiny" title={t("modelDialog.matchHint")} onClick={matchNow}>{t("modelDialog.matchButton")}</button>
+            {matchNote && <em className="muted tiny">{matchNote}</em>}
+          </div>
+        )}
+        {!initial && guess && (
+          <em className="muted tiny">
+            {t("modelDialog.matched", { id: guess.matched, source: t(guess.source === "builtin" ? "modelDialog.sourceBuiltin" : "modelDialog.sourceModelsDev") })}
+          </em>
+        )}
       </div>
       {(hasNames || hasContext) && (
         <div className={hasNames && hasContext ? "form2" : ""}>
@@ -97,9 +180,9 @@ export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasCo
           )}
           {hasContext && (
             <div className="field">
-              <label htmlFor="md-ctx">{t("modelDialog.context")}</label>
+              <label htmlFor="md-ctx">{t("modelDialog.context")}{auto.has(CTX) && <span className="unsaved">{t("modelDialog.auto")}</span>}</label>
               <input id="md-ctx" ref={initial && !hasNames ? first : undefined} className={`input mono${ctxBad ? " bad" : ""}`} value={ctx}
-                onChange={(e) => setCtx(e.target.value)} placeholder={t("modelDialog.contextPlaceholder")} />
+                onChange={(e) => { touch(CTX); setCtx(e.target.value); }} placeholder={t("modelDialog.contextPlaceholder")} />
               {ctxBad ? <em className="field-err">{t("modelDialog.contextBad")}</em> : ctxVal ? <em className="muted tiny">{t("modelDialog.contextTokens", { n: ctxVal.toLocaleString(locale()), short: fmtCtx(ctxVal) })}</em> : null}
             </div>
           )}
@@ -110,9 +193,9 @@ export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasCo
         <section key={g} className="mf-group">
           <div className="mf-title">{g}</div>
           {fields.filter((f) => f.group === g).map((f) => (
-            <FieldRow key={f.key} f={f} value={vals[f.key]} text={nums[f.key] ?? ""} bad={badNums.includes(f.key)}
+            <FieldRow key={f.key} f={f} value={vals[f.key]} text={nums[f.key] ?? ""} bad={badNums.includes(f.key)} auto={auto.has(f.key)}
               changed={f.kind === "number" ? (nums[f.key] ?? "") !== (typeof initial?.extra?.[f.key] === "number" ? String(initial.extra[f.key]) : "") : !same(vals[f.key], initial?.extra?.[f.key])}
-              onChange={(v) => set(f.key, v)} onText={(s) => setNums((x) => ({ ...x, [f.key]: s }))} />
+              onChange={(v) => { touch(f.key); set(f.key, v); }} onText={(s) => { touch(f.key); setNums((x) => ({ ...x, [f.key]: s })); }} />
           ))}
         </section>
       ))}
@@ -121,13 +204,18 @@ export function ModelDialog({ agentName, hasNames, nameIsUpstream = false, hasCo
   );
 }
 
-function FieldRow({ f, value, text, bad, changed, onChange, onText }: {
-  f: ModelField; value: ModelFieldValue | undefined; text: string; bad: boolean; changed: boolean;
+function FieldRow({ f, value, text, bad, auto, changed, onChange, onText }: {
+  f: ModelField; value: ModelFieldValue | undefined; text: string; bad: boolean;
+  /** The value was filled in from the model catalogs (and not edited since). */
+  auto: boolean; changed: boolean;
   onChange: (v: ModelFieldValue | undefined) => void; onText: (s: string) => void;
 }) {
   const head = (
     <div className="grow minw0">
-      <div className="small strong">{f.label}{changed && <span className="unsaved">{t("modelDialog.modified")}</span>}</div>
+      <div className="small strong">
+        {f.label}
+        {auto ? <span className="unsaved">{t("modelDialog.auto")}</span> : changed && <span className="unsaved">{t("modelDialog.modified")}</span>}
+      </div>
       <div className="tiny muted">{f.desc}</div>
     </div>
   );

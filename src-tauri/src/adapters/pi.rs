@@ -287,6 +287,18 @@ mod tests {
     }
 
     #[test]
+    fn new_provider_models_are_filled_in_from_the_catalog() {
+        let _g = setup("seed", None);
+        crate::modelinfo::test_cache_acme();
+        let (d, ..) = plan(&[prov("Seeded", "chat", Some("sk-seed-0000"), &["acme-vision-9", "no-such-model-xyz"])], false).unwrap();
+        let v = read("models.json");
+        let ms = v["providers"]["seeded"]["models"].as_array().unwrap();
+        assert_eq!(ms[0], json!({ "id": "acme-vision-9", "contextWindow": 64000, "input": ["text", "image"], "reasoning": true, "maxTokens": 8192 }));
+        assert_eq!(ms[1], json!({ "id": "no-such-model-xyz" }), "unknown models stay bare");
+        assert!(lines(&d).contains("models[\"acme-vision-9\"].contextWindow = 64000"), "{}", lines(&d));
+    }
+
+    #[test]
     fn reads_state() {
         let _g = setup("state", Some(MODELS));
         let st = state(&Install::default());

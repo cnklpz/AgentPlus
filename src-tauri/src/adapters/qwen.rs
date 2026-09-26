@@ -785,6 +785,11 @@ impl Ctx {
         if let Some(k) = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
             self.set_env(&var, k)?;
         }
+        for op in crate::modelinfo::seed_ops(ID, &id, &models) {
+            if let Op::UpsertModel { provider, model } = op {
+                self.upsert_model(&provider, &model)?;
+            }
+        }
         Ok(())
     }
 

@@ -21,6 +21,15 @@ const en: typeof zh = {
   default: "Default",
   numberBad: "Enter a number; a k suffix is allowed",
   resetDefault: "Reset to default",
+  matched: "Filled in from \"{id}\" ({source}); you can still change it",
+  sourceBuiltin: "built-in data",
+  sourceModelsDev: "models.dev",
+  auto: "Auto-filled",
+  matchButton: "Smart match",
+  matchHint: "Look up the model ID in the built-in data and models.dev; only fills settings that aren't set yet",
+  matchFilled: "Filled in {n} setting from \"{id}\"|Filled in {n} settings from \"{id}\"",
+  matchNothingNew: "Nothing to add from \"{id}\"",
+  matchNone: "No data found for this model",
 };
 
 export default en;

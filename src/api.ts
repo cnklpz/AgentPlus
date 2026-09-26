@@ -72,6 +72,16 @@ export interface ModelInput {
   extra?: Record<string, ModelFieldValue | null>;
 }
 
+/** What the model catalogs know about a model id, as one agent's settings. */
+export interface ModelGuess {
+  context: number | null;
+  /** The agent's model fields, by key. */
+  extra: Record<string, ModelFieldValue>;
+  /** The catalog id that matched. */
+  matched: string;
+  source: "builtin" | "modelsDev";
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -526,6 +536,8 @@ const real = {
   fetchModels: (agent: AgentId, provider: string) => invoke<string[]>("fetch_models", { agent, provider }),
   fetchModelsUrl: (baseUrl: string, apiKey: string | null, api: ApiKind) => invoke<string[]>("fetch_models_url", { baseUrl, apiKey, api }),
   fetchModelsLib: (id: string) => invoke<string[]>("fetch_models_lib", { id }),
+  /** Catalog data for these model ids (unknown ids are left out); `agent` may be an OpenCode project id. */
+  guessModels: (agent: string, ids: string[]) => invoke<Record<string, ModelGuess>>("guess_models", { agent, ids }),
   listBackups: () => invoke<BackupEntry[]>("list_backups"),
   backupDetail: (id: string) => invoke<BackupDetail>("backup_detail", { id }),
   restoreBackup: (id: string) => invoke<string>("restore_backup", { id }),
@@ -752,6 +764,8 @@ const demo: typeof real = {
   fetchModels: async () => ["gpt-5.6-sol", "gpt-5.6-luna", "deepseek-v4-pro", "kimi-k3", "glm-5.3", "qwen3.8-max"],
   fetchModelsUrl: async () => ["deepseek-v4-pro", "kimi-k3", "glm-5.3"],
   fetchModelsLib: async () => ["glm-5", "glm-5.3", "kimi-k3"],
+  guessModels: async (_agent, ids) =>
+    Object.fromEntries(ids.filter((id) => /^(glm|kimi|deepseek|gpt|qwen)/i.test(id)).map((id) => [id, { context: 200000, extra: {}, matched: id.toLowerCase(), source: "builtin" as const }])),
   listBackups: async () => [
     { id: "20260923-140512/codex", stamp: "20260923-140512", agent: "codex", reason: "应用配置", files: [{ name: "config.toml", path: "C:\\Users\\me\\.codex\\config.toml" }], bytes: 10240, restorable: true, blocked: null, blockedMissing: false },
     { id: "20260923-131201/zcode", stamp: "20260923-131201", agent: "zcode", reason: "应用配置", files: [{ name: "provider_config.json", path: "C:\\Users\\me\\.zcode\\v2\\provider_config.json" }], bytes: 19329, restorable: true, blocked: null, blockedMissing: false },

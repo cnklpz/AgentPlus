@@ -555,8 +555,18 @@ impl Ctx {
         }
         self.cfg_dirty = true;
         self.set_name(&id, p.name.trim());
-        for m in clean_ids(&p.models) {
-            self.add_model(&id, &m, &m, None)?;
+        let models = clean_ids(&p.models);
+        let seeds = crate::modelinfo::seed_ops(ID, &id, &models);
+        for m in models {
+            match seeds.iter().find_map(|o| match o {
+                Op::UpsertModel { model, .. } if model.id == m => Some(model),
+                _ => None,
+            }) {
+                Some(seeded) => self.upsert_model(&id, seeded)?,
+                None => {
+                    self.add_model(&id, &m, &m, None)?;
+                }
+            }
         }
         Ok(())
     }
@@ -997,7 +1007,8 @@ max_steps_per_run = 100 # keep
         assert_eq!(doc["providers"]["my-relay"]["api_key"].as_str(), Some(SECRET));
         // "gpt-4.1" is taken by relay: the new one gets a prefixed key.
         assert_eq!(doc["models"]["my-relay/gpt-4.1"]["model"].as_str(), Some("gpt-4.1"));
-        assert_eq!(doc["models"]["o3"]["max_context_size"].as_integer(), Some(DEFAULT_CTX as i64));
+        // Filled in from the model catalog (not the DEFAULT_CTX a bare id gets).
+        assert_ne!(doc["models"]["o3"]["max_context_size"].as_integer(), Some(DEFAULT_CTX as i64));
         let p = prov(&st(), "my-relay");
         assert_eq!((p.name.as_str(), p.api.as_str(), p.models.len()), ("My Relay", "responses", 2));
     }

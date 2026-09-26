@@ -218,6 +218,72 @@ pub fn check<'a>(specs: &'a [Spec], key: &str, v: &Value) -> Result<(&'a Spec, O
     Ok((s, Some(v)))
 }
 
+/// What a field says about the model, for filling it in from `modelinfo::Info`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Sense {
+    /// The list of input kinds.
+    Input,
+    /// Reads this input kind (true / false).
+    Reads(&'static str),
+    NoImage,
+    Attachment,
+    Reasoning,
+    Tools,
+    MaxOutput,
+    /// Kimi's `capabilities` (image_in, video_in, thinking…).
+    KimiCaps,
+    /// Nothing the catalogs know (temperature, default reasoning level…).
+    Other,
+}
+
+fn sense(path: &str) -> Sense {
+    match path {
+        "/modalities/input" | "/input" | "/input_modalities" => Sense::Input,
+        "/supportsImages" | "/properties/inputFormat/supportsImage" | "/generationConfig/modalities/image" => Sense::Reads("image"),
+        "/properties/inputFormat/supportsPdf" | "/generationConfig/modalities/pdf" => Sense::Reads("pdf"),
+        "/properties/inputFormat/supportsVideo" | "/generationConfig/modalities/video" => Sense::Reads("video"),
+        "/generationConfig/modalities/audio" => Sense::Reads("audio"),
+        "/noImageSupport" => Sense::NoImage,
+        "/attachment" => Sense::Attachment,
+        "/reasoning" | "/supportsReasoning" => Sense::Reasoning,
+        "/tool_call" | "/compat/supportsTools" | "/supportsToolCall" => Sense::Tools,
+        "/limit/output" | "/maxTokens" | "/maxOutputTokens" | "/optionSpecs/maxOutputTokens/max" | "/generationConfig/samplingParams/max_tokens" => Sense::MaxOutput,
+        "capabilities" => Sense::KimiCaps,
+        _ => Sense::Other,
+    }
+}
+
+/// Field values that follow from what is known about a model. Input kinds are written both
+/// ways when known; reasoning only when on and tool calls only when off (the agents'
+/// defaults are the other way round), so a guess adds as little as it can.
+pub fn from_info(specs: &[Spec], info: &crate::modelinfo::Info) -> Extra {
+    let known = info.input.is_some();
+    let mut out = Extra::new();
+    for s in specs {
+        let v = match (sense(s.path), s.kind) {
+            (Sense::Input, Kind::Chips(opts)) if known => Some(json!(opts.iter().map(|o| o.0).filter(|o| *o == "text" || info.reads(o)).collect::<Vec<_>>())),
+            (Sense::Reads(k), Kind::Bool) if known => Some(json!(info.reads(k))),
+            (Sense::NoImage, Kind::Bool) if known && !info.reads("image") => Some(json!(true)),
+            (Sense::Attachment, Kind::Bool) if info.reads("image") || info.reads("pdf") => Some(json!(true)),
+            (Sense::Reasoning, Kind::Bool) if info.reasoning == Some(true) => Some(json!(true)),
+            (Sense::Tools, Kind::Bool) if info.tools == Some(false) => Some(json!(false)),
+            (Sense::MaxOutput, Kind::Number) => info.output.map(|n| json!(n)),
+            (Sense::KimiCaps, Kind::Chips(_)) => {
+                let caps: Vec<&str> = [("image_in", info.reads("image")), ("video_in", info.reads("video")), ("thinking", info.reasoning == Some(true))]
+                    .into_iter()
+                    .filter_map(|(c, on)| on.then_some(c))
+                    .collect();
+                (!caps.is_empty()).then(|| json!(caps))
+            }
+            _ => None,
+        };
+        if let Some(v) = v {
+            out.insert(s.path.to_string(), v);
+        }
+    }
+    out
+}
+
 /// "/limit/output" -> "limit.output"
 pub fn dotted(path: &str) -> String {
     path.trim_start_matches('/').replace('/', ".")
@@ -327,6 +393,25 @@ mod tests {
         let kimi = fields(KIMI);
         assert_eq!(kimi[0].caps, ["图片", "视频", "思考", "始终思考"]);
         assert_eq!(kimi[0].hints[0], "读取图片", "the model dialog keeps the full option labels");
+    }
+
+    #[test]
+    fn catalog_facts_reach_every_input_and_number_field() {
+        for specs in [OPENCODE, PI, OPENCLAW, CODEBUDDY, DROID, CODEX, ZCODE, QWEN, KIMI] {
+            for s in specs {
+                let sn = sense(s.path);
+                if s.group == IO {
+                    assert_ne!(sn, Sense::Other, "{}", s.path);
+                }
+                if matches!(s.kind, Kind::Number) {
+                    assert_eq!(sn, Sense::MaxOutput, "{}", s.path);
+                }
+            }
+        }
+        let text_only = crate::modelinfo::Info { id: "t".into(), input: Some(vec!["text".into()]), tools: Some(true), reasoning: Some(false), ..Default::default() };
+        assert_eq!(from_info(DROID, &text_only), ex(&[("/noImageSupport", json!(true))]));
+        assert_eq!(from_info(OPENCODE, &text_only), ex(&[("/modalities/input", json!(["text"]))]), "defaults (tools on, no reasoning) are left out");
+        assert!(from_info(OPENCODE, &crate::modelinfo::Info::default()).is_empty(), "unknown input kinds stay unset");
     }
 
     #[test]

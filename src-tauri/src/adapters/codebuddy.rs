@@ -381,13 +381,16 @@ impl Work {
                             self.check_free(&g, m)?;
                         }
                         // Models the provider already has are left as they are.
-                        let added: Vec<&String> = models.iter().filter(|m| self.owner_of(m).is_none()).collect();
+                        let added: Vec<String> = models.iter().filter(|m| self.owner_of(m).is_none()).cloned().collect();
                         if !added.is_empty() {
                             self.diff.push(&file, trn!(added.len(), "+ 「{vendor}」{n} 个模型（{}{}）", "+ \"{vendor}\" {n} model ({}{})", "+ \"{vendor}\" {n} models ({}{})", url_of(&base), msg::key_suffix(new_key.as_deref())), true);
                         }
-                        for m in added {
+                        for m in &added {
                             self.entries.push(Self::new_entry(&key, m, None, None));
                             self.show(m);
+                        }
+                        for op in crate::modelinfo::seed_ops(ID, &g.id, &added) {
+                            self.apply(&op)?;
                         }
                     }
                     Some(id) => {

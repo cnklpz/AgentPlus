@@ -469,6 +469,9 @@ impl Fmt {
                         if let Some(k) = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
                             self.set_key(cfg, auth, &id, k, diff, dirty)?;
                         }
+                        for op in crate::modelinfo::seed_ops(&self.agent, &id, &p.models) {
+                            self.apply(&op, cfg, root, auth, diff, dirty)?;
+                        }
                     }
                     Some(id) => {
                         let in_cfg = cfg.pointer(&jptr(&["provider", id])).is_some();
@@ -672,6 +675,22 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, cfg.to_string()).unwrap();
         Fmt::new("opencode", path, Some(h.0.join("auth.json")), true)
+    }
+
+    #[test]
+    fn new_provider_models_are_filled_in_from_the_catalog() {
+        let h = TestHome::new("ocfmt-seed");
+        crate::modelinfo::test_cache_acme();
+        let f = write_cfg(&h, json!({}));
+        let (mut cfg, _, _) = f.load(true).unwrap();
+        let p = ProviderInput { id: None, name: "Relay".into(), base_url: "https://r.example.com/v1".into(), api: "chat".into(), api_key: None, models: vec!["acme-vision-9".into(), "mystery-x".into()], key_from_library: None, official_auth: None };
+        let (mut diff, mut dirty) = (Diff::default(), Dirty::default());
+        f.apply(&Op::UpsertProvider { provider: p }, &mut cfg, &mut json!({}), &mut None, &mut diff, &mut dirty).unwrap();
+        assert_eq!(cfg["provider"]["relay"]["models"]["acme-vision-9"], json!({
+            "limit": { "context": 64000, "output": 8192 }, "modalities": { "input": ["text", "image"], "output": ["text"] },
+            "attachment": true, "reasoning": true, "tool_call": false,
+        }));
+        assert_eq!(cfg["provider"]["relay"]["models"]["mystery-x"], json!({}));
     }
 
     #[test]

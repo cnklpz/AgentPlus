@@ -9,6 +9,7 @@ mod history;
 mod library;
 mod model;
 mod mfields;
+mod modelinfo;
 mod net;
 mod official;
 mod process;
@@ -182,6 +183,12 @@ async fn test_provider(agent: String, provider: String, model: String) -> Result
 #[tauri::command]
 async fn fetch_models_lib(id: String) -> Result<Vec<String>, String> {
     fetch_models(library::FROM.to_string(), id).await
+}
+
+/// What the model catalogs say about these ids, as `agent`'s model settings (unknown ids are left out).
+#[tauri::command]
+async fn guess_models(agent: String, ids: Vec<String>) -> Result<std::collections::BTreeMap<String, modelinfo::Guess>, String> {
+    blocking(move || Ok(modelinfo::guesses(&agent, &ids))).await
 }
 
 /// Model ids for a provider being added (key typed in the form).
@@ -434,6 +441,8 @@ pub fn run() {
             std::thread::spawn(gateway::server::autostart);
             // macOS: ask the login shell for PATH now, before the first detection needs it.
             std::thread::spawn(process::search_path);
+            // models.dev's catalog, for filling in new models' settings (refreshed weekly).
+            std::thread::spawn(modelinfo::refresh_if_stale);
             // The window starts hidden and the page shows it after its first render, so the
             // WebView's blank white never flashes. Fallback in case the page never gets there.
             if let Some(w) = app.get_webview_window("main") {
@@ -470,6 +479,7 @@ pub fn run() {
             fetch_models,
             fetch_models_url,
             fetch_models_lib,
+            guess_models,
             list_backups,
             backup_detail,
             restore_backup,

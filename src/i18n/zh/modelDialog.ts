@@ -20,4 +20,13 @@ export default {
   default: "默认",
   numberBad: "写成数字，可以带 k",
   resetDefault: "恢复默认",
+  matched: "已按「{id}」自动填入（{source}），可以再改",
+  sourceBuiltin: "内置资料",
+  sourceModelsDev: "models.dev",
+  auto: "自动匹配",
+  matchButton: "智能匹配",
+  matchHint: "按模型 ID 查内置资料和 models.dev，只填还没设置的项",
+  matchFilled: "已按「{id}」填入 {n} 项",
+  matchNothingNew: "「{id}」的资料里没有可补的项",
+  matchNone: "没找到这个模型的资料",
 };
