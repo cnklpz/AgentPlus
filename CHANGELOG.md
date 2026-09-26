@@ -2,6 +2,18 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.1
+
+官方供应商也能测速了。
+
+- 官方内置供应商（如 Codex 的 ChatGPT 账号登录、Claude 官方账号、Gemini CLI 的 Google 登录、OpenCode 的内置供应商）现在也会测速，测的是它们实际连接的官方接口，只计往返时间，不发送账号信息
+- 「过度」动画下，开启明文同步 API Key 的全屏警告关闭时也有退出动画
+
+Built-in official providers can be tested for latency too.
+
+- Built-in official providers (such as Codex's ChatGPT sign-in, the Claude official account, Gemini CLI's Google sign-in and OpenCode's built-in providers) now show a latency, measured against the official endpoint they connect to; only the round trip is timed and no account data is sent
+- At the Excessive motion level, the full-screen warning for syncing API keys in plain text now plays an exit animation when it closes
+
 ## 0.2.0
 
 多设备同步上线：可加密、可自动同步、保留同步记录；macOS 有了菜单栏。
