@@ -100,6 +100,8 @@ pub struct Provider {
     pub key_hint: Option<String>,
     /// Codex: keeps the ChatGPT sign-in while requests go to this provider (`requires_openai_auth`).
     pub official_auth: bool,
+    /// A built-in provider's official endpoint, only for the latency test. Filled in adapters::state.
+    pub probe_url: Option<String>,
 }
 
 impl AgentState {

@@ -6,7 +6,7 @@ import {
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
-import { type Latency, ProviderCard } from "./ProviderCard";
+import { type Latency, ProviderCard, testUrl } from "./ProviderCard";
 import { SessionsTab } from "./SessionsTab";
 import { TabBar, useSlideDir } from "./TabBar";
 import { OfficialFetch } from "./OfficialFetch";
@@ -139,12 +139,12 @@ export function AgentPage(props: Props) {
                   selected={props.selectedProvider === p.id}
                   enabled={p.isNew || isEnabled(p, draft)}
                   visible={providerModelCount(p, draft)}
-                  latency={p.baseUrl ? latency[p.baseUrl] : undefined}
+                  latency={testUrl(p) ? latency[testUrl(p)!] : undefined}
                   readonly={st.readonly}
                   onSelect={() => props.onSelectProvider(p.id)}
                   onModels={() => { setRailSel(p.id); setTab("models"); }}
                   onAction={() => props.onProviderAction(p)}
-                  onTest={() => p.baseUrl && props.onTestOne(p.baseUrl)}
+                  onTest={() => { const u = testUrl(p); if (u) props.onTestOne(u); }}
                 />
               ))}
               <button className="pcard-add" disabled={st.readonly} onClick={props.onAddProvider}><Icon.plus size={18} />{t("common.addProvider")}</button>

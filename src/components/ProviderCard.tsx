@@ -54,13 +54,18 @@ export function latencyText(l: Latency): { text: string; level: number } {
 }
 
 /** Latency text + signal level (0–3) for a provider. */
+/** Where a provider's latency is measured: its own address, else a built-in's official endpoint. */
+export function testUrl(p: Pick<Provider, "baseUrl" | "probeUrl">): string | null {
+  return p.baseUrl ?? p.probeUrl ?? null;
+}
+
 export function latencyView(p: Provider, off: boolean, latency: Latency): { text: string; level: number; live: boolean } {
   const live = typeof latency === "number" && p.compatible && !off;
   const level = !live ? 0 : latencyLevel(latency as number);
   let text: string;
   if (!p.compatible) text = scrub(p.reason) ?? t("providerCard.incompatible");
   else if (off) text = t("providerCard.offNoTest");
-  else if (!p.baseUrl) text = t("providerCard.accountLogin");
+  else if (!testUrl(p)) text = t("providerCard.accountLogin");
   else if (latency === "pending") text = t("providerCard.testing");
   else if (typeof latency === "number") text = `${latency} ms`;
   else text = scrub(latency) ?? t("providerCard.untested");
@@ -149,7 +154,7 @@ export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled,
         {p.isNew && <span className="tiny muted">{tn("common.modelCount", total)}</span>}
       </div>
       <div className="pcard-foot">
-        {p.baseUrl && p.compatible && !off && !pending ? (
+        {testUrl(p) && p.compatible && !off && !pending ? (
           <button className="lat-btn" title={t("common.retestHint")} onClick={stop(onTest)} disabled={latency === "pending"}>
             <Bars level={lat.level} />
             <span className={`lat${lat.live ? ` ${latencyTone(lat.level)}` : ""}`}>{lat.text}</span>

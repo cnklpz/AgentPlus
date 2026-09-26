@@ -407,6 +407,42 @@ pub fn set_dir(agent: &str, path: Option<&str>) -> Result<()> {
     store::save(&s)
 }
 
+/// The official endpoint a built-in provider talks to, for the latency test (one GET, no key).
+/// Sign-ins first (they don't use the vendor's public API), then vendors by their usual ids
+/// (OpenCode's auth.json, Hermes); unknown ones stay untested.
+fn official_probe(agent: &str, id: &str) -> Option<&'static str> {
+    let agent = agent.split('@').next().unwrap_or(agent);
+    let signed_in = match (agent, id) {
+        (codex::ID, "openai") => Some("https://chatgpt.com/backend-api/codex"),
+        (claude::ID, "official") => Some("https://api.anthropic.com/v1"),
+        (gemini::ID, "google") => Some("https://cloudcode-pa.googleapis.com/v1internal"),
+        (qwen::ID, "qwen-oauth") => Some("https://portal.qwen.ai/v1"),
+        (mimo::ID, "account") => Some("https://api.xiaomimimo.com/v1"),
+        (zcode::ID, "builtin:zai-coding-plan") => Some("https://api.z.ai/api/coding/paas/v4"),
+        _ => None,
+    };
+    signed_in.or(match id.strip_prefix("builtin:").unwrap_or(id) {
+        "openai" => Some("https://api.openai.com/v1"),
+        "anthropic" => Some("https://api.anthropic.com/v1"),
+        "google" | "gemini" => Some("https://generativelanguage.googleapis.com/v1beta"),
+        "github-copilot" | "copilot" => Some("https://api.githubcopilot.com"),
+        "xiaomi" => Some("https://api.xiaomimimo.com/v1"),
+        "xiaomi-token-plan-cn" => Some("https://token-plan-cn.xiaomimimo.com/v1"),
+        "opencode" => Some("https://opencode.ai/zen/v1"),
+        "opencode-go" => Some("https://opencode.ai/zen/go/v1"),
+        "deepseek" => Some("https://api.deepseek.com"),
+        "openrouter" => Some("https://openrouter.ai/api/v1"),
+        "zai" => Some("https://api.z.ai/api/paas/v4"),
+        "zhipuai" => Some("https://open.bigmodel.cn/api/paas/v4"),
+        "moonshotai" => Some("https://api.moonshot.ai/v1"),
+        "moonshotai-cn" => Some("https://api.moonshot.cn/v1"),
+        "xai" => Some("https://api.x.ai/v1"),
+        "groq" => Some("https://api.groq.com/openai/v1"),
+        "mistral" => Some("https://api.mistral.ai/v1"),
+        _ => None,
+    })
+}
+
 pub fn state(agent: &str) -> Result<AgentState> {
     let (mut st, found) = if ocproject::is_project(agent) {
         (ocproject::state(agent)?, None)
@@ -422,6 +458,10 @@ pub fn state(agent: &str) -> Result<AgentState> {
             p.key_fp = Some(crate::model::key_fingerprint(&k));
             p.key_hint = Some(crate::model::mask_key(&k));
         }
+    }
+    // Built-in providers have no base URL of their own: their official endpoint is tested instead.
+    for p in st.providers.iter_mut().filter(|p| p.builtin && p.base_url.is_none()) {
+        p.probe_url = official_probe(agent, &p.id).map(String::from);
     }
     // A project folder is neither installed nor started: nothing below applies.
     let Some((e, inst)) = found else { return Ok(st) };
@@ -634,6 +674,20 @@ mod tests {
         // The Windows desktop apps.
         let desktop: Vec<&str> = EXT.iter().filter(|e| !in_wsl(e)).map(|e| e.id).collect();
         assert_eq!(desktop, [zcode::ID, mimo::ID]);
+    }
+
+    #[test]
+    fn official_probes_follow_the_sign_in_then_the_vendor() {
+        // Codex's ChatGPT sign-in is not the public OpenAI API; OpenCode's "openai" is.
+        assert_eq!(official_probe(codex::ID, "openai"), Some("https://chatgpt.com/backend-api/codex"));
+        assert_eq!(official_probe(opencode::ID, "openai"), Some("https://api.openai.com/v1"));
+        assert_eq!(official_probe("opencode@D:/proj", "opencode-go"), Some("https://opencode.ai/zen/go/v1"));
+        assert_eq!(official_probe(hermes::ID, "builtin:openrouter"), Some("https://openrouter.ai/api/v1"));
+        assert_eq!(official_probe(zcode::ID, "builtin:zai"), Some("https://api.z.ai/api/paas/v4"));
+        assert_eq!(official_probe(zcode::ID, "builtin:zai-coding-plan"), Some("https://api.z.ai/api/coding/paas/v4"));
+        assert_eq!(official_probe(claude::ID, "official"), Some("https://api.anthropic.com/v1"));
+        assert_eq!(official_probe(opencode::ID, "some-custom-thing"), None);
+        assert_eq!(official_probe(gemini::ID, "vertex-ai"), None);
     }
 
     #[test]

@@ -100,6 +100,8 @@ export interface Provider {
   id: string;
   name: string;
   baseUrl: string | null;
+  /** A built-in provider's official endpoint, only for the latency test. */
+  probeUrl?: string | null;
   host: string;
   apis: string[];
   builtin: boolean;
@@ -726,12 +728,12 @@ const withTags = (m: Model): Model => ({ ...m, tags: (m.tags ?? []).map(tagOf) }
 async function fixture(): Promise<AgentState[]> {
   const load = FIXTURE["./dev-fixture.json"];
   const raw = load ? ((await load()).default as AgentState[]) : [];
-  // The snapshot may predate `restartable` (its desktop apps are), `currentModel` and the
-  // model fields' `caps`.
+  // The snapshot may predate `restartable` (its desktop apps are), `currentModel`, the
+  // model fields' `caps` and built-ins' `probeUrl` (demo latencies are made up anyway).
   const list = raw.map((a) => ({
     ...a, restartable: a.restartable ?? true, running: demoRunning[a.id] ?? a.running,
     currentModel: a.currentModel ?? null, modelFields: a.modelFields?.map((f) => ({ ...f, caps: f.caps ?? [] })),
-    catalog: a.catalog?.map(withTags) ?? null, providers: a.providers.map((p) => ({ ...p, models: p.models.map(withTags) })),
+    catalog: a.catalog?.map(withTags) ?? null, providers: a.providers.map((p) => ({ ...p, probeUrl: p.probeUrl ?? (p.builtin && !p.baseUrl ? "https://official.example" : null), models: p.models.map(withTags) })),
   }));
   // No OpenCode in the snapshot: MiMo runs the same config format, so it stands in.
   const mimo = list.find((a) => a.id === "mimo");

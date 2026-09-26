@@ -1,7 +1,7 @@
 import type { AgentId, AgentState, ApiKind, GatewayRouteView } from "../api";
 import { type Draft, type ViewProvider, currentProvider, isEnabled, providerModelCount } from "../draft";
 import { AgentIcon, Icon } from "./icons";
-import { Avatar, Bars, type Latency, colorFor, latencyTone, latencyView, serviceKey } from "./ProviderCard";
+import { Avatar, Bars, type Latency, colorFor, latencyTone, latencyView, serviceKey, testUrl } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
 import { API_LABEL } from "../services";
 import { t } from "../i18n";
@@ -69,7 +69,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
         <div className="pdetail-lat">
           <Bars level={lat.level} />
           <span className={`lat${lat.live ? ` ${latencyTone(lat.level)}` : ""}`}>{lat.text}</span>
-          {p.baseUrl && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />{t("common.retest")}</button>}
+          {testUrl(p) && p.compatible && !off && <button className="btn small" onClick={onTest}><Icon.pulse size={12} />{t("common.retest")}</button>}
         </div>
       )}
 

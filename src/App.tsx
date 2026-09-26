@@ -13,7 +13,7 @@ import { Aside } from "./components/Aside";
 import { CommandPalette, type Target } from "./components/CommandPalette";
 import { HistoryPage } from "./components/HistoryPage";
 import { AgentIcon, Icon } from "./components/icons";
-import type { Latency } from "./components/ProviderCard";
+import { type Latency, testUrl } from "./components/ProviderCard";
 import { ProviderDetail } from "./components/ProviderDetail";
 import { ProviderDialog, type ProviderSave } from "./components/ProviderDialog";
 import { ProvidersHub } from "./components/ProvidersHub";
@@ -386,7 +386,7 @@ export default function App() {
 
   const testAll = useCallback((force: boolean) => {
     if (!st) return;
-    const urls = [...new Set(st.providers.filter((p) => p.baseUrl && p.compatible).map((p) => p.baseUrl!))];
+    const urls = [...new Set(st.providers.filter((p) => p.compatible).map(testUrl).filter((u): u is string => !!u))];
     for (const u of urls) {
       if (force || latency[u] === undefined) testOne(u);
     }
@@ -1494,9 +1494,9 @@ export default function App() {
                 p={pickedProvider}
                 draft={draft}
                 agents={shown}
-                latency={pickedProvider.baseUrl ? latency[pickedProvider.baseUrl] : undefined}
+                latency={testUrl(pickedProvider) ? latency[testUrl(pickedProvider)!] : undefined}
                 onClose={closeDetail}
-                onTest={() => pickedProvider.baseUrl && testOne(pickedProvider.baseUrl)}
+                onTest={() => { const u = testUrl(pickedProvider); if (u) testOne(u); }}
                 onAction={() => providerAction(pickedProvider)}
                 onModels={() => showModels(st.id, pickedProvider.id)}
                 onCopy={(text) => copyText(text, flash, t("app.urlCopied"))}
