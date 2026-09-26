@@ -52,9 +52,24 @@ export function savePrefs(p: Prefs): void {
   }
 }
 
+let motion: Motion | null = null;
 function applyMotion(m: Motion): void {
+  if (motion === m) return;
+  const switching = motion !== null && typeof document.getAnimations === "function";
+  motion = m;
+  // Each level names its own entrance animations (the page title fades at one, drops in at
+  // another), and a new animation name replays the entrance on everything already on
+  // screen: the title would flash. Animations this switch starts skip to their end, except
+  // on elements that were about to animate anyway (text that changed with this click) and
+  // looping ones (spinners, the gateway's pulse).
+  const starting = switching ? new Set(document.getAnimations().filter((a) => !a.currentTime).map(target)) : null;
   document.documentElement.dataset.motion = m;
+  if (!starting) return;
+  for (const a of document.getAnimations()) {
+    if (a instanceof CSSAnimation && !a.currentTime && a.effect?.getTiming().iterations !== Infinity && !starting.has(target(a))) a.finish();
+  }
 }
+const target = (a: Animation) => (a.effect instanceof KeyframeEffect ? a.effect.target : null);
 
 const systemDark = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
 let theme: Theme = "auto";
