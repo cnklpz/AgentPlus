@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
 import {
@@ -325,6 +326,25 @@ export default function App() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // macOS menu bar (appmenu.rs): its AgentPlus items arrive as `menu` events.
+  const menuRef = useRef((_id: string) => {});
+  menuRef.current = (id: string) => {
+    if (id === "settings") openSettings();
+    else if (id === "check-update") {
+      openSettings();
+      checkUpdate();
+      window.setTimeout(() => document.getElementById("update-row")?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    } else if (id === "search") setPalette(true);
+    else if (id === "reload") refreshRef.current();
+    else if (id === "privacy") togglePrivacy();
+    else if (id === "providers" || id === "gateway" || id === "history") setPage(id);
+  };
+  useEffect(() => {
+    if (!inTauri || !isMac) return;
+    const off = listen<string>("menu", (e) => menuRef.current(e.payload));
+    return () => { off.then((f) => f()); };
   }, []);
 
   // Live diff preview for the selected agent.

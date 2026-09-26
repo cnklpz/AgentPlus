@@ -251,7 +251,7 @@ function UpdateRow({ flash }: { flash: Flash }) {
     : u.kind === "installing" ? t("settingsPage.updateInstalling")
     : null;
   return (
-    <div className="srow stacked">
+    <div className="srow stacked" id="update-row">
       <div className="row gap6">
         <div className="grow minw0">
           <div className="slabel">

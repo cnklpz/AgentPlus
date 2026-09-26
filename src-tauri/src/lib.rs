@@ -2,6 +2,7 @@
 mod i18n;
 mod adapters;
 mod applog;
+mod appmenu;
 mod cdp;
 mod dotenv;
 mod env;
@@ -424,6 +425,7 @@ fn library_delete(id: String) -> Result<(), String> {
 fn set_locale(app: tauri::AppHandle, lang: String) {
     i18n::set(&lang);
     tray::relabel(&app);
+    appmenu::relabel(&app);
 }
 
 /// Quit from the window's close button (the tray menu quits on its own).
@@ -570,6 +572,7 @@ pub fn run() {
             applog::info("app", format!("AgentPlus {} started on {} {} ({})", app.package_info().version, std::env::consts::OS, std::env::consts::ARCH, os_version()));
             install_panic_hook();
             tray::setup(app.handle())?;
+            appmenu::setup(app.handle())?;
             // Off the startup path: binding the port and stopping an old listener can wait.
             std::thread::spawn(gateway::server::autostart);
             // macOS: ask the login shell for PATH now, before the first detection needs it.
