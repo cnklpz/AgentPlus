@@ -81,7 +81,7 @@
   --rise: 6px;
   --slide: 12px;
   --pop: .985;
-  --fx: none; /* entrance filter; only the "Extra" level blurs */
+  --fx: none; /* entrance filter; only the "Excessive" level blurs */
 }
 :root[data-motion="reduced"] { --rise: 0px; --slide: 0px; --pop: 1; }
 @media (prefers-reduced-motion: reduce) { :root:not([data-motion="off"]) { --rise: 0px; --slide: 0px; --pop: 1; } }

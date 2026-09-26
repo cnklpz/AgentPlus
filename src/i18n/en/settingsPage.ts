@@ -21,7 +21,7 @@ export default {
   themeDark: "Dark",
   motion: "Animations",
   motionHint: "{hint}. Toned down automatically when the system's \"Reduce motion\" is on",
-  motionRich: "Extra",
+  motionRich: "Excessive",
   motionRichHint: "Springy transitions, overscroll bounce, click ripples, cards tilting with the pointer, popover exits: animation everywhere",
   motionFull: "Standard",
   motionFullHint: "Subtle transitions on pages, cards and dialogs",

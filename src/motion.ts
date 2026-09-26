@@ -1,4 +1,4 @@
-// The "Extra" motion level: effects that need pointer or DOM state, which CSS alone
+// The "Excessive" motion level: effects that need pointer or DOM state, which CSS alone
 // can't do. Installed once at startup; every handler is a no-op unless
 // <html data-motion="rich"> and the system isn't asking for reduced motion.
 // Styles for the classes used here live in styles-motion.css.
