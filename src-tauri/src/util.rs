@@ -225,13 +225,36 @@ pub fn tmp_sibling(target: &Path) -> PathBuf {
     target.with_extension(format!("{}.{}-{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or(""), std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
 }
 
+/// Temp files `tmp_sibling` left next to `target` by a write that crashed (each write
+/// uses a fresh name, so nothing overwrites them). Recent ones may belong to a write
+/// still in progress and are kept.
+fn remove_stale_tmps(target: &Path) {
+    let (Some(dir), Some(name)) = (target.parent(), target.file_name().and_then(|n| n.to_str())) else { return };
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+    for e in entries.flatten() {
+        let file = e.file_name();
+        let Some(mid) = file.to_str().and_then(|f| f.strip_prefix(name)).and_then(|r| r.strip_suffix(".agentplus-tmp")) else { continue };
+        // "<pid>-<n>" after the extension's dots, or nothing (the fixed name older versions used).
+        let mid = mid.trim_start_matches('.');
+        let ours = mid.is_empty() || mid.split_once('-').is_some_and(|(a, b)| [a, b].iter().all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit())));
+        if ours && e.metadata().is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < cutoff)) {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Renames `tmp` over `target`, retrying for a moment while another program (antivirus,
 /// an editor) holds the file. On failure `tmp` is removed; errors name the file as `shown`.
+/// On success, temp files crashed writes left next to `target` are cleared.
 pub fn replace_file(tmp: &Path, target: &Path, shown: &Path) -> Result<()> {
     let mut last = None;
     for _ in 0..10 {
         match fs::rename(tmp, target) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                remove_stale_tmps(target);
+                return Ok(());
+            }
             Err(e) => last = Some(e),
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -720,6 +743,37 @@ mod tests {
         assert!(require_dir(&d.join("nope")).unwrap_err().to_string().starts_with("找不到文件夹："));
         fs::write(d.join("five"), "12345").unwrap();
         assert_eq!((file_len(&d.join("nope")), file_len(&d.join("five"))), (0, 5));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Temps a crashed write left behind go once they are old; fresh ones (a write in
+    /// progress) and other files that merely look alike stay.
+    #[test]
+    fn successful_writes_clear_stale_temps() {
+        let d = tmp("stale-temps");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let make = |name: &str, aged: bool| {
+            let p = d.join(name);
+            fs::write(&p, "x").unwrap();
+            if aged {
+                fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+            }
+            p
+        };
+        let stale = [make("config.toml.123-4.agentplus-tmp", true), make("config.toml.agentplus-tmp", true)];
+        let kept = [
+            make("config.toml.123-5.agentplus-tmp", false),
+            make("config.json.123-4.agentplus-tmp", true),
+            make("config.toml.bak.agentplus-tmp", true),
+            make("config.toml.bak", true),
+        ];
+        let bare = [make("settings..9-1.agentplus-tmp", true), make(".env..9-2.agentplus-tmp", true)];
+        write_bytes_atomic(&d.join("config.toml"), b"new").unwrap();
+        write_bytes_atomic(&d.join("settings"), b"new").unwrap();
+        write_bytes_atomic(&d.join(".env"), b"new").unwrap();
+        assert!(stale.iter().chain(&bare).all(|p| !p.exists()));
+        assert!(kept.iter().all(|p| p.exists()));
+        assert_eq!(fs::read_to_string(d.join("config.toml")).unwrap(), "new");
         let _ = fs::remove_dir_all(&d);
     }
 
