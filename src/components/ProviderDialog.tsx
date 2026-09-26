@@ -159,8 +159,8 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       let list: string[];
       if (unifiedNew || onUnified) {
         // Every model the chosen forwards (or all of them) offer.
-        const g = await ensureGateway();
-        list = await api.fetchModelsUrl(gatewayPoolBase(g.port, pool), null, "chat");
+        await ensureGateway();
+        list = await api.gatewayModels(pool);
       } else if (!isNew && gw && gatewayRoute) {
         // Forwarded through the gateway, but the list still comes from the original endpoint.
         list = await api.fetchModelsLib(gatewayRoute.library);

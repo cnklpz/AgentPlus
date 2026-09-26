@@ -454,7 +454,11 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let mut backup_dir = None;
     if !dry_run {
         if cfg_dirty {
-            backup_dir = Some(backup(ID, &[settings_path()])?);
+            // Profile-only edits leave settings.json alone and need no backup; a settings
+            // backup carries the profiles it was written from (see history::PROFILE_AGENTS).
+            let b = backup(ID, &[settings_path()])?;
+            crate::history::backup_profiles(&b, &store::scoped(ID), &root)?;
+            backup_dir = Some(b);
             std::fs::create_dir_all(dir())?;
             write_json(&settings_path(), &cfg, meta)?;
             written.push(settings_path());
@@ -533,6 +537,37 @@ mod tests {
         assert!(apply(vec![Op::UpsertModel { provider: "r".into(), model: model("m") }]).unwrap().groups.is_empty());
         assert!(apply(vec![Op::SetModelVisible { provider: "r".into(), model: "m".into(), visible: true }]).unwrap().groups.is_empty());
         assert_eq!(fs::read_to_string(agentplus_dir().join("store.json")).unwrap(), store0);
+    }
+
+    #[test]
+    fn rollback_restores_profiles_and_survives_unrelated_edits() {
+        let _h = setup(Some("{}"));
+        apply(vec![Op::UpsertProvider { provider: pi(None, "Relay", "https://r", Some("dummy-key"), &["old", "new"]) }]).unwrap();
+        let role = |model: &str| Op::SetModelRoles { provider: "relay".into(), roles: BTreeMap::from([("default".into(), model.into())]) };
+        apply(vec![role("old"), Op::SetCurrentProvider { provider: "relay".into() }]).unwrap();
+        let (_, _, dir) = plan(&[role("new")], false).unwrap();
+        let dir = dir.unwrap();
+        let id = format!("{}/claude", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
+        store::update(|root| {
+            root["library"] = json!([{"id":"keep-library"}]);
+            root["gatewayKeys"] = json!({"codex":"keep-key"});
+            root["claude"]["autoRestart"] = json!(true);
+            root["claude@wsl:Ubuntu"] = json!({"profiles":{"keep-wsl":{}}});
+            Ok(())
+        }).unwrap();
+        crate::history::restore(&id).unwrap();
+        assert_eq!(settings()["env"]["ANTHROPIC_MODEL"], "old");
+        apply(vec![Op::SetSetting { key: "quiet".into(), value: json!(true) }]).unwrap();
+        assert_eq!(settings()["env"]["ANTHROPIC_MODEL"], "old");
+        let root = store::load();
+        assert_eq!(root["claude"]["profiles"]["relay"]["roles"]["default"], "old");
+        assert_eq!(root["library"][0]["id"], "keep-library");
+        assert_eq!(root["gatewayKeys"]["codex"], "keep-key");
+        assert_eq!(root["claude"]["autoRestart"], true);
+        assert!(root["claude@wsl:Ubuntu"]["profiles"]["keep-wsl"].is_object());
+        // A profile-only edit leaves settings.json alone and adds no backup.
+        let (d, written, backup) = plan(&[Op::UpsertModel { provider: "relay".into(), model: model("extra") }], false).unwrap();
+        assert!(!d.groups.is_empty() && written.is_empty() && backup.is_none());
     }
 
     #[test]

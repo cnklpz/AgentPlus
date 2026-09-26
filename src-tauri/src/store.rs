@@ -95,20 +95,18 @@ fn write(v: &Value) -> anyhow::Result<()> {
 }
 
 fn write_in(dir: &Path, v: &Value) -> anyhow::Result<()> {
-    fs::create_dir_all(dir)?;
+    crate::util::ensure_private_dir(dir)?;
     let path = dir.join("store.json");
     // A file that exists but does not parse loaded as {}: keep it instead of overwriting it.
     if path.exists() && read(&path).is_none() && fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
         let keep = dir.join(format!("store.broken-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-        fs::copy(&path, &keep).with_context(|| tr!("备份无法解析的 {} 失败", "Failed to back up unparsable {}", path.display()))?;
+        crate::util::write_private_atomic(&keep, &fs::read(&path)?).with_context(|| tr!("备份无法解析的 {} 失败", "Failed to back up unparsable {}", path.display()))?;
     }
-    let tmp = dir.join(format!("store.json.{}.tmp", std::process::id()));
-    fs::write(&tmp, serde_json::to_string_pretty(v)?).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
-    crate::util::replace_file(&tmp, &path, &path)
+    crate::util::write_private_atomic(&path, &serde_json::to_vec_pretty(v)?)
 }
 
 /// Per-agent entries are kept apart per environment: "codex" on Windows, "codex@wsl:Ubuntu" in WSL.
-fn scoped(agent: &str) -> String {
+pub(crate) fn scoped(agent: &str) -> String {
     if crate::env::is_wsl() && crate::adapters::ALL.contains(&agent) {
         format!("{agent}@{}", crate::env::id())
     } else {
@@ -185,6 +183,27 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_and_broken_copies_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = crate::util::TestHome::new("store-private");
+        let d = h.0.join(".agentplus");
+        let p = d.join("store.json");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        write_in(&d, &json!({ "library": [{ "apiKey": "dummy" }] })).unwrap();
+        assert_eq!(mode(&d), 0o700);
+        assert_eq!(mode(&p), 0o600);
+        fs::set_permissions(&d, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(&p, "{ broken secret").unwrap();
+        write_in(&d, &json!({})).unwrap();
+        assert_eq!(mode(&d), 0o700);
+        for e in fs::read_dir(&d).unwrap().flatten() {
+            assert_eq!(mode(&e.path()), 0o600);
+        }
     }
 
     /// Readers running while the store is rewritten over and over never see a partial file.

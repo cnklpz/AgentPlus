@@ -141,10 +141,77 @@ pub fn write_text_atomic(path: &Path, text: &str, meta: TextMeta) -> Result<()> 
 /// Replaces `path` with `bytes` as a whole (temp file + rename), so a reader never sees
 /// half a file. A symlinked config is written through (see `resolve_link`).
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, false)
+}
+
+/// App-owned credentials are private even when an older version created a public file.
+pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, true)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
+    use std::io::Write;
     let target = resolve_link(path)?;
     let tmp = tmp_sibling(&target);
-    fs::write(&tmp, bytes).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        // The temp never exposes credentials before its final permissions are applied.
+        options.mode(0o600);
+        if private {
+            fs::Permissions::from_mode(0o600)
+        } else {
+            match fs::metadata(&target) {
+                Ok(m) => m.permissions(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::Permissions::from_mode(0o600),
+                Err(e) => return Err(e.into()),
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let _ = private;
+    let mut file = options.open(&tmp).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    let written = (|| -> std::io::Result<()> {
+        file.write_all(bytes)?;
+        #[cfg(unix)]
+        file.set_permissions(permissions)?;
+        Ok(())
+    })();
+    drop(file);
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()));
+    }
     replace_file(&tmp, &target, path)
+}
+
+/// Restricts AgentPlus's own data directory, including files made by older versions.
+/// Only creating it can fail: a file system that refuses the permission change (or a
+/// folder owned by someone else) is logged, and AgentPlus keeps working.
+pub fn ensure_private_dir(path: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // The store calls this on every write: one line in the log is enough.
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                crate::applog::warn("fs", format!("chmod 700 {} failed: {e}", path.display()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The file a write to `path` should replace: a symlinked config (dotfile managers) is
@@ -156,18 +223,46 @@ pub fn resolve_link(path: &Path) -> Result<PathBuf> {
     })
 }
 
-/// The temp file next to `target` that then replaces it: `config.toml.agentplus-tmp`.
+/// A distinct sibling for each write, so concurrent writes cannot share a temp file.
 pub fn tmp_sibling(target: &Path) -> PathBuf {
-    target.with_extension(format!("{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or("")))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    target.with_extension(format!("{}.{}-{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or(""), std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
+}
+
+/// Temp files `tmp_sibling` left next to `target` by a write that crashed (each write
+/// uses a fresh name, so nothing overwrites them). A crash leaves them from an earlier
+/// process: this process's own are writes in progress, whatever their time says (a
+/// rollback's `fs::copy` keeps the backup's old mtime). Recent ones are kept as well.
+fn remove_stale_tmps(target: &Path) {
+    let (Some(dir), Some(name)) = (target.parent(), target.file_name().and_then(|n| n.to_str())) else { return };
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+    let me = std::process::id().to_string();
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit());
+    for e in entries.flatten() {
+        let file = e.file_name();
+        let Some(mid) = file.to_str().and_then(|f| f.strip_prefix(name)).and_then(|r| r.strip_suffix(".agentplus-tmp")) else { continue };
+        // "<pid>-<n>" after the extension's dots, or nothing (the fixed name older versions used).
+        let mid = mid.trim_start_matches('.');
+        let stale = mid.is_empty() || mid.split_once('-').is_some_and(|(pid, n)| digits(pid) && digits(n) && pid != me);
+        if stale && e.metadata().is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < cutoff)) {
+            let _ = fs::remove_file(e.path());
+        }
+    }
 }
 
 /// Renames `tmp` over `target`, retrying for a moment while another program (antivirus,
 /// an editor) holds the file. On failure `tmp` is removed; errors name the file as `shown`.
+/// On success, temp files crashed writes left next to `target` are cleared.
 pub fn replace_file(tmp: &Path, target: &Path, shown: &Path) -> Result<()> {
     let mut last = None;
     for _ in 0..10 {
         match fs::rename(tmp, target) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                remove_stale_tmps(target);
+                return Ok(());
+            }
             Err(e) => last = Some(e),
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -618,6 +713,30 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writes_keep_permissions_and_create_private_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = TestHome::new("private-writes");
+        let p = h.0.join("config.json");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        fs::write(&p, "old").unwrap();
+        for bits in [0o600, 0o640] {
+            fs::set_permissions(&p, fs::Permissions::from_mode(bits)).unwrap();
+            write_bytes_atomic(&p, b"secret").unwrap();
+            assert_eq!(mode(&p), bits);
+        }
+        let link = h.0.join("link.json");
+        std::os::unix::fs::symlink(&p, &link).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        write_bytes_atomic(&link, b"new secret").unwrap();
+        assert_eq!(mode(&p), 0o600);
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        let new = h.0.join("new.json");
+        write_bytes_atomic(&new, b"secret").unwrap();
+        assert_eq!(mode(&new), 0o600);
+    }
+
     #[test]
     fn replace_file_cleans_up_on_failure() {
         let d = tmp("replace");
@@ -632,6 +751,41 @@ mod tests {
         assert!(require_dir(&d.join("nope")).unwrap_err().to_string().starts_with("找不到文件夹："));
         fs::write(d.join("five"), "12345").unwrap();
         assert_eq!((file_len(&d.join("nope")), file_len(&d.join("five"))), (0, 5));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// Temps a crashed write left behind go once they are old; fresh ones, this process's
+    /// own (writes in progress) and other files that merely look alike stay.
+    #[test]
+    fn successful_writes_clear_stale_temps() {
+        let d = tmp("stale-temps");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let make = |name: &str, aged: bool| {
+            let p = d.join(name);
+            fs::write(&p, "x").unwrap();
+            if aged {
+                fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+            }
+            p
+        };
+        // A crashed earlier process.
+        let other = std::process::id().wrapping_add(1);
+        let stale = [make(&format!("config.toml.{other}-4.agentplus-tmp"), true), make("config.toml.agentplus-tmp", true)];
+        let kept = [
+            make(&format!("config.toml.{other}-5.agentplus-tmp"), false),
+            make(&format!("config.json.{other}-4.agentplus-tmp"), true),
+            make("config.toml.bak.agentplus-tmp", true),
+            make("config.toml.bak", true),
+            // An old mtime from fs::copy, as a rollback in progress leaves it.
+            make(&format!("config.toml.{}-9.agentplus-tmp", std::process::id()), true),
+        ];
+        let bare = [make(&format!("settings..{other}-1.agentplus-tmp"), true), make(&format!(".env..{other}-2.agentplus-tmp"), true)];
+        write_bytes_atomic(&d.join("config.toml"), b"new").unwrap();
+        write_bytes_atomic(&d.join("settings"), b"new").unwrap();
+        write_bytes_atomic(&d.join(".env"), b"new").unwrap();
+        assert!(stale.iter().chain(&bare).all(|p| !p.exists()));
+        assert!(kept.iter().all(|p| p.exists()));
+        assert_eq!(fs::read_to_string(d.join("config.toml")).unwrap(), "new");
         let _ = fs::remove_dir_all(&d);
     }
 

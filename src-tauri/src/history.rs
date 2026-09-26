@@ -31,6 +31,26 @@ pub struct BackupEntry {
 pub struct BackupFile {
     pub name: String,
     pub path: Option<String>,
+    /// A snapshot of one environment's profiles, never the entire shared store.
+    #[serde(skip)]
+    profile_scope: Option<String>,
+}
+
+/// Agents whose config files are written from AgentPlus profiles: a rollback has to bring
+/// the profiles back too, or the next edit writes the newer model into the file again.
+const PROFILE_AGENTS: [&str; 2] = [crate::adapters::claude::ID, crate::adapters::gemini::ID];
+
+/// Adds the profiles that belong to the config being backed up. The manifest records
+/// the environment now, so restoring a Windows backup while viewing WSL stays in Windows.
+pub fn backup_profiles(dir: &Path, scope: &str, root: &Value) -> Result<()> {
+    let name = "agentplus-profiles.json";
+    let value = root.get(scope).and_then(|a| a.get("profiles")).unwrap_or(&Value::Null);
+    write_private_atomic(&dir.join(name), &serde_json::to_vec_pretty(value)?)?;
+    let path = agentplus_dir().join("store.json");
+    let mut manifest = read_json(&dir.join("manifest.json"))?.0;
+    manifest["files"].as_array_mut().ok_or_else(|| anyhow!(l("无效的备份清单", "Invalid backup manifest")))?
+        .push(serde_json::json!({ "name": name, "path": path, "profileScope": scope }));
+    write_private_atomic(&dir.join("manifest.json"), &serde_json::to_vec_pretty(&manifest)?)
 }
 
 fn root() -> PathBuf {
@@ -79,13 +99,21 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
             continue;
         }
         bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
-        let path = manifest
+        let record = manifest
             .as_ref()
             .and_then(|m| m["files"].as_array())
-            .and_then(|a| a.iter().find(|f| f["name"].as_str() == Some(&name)))
-            .and_then(|f| f["path"].as_str().map(String::from))
-            .or_else(|| legacy_path(&agent, &name).map(|p| p.to_string_lossy().to_string()));
-        files.push(BackupFile { name, path });
+            .and_then(|a| a.iter().find(|f| f["name"].as_str() == Some(&name)));
+        let profile_scope = record.and_then(|f| f["profileScope"].as_str())
+            .filter(|scope| *scope == agent || scope.strip_prefix(&format!("{agent}@wsl:")).is_some_and(|d| !d.is_empty()))
+            .map(String::from);
+        let path = if record.is_some_and(|f| f.get("profileScope").is_some()) {
+            // Invalid snapshot metadata must never fall through to replacing store.json.
+            profile_scope.as_ref().map(|_| agentplus_dir().join("store.json").to_string_lossy().to_string())
+        } else {
+            record.and_then(|f| f["path"].as_str().map(String::from))
+                .or_else(|| legacy_path(&agent, &name).map(|p| p.to_string_lossy().to_string()))
+        };
+        files.push(BackupFile { name, path, profile_scope });
     }
     let reason = manifest
         .as_ref()
@@ -98,10 +126,13 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
             };
             l(zh, en).into()
         });
-    let missing: Vec<&str> = files.iter().filter(|f| f.path.as_ref().is_some_and(|p| !Path::new(p).is_file())).map(|f| f.name.as_str()).collect();
+    let missing: Vec<&str> = files.iter().filter(|f| f.profile_scope.is_none() && f.path.as_ref().is_some_and(|p| !Path::new(p).is_file())).map(|f| f.name.as_str()).collect();
     let mut blocked_missing = false;
     let blocked = if agent.starts_with("codex-") {
         Some(l("数据库类备份，请在「会话」页撤销或手动处理", "Database backup: undo it on the Sessions page or handle it manually").to_string())
+    } else if PROFILE_AGENTS.contains(&agent.as_str()) && !files.iter().any(|f| f.profile_scope.is_some()) {
+        let name = crate::adapters::display_name(&agent);
+        Some(tr!("备份缺少 {name} 配置档，请手动恢复并核对配置", "The backup has no {name} profiles. Restore it manually and check the config"))
     } else if files.is_empty() || files.iter().any(|f| f.path.is_none()) {
         Some(l("不知道原文件放在哪", "Unknown original file location").to_string())
     } else if !missing.is_empty() {
@@ -165,14 +196,33 @@ fn backup_dir(id: &str) -> Result<(&str, &str, PathBuf)> {
 /// Copies a backup's files back to their original places. The current files are
 /// backed up first, so a rollback can itself be rolled back.
 pub fn restore(id: &str) -> Result<String> {
+    crate::store::transaction(|| restore_in(id))
+}
+
+fn restore_in(id: &str) -> Result<String> {
     let (stamp, agent, dir) = backup_dir(id)?;
     let entry = read_entry(stamp, &dir).ok_or_else(|| anyhow!(tr!("找不到备份 {id}", "Backup not found: {id}")))?;
     if !entry.restorable {
         return Err(anyhow!(tr!("这份备份不能自动回滚：{}", "This backup can't be rolled back automatically: {}", entry.blocked.unwrap_or(entry.reason))));
     }
-    let targets: Vec<PathBuf> = entry.files.iter().filter_map(|f| f.path.as_ref().map(PathBuf::from)).collect();
-    let safety = backup_tagged(agent, &targets, &tr!("回滚到 {stamp} 之前", "Before rolling back to {stamp}"))?;
+    // Decode every profile snapshot before writing any files. Only profiles are restored;
+    // library entries, gateway keys and other agents' settings keep their current values.
+    let mut profiles = vec![];
     for f in &entry.files {
+        if let Some(scope) = &f.profile_scope {
+            let value = read_json(&dir.join(&f.name))?.0;
+            if !value.is_object() && !value.is_null() {
+                return Err(anyhow!(l("备份中的配置档无法读取，没有回滚", "Can't read the backed-up profiles; nothing was restored")));
+            }
+            profiles.push((scope.clone(), value));
+        }
+    }
+    let targets: Vec<PathBuf> = entry.files.iter().filter(|f| f.profile_scope.is_none()).filter_map(|f| f.path.as_ref().map(PathBuf::from)).collect();
+    let safety = backup_tagged(agent, &targets, &tr!("回滚到 {stamp} 之前", "Before rolling back to {stamp}"))?;
+    for (scope, _) in &profiles {
+        backup_profiles(&safety, scope, &crate::store::load())?;
+    }
+    for f in entry.files.iter().filter(|f| f.profile_scope.is_none()) {
         let to = PathBuf::from(f.path.as_ref().unwrap());
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent)?;
@@ -192,7 +242,31 @@ pub fn restore(id: &str) -> Result<String> {
             return Err(anyhow!(tr!("恢复 {} 失败：{e}（回滚前的文件备份在 {}）", "Failed to restore {}: {e} (the pre-rollback files are backed up in {})", to.display(), display_path(&safety))));
         }
     }
-    Ok(tr!("已回滚 {} 个文件到 {stamp} 的状态（回滚前的文件备份在 {}）", "Rolled back {} file(s) to their state at {stamp} (the pre-rollback files are backed up in {})", entry.files.len(), display_path(&safety)))
+    let restored_profiles = !profiles.is_empty();
+    if restored_profiles {
+        crate::store::update(|root| {
+            for (scope, value) in profiles {
+                if value.is_null() {
+                    if let Some(a) = root.get_mut(&scope).and_then(Value::as_object_mut) {
+                        a.remove("profiles");
+                    }
+                } else {
+                    obj_at(root, &[&scope])?.insert("profiles".into(), value);
+                }
+            }
+            Ok(())
+        }).map_err(|e| anyhow!(tr!("恢复配置档失败：{e}（回滚前的备份在 {}）", "Failed to restore profiles: {e} (the pre-rollback backup is in {})", display_path(&safety))))?;
+    }
+    Ok(restored_message(targets.len(), restored_profiles, stamp, &display_path(&safety)))
+}
+
+/// The profile snapshot is not a file of the agent's: it is named apart from the count.
+fn restored_message(files: usize, profiles: bool, stamp: &str, safety: &str) -> String {
+    match (files, profiles) {
+        (0, true) => tr!("已回滚 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）", "Rolled back the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})"),
+        (n, true) => tr!("已回滚 {n} 个文件和 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）", "Rolled back {n} file(s) and the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})"),
+        (n, false) => tr!("已回滚 {n} 个文件到 {stamp} 的状态（回滚前的文件备份在 {safety}）", "Rolled back {n} file(s) to their state at {stamp} (the pre-rollback files are backed up in {safety})"),
+    }
 }
 
 // ---------------------------------------------------------------- detail
@@ -285,11 +359,15 @@ fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
     let old_len = file_len(&old_path);
     let cur_path = f.path.as_ref().map(PathBuf::from);
     let meta = cur_path.as_ref().and_then(|p| fs::metadata(p).ok()).filter(|m| m.is_file());
+    let profile = f.profile_scope.as_ref().map(|scope| {
+        let root = crate::store::load();
+        serde_json::to_vec_pretty(root.get(scope).and_then(|a| a.get("profiles")).unwrap_or(&Value::Null)).unwrap_or_default()
+    });
     let mut d = FileDetail {
         name: f.name,
         path: f.path,
         backup_bytes: old_len,
-        current_bytes: meta.as_ref().map(|m| m.len()),
+        current_bytes: profile.as_ref().map(|p| p.len() as u64).or_else(|| meta.as_ref().map(|m| m.len())),
         current_modified: meta.as_ref().and_then(fmt_mtime),
         same: false,
         binary: false,
@@ -298,13 +376,14 @@ fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
         removed: 0,
         truncated: false,
     };
-    if old_len > MAX_DIFF_BYTES || meta.as_ref().is_some_and(|m| m.len() > MAX_DIFF_BYTES) {
-        d.same = cur_path.as_ref().is_some_and(|c| meta.is_some() && same_content(&old_path, c));
+    if old_len > MAX_DIFF_BYTES || d.current_bytes.is_some_and(|n| n > MAX_DIFF_BYTES) {
+        d.same = if let Some(p) = &profile { fs::read(&old_path).is_ok_and(|old| old == *p) }
+            else { cur_path.as_ref().is_some_and(|c| meta.is_some() && same_content(&old_path, c)) };
         d.binary = true;
         return d;
     }
     let old = fs::read(&old_path).unwrap_or_default();
-    let cur = meta.as_ref().and_then(|_| fs::read(cur_path.as_ref()?).ok());
+    let cur = profile.or_else(|| meta.as_ref().and_then(|_| fs::read(cur_path.as_ref()?).ok()));
     let text = |b: &[u8]| std::str::from_utf8(b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(b)).ok().filter(|s| !s.contains('\0')).map(String::from);
     let old_text = text(&old);
     let cur_text = match &cur {
@@ -418,6 +497,80 @@ fn mask_secrets(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_snapshots_are_scoped_reviewable_and_reversible() {
+        use serde_json::json;
+        let h = TestHome::new("profile-backup");
+        let scope = "claude@wsl:Ubuntu";
+        let initial = json!({scope:{"profiles":{"relay":{"roles":{"default":"old"},"apiKey":"abcdefgh12345678"}}}, "library":[{"id":"unrelated"}]});
+        crate::store::save(&initial).unwrap();
+        let cfg = h.0.join("settings.json");
+        fs::write(&cfg, "old config").unwrap();
+        let dir = backup("claude", std::slice::from_ref(&cfg)).unwrap();
+        backup_profiles(&dir, scope, &initial).unwrap();
+        let id_of = |dir: &Path| format!("{}/claude", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
+        let id = id_of(&dir);
+        crate::store::update(|root| {
+            root[scope]["profiles"]["relay"]["roles"]["default"] = json!("new");
+            root["claude"] = json!({"profiles":{"local":{}}});
+            Ok(())
+        }).unwrap();
+        fs::write(&cfg, "new config").unwrap();
+        let d = detail(&id).unwrap();
+        let p = d.files.iter().find(|f| f.name == "agentplus-profiles.json").unwrap();
+        assert!(!p.same && p.added > 0 && p.removed > 0);
+        assert!(p.diff.iter().all(|r| !r.text.contains("abcdefgh12345678") && !r.text.contains("unrelated")));
+        assert!(restore(&id).unwrap().starts_with("已回滚 1 个文件和 AgentPlus 配置档到"));
+        let root = crate::store::load();
+        assert_eq!(root[scope], initial[scope]);
+        assert_eq!(root["library"], initial["library"]);
+        assert!(root["claude"]["profiles"]["local"].is_object());
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), "old config");
+        assert!(detail(&id).unwrap().files.iter().all(|f| f.same));
+        let safety = list().unwrap().into_iter().find(|e| e.id != id).unwrap();
+        restore(&safety.id).unwrap();
+        assert_eq!(crate::store::load()[scope]["profiles"]["relay"]["roles"]["default"], "new");
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), "new config");
+        // A missing or invalid profile snapshot must not partly restore the files.
+        fs::write(dir.join("agentplus-profiles.json"), "[]").unwrap();
+        assert!(restore(&id).is_err());
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), "new config");
+        fs::remove_file(dir.join("agentplus-profiles.json")).unwrap();
+        assert!(restore(&id).is_err());
+        assert_eq!(fs::read_to_string(&cfg).unwrap(), "new config");
+    }
+
+    #[test]
+    fn profile_only_backup_restores_absence_without_clearing_the_store() {
+        use serde_json::json;
+        let _h = TestHome::new("profile-only");
+        let initial = json!({"claude":{"autoRestart":true}});
+        crate::store::save(&initial).unwrap();
+        let dir = backup("claude", &[]).unwrap();
+        backup_profiles(&dir, "claude", &initial).unwrap();
+        crate::store::update(|r| { r["claude"]["profiles"] = json!({"relay":{}}); Ok(()) }).unwrap();
+        let id = format!("{}/claude", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
+        assert!(list().unwrap().iter().any(|e| e.id == id && e.restorable));
+        assert!(restore(&id).unwrap().starts_with("已回滚 AgentPlus 配置档到"), "no file was restored");
+        assert_eq!(crate::store::load(), initial);
+    }
+
+    /// Profile agents' backups made before the snapshot existed can't be rolled back
+    /// automatically; other agents' backups are unaffected.
+    #[test]
+    fn profile_agent_backups_without_a_snapshot_are_blocked() {
+        let h = TestHome::new("profile-agents-blocked");
+        let cfg = h.0.join("settings.json");
+        fs::write(&cfg, "{}").unwrap();
+        for (agent, blocked) in [("claude", true), ("gemini", true), ("codebuddy", false)] {
+            let dir = backup(agent, std::slice::from_ref(&cfg)).unwrap();
+            let id = format!("{}/{agent}", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
+            let e = list().unwrap().into_iter().find(|e| e.id == id).unwrap();
+            assert_eq!(!e.restorable, blocked, "{agent}");
+            assert_eq!(e.blocked.is_some_and(|b| b.contains("配置档")), blocked, "{agent}");
+        }
+    }
 
     #[test]
     fn diff_folds_context_and_masks() {

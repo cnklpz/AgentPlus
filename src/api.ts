@@ -577,6 +577,7 @@ const real = {
   fetchModels: (agent: AgentId, provider: string) => invoke<string[]>("fetch_models", { agent, provider }),
   fetchModelsUrl: (baseUrl: string, apiKey: string | null, api: ApiKind) => invoke<string[]>("fetch_models_url", { baseUrl, apiKey, api }),
   fetchModelsLib: (id: string) => invoke<string[]>("fetch_models_lib", { id }),
+  gatewayModels: (routes: string[]) => invoke<string[]>("gateway_models", { routes }),
   /** Catalog data for these model ids (unknown ids are left out); `agent` may be an OpenCode project id. */
   guessModels: (agent: string, ids: string[]) => invoke<Record<string, ModelGuess>>("guess_models", { agent, ids }),
   listBackups: () => invoke<BackupEntry[]>("list_backups"),
@@ -815,6 +816,7 @@ const demo: typeof real = {
   fetchModels: async () => ["gpt-5.6-sol", "gpt-5.6-luna", "deepseek-v4-pro", "kimi-k3", "glm-5.3", "qwen3.8-max"],
   fetchModelsUrl: async () => ["deepseek-v4-pro", "kimi-k3", "glm-5.3"],
   fetchModelsLib: async () => ["glm-5", "glm-5.3", "kimi-k3"],
+  gatewayModels: async () => ["glm-5", "glm-5.3", "kimi-k3"],
   guessModels: async (_agent, ids) =>
     Object.fromEntries(ids.filter((id) => /^(glm|kimi|deepseek|gpt|qwen)/i.test(id)).map((id) => [id, { context: 200000, extra: {}, matched: id.toLowerCase(), source: "builtin" as const }])),
   listBackups: async () => [

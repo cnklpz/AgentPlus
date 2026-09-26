@@ -577,7 +577,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             targets.push(env_path());
         }
         if !targets.is_empty() {
-            backup_dir = Some(backup(ID, &targets)?);
+            // With the profiles they were written from (see history::PROFILE_AGENTS).
+            let b = backup(ID, &targets)?;
+            crate::history::backup_profiles(&b, &store::scoped(ID), &root)?;
+            backup_dir = Some(b);
             std::fs::create_dir_all(dir())?;
         }
         if cfg_dirty {
@@ -653,6 +656,24 @@ mod tests {
         assert!(apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r/", Some("sk-x-1234"), &["m"]) }]).is_err());
         assert_eq!(fs::read(t.0.join(".env")).unwrap(), gbk);
         let _ = settings(&t);
+    }
+
+    /// A rollback brings the profiles back with settings.json, so the next edit to the
+    /// active profile doesn't write the rolled-back model into the file again.
+    #[test]
+    fn rollback_restores_profiles_so_the_model_stays_rolled_back() {
+        let t = setup(Some(SETTINGS), None);
+        let role = |m: &str| Op::SetModelRoles { provider: "r".into(), roles: BTreeMap::from([("default".into(), m.into())]) };
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r/", Some("sk-x-1234"), &["old", "new"]) }, Op::SetCurrentProvider { provider: "r".into() }, role("old")]).unwrap();
+        let (_, _, b) = plan(&[role("new")], false).unwrap();
+        let b = b.unwrap();
+        assert_eq!(settings(&t).pointer("/model/name").and_then(|x| x.as_str()), Some("new"));
+        let id = format!("{}/{ID}", b.parent().unwrap().file_name().unwrap().to_string_lossy());
+        crate::history::restore(&id).unwrap();
+        assert_eq!(settings(&t).pointer("/model/name").and_then(|x| x.as_str()), Some("old"));
+        assert_eq!(str_field(&profiles::load(&store::load(), ID)["r"], "defaultModel"), "old");
+        apply(vec![Op::UpsertModel { provider: "r".into(), model: crate::model::ModelInput { id: "extra".into(), ..Default::default() } }]).unwrap();
+        assert_eq!(settings(&t).pointer("/model/name").and_then(|x| x.as_str()), Some("old"));
     }
 
     #[test]

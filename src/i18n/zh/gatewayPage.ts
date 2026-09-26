@@ -29,7 +29,7 @@ export default {
   pausedBanner: "{n} 个转发因连续出错已暂停（错误熔断）",
   resumeAll: "全部恢复",
   staleKeysBanner: "{n} 个 Agent 供应商还在用旧的网关密钥",
-  staleKeysHint: "网关现在按 Agent 发放各自的密钥，用来校验请求、按 Agent 统计流量。旧密钥暂时还能用，但分不出是哪个 Agent 在调用。",
+  staleKeysHint: "网关按 Agent 发放各自的密钥，用来校验请求、按 Agent 统计流量。旧版共用密钥已停用，请更新并写入配置后再连接。",
   updateKeys: "更新密钥",
   resumeNow: "立即恢复",
   step1: "开启网关",

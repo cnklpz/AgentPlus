@@ -236,6 +236,11 @@ async fn fetch_models_url(base_url: String, api_key: Option<String>, api: String
 }
 
 #[tauri::command]
+async fn gateway_models(routes: Vec<String>) -> Result<Vec<String>, String> {
+    blocking(move || gateway::server::list_models(&routes)).await
+}
+
+#[tauri::command]
 async fn list_backups() -> Result<Vec<history::BackupEntry>, String> {
     blocking(history::list).await
 }
@@ -558,6 +563,10 @@ pub fn run() {
         .manage(update::Pending::default())
         .setup(|app| {
             applog::init();
+            // Not fatal: the store retries creating the folder on its first write.
+            if let Err(e) = util::ensure_private_dir(&util::agentplus_dir()) {
+                applog::warn("app", format!("Can't create {}: {e}", util::agentplus_dir().display()));
+            }
             applog::info("app", format!("AgentPlus {} started on {} {} ({})", app.package_info().version, std::env::consts::OS, std::env::consts::ARCH, os_version()));
             install_panic_hook();
             tray::setup(app.handle())?;
@@ -602,6 +611,7 @@ pub fn run() {
             reveal_path,
             fetch_models,
             fetch_models_url,
+            gateway_models,
             fetch_models_lib,
             guess_models,
             list_backups,
