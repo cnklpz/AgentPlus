@@ -14,6 +14,7 @@ Tauri 2（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）。
 - 不写无实义的三段并列（「快速、简单、可靠」），不堆「无缝」「一站式」「助力」「旨在」，英文同理避开
   seamless / effortless / powerful / comprehensive。
 - 中英文各按母语习惯写，不逐字对译，两边句子数量不必相同。
+- 「优化文案」指的是改文字，不是砍内容：不要顺手删条目、合并章节或把细节搬到别的文件。真想精简先单独确认。
 - 文档里的数字（模板数、Agent 数、快捷键、路径）改了代码要一起核对：模板数看 `src/templates.ts` 的
   `TEMPLATES`，Agent 列表看 `src-tauri/src/adapters/`。
 
