@@ -270,9 +270,10 @@ fn rules() -> &'static Rules {
     static R: OnceLock<Rules> = OnceLock::new();
     R.get_or_init(|| {
         let home = dirs::home_dir().map(|h| h.to_string_lossy().to_string()).filter(|h| h.len() > 3).map(|h| {
-            // Either slash style, any case: `C:\Users\me`, `C:/Users/me`.
+            // Either slash style, any case: `C:\Users\me`, `C:/Users/me`. It must end the path
+            // component (kept in group 1), so `C:\Users\me2` is someone else's, not `~2`.
             let parts: Vec<String> = h.split(['\\', '/']).map(regex::escape).collect();
-            Regex::new(&format!(r"(?i){}", parts.join(r"[\\/]+"))).unwrap()
+            Regex::new(&format!(r#"(?i){}([\\/\s"'<>:]|$)"#, parts.join(r"[\\/]+"))).unwrap()
         });
         Rules {
             // key=value, "key": "value", Header: value for anything that names a secret.
@@ -294,7 +295,7 @@ pub fn scrub(text: &str) -> String {
     let r = rules();
     let mut s = text.to_string();
     if let Some(h) = &r.home {
-        s = h.replace_all(&s, "~").into_owned();
+        s = h.replace_all(&s, "~${1}").into_owned();
     }
     s = r.kv.replace_all(&s, |c: &Captures| format!("{}{MASK}", &c[1])).into_owned();
     s = r.key.replace_all(&s, |c: &Captures| format!("{}{MASK}", c.get(1).map_or("", |m| m.as_str()))).into_owned();
@@ -364,6 +365,10 @@ mod tests {
         let home = dirs::home_dir().unwrap().to_string_lossy().to_string();
         assert_eq!(scrub(&format!("{home}/.agentplus/store.json")), "~/.agentplus/store.json");
         assert_eq!(scrub(&format!("{}\\x", home.replace('/', "\\"))), "~\\x");
+        assert_eq!(scrub(&format!("cwd {home}")), "cwd ~");
+        assert_eq!(scrub(&format!("\"{home}\": ok")), "\"~\": ok");
+        // A longer name that merely starts with ours is another user.
+        assert!(!scrub(&format!("{home}2/x")).starts_with('~'));
     }
 
     #[test]
