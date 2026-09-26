@@ -7,6 +7,9 @@
 Manage API settings and model lists across your coding agents.
 
 [![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 English | [简体中文](README.zh-CN.md)
@@ -161,7 +164,7 @@ npm run check          # Frontend type checks and tests
 cd src-tauri && cargo clippy --all-targets && cargo test
 ```
 
-To preview the interface in a browser with demo data, run `npm run dev`. Development and translation conventions are in [CLAUDE.md](CLAUDE.md).
+To preview the interface in a browser with demo data, run `npm run dev`.
 
 ## License
 

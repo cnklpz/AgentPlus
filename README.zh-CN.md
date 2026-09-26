@@ -7,6 +7,9 @@
 统一管理编程 Agent 的 API 配置和模型列表。
 
 [![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest)
+[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 [English](README.md) | 简体中文
@@ -161,7 +164,7 @@ npm run check          # 前端类型检查和测试
 cd src-tauri && cargo clippy --all-targets && cargo test
 ```
 
-想在浏览器里预览界面（用的是演示数据）可以跑 `npm run dev`。开发规范和多语言约定见 [CLAUDE.md](CLAUDE.md)。
+想在浏览器里预览界面（用的是演示数据）可以跑 `npm run dev`。
 
 ## 许可证
 
