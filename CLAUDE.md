@@ -4,6 +4,19 @@ Tauri 2（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）。
 检查：前端 `npm run check`（`tsc --noEmit` + `vitest run`），后端在 `src-tauri/` 下
 `cargo clippy --all-targets`（保持零警告）/ `cargo test`。改动逻辑时给边界情况补单元测试。
 
+## 文案风格（界面、README、文档）
+
+写给人看，不要写成模板。README 和文档最容易写成模板腔。
+
+- 别让一屏里的条目都是同一个句式（八条「**标签.** 一句话」最典型）。长短错开，个别条目可以不带标签。
+- 删掉只复述结构的句子（「下表说明了各 Agent 的支持范围」「此外还支持…」），直接写内容。
+- 用具体事实和数字，不用概括性形容（「安装包还没签名」，不是「安装包暂未经过完善的安全签名认证」）。
+- 不写无实义的三段并列（「快速、简单、可靠」），不堆「无缝」「一站式」「助力」「旨在」，英文同理避开
+  seamless / effortless / powerful / comprehensive。
+- 中英文各按母语习惯写，不逐字对译，两边句子数量不必相同。
+- 文档里的数字（模板数、Agent 数、快捷键、路径）改了代码要一起核对：模板数看 `src/templates.ts` 的
+  `TEMPLATES`，Agent 列表看 `src-tauri/src/adapters/`。
+
 ## 多语言（i18n）
 
 界面支持简体中文和英文。**中文是源语言**，英文必须与之逐条对应。
