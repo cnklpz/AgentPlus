@@ -85,7 +85,7 @@ Every change is previewed as a diff and backed up before it is written, so you c
 Get it from [Releases](https://github.com/cnklpz/AgentPlus/releases/latest):
 
 - **Windows**: `AgentPlus_<version>_x64-setup.exe`. Run it to install. The installer is not code-signed, so SmartScreen may say "Windows protected your PC" on first run. Click "More info → Run anyway".
-- **macOS**: `AgentPlus_<version>_universal.dmg`. Open it and drag AgentPlus into Applications. The app isn't notarized by Apple, so macOS blocks the first launch: click "Open Anyway" in System Settings → Privacy & Security. If it says the app is damaged, run `xattr -cr /Applications/AgentPlus.app` in Terminal and open it again.
+- **macOS**: `AgentPlus_<version>_aarch64.dmg` for Apple silicon, `AgentPlus_<version>_x64.dmg` for Intel. Open it and drag AgentPlus into Applications. The app isn't notarized by Apple, so macOS blocks the first launch: click "Open Anyway" in System Settings → Privacy & Security. If it says the app is damaged, run `xattr -cr /Applications/AgentPlus.app` in Terminal and open it again.
 
 **Updates**: AgentPlus checks for a new version at startup; when there is one, a small dot appears on the Settings button in the top-right corner.
 Open Settings → General → About to read the release notes and click "Download and install". AgentPlus verifies the signature, installs the update and reopens. You can turn off the startup check in the same place.

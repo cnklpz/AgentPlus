@@ -1,7 +1,7 @@
 name: Release
 
-# Pushing a tag like v0.2.0 builds the signed Windows installer and the macOS app (universal:
-# Apple silicon + Intel) and puts them, with the updater's latest.json, on a draft GitHub
+# Pushing a tag like v0.2.0 builds the signed Windows installer and the macOS apps (Apple
+# silicon and Intel, one each) and puts them, with the updater's latest.json, on a draft GitHub
 # release. Publishing that draft is what makes installed copies see the update (the updater
 # reads releases/latest, which skips drafts).
 #
@@ -67,9 +67,12 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            args: ""
+            target: ""
+          # Two jobs side by side rather than one universal build, which compiles both in turn.
           - os: macos-latest
-            args: --target universal-apple-darwin
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -82,25 +85,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          shared-key: release
+          shared-key: release-${{ matrix.target || 'host' }}
           # Filled by warm-cache on main; a tag's own cache would be useless to the next tag.
           save-if: false
-
-      # latest.json's notes (the in-app update prompt): tauri-action takes them from releaseBody,
-      # not from the release create-release made.
-      - name: Release notes
-        id: notes
-        shell: bash
-        run: |
-          {
-            echo 'body<<AGENTPLUS_NOTES_EOF'
-            node scripts/release-notes.mjs "$GITHUB_REF_NAME"
-            echo 'AGENTPLUS_NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -110,10 +101,35 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.create-release.outputs.id }}
-          releaseBody: ${{ steps.notes.outputs.body }}
-          includeUpdaterJson: true
+          # latest.json is written once by updater-json below; three jobs merging into it race.
+          includeUpdaterJson: false
           # Adds the signed updater artifacts; kept out of tauri.conf.json so local builds need no key.
-          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }} --config src-tauri/tauri.release.conf.json
+
+  # The updater's latest.json from every platform's .sig, once all of them are uploaded. Rerun
+  # the failed build job if one fails; this job then runs by itself.
+  updater-json:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # By release id, like the uploads: looking a draft up by its tag isn't reliable.
+      - name: Write and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE: repos/${{ github.repository }}/releases/${{ needs.create-release.outputs.id }}
+        run: |
+          mkdir sigs
+          gh api "$RELEASE/assets" --paginate --jq '.[] | select(.name | endswith(".sig")) | "\(.id) \(.name)"' |
+            while read -r id name; do
+              gh api -H "Accept: application/octet-stream" "repos/$GITHUB_REPOSITORY/releases/assets/$id" > "sigs/$name"
+            done
+          node scripts/updater-json.mjs "$GITHUB_REF_NAME" sigs "$GITHUB_REPOSITORY" > latest.json
+          # Replaces the one left by a rerun.
+          old=$(gh api "$RELEASE/assets" --paginate --jq '.[] | select(.name == "latest.json") | .id')
+          if [ -n "$old" ]; then gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old"; fi
+          gh api -X POST "https://uploads.github.com/$RELEASE/assets?name=latest.json" \
+            -H "Content-Type: application/json" --input latest.json --jq .browser_download_url
 
   # Same toolchain, cache key and cargo invocation as build (keep them in sync), without
   # bundling or uploading.
@@ -126,21 +142,24 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            args: ""
+            target: ""
+          # Two jobs side by side rather than one universal build, which compiles both in turn.
           - os: macos-latest
-            args: --target universal-apple-darwin
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         id: cache
         with:
           workspaces: src-tauri
-          shared-key: release
+          shared-key: release-${{ matrix.target || 'host' }}
 
       - uses: actions/setup-node@v4
         if: steps.cache.outputs.cache-hit != 'true'
@@ -151,4 +170,4 @@ jobs:
         run: npm ci
       - name: Build without bundling
         if: steps.cache.outputs.cache-hit != 'true'
-        run: npx tauri build --no-bundle ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+        run: npx tauri build --no-bundle ${{ matrix.target && format('--target {0}', matrix.target) || '' }} --config src-tauri/tauri.release.conf.json

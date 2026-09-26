@@ -83,7 +83,7 @@ AgentPlus 把这些配置都读出来，放在一个界面里：**供应商维�
 到 [Releases](https://github.com/cnklpz/AgentPlus/releases/latest) 下载：
 
 - **Windows**：`AgentPlus_<版本>_x64-setup.exe`，双击安装。安装包没有做代码签名，首次运行时 SmartScreen 可能提示「已保护你的电脑」，点「更多信息 → 仍要运行」即可。
-- **macOS**：`AgentPlus_<版本>_universal.dmg`，打开后把 AgentPlus 拖进「应用程序」。应用没有经过 Apple 公证，首次打开会被拦下：到「系统设置 → 隐私与安全性」点「仍要打开」；如果提示「已损坏」，在终端运行 `xattr -cr /Applications/AgentPlus.app` 后再打开。
+- **macOS**：Apple 芯片下载 `AgentPlus_<版本>_aarch64.dmg`，Intel 下载 `AgentPlus_<版本>_x64.dmg`，打开后把 AgentPlus 拖进「应用程序」。应用没有经过 Apple 公证，首次打开会被拦下：到「系统设置 → 隐私与安全性」点「仍要打开」；如果提示「已损坏」，在终端运行 `xattr -cr /Applications/AgentPlus.app` 后再打开。
 
 **更新**：AgentPlus 启动时会检查新版本，有新版本时右上角的「设置」按钮会出现小圆点。到「设置 → 通用 → 关于」查看更新说明，点「下载并安装」，AgentPlus 会校验签名、安装并自动重新打开。不想自动检查的，可以在同一处关闭。
 
