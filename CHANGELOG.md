@@ -2,6 +2,20 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.1.8
+
+提示文字切换有了动画；macOS 改用苹方和系统字体。
+
+- 在设置 → 界面里切换「详细」「简约」提示文字时带动画：「过度」动画下提示从末尾逐字碎裂、逐字显现，「标准」下整段淡入淡出并收起展开，「减弱」下只淡入淡出
+- macOS：界面改用系统字体（英文 SF，中文苹方）。以前装了 Office 的 Mac 会用微软雅黑显示界面
+- 「Extra」动画级别在英文界面里改名为「Excessive」
+
+Switching hint text now animates; macOS uses PingFang and the system font.
+
+- Switching between Detailed and Brief hint text (Settings → Interface) animates: at Excessive motion the hints shatter and come back character by character, at Standard whole hints fade and fold, at Reduced they only fade
+- macOS: the interface uses the system font (SF, with PingFang for Chinese). Macs with Office installed used to show it in Microsoft YaHei
+- The "Extra" motion level is renamed "Excessive" in the English interface
+
 ## 0.1.7
 
 网关不再接受旧的共用密钥；回滚 Claude Code、Gemini CLI 配置后模型不再变回去；Gemini 供应商可以获取模型列表和测试。
