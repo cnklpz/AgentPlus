@@ -144,7 +144,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
 
   const foot = (
     <>
-      <span className="muted tiny grow">{t("serviceDialog.footNote")}</span>
+      <span className="muted tiny grow hint">{t("serviceDialog.footNote")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
     </>
@@ -172,7 +172,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
               const missing = !!tpl && !tpl.endpoints[v];
               return { value: v, label: API_LABEL[v], disabled: missing, title: missing ? t("serviceDialog.protoMissing", { vendor: tpl!.vendor, api: API_LABEL[v] }) : t(API_HINT[v]) };
             })} />
-          <em className="muted tiny">
+          <em className={`muted tiny${tpl ? "" : " hint"}`}>
             {tpl
               ? t("serviceDialog.tplProtocols", { list: (Object.keys(tpl.endpoints) as ApiKind[]).map((k) => API_LABEL[k]).join(" / ") })
               : t("serviceDialog.groupHint")}
@@ -182,7 +182,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
           <span>{t("common.apiKeyLabel")}</span>
           <input className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
             placeholder={group?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("common.keyKeepPlaceholder") : "sk-..."} />
-          <em className="muted tiny">
+          <em className={`muted tiny${tpl ? "" : " hint"}`}>
             {t("serviceDialog.keyStorage")}
             {tpl && <TemplateKeyLink tpl={tpl} />}
           </em>
@@ -191,7 +191,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
 
       <div className="field">
         <div className="row between">
-          <span>{t("serviceDialog.commonModels")} <em className="muted tiny">{t("serviceDialog.commonModelsHint")}</em></span>
+          <span>{t("serviceDialog.commonModels")} <em className="muted tiny hint">{t("serviceDialog.commonModelsHint")}</em></span>
           <button type="button" className="btn small" disabled={!urlOk || fetching} onClick={fetchList}>
             <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
           </button>
@@ -237,7 +237,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
               );
             })}
           </div>
-          {isNew && <em className="muted tiny">{t("serviceDialog.noneRequired")}</em>}
+          {isNew && <em className="muted tiny hint">{t("serviceDialog.noneRequired")}</em>}
         </div>
       )}
 

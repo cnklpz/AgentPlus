@@ -29,7 +29,7 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
       {detail ?? <section className="aside-cur">
         <div className="row between">
           <h2>{t("aside.current")}</h2>
-          <span className="muted tiny">{t("aside.fromFiles")}</span>
+          <span className="muted tiny hint">{t("aside.fromFiles")}</span>
         </div>
         <div className="kv">
           {st.current.map((r) => (
@@ -38,6 +38,7 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
               <span className={r.mono ? "mono small wrap" : "small wrap"}>{scrub(r.v)}</span>
             </div>
           ))}
+          {st.restartable && <LaunchRow st={st} />}
         </div>
       </section>}
 
@@ -56,11 +57,29 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
           <button className="btn full" disabled={!pending || busy} onClick={onDiscard}>{t("common.discard")}</button>
           <button className="btn primary full" disabled={!pending || busy || st.readonly} onClick={onApply}>{busy ? t("common.writing") : t("common.apply")}</button>
         </div>
-        <span className="muted tiny center">{st.restartable
+        <span className="muted tiny center hint">{st.restartable
           ? t(st.running ? "aside.footRestart" : "aside.footStart", { name: st.name })
           : t("aside.footNewSession", { name: isProjectId(st.id) ? "OpenCode" : st.name })}</span>
       </div>
     </aside>
+  );
+}
+
+/** Whether the running app is the one AgentPlus started (UI injection only reaches that one). */
+function LaunchRow({ st }: { st: AgentState }) {
+  const l = st.running ? st.launch : null;
+  const text = !st.running ? t("aside.notRunning")
+    : !l ? t("aside.launchUnknown")
+    : l.byAgentplus ? t(l.debugPort && st.id === "codex" ? "aside.byAgentplusUi" : "aside.byAgentplus")
+    : t("aside.notByAgentplus");
+  return (
+    <div className="kv-row">
+      <span className="muted small">{t("aside.launch")}</span>
+      <span className="small wrap">
+        <span className={`launch-dot ${!st.running ? "off" : l?.byAgentplus ? "ok" : "warn"}`} />{text}
+        {l?.uiInactive && <span className="block tiny warn-text">{t("aside.uiInactive", { name: st.name })}</span>}
+      </span>
+    </div>
   );
 }
 
@@ -84,7 +103,7 @@ export function UpToDate({ hint }: { hint: string }) {
     <div className="dempty">
       <Icon.check size={20} color="var(--ok-dot)" />
       <strong>{t("aside.upToDate")}</strong>
-      <span className="muted small">{hint}</span>
+      <span className="muted small hint">{hint}</span>
     </div>
   );
 }

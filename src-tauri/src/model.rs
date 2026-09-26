@@ -36,6 +36,20 @@ pub struct AgentState {
     /// Per-model settings beyond name / context this agent's config understands.
     /// Filled in adapters::state.
     pub model_fields: Vec<ModelField>,
+    /// How the running desktop app was started; None unless restartable and running.
+    pub launch: Option<Launch>,
+}
+
+/// Whether the running desktop app is the one AgentPlus started.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Launch {
+    /// AgentPlus started this very process (a restart / start from AgentPlus).
+    pub by_agentplus: bool,
+    /// It was started with AgentPlus's DevTools port, so UI injection can reach it.
+    pub debug_port: bool,
+    /// UI injection is turned on but can't reach this process: it takes a restart from AgentPlus.
+    pub ui_inactive: bool,
 }
 
 /// One per-model setting (e.g. image input, max output tokens). `key` is its path inside

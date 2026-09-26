@@ -144,7 +144,7 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
             </button>
           ))}
         </div>
-        <div className="palette-foot tiny muted">{t("commandPalette.foot")}</div>
+        <div className="palette-foot tiny muted hint">{t("commandPalette.foot")}</div>
       </div>
     </div>
   );

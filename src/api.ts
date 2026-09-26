@@ -2,8 +2,20 @@ import { Channel, invoke as tauriInvoke, type InvokeArgs } from "@tauri-apps/api
 import { whenReady } from "./i18n";
 import { inTauri } from "./tauri";
 
-/** Every call waits until the backend renders text in the UI language. */
-const invoke = <T>(cmd: string, args?: InvokeArgs) => whenReady().then(() => tauriInvoke<T>(cmd, args));
+/** Every call waits until the backend renders text in the UI language. A failed call goes to
+ *  the diagnostic log with the command's name (never its arguments: they can hold keys). */
+const invoke = <T>(cmd: string, args?: InvokeArgs) =>
+  whenReady().then(() => tauriInvoke<T>(cmd, args)).catch((e: unknown) => {
+    if (!cmd.startsWith("log_")) logClient("error", cmd, e);
+    throw e;
+  });
+
+/** Adds an entry to the diagnostic log (scrubbed by the backend); never fails. */
+export function logClient(level: "error" | "warn" | "info", source: string, e: unknown): void {
+  if (!inTauri) return;
+  const message = e instanceof Error ? `${e.message}${e.stack ? `\n${e.stack}` : ""}` : typeof e === "string" ? e : JSON.stringify(e) ?? String(e);
+  tauriInvoke("log_client", { level, source, message }).catch(() => undefined);
+}
 
 export type AgentId =
   | "codex" | "claude" | "opencode" | "zcode" | "mimo"
@@ -152,6 +164,25 @@ export interface AgentState {
   restartable: boolean;
   /** Per-model settings this agent's config understands. */
   modelFields?: ModelField[];
+  /** How the running desktop app was started; null unless restartable and running. */
+  launch?: Launch | null;
+}
+
+/** Whether the running desktop app is the one AgentPlus started. */
+export interface Launch {
+  byAgentplus: boolean;
+  /** Started with AgentPlus's DevTools port (UI injection can reach it). */
+  debugPort: boolean;
+  /** UI injection is on but doesn't reach this process: restart it from AgentPlus. */
+  uiInactive: boolean;
+}
+
+export const sameLaunch = (a: Launch | null | undefined, b: Launch | null | undefined): boolean =>
+  (a ?? null) === (b ?? null) || (!!a && !!b && a.byAgentplus === b.byAgentplus && a.debugPort === b.debugPort && a.uiInactive === b.uiInactive);
+
+export interface RunState {
+  running: boolean;
+  launch: Launch | null;
 }
 
 export type Op =
@@ -497,6 +528,16 @@ export type RestartProgress =
   | { kind: "plan"; steps: RestartStep[] }
   | { kind: "step"; step: RestartStep; status: RestartStatus; detail: string | null };
 
+/** AgentPlus's diagnostic log (Settings → General). */
+export interface LogInfo {
+  enabled: boolean;
+  /** Files older than this many days are removed. */
+  days: number;
+  files: number;
+  bytes: number;
+  dir: string;
+}
+
 /** A newer AgentPlus release on GitHub. `notes` is the release's Markdown text. */
 export interface UpdateInfo {
   version: string;
@@ -524,7 +565,7 @@ const real = {
   },
   /** Stops the running restart at its next wait (it then rejects); an app already started keeps running. */
   cancelRestart: () => invoke<void>("cancel_restart"),
-  agentRunning: (agent: AgentId) => invoke<boolean>("agent_running", { agent }),
+  agentRunning: (agent: AgentId) => invoke<RunState>("agent_running", { agent }),
   openConfigDir: (agent: AgentId) => invoke<void>("open_config_dir", { agent }),
   codexSessions: () => invoke<SessionList>("codex_sessions"),
   codexHealth: () => invoke<HealthItem[]>("codex_health"),
@@ -554,6 +595,12 @@ const real = {
   librarySave: (input: LibInput) => invoke<LibEntry>("library_save", { input }),
   libraryDelete: (id: string) => invoke<void>("library_delete", { id }),
   openDataDir: () => invoke<void>("open_data_dir"),
+  logInfo: () => invoke<LogInfo>("log_info"),
+  logSet: (enabled: boolean, days: number) => invoke<LogInfo>("log_set", { enabled, days }),
+  logClear: () => invoke<LogInfo>("log_clear"),
+  /** Writes the scrubbed log to one file (Downloads); resolves with its path. */
+  logExport: () => invoke<string>("log_export"),
+  openLogDir: () => invoke<void>("open_log_dir"),
   quitApp: () => invoke<void>("quit_app"),
   detectAgents: () => invoke<AgentDetect[]>("detect_agents"),
   testProvider: (agent: string, provider: string, model: string) => invoke<TestResult>("test_provider", { agent, provider, model }),
@@ -619,6 +666,7 @@ async function fixture(): Promise<AgentState[]> {
 }
 
 let demoEnv = "windows";
+const demoLog: LogInfo = { enabled: true, days: 7, files: 3, bytes: 184_320, dir: "~/.agentplus/logs" };
 let demoLib: LibEntry[] = [];
 const demoOfficial: OfficialFetch = { active: false, startedAt: "15:20:01", backupDir: "C:\\Users\\me\\.agentplus\\backups\\20260923-152001\\codex", cacheReady: false, cacheModels: 0, cachePath: "~/.codex/models_cache.json", catalogPath: "~/.codex/models.json", chatgptLogin: true };
 let demoOfficialAt = 0;
@@ -735,7 +783,10 @@ const demo: typeof real = {
     return running ? "（演示）已重启" : "（演示）已启动";
   },
   cancelRestart: async () => { demoCancel = true; },
-  agentRunning: async (agent) => (await fixture()).find((a) => a.id === agent)?.running ?? false,
+  agentRunning: async (agent) => {
+    const running = (await fixture()).find((a) => a.id === agent)?.running ?? false;
+    return { running, launch: running ? { byAgentplus: !!demoRunning[agent], debugPort: !!demoRunning[agent], uiInactive: agent === "codex" && !demoRunning[agent] } : null };
+  },
   openConfigDir: async () => undefined,
   codexSessions: async () => ({
     sessions: [
@@ -817,6 +868,11 @@ const demo: typeof real = {
   },
   libraryDelete: async (id) => { demoLib = demoLib.filter((x) => x.id !== id); },
   openDataDir: async () => undefined,
+  logInfo: async () => ({ ...demoLog }),
+  logSet: async (enabled, days) => { Object.assign(demoLog, { enabled, days }); return { ...demoLog }; },
+  logClear: async () => { Object.assign(demoLog, { files: 0, bytes: 0 }); return { ...demoLog }; },
+  logExport: async () => { await sleep(500); return "C:\\Users\\me\\Downloads\\AgentPlus-log-20260926-190512.txt"; },
+  openLogDir: async () => undefined,
   quitApp: async () => undefined,
   detectAgents: async () => (await fixture()).map((a) => ({
     id: a.id, name: a.name, appFound: a.installed, version: a.version, running: a.running,

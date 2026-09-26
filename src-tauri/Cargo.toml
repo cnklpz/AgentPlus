@@ -39,6 +39,11 @@ tauri-plugin-updater = "2"
 winreg = "0.52"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 
+# Already in the tree through Tauri; used to keep App Nap off while a restart waits.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSObject", "NSProcessInfo", "NSString"] }
+
 [profile.release]
 opt-level = "s"
 # Thin rather than fat: the final link takes about a third of the time for a ~8% larger exe.

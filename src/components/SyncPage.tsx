@@ -53,7 +53,7 @@ export function SyncPage({ flash, onAdopt }: Props) {
         <div className="page-head">
           <div className="page-title">
             <h1>{t("syncPage.title")}</h1>
-            <span className="muted small">{t("syncPage.intro")}</span>
+            <span className="muted small hint">{t("syncPage.intro")}</span>
           </div>
         </div>
       </div>
@@ -90,11 +90,11 @@ export function SyncPage({ flash, onAdopt }: Props) {
             <section className="sgroup">
               <h2>{t("syncPage.importable")}</h2>
               {sugs.map((s, i) => { const id = ids[i]; return (
-                <SettingRow key={id} as="label" className="check-row" label={s.title} desc={scrub(s.detail)} descClassName="ellipsis"
+                <SettingRow key={id} as="label" className="check-row" label={s.title} desc={scrub(s.detail)} descClassName="ellipsis" keepDesc
                   lead={<><input type="checkbox" checked={chosen.has(id)} onChange={() => setChosen((c) => toggled(c, id))} /><AgentIcon id={s.agent} size={22} /></>} />
               ); })}
               <div className="srow">
-                <span className="grow muted small">{t("syncPage.noKeyHint")}</span>
+                <span className="grow muted small hint">{t("syncPage.noKeyHint")}</span>
                 <button className="btn primary" disabled={picked.length === 0} onClick={adopt}>{t("syncPage.adopt", { n: picked.length })}</button>
               </div>
             </section>

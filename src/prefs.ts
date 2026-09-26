@@ -9,6 +9,8 @@ export type RestartProgressPref = "dialog" | "toast";
 export type Theme = "auto" | "light" | "dark";
 /** What closing the window does: ask each time, hide it in the tray, or quit. */
 export type CloseAction = "ask" | "tray" | "quit";
+/** How much explanatory text the UI shows: every description, or just the option names. */
+export type Hints = "full" | "brief";
 
 export interface Prefs {
   motion: Motion;
@@ -25,10 +27,12 @@ export interface Prefs {
   privacy: boolean;
   /** Look for a new AgentPlus release on GitHub at startup. */
   autoUpdate: boolean;
+  /** "brief" hides descriptions and hints (elements with the `hint` class). */
+  hints: Hints;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full" };
 
 export function loadPrefs(): Prefs {
   try {
@@ -69,6 +73,8 @@ function applyTheme(t: Theme): void {
 export function applyPrefs(p: Prefs): void {
   applyMotion(p.motion);
   applyTheme(p.theme);
+  // CSS hook: `.hint` elements (descriptions, explanations) are hidden in brief mode.
+  document.documentElement.dataset.hints = p.hints;
   void setLang(p.lang);
   setPrivacy(p.privacy);
 }

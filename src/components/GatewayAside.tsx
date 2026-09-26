@@ -131,7 +131,7 @@ export function GatewayAside({ status: s, agents }: { status: GatewayStatus | nu
           <Seg className="gwc-range" value={range} onChange={setRange} label={t("gatewayAside.ariaRange")}
             options={([15, 60] as Range[]).map((r) => ({ value: r, label: t(r === 60 ? "gatewayAside.range60" : "gatewayAside.range15") }))} />
         </div>
-        <span className="muted tiny">
+        <span className={`muted tiny${quiet ? "" : " hint"}`}>
           {quiet ? t(range === 60 ? "gatewayAside.quiet60" : "gatewayAside.quiet15") : t("gatewayAside.liveNote")}
         </span>
       </section>
@@ -194,7 +194,7 @@ function AgentUsage({ minutes, agents }: { minutes: GatewayMinute[]; agents: Age
     <div className="gwc-card">
       <div className="gwc-head">
         <span className="small strong">{t("gatewayAside.byAgentTitle")}</span>
-        <span className="tiny muted">{t("gatewayAside.byAgentHint")}</span>
+        <span className="tiny muted hint">{t("gatewayAside.byAgentHint")}</span>
       </div>
       {rows.length === 0 ? (
         <span className="tiny muted gwa-empty">{t("gatewayAside.byAgentEmpty")}</span>

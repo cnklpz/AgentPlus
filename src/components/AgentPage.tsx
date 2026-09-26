@@ -114,7 +114,7 @@ export function AgentPage(props: Props) {
         {tab === "prov" && (
           <div className="stack12">
             <div className="row between">
-              <span className="muted small">
+              <span className={`muted small${st.fixedPending && fixedSetting && settingValue(fixedSetting, draft) !== true ? "" : " hint"}`}>
                 {st.mode === "single"
                   ? t(st.id === "codex" ? "agentPage.singleNoteCodex" : st.id === "claude" ? "agentPage.singleNoteClaude" : "agentPage.singleNote", { name: st.name })
                   : project ? t("agentPage.projectNote")
@@ -149,7 +149,7 @@ export function AgentPage(props: Props) {
               ))}
               <button className="pcard-add" disabled={st.readonly} onClick={props.onAddProvider}><Icon.plus size={18} />{t("common.addProvider")}</button>
               {props.onCopyProvider && (
-                <button className="pcard-add" disabled={st.readonly} onClick={props.onCopyProvider}><Icon.copy size={18} />{t("agentPage.copyProvider")}<span className="tiny">{t("agentPage.copyProviderHint")}</span></button>
+                <button className="pcard-add" disabled={st.readonly} onClick={props.onCopyProvider}><Icon.copy size={18} />{t("agentPage.copyProvider")}<span className="tiny hint">{t("agentPage.copyProviderHint")}</span></button>
               )}
             </div>
           </div>
@@ -372,7 +372,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
       <div className="mtable-head">
         <div className="grow minw0">
           <div className="strong ellipsis">{title}</div>
-          <div className="muted small">{note}</div>
+          <div className={`muted small${readonly ? "" : " hint"}`}>{note}</div>
         </div>
         <input className="search-input slim" placeholder={t("common.filter")} value={filter} onChange={(e) => setFilter(e.target.value)} />
         <button className="btn small" disabled={readonly || !fetchFrom || fetching} onClick={doFetch} title={fetchFrom ? "" : t("agentPage.noFetchUrl")}>
@@ -485,7 +485,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
             const head = (
               <div className="grow minw0">
                 <div className="slabel">{s.label}{dirty && <span className="unsaved">{t("agentPage.unapplied")}</span>}</div>
-                <div className="muted small">{s.desc}</div>
+                <div className="muted small hint">{s.desc}</div>
                 {notes?.[s.key]}
               </div>
             );
@@ -542,7 +542,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
                         <OptCheck on={on} />
                         <span className="minw0">
                           <span className="opt-name">{o}</span>
-                          {s.hints[i] && <span className="opt-hint">{s.hints[i]}</span>}
+                          {s.hints[i] && <span className="opt-hint hint">{s.hints[i]}</span>}
                         </span>
                       </button>
                     );

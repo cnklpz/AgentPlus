@@ -427,6 +427,9 @@ pub fn state(agent: &str) -> Result<AgentState> {
     let Some((e, inst)) = found else { return Ok(st) };
     // Only desktop apps can be restarted; CLIs read the new config on their next run.
     st.restartable = !crate::env::is_wsl() && (inst.exe.is_some() || inst.aumid.is_some());
+    if st.restartable {
+        st.launch = process::launch(agent, &inst);
+    }
     let custom = dir_override(agent).filter(|d| has_marker(d, e));
     if custom.is_some() || (config_counts() && has_marker(&(e.default_dir)(), e)) {
         st.installed = true;

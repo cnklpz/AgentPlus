@@ -20,8 +20,10 @@ export function Switch({ on, onChange, label, disabled, fast }: {
  * it is a static notice (no switch), highlighted when `on`. `label` names the switch when
  * the title is not plain text (or should read differently).
  */
-export function ToggleRow({ icon, title, hint, on, onChange, disabled, className, label }: {
-  icon?: ReactNode; title: ReactNode; hint?: ReactNode; on: boolean; onChange?: (next: boolean) => void;
+/** A switch with a title and a hint. The hint explains the option, so brief hints mode hides
+ *  it, unless `keepHint` (it says something current) or there is no switch (a static notice). */
+export function ToggleRow({ icon, title, hint, keepHint, on, onChange, disabled, className, label }: {
+  icon?: ReactNode; title: ReactNode; hint?: ReactNode; keepHint?: boolean; on: boolean; onChange?: (next: boolean) => void;
   disabled?: boolean; className?: string; label?: string;
 }) {
   return (
@@ -29,7 +31,7 @@ export function ToggleRow({ icon, title, hint, on, onChange, disabled, className
       {icon}
       <div className="grow minw0">
         <div className="small strong">{title}</div>
-        {hint && <div className="tiny muted">{hint}</div>}
+        {hint && <div className={`tiny muted${onChange && !keepHint ? " hint" : ""}`}>{hint}</div>}
       </div>
       {onChange && <Switch on={on} onChange={onChange} disabled={disabled} label={label ?? (typeof title === "string" ? title : "")} />}
     </div>
@@ -85,8 +87,11 @@ export function SegMulti<T extends string | number>({ value, options, onChange, 
  * (children) on the right. `lead` goes before the text (a checkbox, a status dot); `note`
  * under the description. `as="label"` makes the whole row toggle a checkbox inside it.
  */
-export function SettingRow({ label, desc, descClassName, note, lead, children, className, id, as: Tag = "div" }: {
-  label: ReactNode; desc?: ReactNode; descClassName?: string; note?: ReactNode; lead?: ReactNode; children?: ReactNode;
+/** A setting: its name, a description (an explanation: hidden in brief hints mode unless
+ *  `keepDesc`, for a description that says something current such as a path or a count),
+ *  and its control. */
+export function SettingRow({ label, desc, descClassName, keepDesc, note, lead, children, className, id, as: Tag = "div" }: {
+  label: ReactNode; desc?: ReactNode; descClassName?: string; keepDesc?: boolean; note?: ReactNode; lead?: ReactNode; children?: ReactNode;
   className?: string; id?: string; as?: "div" | "label";
 }) {
   return (
@@ -94,7 +99,7 @@ export function SettingRow({ label, desc, descClassName, note, lead, children, c
       {lead}
       <div className="grow minw0">
         <div className="slabel">{label}</div>
-        {desc != null && <div className={`muted small${descClassName ? ` ${descClassName}` : ""}`}>{desc}</div>}
+        {desc != null && <div className={`muted small${keepDesc ? "" : " hint"}${descClassName ? ` ${descClassName}` : ""}`}>{desc}</div>}
         {note}
       </div>
       {children}

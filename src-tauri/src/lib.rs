@@ -1,6 +1,7 @@
 #[macro_use]
 mod i18n;
 mod adapters;
+mod applog;
 mod cdp;
 mod dotenv;
 mod env;
@@ -46,9 +47,35 @@ fn with_status(r: anyhow::Result<()>) -> Result<gateway::server::Status, String>
     Ok(gateway::server::status())
 }
 
+/// Every agent's state, read side by side: each can wait on a `--version` probe, PowerShell
+/// or WSL, and one slow agent shouldn't hold up the others.
 #[tauri::command]
 async fn list_agents() -> Result<Vec<AgentState>, String> {
-    blocking(|| Ok(adapters::ALL.iter().filter_map(|a| adapters::state(a).ok()).collect())).await
+    blocking(|| {
+        let t0 = std::time::Instant::now();
+        let results: Vec<(&str, anyhow::Result<AgentState>, std::time::Duration)> = std::thread::scope(|s| {
+            let jobs: Vec<_> = adapters::ALL
+                .iter()
+                .map(|a| {
+                    s.spawn(move || {
+                        let t = std::time::Instant::now();
+                        (*a, adapters::state(a), t.elapsed())
+                    })
+                })
+                .collect();
+            jobs.into_iter().filter_map(|j| j.join().ok()).collect()
+        });
+        let total = t0.elapsed();
+        if total > std::time::Duration::from_secs(3) {
+            let slow: Vec<String> = results.iter().filter(|(_, _, d)| d.as_millis() >= 500).map(|(a, _, d)| format!("{a} {:.1}s", d.as_secs_f32())).collect();
+            applog::warn("detect", format!("agent list took {:.1}s; slowest: {}", total.as_secs_f32(), slow.join(", ")));
+        }
+        Ok(results
+            .into_iter()
+            .filter_map(|(a, r, _)| r.map_err(|e| applog::error("state", format!("{a}: {e:#}"))).ok())
+            .collect())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -89,6 +116,7 @@ async fn test_latency(url: String) -> Result<u64, String> {
 async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>) -> Result<String, String> {
     process::reset_cancel();
     blocking(move || {
+        let _awake = process::stay_awake("Restarting an agent");
         let report = |p: process::Progress| {
             let _ = on_progress.send(p);
         };
@@ -123,10 +151,20 @@ fn cancel_restart() {
     process::cancel();
 }
 
-/// Whether an agent's app is running right now.
+/// Whether an agent's app is running right now, and how it was started.
+#[derive(serde::Serialize)]
+struct RunState {
+    running: bool,
+    launch: Option<Launch>,
+}
+
 #[tauri::command]
-async fn agent_running(agent: String) -> Result<bool, String> {
-    blocking(move || Ok(process::running(&agent))).await
+async fn agent_running(agent: String) -> Result<RunState, String> {
+    blocking(move || {
+        let (running, launch) = process::running(&agent);
+        Ok(RunState { running, launch })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -390,6 +428,77 @@ fn quit_app(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
+fn log_info() -> applog::LogInfo {
+    applog::status()
+}
+
+#[tauri::command]
+async fn log_set(enabled: bool, days: u32) -> Result<applog::LogInfo, String> {
+    blocking(move || applog::set(enabled, days)).await
+}
+
+#[tauri::command]
+async fn log_clear() -> Result<applog::LogInfo, String> {
+    blocking(applog::clear).await
+}
+
+/// An entry from the page: a failed command, an uncaught error.
+#[tauri::command]
+fn log_client(level: String, source: String, message: String) {
+    applog::client(&level, &source, &message);
+}
+
+/// Writes the scrubbed log, with a header about this machine, to one file; returns its path.
+#[tauri::command]
+async fn log_export(app: tauri::AppHandle) -> Result<String, String> {
+    let version = app.package_info().version.to_string();
+    blocking(move || {
+        let mut header = format!(
+            "AgentPlus {version} diagnostic log
+exported: {}
+os: {} {} ({})
+language: {}
+environment: {}
+",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S %:z"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            os_version(),
+            if i18n::is_en() { "en" } else { "zh" },
+            env::id(),
+        );
+        header.push_str("agents:
+");
+        for d in adapters::detect_all().iter().filter(|d| d.app_found || d.config_found) {
+            header.push_str(&format!(
+                "  {}: {} running={} config={} custom_dir={}
+",
+                d.id,
+                d.version.as_deref().unwrap_or("?"),
+                d.running,
+                d.config_found,
+                d.custom_dir.is_some()
+            ));
+        }
+        let p = applog::export(&header)?;
+        Ok(p.to_string_lossy().to_string())
+    })
+    .await
+}
+
+/// "Windows 11 (26200)"-like text for the export header; empty when unknown.
+fn os_version() -> String {
+    sysinfo::System::long_os_version().unwrap_or_default()
+}
+
+#[tauri::command]
+fn open_log_dir() -> Result<(), String> {
+    let d = applog::dir();
+    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    process::open_dir(&d.to_string_lossy()).map_err(err)
+}
+
+#[tauri::command]
 fn open_data_dir() -> Result<(), String> {
     let d = util::agentplus_dir();
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
@@ -427,6 +536,18 @@ async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>) -> Res
     blocking(move || projects::pick_folder(owner, start.as_deref())).await
 }
 
+/// Panics (a worker thread, the gateway) go to the diagnostic log before the default report.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let msg = info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned()).unwrap_or_default();
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        applog::error("panic", format!("thread {thread} at {at}: {msg}"));
+        prev(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -436,6 +557,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(update::Pending::default())
         .setup(|app| {
+            applog::init();
+            applog::info("app", format!("AgentPlus {} started on {} {} ({})", app.package_info().version, std::env::consts::OS, std::env::consts::ARCH, os_version()));
+            install_panic_hook();
             tray::setup(app.handle())?;
             // Off the startup path: binding the port and stopping an old listener can wait.
             std::thread::spawn(gateway::server::autostart);
@@ -512,6 +636,12 @@ pub fn run() {
             gateway_reset_breaker,
             gateway_test,
             set_agent_dir,
+            log_info,
+            log_set,
+            log_clear,
+            log_client,
+            log_export,
+            open_log_dir,
             update::update_check,
             update::update_install
         ])
@@ -539,6 +669,17 @@ mod tests {
             let st = adapters::state(a).unwrap();
             println!("{}", serde_json::to_string_pretty(&st).unwrap());
         }
+    }
+
+    /// Read-only: Codex detection and how the running app was started.
+    /// `cargo test dump_codex_launch -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn dump_codex_launch() {
+        let t = std::time::Instant::now();
+        let inst = process::detect("codex");
+        println!("installed={} ver={:?} dir={:?} running={} ({:?})", inst.installed, inst.version, inst.dir, inst.running, t.elapsed());
+        println!("{:?}", process::running("codex"));
     }
 
     /// Read-only: the WSL view (codex CLI) without touching the saved choice.

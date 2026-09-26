@@ -45,7 +45,7 @@ export function ProviderTest({ source, models, defaultModel, disabled }: Props) 
     <div className="ptest">
       <div className="ptest-head">
         <strong className="small">{t("providerTest.title")}</strong>
-        <span className="tiny muted">{t("providerTest.hint")}</span>
+        <span className="tiny muted hint">{t("providerTest.hint")}</span>
       </div>
       <div className="row gap6">
         <ComboBox value={model} options={models} onChange={setModel} onEnter={run} disabled={!!why || running}

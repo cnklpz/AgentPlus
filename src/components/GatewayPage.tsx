@@ -111,7 +111,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
           <span className="page-icon"><Icon.gateway size={20} /></span>
           <div className="page-title">
             <h1>{t("gatewayPage.title")}</h1>
-            <span className="muted small">{t("gatewayPage.intro")}</span>
+            <span className="muted small hint">{t("gatewayPage.intro")}</span>
           </div>
         </div>
       </div>
@@ -130,7 +130,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                     <span className="tiny muted">· {tn("gatewayPage.heroRequests", s.requests)} · {tn("gatewayPage.heroFailures", s.failures)}{s.active ? ` · ${tn("gatewayPage.heroActive", s.active)}` : ""}</span>
                   </div>
                 ) : (
-                  <div className="small muted">{scrub(s?.error) ?? t("gatewayPage.idleHint")}</div>
+                  <div className={`small muted${s?.error ? "" : " hint"}`}>{scrub(s?.error) ?? t("gatewayPage.idleHint")}</div>
                 )}
               </div>
               <label className="gw-port-field">
@@ -170,7 +170,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
                 <Icon.key size={14} />
                 <div className="grow minw0">
                   <strong className="small">{tn("gatewayPage.staleKeysBanner", staleKeys)}</strong>
-                  <div className="tiny muted">{t("gatewayPage.staleKeysHint")}</div>
+                  <div className="tiny muted hint">{t("gatewayPage.staleKeysHint")}</div>
                 </div>
                 <button className="btn xs" onClick={onUpdateKeys}>{t("gatewayPage.updateKeys")}</button>
               </div>
@@ -196,7 +196,7 @@ export function GatewayPage({ status: s, setStatus, agents, stations, gatewayHos
             {s && s.routes.length === 0 && (
               <div className="gw-empty">
                 <strong className="small">{t("gatewayPage.noRoutes")}</strong>
-                <span className="muted small">{t("gatewayPage.noRoutesHint")}</span>
+                <span className="muted small hint">{t("gatewayPage.noRoutesHint")}</span>
                 <button className="btn primary small" onClick={() => setAdding(true)}><Icon.plus size={12} />{t("gatewayPage.addRoute")}</button>
               </div>
             )}
@@ -282,7 +282,7 @@ function Unified({ s, copy }: { s: GatewayStatus; copy: (text: string) => void }
           <span className="mono small grow ellipsis">{s.unifiedBase}</span>
           <button className="icon-btn sm" aria-label={t("gatewayPage.copyUnified")} onClick={() => copy(s.unifiedBase)}><Icon.copy size={12} /></button>
         </div>
-        <span className="tiny muted">
+        <span className="tiny muted hint">
           {tx("gatewayPage.unifiedHint", { example: <span className="mono">{t("gatewayPage.unifiedExample")}</span> })}
         </span>
         {rows.length > 0 && (
@@ -354,7 +354,7 @@ function AddForward({ groups, onForward, onClose }: {
 
   const foot = (
     <>
-      <span className="muted tiny grow">{t("gatewayPage.autoStart")}</span>
+      <span className="muted tiny grow hint">{t("gatewayPage.autoStart")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!can || busy} onClick={save}>{busy ? t("gatewayPage.adding") : t("common.add")}</button>
     </>
@@ -370,7 +370,7 @@ function AddForward({ groups, onForward, onClose }: {
           <span className="field-label">{t("common.provider")}</span>
           <Dropdown value={pick} label={t("common.provider")} onChange={setPick}
             options={groups.map(({ st, g }) => ({ value: g.key, label: g.name, hint: `${st.name} · ${API_LABEL[g.api]} · ${g.baseUrl}` }))} />
-          <em className="muted tiny">{t("gatewayPage.pickHint")}</em>
+          <em className="muted tiny hint">{t("gatewayPage.pickHint")}</em>
           {(() => {
             const users = replaceable(groups.find((x) => x.g.key === pick)?.g);
             return (
@@ -399,12 +399,12 @@ function AddForward({ groups, onForward, onClose }: {
           <div className="field">
             <span className="field-label">{t("gatewayPage.upstreamProto")}</span>
             <Seg value={apiKind} onChange={setApiKind} label={t("gatewayPage.upstreamProto")} options={PROTOS.map((p) => ({ value: p, label: API_LABEL[p] }))} />
-            <em className="muted tiny">{t("gatewayPage.protoHint")}</em>
+            <em className="muted tiny hint">{t("gatewayPage.protoHint")}</em>
           </div>
           <div className="field">
             <label htmlFor="af-key">{t("common.apiKey")}</label>
             <input id="af-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-..." />
-            <em className="muted tiny">{t("gatewayPage.keyHint")}</em>
+            <em className="muted tiny hint">{t("gatewayPage.keyHint")}</em>
           </div>
         </>
       )}
@@ -502,7 +502,7 @@ function RouteBody({ r, g, agents, gatewayHost, running, threshold, setStatus, c
             );
           })}
         </div>
-        <span className="tiny muted">{t("gatewayPage.connectHint")}</span>
+        <span className="tiny muted hint">{t("gatewayPage.connectHint")}</span>
       </div>
 
       <div className="gw-block">
@@ -533,7 +533,7 @@ function RouteBody({ r, g, agents, gatewayHost, running, threshold, setStatus, c
         <div className="row gap6">
           <input className="input mono gw-weight-input" value={weight} onChange={(e) => setWeight(e.target.value.replace(/\D/g, "").slice(0, 4))} aria-label={t("gatewayPage.weight")} />
           {weight !== String(r.weight) && weight !== "" && <button className="btn small primary" onClick={() => save({ weight: Math.max(1, Number(weight)) }, t("gatewayPage.weightSaved"))}>{t("common.save")}</button>}
-          <span className="tiny muted">{t("gatewayPage.weightHint")}</span>
+          <span className="tiny muted hint">{t("gatewayPage.weightHint")}</span>
         </div>
       </div>
 
@@ -542,7 +542,7 @@ function RouteBody({ r, g, agents, gatewayHost, running, threshold, setStatus, c
         {advanced && (
           <div className="stack6">
             <label className="field">
-              <span className="small">{t("gatewayPage.modelMap")} <em className="muted tiny">{t("gatewayPage.modelMapHint")}</em></span>
+              <span className="small">{t("gatewayPage.modelMap")} <em className="muted tiny hint">{t("gatewayPage.modelMapHint")}</em></span>
               <textarea className="input mono gw-map" rows={3} value={map} onChange={(e) => setMap(e.target.value)} placeholder={"gpt-5.5=glm-5\n*=deepseek-v4-pro"} />
             </label>
             <div className="row gap6">

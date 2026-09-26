@@ -143,7 +143,7 @@ export function ModelDialog({ agent, agentName, hasNames, nameIsUpstream = false
 
   const foot = (
     <>
-      <span className="muted tiny grow">{t("common.pendingNote")}</span>
+      <span className="muted tiny grow hint">{t("common.pendingNote")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!canSave} onClick={save}>{initial ? t("common.save") : t("common.add")}</button>
     </>
@@ -199,7 +199,7 @@ export function ModelDialog({ agent, agentName, hasNames, nameIsUpstream = false
           ))}
         </section>
       ))}
-      {fields.length > 0 && <em className="muted tiny">{t("modelDialog.defaultNote", { agent: agentName })}</em>}
+      {fields.length > 0 && <em className="muted tiny hint">{t("modelDialog.defaultNote", { agent: agentName })}</em>}
     </Modal>
   );
 }
@@ -216,7 +216,7 @@ function FieldRow({ f, value, text, bad, auto, changed, onChange, onText }: {
         {f.label}
         {auto ? <span className="unsaved">{t("modelDialog.auto")}</span> : changed && <span className="unsaved">{t("modelDialog.modified")}</span>}
       </div>
-      <div className="tiny muted">{f.desc}</div>
+      <div className="tiny muted hint">{f.desc}</div>
     </div>
   );
 

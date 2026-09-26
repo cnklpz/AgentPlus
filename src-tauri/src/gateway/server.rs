@@ -250,6 +250,18 @@ fn with_minute(f: impl FnOnce(&mut Minute)) {
 }
 
 fn push_log(e: LogEntry) {
+    // Failures go to the diagnostic log too (it outlives the 200 entries kept here).
+    if e.error.is_some() || e.status >= 400 {
+        let agent = e.agent.as_deref().unwrap_or("-");
+        crate::applog::warn(
+            "gateway",
+            format!(
+                "{} {} {} route={} agent={agent} {}->{} model={} status={} {}ms stream={}: {}",
+                e.method, e.path, if e.upstream_broken { "(broken stream)" } else { "" }, e.route, e.inbound, e.upstream, e.model, e.status, e.ms, e.stream,
+                e.error.as_deref().unwrap_or("-")
+            ),
+        );
+    }
     let mut log = lock(&LOG);
     if log.len() >= 200 {
         log.pop_back();
@@ -469,6 +481,9 @@ fn bind(port: u16) -> Result<TcpListener> {
         _ => BindError::Other(port, e.to_string()),
     });
     let msg = err.as_ref().map(BindError::message);
+    if let Err(e) = &r {
+        crate::applog::error("gateway", format!("bind 127.0.0.1:{port} failed: {e}"));
+    }
     *lock(&LAST_ERROR) = err;
     r.map_err(|_| anyhow!(msg.unwrap_or_default()))
 }

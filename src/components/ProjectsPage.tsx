@@ -25,7 +25,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
   const go = () => { if (path.trim()) onOpen(path.trim()); };
   return (
     <div className="stack12">
-      <span className="muted small">{t("projectsPage.intro")}</span>
+      <span className="muted small hint">{t("projectsPage.intro")}</span>
       <div className="proj-open">
         <button className="btn primary" disabled={busy} onClick={onPick}><Icon.folder />{t("projectsPage.pickFolder")}</button>
         <span className="muted small">{t("projectsPage.or")}</span>
@@ -67,7 +67,7 @@ export function ProjectList({ projects, busy, pending, onOpen, onPick, onForget,
           })}
         </div>
       )}
-      <div className="notes">
+      <div className="notes hint">
         <span>{t("projectsPage.noteMerge")}</span>
         <span>{t("projectsPage.noteAuth")}</span>
       </div>

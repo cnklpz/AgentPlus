@@ -409,6 +409,9 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 .kv { border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
 .kv-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--line2); align-items: baseline; }
 .kv-row:last-child { border-bottom: 0; }
+.launch-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--muted); }
+.launch-dot.ok { background: var(--ok-dot); }
+.launch-dot.warn { background: var(--warn); }
 .kv-row > :first-child { min-width: 0; overflow-wrap: anywhere; }
 .pdetail { padding: 16px 18px 14px; border-bottom: 1px solid var(--line2); display: flex; flex-direction: column; gap: 12px; max-height: 58%; overflow-y: auto; }
 .pdetail-head { display: flex; align-items: center; gap: 12px; }
@@ -557,3 +560,8 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .pavatar.sm { width: 28px; height: 28px; border-radius: 8px; font-size: 10.5px; }
 .copy-meta { width: 92px; text-align: right; flex-shrink: 0; }
 .nowrap { white-space: nowrap; flex-shrink: 0; }
+
+/* Brief hints (Settings → Interface): explanations go, option names stay. */
+:root[data-hints="brief"] .hint { display: none !important; }
+/* A hint that is also a row's spacer (`grow`) keeps its space, empty, so buttons stay put. */
+:root[data-hints="brief"] .hint.grow { display: block !important; visibility: hidden; height: 0; overflow: hidden; }

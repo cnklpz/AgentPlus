@@ -98,7 +98,7 @@ export function CopyProviderDialog({ target, agents, lib, onCopy, onClose }: Pro
   );
   return (
     <Modal label={t("copyProviderDialog.ariaTitle")} title={t("copyProviderDialog.title", { name: target.name })} wide onClose={onClose} foot={foot}>
-      <span className="muted small">{t("copyProviderDialog.intro")}</span>
+      <span className="muted small hint">{t("copyProviderDialog.intro")}</span>
       <input className="search-input" autoFocus placeholder={t("copyProviderDialog.filterPlaceholder")} value={q} onChange={(e) => setQ(e.target.value)} />
       {all.length === 0 && <div className="empty">{t("copyProviderDialog.empty")}</div>}
       {groups.map((g) => {

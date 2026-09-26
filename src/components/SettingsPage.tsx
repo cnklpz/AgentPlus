@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { type AgentDetect, type AgentId, type EnvInfo, api } from "../api";
+import { type AgentDetect, type AgentId, type EnvInfo, type LogInfo, api } from "../api";
 import { inTauri } from "../tauri";
-import type { CloseAction, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
-import { LANGS, type LangPref, type TKey, locale, t, useLang } from "../i18n";
+import type { CloseAction, Hints, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
+import { LANGS, type LangPref, type TKey, locale, t, tn, useLang } from "../i18n";
 import { useLoad, usePageEscape } from "../hooks";
 import { AGENT_NAME } from "../services";
 import { AgentIcon, EnvIcon, Icon } from "./icons";
 import { Modal } from "./Modal";
+import { ask } from "./Confirm";
 import { ErrorBox, Seg, SettingRow, Switch } from "./controls";
 import { TabBar, useSlideDir } from "./TabBar";
 import { scrub } from "../privacy";
@@ -52,6 +53,11 @@ const RESTART_PROGRESS: { v: RestartProgressPref; label: TKey; hint: TKey }[] = 
   { v: "toast", label: "settingsPage.restartToast", hint: "settingsPage.restartToastHint" },
 ];
 
+const HINTS: { v: Hints; label: TKey }[] = [
+  { v: "full", label: "settingsPage.hintsFull" },
+  { v: "brief", label: "settingsPage.hintsBrief" },
+];
+
 const CLOSE_ACTIONS: { v: CloseAction; label: TKey; hint: TKey }[] = [
   { v: "ask", label: "settingsPage.closeAsk", hint: "settingsPage.closeAskHint" },
   { v: "tray", label: "common.minimizeToTray", hint: "settingsPage.closeTrayHint" },
@@ -72,7 +78,7 @@ export function SettingsPage(props: Props) {
           <span className="page-icon"><Icon.gear size={20} /></span>
           <div className="page-title">
             <h1>{t("settingsPage.title")}</h1>
-            <span className="muted small">{t("settingsPage.subtitle")}</span>
+            <span className="muted small hint">{t("settingsPage.subtitle")}</span>
           </div>
           <button className="icon-btn" aria-label={t("settingsPage.closeSettings")} title={t("settingsPage.closeEsc")} onClick={props.onClose}><Icon.close /></button>
         </div>
@@ -112,7 +118,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
               </button>
             ))}
           </div>
-          <span className="muted tiny">{t("settingsPage.envsHint")}</span>
+          <span className="muted tiny hint">{t("settingsPage.envsHint")}</span>
         </div>
       </section>}
 
@@ -129,6 +135,10 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         <SettingRow label={t("settingsPage.motion")} desc={t("settingsPage.motionHint", { hint: t(MOTION.find((m) => m.v === prefs.motion)?.hint ?? "settingsPage.motionFullHint") })}>
           <Seg value={prefs.motion} onChange={(v) => setPrefs({ ...prefs, motion: v })} label={t("settingsPage.motion")}
             options={MOTION.map((m) => ({ value: m.v, label: t(m.label), title: t(m.hint) }))} />
+        </SettingRow>
+        <SettingRow label={t("settingsPage.hints")} desc={t("settingsPage.hintsHint")}>
+          <Seg value={prefs.hints} onChange={(v) => setPrefs({ ...prefs, hints: v })} label={t("settingsPage.hints")}
+            options={HINTS.map((m) => ({ value: m.v, label: t(m.label) }))} />
         </SettingRow>
         <SettingRow label={t("settingsPage.autoLatency")} desc={t("settingsPage.autoLatencyHint")}>
           <Switch on={prefs.autoLatency} onChange={(v) => setPrefs({ ...prefs, autoLatency: v })} label={t("settingsPage.autoLatency")} />
@@ -151,11 +161,13 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
 
       <section className="sgroup">
         <h2>{t("settingsPage.dataTitle")}</h2>
-        <SettingRow label={t("settingsPage.dataDir")} desc={t("settingsPage.dataDirHint")} descClassName="mono">
+        <SettingRow label={t("settingsPage.dataDir")} desc={t("settingsPage.dataDirHint")} descClassName="mono" keepDesc>
           <button className="btn" onClick={() => api.openDataDir().catch((e) => flash(errText(e), true))}><Icon.folder />{t("common.open")}</button>
           <button className="btn" onClick={onHistory}><Icon.history size={14} />{t("settingsPage.backups")}</button>
         </SettingRow>
       </section>
+
+      <LogSection flash={flash} />
 
       <section className="sgroup">
         <h2>{t("settingsPage.aboutTitle")}</h2>
@@ -166,6 +178,61 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         </SettingRow>
       </section>
     </div>
+  );
+}
+
+/** Choices for how many days the diagnostic log is kept. */
+const LOG_DAYS = [3, 7, 14, 30];
+
+/** The diagnostic log: on / off, how long it is kept, export for analysis. */
+function LogSection({ flash }: { flash: Flash }) {
+  const [info, setInfo] = useState<LogInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.logInfo().then((i) => { if (alive) setInfo(i); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  const run = async (f: () => Promise<LogInfo>, done?: string) => {
+    setBusy(true);
+    try {
+      setInfo(await f());
+      if (done) flash(done);
+    } catch (e) {
+      flash(errText(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const exportLog = () => run(async () => {
+    const path = await api.logExport();
+    flash(t("settingsPage.logExported", { path }));
+    api.revealPath(path).catch(() => undefined);
+    return api.logInfo();
+  });
+  const clear = async () => {
+    if (await ask({ title: t("settingsPage.logClearConfirm"), confirmText: t("settingsPage.logClear"), danger: true })) {
+      await run(api.logClear, t("settingsPage.logCleared"));
+    }
+  };
+  if (!info) return null;
+  return (
+    <section className="sgroup">
+      <h2>{t("settingsPage.logTitle")}</h2>
+      <SettingRow label={t("settingsPage.logEnabled")} desc={t("settingsPage.logEnabledHint")}>
+        <Switch on={info.enabled} onChange={(v) => { void run(() => api.logSet(v, info.days)); }} label={t("settingsPage.logEnabled")} />
+      </SettingRow>
+      <SettingRow label={t("settingsPage.logDays")} desc={t("settingsPage.logDaysHint")}>
+        <Seg value={info.days} onChange={(v) => { void run(() => api.logSet(info.enabled, v)); }} label={t("settingsPage.logDays")}
+          options={LOG_DAYS.map((n) => ({ value: n, label: tn("settingsPage.logDaysN", n), disabled: busy }))} />
+      </SettingRow>
+      <SettingRow label={t("settingsPage.logFiles")} descClassName="mono" keepDesc
+        desc={info.files ? `${tn("settingsPage.logFilesHint", info.files, { size: fmtSize(info.bytes) })} · ${scrub(info.dir)}` : t("settingsPage.logEmpty")}>
+        <button className="btn" disabled={busy} onClick={() => { void exportLog(); }}><Icon.download size={13} />{t("settingsPage.logExport")}</button>
+        <button className="btn" onClick={() => api.openLogDir().catch((e) => flash(errText(e), true))}><Icon.folder />{t("common.open")}</button>
+        <button className="btn" disabled={busy || !info.files} onClick={() => { void clear(); }}><Icon.trash />{t("settingsPage.logClear")}</button>
+      </SettingRow>
+    </section>
   );
 }
 
@@ -248,7 +315,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
   return (
     <div className="settings">
       <div className="row between">
-        <span className="muted small">{t("settingsPage.detectIntro", { env: envLabel })}</span>
+        <span className="muted small hint">{t("settingsPage.detectIntro", { env: envLabel })}</span>
         <span className="row gap6 noshrink">
           <button className="btn small" onClick={() => setShowAll(true)}><Icon.layers size={12} />{t("settingsPage.supportedAgents")}</button>
           <button className="btn small" onClick={() => { void load(true); }}><Icon.refresh size={12} />{t("settingsPage.redetect")}</button>
@@ -277,7 +344,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
               <label className="srow detect-show">
                 <span className="grow minw0">
                   <span className="small strong">{t("settingsPage.showInSidebar")}</span>
-                  <span className="block tiny muted">{t("settingsPage.showInSidebarHint")}</span>
+                  <span className="block tiny muted hint">{t("settingsPage.showInSidebarHint")}</span>
                 </span>
                 <Switch on={!hidden.has(d.id)} onChange={() => toggleShown(d.id)} label={t("settingsPage.showInSidebarAria", { name: d.name })} />
               </label>
@@ -305,7 +372,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
                   <button className="btn small primary" disabled={!draft.trim() || saving === d.id} onClick={() => save(d.id, draft)}>{t(saving === d.id ? "settingsPage.checking" : "settingsPage.use")}</button>
                 </div>
               )}
-              {draft !== undefined && <span className="tiny muted">{t(isMac ? "settingsPage.dirInputHintMac" : "settingsPage.dirInputHint", { dir: d.defaultDir })}</span>}
+              {draft !== undefined && <span className="tiny muted hint">{t(isMac ? "settingsPage.dirInputHintMac" : "settingsPage.dirInputHint", { dir: d.defaultDir })}</span>}
             </div>}
           </section>
         );
@@ -350,7 +417,7 @@ function SupportedAgents({ found, onClose }: { found: Set<AgentId>; onClose: () 
           </div>
         ))}
       </div>
-      <span className="tiny muted">{t("settingsPage.supportedHint")}</span>
+      <span className="tiny muted hint">{t("settingsPage.supportedHint")}</span>
     </Modal>
   );
 }

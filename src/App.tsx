@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
 import {
   CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, guessedModel, importProvider, isEnabled, isVisible, keys, opCount,
   opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
@@ -111,7 +111,7 @@ export default function App() {
   const [projStates, setProjStates] = useState<Record<string, AgentState>>({});
   const [copyOpen, setCopyOpen] = useState(false);
   const setPrefs = (p: Prefs) => { setPrefsState(p); savePrefs(p); };
-  useEffect(() => applyPrefs(prefs), [prefs.motion, prefs.theme, prefs.lang, prefs.privacy]);
+  useEffect(() => applyPrefs(prefs), [prefs.motion, prefs.theme, prefs.lang, prefs.privacy, prefs.hints]);
   // The window starts hidden (tauri.conf.json) so the WebView's blank white never shows;
   // reveal it once the first frame is committed with theme and styles in place.
   useEffect(() => { if (inTauri) getCurrentWindow().show().catch(() => {}); }, []);
@@ -480,17 +480,21 @@ export default function App() {
       if (document.hidden) return;
       api.agentRunning(pollRunning)
         // Same list when nothing changed, so everything that depends on `agents` stays put.
-        .then((running) => setAgents((list) => (list.some((a) => a.id === pollRunning && a.running !== running)
-          ? list.map((a) => (a.id === pollRunning ? { ...a, running } : a))
+        .then(({ running, launch }) => setAgents((list) => (list.some((a) => a.id === pollRunning && (a.running !== running || !sameLaunch(a.launch, launch)))
+          ? list.map((a) => (a.id === pollRunning ? { ...a, running, launch } : a))
           : list)))
         .catch(() => undefined);
     };
     check();
     const timer = window.setInterval(check, 4000);
+    // Checks are skipped while the window is hidden (on macOS also while another window
+    // covers it): look again as soon as it shows, not at the next tick.
     window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
     };
   }, [pollRunning]);
 

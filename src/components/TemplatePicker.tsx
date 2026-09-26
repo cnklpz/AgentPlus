@@ -10,7 +10,7 @@ export function TemplatePicker({ value, onPick }: { value: Template | null; onPi
   const vendor = value ? VENDORS.find((v) => v.id === value.icon) ?? null : null;
   return (
     <div className="field tpl-dd">
-      <span className="field-label">{t("templatePicker.label")} <em className="muted tiny">{t("templatePicker.labelHint")}</em></span>
+      <span className="field-label">{t("templatePicker.label")} <em className="muted tiny hint">{t("templatePicker.labelHint")}</em></span>
       <div className="tpl-row">
         <Dropdown label={t("templatePicker.vendor")} value={vendor?.id ?? ""} maxHeight={420}
           onChange={(v) => onPick(VENDORS.find((x) => x.id === v)?.plans[0] ?? null)}

@@ -321,7 +321,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   const foot = (
     <>
-      <span className="muted tiny grow">{t("common.pendingNote")}</span>
+      <span className="muted tiny grow hint">{t("common.pendingNote")}</span>
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
     </>
@@ -335,7 +335,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />
       </div>
       {isNew && gatewayCapable(st.id) && !tpl && (
-        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
+        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")} keepHint={unifiedNew}
           hint={unifiedNew
             ? pool.length
               ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
@@ -382,7 +382,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
           <span className="field-label">{t("providerDialog.gatewayProtocol")}</span>
           <Seg value={kind} onChange={setKind} label={t("providerDialog.gatewayProtocol")}
             options={PROTOCOLS.map((v) => ({ value: v, label: API_LABEL[v], title: t(API_HINT[v]) }))} />
-          <em className="muted tiny">{t("providerDialog.gatewayProtocolNote")}</em>
+          <em className="muted tiny hint">{t("providerDialog.gatewayProtocolNote")}</em>
         </div>
       )}
 
@@ -399,13 +399,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
               {multi
                 ? <SegMulti value={apis} onChange={pickApis} label={t("providerDialog.apiTypeMulti")} options={protoOptions} />
                 : <Seg value={kind} onChange={setProto} label={t("providerDialog.apiType")} options={protoOptions} />}
-              {multi && apis.length > 1 && <em className="muted tiny">{viaFwd ? t("providerDialog.multiForward") : t("providerDialog.multiDirect")}</em>}
+              {multi && apis.length > 1 && <em className="muted tiny hint">{viaFwd ? t("providerDialog.multiForward") : t("providerDialog.multiDirect")}</em>}
             </div>
             <div className="field">
               <label htmlFor="pd-key">{t("common.apiKeyLabel")}</label>
               <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
                 placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
-              <em className="muted tiny">
+              <em className={`muted tiny${tpl ? "" : " hint"}`}>
                 {viaFwd ? t("providerDialog.keyForward") : keyHint}
                 {tpl && <TemplateKeyLink tpl={tpl} />}
               </em>
@@ -427,7 +427,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                 ? t("providerDialog.mixSyncTwo", { a: mixOff[0].label, b: mixOff[1].label })
                 : t("providerDialog.mixSyncOne", { a: mixOff[0].label })}
             </span>
-            <em className="muted tiny">{t("providerDialog.mixSyncNote")}</em>
+            <em className="muted tiny hint">{t("providerDialog.mixSyncNote")}</em>
           </span>
         </label>
       )}
@@ -447,12 +447,12 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       )}
       <div className="field">
         <div className="row between">
-          <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>
+          <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny hint">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>
           <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
             <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
           </button>
         </div>
-        <em className="muted tiny">
+        <em className={`muted tiny${!codex && claude && unmanaged ? "" : " hint"}`}>
           {codex
             ? isNew
               ? t("providerDialog.codexNewNote")
@@ -473,7 +473,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       </div>
       {roleList.length > 0 && !isNew && !unmanaged && (
         <div className="field">
-          <span className="field-label">{t("providerDialog.roleAssign")} <em className="muted tiny">{claude ? t("providerDialog.roleScopeClaude") : t("providerDialog.roleScopeHermes")}</em></span>
+          <span className="field-label">{t("providerDialog.roleAssign")} <em className="muted tiny hint">{claude ? t("providerDialog.roleScopeClaude") : t("providerDialog.roleScopeHermes")}</em></span>
           <div className="roles-grid">
             {roleList.map((r) => (
               <div key={r.role} className="role-row" title={t(r.hint)}>
@@ -483,7 +483,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
               </div>
             ))}
           </div>
-          <em className="muted tiny">{t("providerDialog.roleNote")}</em>
+          <em className="muted tiny hint">{t("providerDialog.roleNote")}</em>
         </div>
       )}
       {err && <ErrorBox text={err} />}
@@ -527,7 +527,7 @@ function ForwardPicker({ routes, value, onChange }: { routes: GatewayRouteView[]
           ))}
         </div>
       )}
-      <em className="muted tiny">{t("providerDialog.fwdNote")}</em>
+      <em className="muted tiny hint">{t("providerDialog.fwdNote")}</em>
     </div>
   );
 }

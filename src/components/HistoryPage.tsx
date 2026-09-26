@@ -70,7 +70,7 @@ export function HistoryPage({ flash, onChanged }: { flash: Flash; onChanged: () 
           <div className="page-head">
             <div className="page-title">
               <h1>{t("historyPage.title")}</h1>
-              <span className="muted small">{t("historyPage.subtitle")}</span>
+              <span className="muted small hint">{t("historyPage.subtitle")}</span>
             </div>
             <button className="btn" onClick={() => { load(); setRev((n) => n + 1); }}>{t("common.refresh")}</button>
           </div>
@@ -106,7 +106,7 @@ export function HistoryPage({ flash, onChanged }: { flash: Flash; onChanged: () 
         ) : (
           <section className="aside-cur">
             <h2>{t("historyPage.detailTitle")}</h2>
-            <span className="muted tiny">{t("historyPage.detailHint")}</span>
+            <span className="muted tiny hint">{t("historyPage.detailHint")}</span>
             {list && list.length > 0 && (
               <div className="hub-stats">
                 <div><b>{list.length}</b><span>{t("historyPage.statRecords")}</span></div>
@@ -153,7 +153,7 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
         {error && <ErrorBox text={error} />}
         {d && (
           <>
-            <span className="tiny muted">{tx("historyPage.diffLegend", {
+            <span className="tiny muted hint">{tx("historyPage.diffLegend", {
               red: <span className="hd-key del">{t("historyPage.red")}</span>,
               green: <span className="hd-key add">{t("historyPage.green")}</span>,
             })}</span>

@@ -44,7 +44,7 @@ export function HubAside({ agents, pending, drafts, stations, detail, busy, onDi
             <div><b>{groups}</b><span>{tn("hubAside.groups", groups)}</span></div>
             <div><b>{usable}</b><span>{tn("hubAside.agentsAvailable", usable)}</span></div>
           </div>
-          <span className="muted tiny">{t("hubAside.hint")}</span>
+          <span className="muted tiny hint">{t("hubAside.hint")}</span>
         </section>
       )}
 
@@ -76,7 +76,7 @@ export function HubAside({ agents, pending, drafts, stations, detail, busy, onDi
           <button className="btn full" disabled={!total || busy} onClick={() => onDiscard(null)}>{t("common.discardAll")}</button>
           <button className="btn primary full" disabled={!total || busy} onClick={onApplyAll}>{busy ? t("common.writing") : withOps.length > 1 ? tn("hubAside.applyTo", withOps.length) : t("common.apply")}</button>
         </div>
-        <span className="muted tiny center">{t("hubAside.backupNote")}</span>
+        <span className="muted tiny center hint">{t("hubAside.backupNote")}</span>
       </div>
     </aside>
   );

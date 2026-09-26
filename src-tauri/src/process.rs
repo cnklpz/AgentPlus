@@ -153,15 +153,48 @@ fn login_shell_path() -> Option<OsString> {
     text.rsplit_once(MARK)?.1.lines().map(str::trim).find(|l| !l.is_empty()).map(OsString::from)
 }
 
+type CodexPkg = Option<(PathBuf, String, String, Option<PathBuf>)>;
+
+/// How long a PowerShell answer about the Codex package is trusted when nothing says it changed.
+const CODEX_PKG_TTL: Duration = Duration::from_secs(300);
+
+/// The MSIX package folder (`…\WindowsApps\OpenAI.Codex_<version>_…`) an executable is in.
+fn codex_package_dir(exe: &Path) -> Option<&Path> {
+    exe.ancestors().find(|d| {
+        d.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().starts_with("openai.codex_"))
+            && d.parent().and_then(Path::file_name).is_some_and(|n| n.eq_ignore_ascii_case("WindowsApps"))
+    })
+}
+
+/// Whether a cached answer no longer describes the installed package: an update installs
+/// Codex into a new versioned folder (and removes the old one once nothing runs from it),
+/// so the cached folder is gone, or Codex is running from another package folder.
+fn codex_package_stale(cached: &CodexPkg, age: Duration, sys: &System) -> bool {
+    let Some((dir, ..)) = cached else { return age > Duration::from_secs(60) };
+    if age > CODEX_PKG_TTL || !dir.is_dir() {
+        return true;
+    }
+    let own = norm_dir(&dir.to_string_lossy());
+    sys.processes().values().filter_map(|p| p.exe()).filter_map(codex_package_dir).any(|d| norm_dir(&d.to_string_lossy()) != own)
+}
+
 /// (install dir, version, package family name, main executable) of the Codex MSIX package.
-/// Cached once PowerShell has answered; a probe that failed or timed out is tried again
-/// on the next refresh instead of hiding Codex for the rest of the run.
-fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
-    type Pkg = Option<(PathBuf, String, String, Option<PathBuf>)>;
-    static CACHE: std::sync::Mutex<Option<Pkg>> = std::sync::Mutex::new(None);
-    if let Some(p) = crate::util::lock(&CACHE).clone() {
+/// Cached once PowerShell has answered, until the package changes (see
+/// [`codex_package_stale`]); a probe that failed or timed out is tried again on the next
+/// refresh instead of hiding Codex for the rest of the run.
+fn codex_package(sys: &System) -> CodexPkg {
+    static CACHE: std::sync::Mutex<Option<(Instant, CodexPkg)>> = std::sync::Mutex::new(None);
+    /// One probe at a time: callers that arrive meanwhile use its answer.
+    static PROBE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let cached = || crate::util::lock(&CACHE).clone().filter(|(t, p)| !codex_package_stale(p, t.elapsed(), sys)).map(|(_, p)| p);
+    if let Some(p) = cached() {
         return p;
     }
+    let _probe = crate::util::lock(&PROBE);
+    if let Some(p) = cached() {
+        return p;
+    }
+    let t0 = Instant::now();
     let out = output_within(
         Command::new("powershell.exe").args([
             "-NoProfile",
@@ -170,7 +203,11 @@ fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
         ]),
         Duration::from_secs(20),
     )
-    .filter(|o| o.status.success())?;
+    .filter(|o| o.status.success());
+    let Some(out) = out else {
+        crate::applog::warn("detect", format!("Codex package probe failed after {:.1}s", t0.elapsed().as_secs_f32()));
+        return None;
+    };
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     let pkg = (|| {
@@ -180,7 +217,9 @@ fn codex_package() -> Option<(PathBuf, String, String, Option<PathBuf>)> {
         let main = lines.next().map(|e| dir.join(e.replace('/', "\\")));
         Some((dir, ver, pfn, main))
     })();
-    *crate::util::lock(&CACHE) = Some(pkg.clone());
+    let found = pkg.as_ref().map(|(d, v, ..)| format!("{v} at {}", d.display())).unwrap_or_else(|| "not installed".into());
+    crate::applog::info("detect", format!("Codex package: {found} ({:.1}s)", t0.elapsed().as_secs_f32()));
+    *crate::util::lock(&CACHE) = Some((Instant::now(), pkg.clone()));
     pkg
 }
 
@@ -641,12 +680,18 @@ pub(crate) fn detect_codex() -> Install {
         let name = exe("codex");
         cli.running = cli.installed && any_process(|n, _| n == name);
         return cli;
-    } else if let Some((dir, ver, pfn, main)) = codex_package() {
-        inst.installed = true;
-        inst.version = Some(ver);
-        inst.aumid = Some(format!("{pfn}!App"));
-        inst.exe = main;
-        inst.dir = Some(dir);
+    } else {
+        // One process scan both checks the cached package and finds the running app.
+        let sys = processes();
+        if let Some((dir, ver, pfn, main)) = codex_package(&sys) {
+            inst.installed = true;
+            inst.version = Some(ver);
+            inst.aumid = Some(format!("{pfn}!App"));
+            inst.exe = main;
+            inst.dir = Some(dir);
+            inst.running = !app_of(&sys, &inst).is_empty();
+        }
+        return inst;
     }
     set_app_running(&mut inst);
     inst
@@ -867,6 +912,37 @@ pub fn pause(d: Duration) -> Result<()> {
     }
 }
 
+/// While alive, macOS doesn't put AgentPlus into App Nap. A restart starts an app whose
+/// window then covers AgentPlus's, and a napping app's sleeps and timers stretch to many
+/// seconds: the waits for the process and the DevTools port would lag far behind. No-op
+/// elsewhere.
+pub struct Awake {
+    #[cfg(target_os = "macos")]
+    token: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2::runtime::NSObjectProtocol>>,
+}
+
+pub fn stay_awake(reason: &str) -> Awake {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+        let opts = NSActivityOptions::UserInitiatedAllowingIdleSystemSleep | NSActivityOptions::LatencyCritical;
+        Awake { token: NSProcessInfo::processInfo().beginActivityWithOptions_reason(opts, &NSString::from_str(reason)) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = reason;
+        Awake {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for Awake {
+    fn drop(&mut self) {
+        // SAFETY: the token is what beginActivityWithOptions:reason: returned.
+        unsafe { objc2_foundation::NSProcessInfo::processInfo().endActivity(&self.token) };
+    }
+}
+
 /// Ends the desktop app's processes: asked to quit (SIGTERM) where the system has that
 /// (macOS), killed otherwise (Windows) or when `force`.
 fn end_app(inst: &Install, force: bool) {
@@ -936,6 +1012,7 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     if crate::env::is_wsl() {
         return Err(anyhow!(crate::i18n::l("WSL 里的 Codex 是命令行工具，不用重启：新开的 codex 会话会读取新配置", "Codex in WSL is a command-line tool and doesn't need a restart: new codex sessions read the new config")));
     }
+    let t0 = Instant::now();
     let inst = detect(agent);
     if !inst.installed {
         return Err(anyhow!(crate::i18n::l("没有检测到安装", "No installation detected")));
@@ -945,6 +1022,17 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     let running = app.len();
     let cli = cli_sessions(&sys, agent, &app);
     drop(sys);
+    crate::applog::info(
+        "restart",
+        format!(
+            "{agent} {}: {running} app process(es), {cli} CLI session(s), dir={:?} exe={:?} aumid={:?} args={args:?} (detect {:.1}s)",
+            inst.version.as_deref().unwrap_or("?"),
+            inst.dir,
+            inst.exe,
+            inst.aumid,
+            t0.elapsed().as_secs_f32()
+        ),
+    );
     let cli_note = (cli > 0).then(|| tr!("终端里的 {cli} 个 CLI 会话不会重启，重新打开后才读到新配置", "{cli} CLI session(s) in terminals aren't restarted; they read the new config once reopened"));
     if running > 0 {
         on(Progress::step("stop", "active", Some(tr!("正在结束 {running} 个进程", "Ending {running} process(es)"))));
@@ -973,21 +1061,93 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     if inst.dir.is_some() {
         on(Progress::step("start", "active", Some(crate::i18n::l("等待进程出现", "Waiting for the process").into())));
         let t0 = Instant::now();
+        let mut scans = 0u32;
         while app_of(&processes(), &inst).is_empty() {
+            scans += 1;
             if t0.elapsed() > Duration::from_secs(15) {
+                crate::applog::warn("restart", format!("{agent}: no app process seen within 15s ({scans} scans); {}", near_misses(&inst)));
                 on(Progress::step("start", "warn", Some(crate::i18n::l("15 秒内没有看到它的进程，可能还在启动", "No process seen within 15 seconds; it may still be starting").into())));
                 return Ok(done);
             }
             pause(Duration::from_millis(300))?;
         }
+        crate::applog::info("restart", format!("{agent}: app process seen after {:.1}s ({scans} scans)", t0.elapsed().as_secs_f32()));
+        remember_launch(agent, &inst);
     }
     on(Progress::step("start", "done", None));
     Ok(done)
 }
 
-/// Whether the agent's app is running now (cheap; used to keep the Start/Restart button honest).
-pub fn running(agent: &str) -> bool {
-    detect(agent).running
+/// The app's main process: its main executable, not started by another of its processes
+/// (the oldest when several). (pid, start time).
+fn main_process(sys: &System, inst: &Install) -> Option<(Pid, u64)> {
+    let main = norm_dir(&inst.exe.as_deref()?.to_string_lossy());
+    let pids = app_of(sys, inst);
+    pids.iter()
+        .filter_map(|pid| sys.process(*pid))
+        .filter(|p| p.exe().is_some_and(|e| norm_dir(&e.to_string_lossy()) == main))
+        .filter(|p| !p.parent().is_some_and(|pp| pids.contains(&pp)))
+        .min_by_key(|p| p.start_time())
+        .map(|p| (p.pid(), p.start_time()))
+}
+
+/// Remembers the app's main process as started by AgentPlus (see [`launch`]).
+fn remember_launch(agent: &str, inst: &Install) {
+    let Some((pid, start)) = main_process(&processes(), inst) else { return };
+    let r = crate::store::update(|root| {
+        if !root.get("launched").is_some_and(|v| v.is_object()) {
+            root["launched"] = serde_json::json!({});
+        }
+        root["launched"][agent] = serde_json::json!({ "pid": pid.as_u32(), "start": start });
+        Ok(())
+    });
+    if let Err(e) = r {
+        crate::applog::warn("restart", format!("{agent}: could not remember the launch: {e:#}"));
+    }
+}
+
+/// How the running app of `agent` was started: by AgentPlus when its main process is the
+/// one the last restart from AgentPlus started, or when it carries AgentPlus's DevTools
+/// port (an app started by an earlier AgentPlus). None while it isn't running.
+pub fn launch(agent: &str, inst: &Install) -> Option<crate::model::Launch> {
+    use sysinfo::{ProcessRefreshKind, UpdateKind};
+    if !inst.running {
+        return None;
+    }
+    let mut sys = processes();
+    let (pid, start) = main_process(&sys, inst)?;
+    let rec = crate::store::load().get("launched").and_then(|l| l.get(agent)).cloned();
+    let ours = rec.is_some_and(|r| r["pid"].as_u64() == Some(u64::from(pid.as_u32())) && r["start"].as_u64() == Some(start));
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), false, ProcessRefreshKind::new().with_cmd(UpdateKind::Always));
+    let flag = format!("--remote-debugging-port={}", crate::cdp::PORT);
+    let debug_port = sys.process(pid).is_some_and(|p| p.cmd().iter().any(|a| a.to_string_lossy() == flag));
+    let wants_ui = agent == crate::adapters::codex::ID && crate::adapters::codex::ui_patches().any();
+    Some(crate::model::Launch { by_agentplus: ours || debug_port, debug_port, ui_inactive: wants_ui && !debug_port })
+}
+
+/// For the log when a started app wasn't found: processes named like its main executable and
+/// where they run from (a second copy, or a macOS app run from a translocated path).
+fn near_misses(inst: &Install) -> String {
+    let Some(name) = inst.exe.as_deref().and_then(Path::file_name) else { return "no main executable known".into() };
+    let sys = processes();
+    let seen: Vec<String> = sys.processes().values().filter(|p| p.name().eq_ignore_ascii_case(name)).take(5).map(|p| format!("pid {} exe={:?}", p.pid(), p.exe())).collect();
+    if seen.is_empty() {
+        format!("no process named {name:?}")
+    } else {
+        format!("processes named {name:?}: {}", seen.join(", "))
+    }
+}
+
+/// Whether the agent's app is running now and how it was started (cheap; keeps the
+/// Start/Restart button and the launch hint honest).
+pub fn running(agent: &str) -> (bool, Option<crate::model::Launch>) {
+    let t0 = Instant::now();
+    let inst = detect(agent);
+    let launch = if inst.dir.is_some() { launch(agent, &inst) } else { None };
+    if t0.elapsed() > Duration::from_secs(2) {
+        crate::applog::warn("detect", format!("{agent}: running check took {:.1}s", t0.elapsed().as_secs_f32()));
+    }
+    (inst.running, launch)
 }
 
 /// Starts a desktop app. A macOS app bundle goes through LaunchServices (`open`), as from
@@ -1048,6 +1208,28 @@ pub fn reveal(path: &str) -> Result<()> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_package_dir_is_the_versioned_folder() {
+        let exe = Path::new(r"C:\Program Files\WindowsApps\OpenAI.Codex_26.924.2738.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe");
+        assert_eq!(codex_package_dir(exe), Some(Path::new(r"C:\Program Files\WindowsApps\OpenAI.Codex_26.924.2738.0_x64__2p2nqsd0c76g0")));
+        // The CLI Codex keeps in the profile, or a folder merely named like the package, isn't it.
+        assert_eq!(codex_package_dir(Path::new(r"C:\Users\me\AppData\Local\OpenAI\Codex\bin\x\codex.exe")), None);
+        assert_eq!(codex_package_dir(Path::new(r"D:\tmp\OpenAI.Codex_1\app\ChatGPT.exe")), None);
+    }
+
+    #[test]
+    fn cached_codex_package_goes_stale() {
+        let sys = System::new();
+        let gone: CodexPkg = Some((PathBuf::from(r"C:\Program Files\WindowsApps\OpenAI.Codex_0.0.0.0_x64__none"), "0".into(), "f".into(), None));
+        assert!(codex_package_stale(&gone, Duration::ZERO, &sys));
+        let here: CodexPkg = Some((std::env::temp_dir(), "1".into(), "f".into(), None));
+        assert!(!codex_package_stale(&here, Duration::ZERO, &sys));
+        assert!(codex_package_stale(&here, CODEX_PKG_TTL + Duration::from_secs(1), &sys));
+        // "Not installed" is asked again after a minute.
+        assert!(!codex_package_stale(&None, Duration::from_secs(5), &sys));
+        assert!(codex_package_stale(&None, Duration::from_secs(61), &sys));
+    }
 
     #[test]
     fn unquote_exe_needs_an_absolute_path() {

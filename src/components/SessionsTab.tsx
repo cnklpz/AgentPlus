@@ -106,7 +106,7 @@ export function SessionsTab({ target, flash, initialQuery }: Props) {
           <div className="grow minw0 stack8">
             <div>
               <div className="strong">{tn("sessionsTab.misplacedTitle", misplacedBy.reduce((n, [, c]) => n + c, 0))}</div>
-              <div className="muted small">{t("sessionsTab.misplacedHint")}</div>
+              <div className="muted small hint">{t("sessionsTab.misplacedHint")}</div>
             </div>
             <div className="repair2-bar">
               <span className="tiny muted">{t("sessionsTab.source")}</span>

@@ -82,7 +82,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
         <span className="ofetch-icon"><Icon.cloud size={18} /></span>
         <div className="grow minw0">
           <div className="slabel">{t("officialFetch.title")}</div>
-          <div className="muted small">{t("officialFetch.intro")}</div>
+          <div className="muted small hint">{t("officialFetch.intro")}</div>
         </div>
         {step === "idle" && (
           <button className="btn primary" disabled={busy || pending > 0} title={pending ? t("officialFetch.pendingFirst") : undefined} onClick={() => setStep("confirm")}>
@@ -174,7 +174,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
             ))}
           </div>
           <div className="row gap6">
-            <span className="tiny muted grow">{t("officialFetch.adjustHint")}</span>
+            <span className="tiny muted grow hint">{t("officialFetch.adjustHint")}</span>
             <button className="btn" onClick={() => setStep("idle")}>{t("common.done")}</button>
             {restartable && <button className="btn primary" disabled={restarting} onClick={onRestart}><Icon.refresh size={12} />{restarting ? t("officialFetch.restarting") : t("officialFetch.restartCodex")}</button>}
           </div>

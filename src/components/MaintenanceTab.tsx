@@ -57,7 +57,7 @@ export function MaintenanceTab({ flash }: { flash: Flash }) {
         {healthErr && <div className="srow"><ErrorBox className="grow" text={healthErr} /></div>}
         {!health && !healthErr && <div className="srow muted small">{t("maintenanceTab.checking")}</div>}
         {health?.map((h) => (
-          <SettingRow key={h.key} lead={<span className={`hdot ${h.status}`} />} label={h.title} desc={scrub(h.detail)} />
+          <SettingRow key={h.key} lead={<span className={`hdot ${h.status}`} />} label={h.title} desc={scrub(h.detail)} keepDesc />
         ))}
       </section>
 
@@ -65,11 +65,11 @@ export function MaintenanceTab({ flash }: { flash: Flash }) {
         <h2>{t("maintenanceTab.cleanupTitle")}</h2>
         {preErr && <div className="srow"><ErrorBox className="grow" text={preErr} /></div>}
         <SettingRow as="label" className="check-row" lead={<input type="checkbox" checked={tmp} onChange={(e) => setTmp(e.target.checked)} />}
-          label={t("maintenanceTab.tmpLabel")} desc={pre ? tn("maintenanceTab.tmpHint", pre.tmpCount, { size: fmtSize(pre.tmpBytes) }) : waiting} />
+          label={t("maintenanceTab.tmpLabel")} keepDesc desc={pre ? tn("maintenanceTab.tmpHint", pre.tmpCount, { size: fmtSize(pre.tmpBytes) }) : waiting} />
         <SettingRow as="label" className="check-row" lead={<input type="checkbox" checked={logs} onChange={(e) => setLogs(e.target.checked)} />}
-          label={t("maintenanceTab.logsLabel")}
+          label={t("maintenanceTab.logsLabel")} keepDesc
           desc={pre ? t("maintenanceTab.logsHint", { size: fmtSize(pre.logsBytes), old: pre.logsOldRows.toLocaleString(locale()), total: pre.logsRows.toLocaleString(locale()), save: fmtSize(logsSave) }) : waiting}
-          note={<div className="muted small">{t("maintenanceTab.logsNote")}</div>}>
+          note={<div className="muted small hint">{t("maintenanceTab.logsNote")}</div>}>
           <div className="chips">
             {DAYS.map((d) => (
               <button key={d} type="button" className={`chip${days === d ? " on" : ""}`} onClick={(e) => { e.preventDefault(); setDays(d); }}>{tn("maintenanceTab.keepDays", d)}</button>
@@ -77,7 +77,7 @@ export function MaintenanceTab({ flash }: { flash: Flash }) {
           </div>
         </SettingRow>
         <SettingRow as="label" className="check-row" lead={<input type="checkbox" checked={wal} onChange={(e) => setWal(e.target.checked)} />}
-          label={t("maintenanceTab.walLabel")} desc={pre ? t("maintenanceTab.walHint", { size: fmtSize(pre.walBytes) }) : waiting} />
+          label={t("maintenanceTab.walLabel")} keepDesc desc={pre ? t("maintenanceTab.walHint", { size: fmtSize(pre.walBytes) }) : waiting} />
         <div className="srow">
           <div className="grow muted small">
             {pre?.codexRunning ? t("maintenanceTab.codexRunning") : t("maintenanceTab.estimate", { size: fmtSize(total) })}

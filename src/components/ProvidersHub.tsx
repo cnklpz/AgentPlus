@@ -51,7 +51,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
         <div className="page-head">
           <div className="page-title">
             <h1>{t("common.providers")}</h1>
-            <span className="muted small">
+            <span className="muted small hint">
               {t("providersHub.intro", { env: envLabel })}
             </span>
           </div>
@@ -139,7 +139,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
             <button className="hcard-add" onClick={onAdd}>
               <Icon.plus size={16} />
               <strong>{t("common.addProvider")}</strong>
-              <span className="tiny muted">{t("providersHub.addCardHint", { agents: shown.map((a) => a.name).join(" / ") || t("providersHub.eachAgent") })}</span>
+              <span className="tiny muted hint">{t("providersHub.addCardHint", { agents: shown.map((a) => a.name).join(" / ") || t("providersHub.eachAgent") })}</span>
             </button>
           )}
         </div>

@@ -219,7 +219,7 @@ pub fn refresh_if_stale() {
     let fresh = std::fs::metadata(cache_path()).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < MAX_AGE);
     if !fresh {
         if let Err(e) = refresh() {
-            eprintln!("models.dev refresh failed: {e:#}");
+            crate::applog::warn("models", format!("models.dev refresh failed: {e:#}"));
         }
     }
 }
