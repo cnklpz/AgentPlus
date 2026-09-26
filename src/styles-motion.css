@@ -138,9 +138,15 @@
 .ap-ripple-host { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; z-index: 0; animation: none !important; }
 .ap-ripple { position: absolute; border-radius: 50%; background: currentColor; pointer-events: none; transform: scale(0); animation: ap-ripple .65s var(--ease-smooth) forwards !important; }
 
-/* Rubber-band bounce at the scroll edge: the host sets --ob, children shift with it */
-.ap-ob > :not(.ap-glider) { translate: 0 var(--ob, 0px); transition: translate .6s var(--ease-spring) !important; }
-.ap-ob.ap-pulling > :not(.ap-glider) { transition: translate .09s linear !important; }
+/* Rubber stretch at the scroll edge (motion.ts): the host sets the scale and the fixed line
+   (--ob-sy, --ob-sx, --ob-y); every child scales about that same line, so the content deforms
+   as one piece, then springs back with a little squash. */
+.ap-ob > :not(.ap-glider) {
+  transform-origin: 50% calc(var(--ob-y, 0px) - var(--ob-t, 0px));
+  scale: var(--ob-sx, 1) var(--ob-sy, 1);
+  transition: scale .6s var(--ease-spring) !important;
+}
+.ap-ob.ap-pulling > :not(.ap-glider) { transition: scale .09s linear !important; }
 
 /* Selection highlight gliding between siblings */
 :root[data-motion="rich"] .seg { position: relative; }
