@@ -17,6 +17,14 @@ pub fn with_key(req: reqwest::blocking::RequestBuilder, anthropic: bool, key: Op
     }
 }
 
+fn with_api_key(req: reqwest::blocking::RequestBuilder, api: &str, key: Option<&str>) -> reqwest::blocking::RequestBuilder {
+    if api == "gemini" {
+        match key { Some(k) => req.header("x-goog-api-key", k), None => req }
+    } else {
+        with_key(req, api == "anthropic", key)
+    }
+}
+
 fn client() -> Result<reqwest::blocking::Client, String> {
     client_with(Duration::from_secs(12))
 }
@@ -30,7 +38,7 @@ fn client_with(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
 }
 
 /// Follows redirects only within one origin (an added slash, a moved path). reqwest drops
-/// `Authorization` when the host or port changes but keeps `x-api-key`, so a key must
+/// `Authorization` when the host or port changes but keeps custom API-key headers, so a key must
 /// never be replayed to wherever a provider points; anything else comes back as the 3xx.
 fn same_host_redirects() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|a| {
@@ -83,6 +91,28 @@ fn models_url(base_url: &str) -> String {
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
+/// Native Gemini defaults to v1beta, retaining an explicit version and proxy prefix.
+/// Model names are one URL segment after the optional `models/` resource prefix.
+fn gemini_url(base_url: &str, model: Option<&str>) -> Result<url::Url, String> {
+    let invalid = || crate::i18n::l("Gemini 地址无效，请填写 HTTP 或 HTTPS 地址", "Invalid Gemini URL; use an HTTP or HTTPS URL").to_string();
+    let mut url = url::Url::parse(base_url.trim_end_matches('/')).map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(invalid());
+    }
+    let model = model.map(|m| m.strip_prefix("models/").unwrap_or(m));
+    if model.is_some_and(|m| m.is_empty() || matches!(m, "." | "..") || m.contains('/')) {
+        return Err(crate::i18n::l("Gemini 模型名无效", "Invalid Gemini model name").into());
+    }
+    let versioned = matches!(url.path().trim_end_matches('/').rsplit('/').next(), Some("v1" | "v1beta" | "v1alpha"));
+    let mut path = url.path_segments_mut().map_err(|_| invalid())?;
+    path.pop_if_empty();
+    if !versioned { path.push("v1beta"); }
+    path.push("models");
+    if let Some(model) = model { path.push(&format!("{model}:generateContent")); }
+    drop(path);
+    Ok(url)
+}
+
 /// Time to first response header of `GET <base>/models`. Any HTTP status counts
 /// (an unauthenticated 401 still measures the round trip).
 pub fn latency(base_url: &str) -> Result<u64, String> {
@@ -102,28 +132,50 @@ pub fn latency(base_url: &str) -> Result<u64, String> {
     Ok(t0.elapsed().as_millis() as u64)
 }
 
-/// Lists model ids from `GET <base>/models` (OpenAI and Anthropic shapes).
+/// Lists model ids from OpenAI, Anthropic or native Gemini endpoints. Gemini pages
+/// share one time/body budget; page tokens can only change the query on this URL.
 pub fn list_models(base_url: &str, key: Option<&str>, api: &str) -> Result<Vec<String>, String> {
-    let req = with_key(client()?.get(models_url(base_url)), api == "anthropic", key);
-    let resp = req.send().map_err(|e| if e.is_timeout() { crate::i18n::l("请求超时", "Request timed out").to_string() } else { tr!("连接失败：{e}", "Connection failed: {e}") })?;
-    let status = resp.status();
-    if let Some(to) = moved_to(&resp) {
-        return Err(to);
+    let base = if api == "gemini" { gemini_url(base_url, None)?.to_string() } else { models_url(base_url) };
+    let client = client()?;
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut url = base.clone();
+    let mut ids = Vec::new();
+    let mut tokens = std::collections::BTreeSet::new();
+    let mut bytes = 0;
+    loop {
+        let timeout = deadline.checked_duration_since(Instant::now()).ok_or_else(|| crate::i18n::l("请求超时", "Request timed out").to_string())?;
+        let req = with_api_key(client.get(&url).timeout(timeout), api, key);
+        let resp = req.send().map_err(|e| if e.is_timeout() { crate::i18n::l("请求超时", "Request timed out").to_string() } else { tr!("连接失败：{e}", "Connection failed: {e}") })?;
+        let status = resp.status();
+        if let Some(to) = moved_to(&resp) { return Err(to); }
+        let text = body_text(resp, MAX_MODELS_BODY)?;
+        bytes += text.len() as u64;
+        if bytes > MAX_MODELS_BODY {
+            return Err(tr!("响应太大（超过 {} MB）", "Response too large (over {} MB)", MAX_MODELS_BODY >> 20));
+        }
+        if !status.is_success() {
+            return Err(match status.as_u16() {
+                401 | 403 => tr!("密钥无效或没有权限（HTTP {}）", "Invalid API key or no permission (HTTP {})", status.as_str()),
+                404 => crate::i18n::l("这个地址没有 /models 接口（HTTP 404）", "This URL has no /models endpoint (HTTP 404)").to_string(),
+                _ => format!("HTTP {status}"),
+            });
+        }
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| crate::i18n::l("返回的不是 JSON", "Response is not JSON").to_string())?;
+        let list = v.get("data").or_else(|| v.get("models")).and_then(|d| d.as_array()).ok_or(crate::i18n::l("返回里没有模型列表", "No model list in the response"))?;
+        ids.extend(list.iter().filter_map(|m| m.get("id").or_else(|| m.get("name")).and_then(|x| x.as_str())).map(|id| {
+            if api == "gemini" { id.strip_prefix("models/").unwrap_or(id) } else { id }.to_string()
+        }));
+        let next = (api == "gemini").then(|| v.get("nextPageToken").and_then(|t| t.as_str()).filter(|t| !t.is_empty())).flatten();
+        let Some(token) = next else { break };
+        if !tokens.insert(token.to_string()) || tokens.len() >= 100 {
+            return Err(crate::i18n::l("模型列表分页异常，请检查上游接口", "Invalid model list pagination; check the upstream API").into());
+        }
+        let mut next_url = url::Url::parse(&base).map_err(|e| e.to_string())?;
+        let query: Vec<_> = next_url.query_pairs().filter(|(k, _)| k != "pageToken").map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+        next_url.set_query(None);
+        next_url.query_pairs_mut().extend_pairs(query).append_pair("pageToken", token);
+        url = next_url.to_string();
     }
-    let text = body_text(resp, MAX_MODELS_BODY)?;
-    if !status.is_success() {
-        return Err(match status.as_u16() {
-            401 | 403 => tr!("密钥无效或没有权限（HTTP {}）", "Invalid API key or no permission (HTTP {})", status.as_str()),
-            404 => crate::i18n::l("这个地址没有 /models 接口（HTTP 404）", "This URL has no /models endpoint (HTTP 404)").to_string(),
-            _ => format!("HTTP {status}"),
-        });
-    }
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| crate::i18n::l("返回的不是 JSON", "Response is not JSON").to_string())?;
-    let list = v.get("data").or_else(|| v.get("models")).and_then(|d| d.as_array()).ok_or(crate::i18n::l("返回里没有模型列表", "No model list in the response"))?;
-    let mut ids: Vec<String> = list
-        .iter()
-        .filter_map(|m| m.get("id").or_else(|| m.get("name")).and_then(|x| x.as_str()).map(String::from))
-        .collect();
     ids.sort();
     ids.dedup();
     Ok(ids)
@@ -169,6 +221,11 @@ fn test_bodies(api: &str, model: &str, prompt: &str) -> Vec<serde_json::Value> {
             let plain = json!({ "model": model, "max_tokens": 32, "stream": false, "messages": [{ "role": "user", "content": prompt }] });
             // `thinking`: DeepSeek, GLM, Doubao, MiMo, Kimi…; `enable_thinking`: Qwen, SiliconFlow.
             vec![with(&plain, json!({ "thinking": { "type": "disabled" }, "enable_thinking": false })), plain]
+        }
+        "gemini" => {
+            // Models that cannot disable thinking need room for thoughts before the reply.
+            let plain = json!({ "contents": [{ "role": "user", "parts": [{ "text": prompt }] }], "generationConfig": { "maxOutputTokens": 1024 } });
+            vec![with(&plain, json!({ "generationConfig": { "maxOutputTokens": 64, "thinkingConfig": { "thinkingBudget": 0 } } })), plain]
         }
         _ => {
             let plain = json!({ "model": model, "input": prompt, "max_output_tokens": 64, "stream": false });
@@ -233,11 +290,14 @@ fn from_sse(api: &str, text: &str) -> Option<Result<serde_json::Value, String>> 
 pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> TestResult {
     let base = base_url.trim_end_matches('/');
     let url = match api {
-        "anthropic" => format!("{base}/messages"),
-        "chat" => format!("{base}/chat/completions"),
-        _ => format!("{base}/responses"),
+        "anthropic" => Ok(format!("{base}/messages")),
+        "chat" => Ok(format!("{base}/chat/completions")),
+        "gemini" => gemini_url(base, Some(model)).map(|u| u.to_string()),
+        _ => Ok(format!("{base}/responses")),
     };
-    let mut r = TestResult { ok: false, status: None, ms: 0, model: model.into(), url: url.clone(), reply: None, error: None, usage: None };
+    let mut r = TestResult { ok: false, status: None, ms: 0, model: model.into(), url: base.into(), reply: None, error: None, usage: None };
+    let url = match url { Ok(url) => url, Err(e) => { r.error = Some(e); return r; } };
+    r.url = url.clone();
     let client = match client_with(Duration::from_secs(45)) {
         Ok(c) => c,
         Err(e) => {
@@ -250,7 +310,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     let session = crate::gateway::session::wants_session(base).then(|| format!("agp-test-{:x}", chrono::Utc::now().timestamp_micros()));
     let (status, text) = loop {
         let body = bodies.next().expect("test_bodies is never empty");
-        let mut req = with_key(client.post(&url).header("content-type", "application/json").body(body.to_string()), api == "anthropic", key);
+        let mut req = with_api_key(client.post(&url).header("content-type", "application/json").body(body.to_string()), api, key);
         if let Some(s) = &session {
             req = req.header(crate::gateway::session::HEADER, s).header("user-agent", concat!("AgentPlus/", env!("CARGO_PKG_VERSION")));
         }
@@ -314,6 +374,10 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     let reply = match api {
         "anthropic" => v.get("content").and_then(|c| c.as_array()).map(|a| a.iter().filter_map(|b| b.get("text").and_then(|t| t.as_str())).collect::<String>()),
         "chat" => v.pointer("/choices/0/message/content").and_then(|c| c.as_str()).map(String::from),
+        "gemini" => v.pointer("/candidates/0/content/parts").and_then(|p| p.as_array()).map(|parts| {
+            parts.iter().filter(|p| p.get("thought").and_then(|t| t.as_bool()) != Some(true))
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str())).collect::<String>()
+        }),
         _ => v.get("output_text").and_then(|t| t.as_str()).map(String::from).or_else(|| {
             v.get("output").and_then(|o| o.as_array()).map(|items| {
                 items
@@ -326,10 +390,26 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
         }),
     };
     r.reply = reply.filter(|s| !s.trim().is_empty()).map(|s| clip(s.trim(), 80));
-    let u = v.get("usage");
+    let u = v.get(if api == "gemini" { "usageMetadata" } else { "usage" });
     let num = |k: &[&str]| k.iter().find_map(|k| u.and_then(|u| u.get(*k)).and_then(|x| x.as_u64()));
-    if let (Some(i), Some(o)) = (num(&["input_tokens", "prompt_tokens"]), num(&["output_tokens", "completion_tokens"])) {
+    let (input, output): (&[&str], &[&str]) = if api == "gemini" { (&["promptTokenCount"], &["candidatesTokenCount"]) }
+        else { (&["input_tokens", "prompt_tokens"], &["output_tokens", "completion_tokens"]) };
+    if let (Some(i), Some(o)) = (num(input), num(output)) {
         r.usage = Some((i, o));
+    }
+    if api == "gemini" {
+        let block = v.pointer("/promptFeedback/blockReason").and_then(|b| b.as_str()).filter(|b| !b.is_empty() && *b != "BLOCK_REASON_UNSPECIFIED");
+        let finish = v.pointer("/candidates/0/finishReason").and_then(|f| f.as_str());
+        let rejected = finish.filter(|f| !matches!(*f, "STOP" | "MAX_TOKENS" | "FINISH_REASON_UNSPECIFIED" | ""));
+        if let Some(reason) = block.or(rejected) {
+            r.error = Some(tr!("Gemini 未完成生成：{reason}", "Gemini did not complete generation: {reason}"));
+            return r;
+        }
+        if v.get("error").is_some() || r.reply.is_none() {
+            let reason = crate::gateway::convert::error_message(&v).or_else(|| finish.map(String::from)).unwrap_or_else(|| crate::i18n::l("响应中没有文本", "No text in the response").into());
+            r.error = Some(tr!("Gemini 测试失败：{}", "Gemini test failed: {}", clip(&reason, 200)));
+            return r;
+        }
     }
     r.ok = true;
     r
@@ -470,6 +550,124 @@ mod tests {
         assert!(list_models(&serve(404, "{}"), None, "chat").unwrap_err().contains("404"));
         assert!(list_models(&serve(403, "{}"), None, "chat").unwrap_err().contains("密钥无效"));
         assert!(list_models(&serve(500, "{}"), None, "chat").unwrap_err().contains("500"));
+    }
+
+    #[test]
+    fn gemini_models_use_native_auth_and_pagination() {
+        let (port, seen) = serve_with(2, |head| {
+            let body = if head.starts_with("GET /relay/v1beta/models?pageToken=next%2Bpage%26x") {
+                r#"{"models":[{"name":"models/gemini-b"},{"name":"models/gemini-a"}]}"#
+            } else {
+                r#"{"models":[{"name":"models/gemini-a"}],"nextPageToken":"next+page&x"}"#
+            };
+            http("200 OK", "", body)
+        });
+        assert_eq!(list_models(&format!("http://127.0.0.1:{port}/relay"), Some("gem-key"), "gemini").unwrap(), ["gemini-a", "gemini-b"]);
+        for path in ["/relay/v1beta/models", "/relay/v1beta/models?pageToken=next%2Bpage%26x"] {
+            let req = seen.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert!(req.starts_with(&format!("GET {path} HTTP/1.1")), "{req}");
+            assert!(req.contains("x-goog-api-key: gem-key") && !req.contains("authorization:") && !req.contains("x-api-key:"), "{req}");
+        }
+    }
+
+    #[test]
+    fn gemini_test_uses_generate_content_and_reads_native_reply() {
+        let (port, seen) = serve_with(1, |_| http("200 OK", "", r#"{"candidates":[{"content":{"parts":[{"text":"private thought","thought":true},{"text":"po"},{"text":"ng"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":9,"candidatesTokenCount":2}}"#));
+        let r = test_call(&format!("http://127.0.0.1:{port}/v1beta/"), Some("gem-key"), "gemini", "models/gemini-test");
+        assert!(r.ok && r.reply.as_deref() == Some("pong") && r.usage == Some((9, 2)), "{r:?}");
+        assert!(r.url.ends_with("/v1beta/models/gemini-test:generateContent"), "{}", r.url);
+        let req = seen.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(req.starts_with("POST /v1beta/models/gemini-test:generateContent HTTP/1.1"), "{req}");
+        assert!(req.contains("x-goog-api-key: gem-key") && !req.contains("authorization:"), "{req}");
+        let body: serde_json::Value = serde_json::from_str(req.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["contents"][0]["role"], "user");
+        assert_eq!(body["contents"][0]["parts"][0]["text"], "Reply with exactly one word: pong");
+        assert!(body["generationConfig"]["maxOutputTokens"].as_u64().unwrap() > 0);
+        assert!(body.get("input").is_none() && body.get("messages").is_none() && body.get("model").is_none());
+    }
+
+    #[test]
+    fn gemini_urls_keep_versions_prefixes_and_model_boundaries() {
+        for (base, path) in [
+            ("https://example.com", "/v1beta/models"),
+            ("https://example.com/", "/v1beta/models"),
+            ("https://example.com/v1/", "/v1/models"),
+            ("https://example.com/proxy/v1beta", "/proxy/v1beta/models"),
+            ("https://example.com/proxy/v1alpha", "/proxy/v1alpha/models"),
+        ] {
+            assert_eq!(gemini_url(base, None).unwrap().path(), path);
+            for model in ["gemini-test", "models/gemini-test"] {
+                let url = gemini_url(base, Some(model)).unwrap();
+                assert_eq!(url.path(), format!("{path}/gemini-test:generateContent"));
+            }
+        }
+        let url = gemini_url("https://example.com/proxy", Some("m?x#y")).unwrap();
+        assert_eq!(url.path(), "/proxy/v1beta/models/m%3Fx%23y:generateContent");
+        assert!(url.query().is_none() && url.fragment().is_none());
+        for model in ["", "models/", "..", "../other", "models/a/b"] {
+            let r = test_call("https://example.com", Some("k"), "gemini", model);
+            assert!(!r.ok && r.status.is_none() && r.error.unwrap().contains("模型名"));
+        }
+        assert!(gemini_url("file:///tmp/config", None).is_err());
+        assert!(gemini_url("not a URL", None).is_err());
+        let (port, seen) = serve_with(1, |_| http("200 OK", "", r#"{"models":[]}"#));
+        assert!(list_models(&format!("http://127.0.0.1:{port}/v1"), None, "gemini").unwrap().is_empty());
+        let req = seen.recv().unwrap();
+        assert!(req.starts_with("GET /v1/models HTTP/1.1") && !req.contains("x-goog-api-key") && !req.contains("authorization:"), "{req}");
+    }
+
+    #[test]
+    fn gemini_pagination_refuses_loops_and_later_page_failures() {
+        let (port, seen) = serve_with(2, |_| http("200 OK", "", r#"{"models":[],"nextPageToken":"repeat"}"#));
+        let err = list_models(&format!("http://127.0.0.1:{port}?pageSize=1&pageToken=initial"), None, "gemini").unwrap_err();
+        assert!(err.contains("分页"), "{err}");
+        seen.recv().unwrap();
+        assert!(seen.recv().unwrap().starts_with("GET /v1beta/models?pageSize=1&pageToken=repeat HTTP/1.1"));
+        let (port, _) = serve_with(2, |req| {
+            if req.contains("pageToken=") { http("403 Forbidden", "", r#"{"error":{"message":"no permission"}}"#) }
+            else { http("200 OK", "", r#"{"models":[{"name":"models/partial"}],"nextPageToken":"next"}"#) }
+        });
+        let err = list_models(&format!("http://127.0.0.1:{port}"), Some("k"), "gemini").unwrap_err();
+        assert!(err.contains("403"), "partial catalogs must not be reported as complete");
+    }
+
+    #[test]
+    fn gemini_test_falls_back_and_reports_blocked_or_empty_generation() {
+        let (port, seen) = serve_with(2, |req| {
+            if req.contains("thinkingConfig") { http("400 Bad Request", "", r#"{"error":{"message":"thinking cannot be disabled"}}"#) }
+            else { http("200 OK", "", r#"{"candidates":[{"content":{"parts":[{"text":"pong"}]}}]}"#) }
+        });
+        let r = test_call(&format!("http://127.0.0.1:{port}"), Some("k"), "gemini", "gemini-test");
+        assert!(r.ok && r.reply.as_deref() == Some("pong"), "{r:?}");
+        assert!(seen.recv().unwrap().starts_with("POST /v1beta/models/gemini-test:generateContent HTTP/1.1"));
+        let second = seen.recv().unwrap();
+        assert!(!second.contains("thinkingConfig") && second.contains("\"maxOutputTokens\":1024"), "{second}");
+        for (body, message) in [
+            (r#"{"promptFeedback":{"blockReason":"SAFETY"}}"#, "SAFETY"),
+            (r#"{"candidates":[{"finishReason":"RECITATION","content":{"parts":[{"text":"partial"}]}}]}"#, "RECITATION"),
+            (r#"{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"thought","thought":true}]}}]}"#, "MAX_TOKENS"),
+            (r#"{"error":{"message":"quota exhausted"}}"#, "quota exhausted"),
+            (r#"{"candidates":[]}"#, "没有文本"),
+        ] {
+            let r = test_call(&serve(200, body), Some("k"), "gemini", "m");
+            assert!(!r.ok && r.error.as_deref().unwrap().contains(message), "{r:?}");
+        }
+        let r = test_call(&serve(403, r#"{"error":{"message":"API key not valid"}}"#), Some("k"), "gemini", "m");
+        assert!(!r.ok && r.status == Some(403) && r.error.unwrap().contains("API key not valid"));
+    }
+
+    #[test]
+    fn gemini_keys_never_follow_cross_origin_redirects() {
+        for listing in [true, false] {
+            let (other, seen) = serve_with(1, |_| http("200 OK", "", "{}"));
+            let (port, first) = serve_with(1, move |_| http("307 Temporary Redirect", &format!("location: http://127.0.0.1:{other}/v1beta/models\r\n"), ""));
+            let base = format!("http://127.0.0.1:{port}");
+            let err = if listing { list_models(&base, Some("gem-secret"), "gemini").unwrap_err() }
+                else { test_call(&base, Some("gem-secret"), "gemini", "m").error.unwrap() };
+            assert!(err.contains("307"), "{err}");
+            assert!(first.recv().unwrap().contains("x-goog-api-key: gem-secret"));
+            assert!(seen.recv_timeout(Duration::from_millis(100)).is_err(), "the redirect target must not receive the key");
+        }
     }
 
     #[test]
