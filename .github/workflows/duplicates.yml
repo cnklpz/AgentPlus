@@ -1,0 +1,68 @@
+name: Potential duplicates
+
+# Comments on a new issue with existing issues whose titles look alike. Titles are compared
+# by character bigrams, which works for Chinese titles as well as English ones.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const THRESHOLD = 0.5;
+            const MAX = 5;
+
+            const norm = (s) => s.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, "");
+            const bigrams = (s) => {
+              const out = new Map();
+              for (let i = 0; i < s.length - 1; i++) {
+                const g = s.slice(i, i + 2);
+                out.set(g, (out.get(g) || 0) + 1);
+              }
+              return out;
+            };
+            // Dice coefficient over bigram multisets.
+            const similarity = (a, b) => {
+              const x = norm(a), y = norm(b);
+              if (x === y) return 1;
+              if (x.length < 2 || y.length < 2) return 0;
+              const bx = bigrams(x), by = bigrams(y);
+              let common = 0;
+              for (const [g, n] of bx) common += Math.min(n, by.get(g) || 0);
+              return (2 * common) / (x.length - 1 + y.length - 1);
+            };
+
+            const issue = context.payload.issue;
+            const all = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: "all", per_page: 100,
+            });
+            const hits = all
+              .filter((i) => !i.pull_request && i.number !== issue.number)
+              .map((i) => ({ i, score: similarity(issue.title, i.title) }))
+              .filter((h) => h.score >= THRESHOLD)
+              .sort((a, b) => b.score - a.score)
+              .slice(0, MAX);
+            if (!hits.length) return;
+
+            const lines = hits.map(({ i, score }) =>
+              `- #${i.number}${i.state === "closed" ? "（已关闭 / closed）" : ""} ${Math.round(score * 100)}%`);
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: issue.number,
+              body: [
+                "找到了标题相似的 issue，请看看是不是同一个问题：",
+                "These existing issues look similar — please check whether yours is a duplicate:",
+                "",
+                ...lines,
+                "",
+                "如果是，可以在原 issue 下补充信息并关闭这个；如果不是，请忽略这条评论。",
+                "If it is, add your details there and close this one; otherwise just ignore this comment.",
+              ].join("\n"),
+            });
