@@ -453,13 +453,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let mut written = vec![];
     let mut backup_dir = None;
     if !dry_run {
-        if cfg_dirty || store_dirty {
-            let targets = if cfg_dirty { vec![settings_path()] } else { vec![] };
-            let dir = backup(ID, &targets)?;
-            crate::history::backup_profiles(&dir, &store::scoped(ID), &root)?;
-            backup_dir = Some(dir);
-        }
         if cfg_dirty {
+            // Profile-only edits leave settings.json alone and need no backup; a settings
+            // backup carries the profiles it was written from (see history::PROFILE_AGENTS).
+            let b = backup(ID, &[settings_path()])?;
+            crate::history::backup_profiles(&b, &store::scoped(ID), &root)?;
+            backup_dir = Some(b);
             std::fs::create_dir_all(dir())?;
             write_json(&settings_path(), &cfg, meta)?;
             written.push(settings_path());
@@ -566,6 +565,9 @@ mod tests {
         assert_eq!(root["gatewayKeys"]["codex"], "keep-key");
         assert_eq!(root["claude"]["autoRestart"], true);
         assert!(root["claude@wsl:Ubuntu"]["profiles"]["keep-wsl"].is_object());
+        // A profile-only edit leaves settings.json alone and adds no backup.
+        let (d, written, backup) = plan(&[Op::UpsertModel { provider: "relay".into(), model: model("extra") }], false).unwrap();
+        assert!(!d.groups.is_empty() && written.is_empty() && backup.is_none());
     }
 
     #[test]
