@@ -236,6 +236,11 @@ async fn fetch_models_url(base_url: String, api_key: Option<String>, api: String
 }
 
 #[tauri::command]
+async fn gateway_models(routes: Vec<String>) -> Result<Vec<String>, String> {
+    blocking(move || gateway::server::list_models(&routes)).await
+}
+
+#[tauri::command]
 async fn list_backups() -> Result<Vec<history::BackupEntry>, String> {
     blocking(history::list).await
 }
@@ -603,6 +608,7 @@ pub fn run() {
             reveal_path,
             fetch_models,
             fetch_models_url,
+            gateway_models,
             fetch_models_lib,
             guess_models,
             list_backups,
