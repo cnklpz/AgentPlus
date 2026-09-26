@@ -20,7 +20,7 @@
 
 use super::breaker::{self, Outcome};
 use super::convert::{self, DownstreamStream, Proto, UpstreamStream};
-use super::{clip, keys, lock};
+use super::{clip, keys, lock, session};
 use crate::i18n::l;
 use crate::{library, store};
 use anyhow::{anyhow, Result};
@@ -1121,10 +1121,7 @@ fn extend_unique(out: &mut Vec<String>, items: impl IntoIterator<Item = String>)
 /// /v1/models lists them (without Gemini's "models/" prefix), so the library's "models/x"
 /// and the upstream's cached "x" show as one model.
 fn known_models(root: &Value, r: &Route) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
-    let lib = library::list_in(root).into_iter().find(|e| e.id == r.library).map(|e| e.models).unwrap_or_default();
-    extend_unique(&mut out, lib.iter().map(|m| convert::bare_model(m).to_string()));
-    extend_unique(&mut out, r.model_map.iter().map(|(from, _)| from.as_str()).filter(|f| *f != "*").map(|f| convert::bare_model(f).to_string()));
+    let mut out = listed_models(root, r);
     let fp = target(root, r).ok().map(|t| t.fp);
     if let Some((.., cached)) = lock(&MODEL_CACHE).iter().find(|(id, f, ..)| id == &r.id && Some(*f) == fp) {
         extend_unique(&mut out, cached.iter().cloned());
@@ -1164,6 +1161,35 @@ fn all_models(root: &Value, t: &Target) -> Vec<String> {
     let mut out = known_models(root, &t.route);
     extend_unique(&mut out, upstream_models(t));
     out
+}
+
+/// Same upstream address and key (the protocol may differ).
+fn same_upstream(a: &Target, b: &Target) -> bool {
+    a.base == b.base && a.key == b.key
+}
+
+/// The models a forward's library entry and model map name, without the upstream's list
+/// (ids without Gemini's "models/" prefix, as in `known_models`).
+fn listed_models(root: &Value, r: &Route) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let lib = library::list_in(root).into_iter().find(|e| e.id == r.library).map(|e| e.models).unwrap_or_default();
+    extend_unique(&mut out, lib.iter().map(|m| convert::bare_model(m).to_string()));
+    extend_unique(&mut out, r.model_map.iter().map(|(from, _)| from.as_str()).filter(|f| *f != "*").map(|f| convert::bare_model(f).to_string()));
+    out
+}
+
+/// Of the forwards to one upstream in several protocols, the one that speaks the client's
+/// protocol goes first (nothing to convert); the others keep their places after it.
+/// Weights between different upstreams are untouched.
+fn native_first(order: &mut [Target], inbound: Proto) {
+    for i in 0..order.len() {
+        if order[i].proto != inbound {
+            continue;
+        }
+        if let Some(j) = (0..i).find(|&j| order[j].proto != inbound && same_upstream(&order[j], &order[i])) {
+            order.swap(i, j);
+        }
+    }
 }
 
 /// Weighted random order (without replacement) of candidate forwards.
@@ -1290,9 +1316,14 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     // Forwards that list the model; unknown lists count as "maybe" and come after. Ids are
     // compared without Gemini's "models/" prefix, as /v1/models lists them.
     let want = convert::bare_model(&model);
+    // One upstream (address and key) forwarded in several protocols: its /models lists every
+    // model for each of them (OpenCode serves each model on one protocol only), so each
+    // forward serves what its own library list names.
+    let siblings: Vec<bool> = targets.iter().map(|t| targets.iter().any(|o| o.proto != t.proto && same_upstream(o, t))).collect();
     let (mut sure, mut maybe): (Vec<Target>, Vec<Target>) = (vec![], vec![]);
-    for t in targets {
-        let list = all_models(root, &t);
+    for (t, sibling) in targets.into_iter().zip(siblings) {
+        let listed = if sibling { listed_models(root, &t.route) } else { vec![] };
+        let list = if listed.is_empty() { all_models(root, &t) } else { listed };
         let wildcard = t.route.model_map.iter().any(|(f, _)| f == "*");
         if wildcard || list.iter().any(|m| convert::bare_model(m) == want) {
             sure.push(t);
@@ -1302,6 +1333,7 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     }
     let mut order = weighted_order(sure);
     order.extend(weighted_order(maybe));
+    native_first(&mut order, inbound);
     if order.is_empty() {
         return Ok(reply_error(s, log, inbound, 404, &tr!("没有哪个转发提供模型「{model}」", "No forward serves model \"{model}\"")));
     }
@@ -1439,6 +1471,7 @@ enum Attempt {
 /// 5xx / 429 answers return `Retry` without touching the client connection.
 fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &Value, log: &mut LogEntry, can_retry: bool) -> Result<Attempt> {
     let upstream = t.proto;
+    let original = body;
     let mut body = body.clone();
     apply_model_map(&mut body, &t.route.model_map);
     let ctx = convert::req_ctx(inbound, &body);
@@ -1446,12 +1479,15 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     log.stream = ctx.stream;
     log.converted = inbound != upstream;
 
-    let upstream_body = if inbound == upstream {
+    let mut upstream_body = if inbound == upstream {
         body
     } else {
         let chat = convert::request_to_chat(inbound, &body)?;
         convert::request_from_chat(upstream, &chat)?
     };
+    if upstream == Proto::Chat && ctx.stream {
+        ask_stream_usage(&mut upstream_body);
+    }
     let mut up = t.request(reqwest::Method::POST, upstream.path()).header("content-type", "application/json").body(upstream_body.to_string());
     if upstream == Proto::Anthropic {
         if let Some(b) = req.header("anthropic-beta").filter(|_| inbound == Proto::Anthropic) {
@@ -1460,6 +1496,10 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     }
     if ctx.stream {
         up = up.header("accept", "text/event-stream");
+    }
+    if session::wants_session(&t.base) {
+        // Id from the client's request as it came in (before the model map / conversion).
+        up = up.header(session::HEADER, session::session_id(|h| req.header(h), inbound, original)).header("user-agent", user_agent(req));
     }
     let mut resp = match up.send() {
         Ok(r) => r,
@@ -1527,6 +1567,26 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         write_json(s, 200, &convert::response_from_chat(inbound, &chat, &ctx)?);
     }
     Ok(Attempt::Done(200))
+}
+
+/// A chat stream reports token usage (in a last chunk with empty `choices`) only when asked;
+/// many agents don't ask, and the gateway counts tokens. A client's explicit choice stays.
+fn ask_stream_usage(body: &mut Value) {
+    let Some(o) = body.as_object_mut() else { return };
+    let opts = o.entry("stream_options").or_insert_with(|| json!({}));
+    if let Some(opts) = opts.as_object_mut() {
+        opts.entry("include_usage").or_insert(json!(true));
+    }
+}
+
+/// The agent's own User-Agent (OpenCode asks clients to name themselves, not their HTTP
+/// library), or AgentPlus's when it sent none.
+fn user_agent(req: &Request) -> String {
+    req.header("user-agent")
+        .map(str::trim)
+        .filter(|u| !u.is_empty() && !u.chars().any(|c| c.is_control()))
+        .map(String::from)
+        .unwrap_or_else(|| format!("AgentPlus/{}", env!("CARGO_PKG_VERSION")))
 }
 
 fn apply_model_map(body: &mut Value, map: &[(String, String)]) {
@@ -1948,6 +2008,56 @@ mod tests {
         let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
         assert!(ids.contains(&"glm-5") && ids.contains(&"kimi-k3"), "{ids:?}");
         lock(&TEST_ROUTES).clear();
+    }
+
+    /// One upstream forwarded in two protocols (OpenCode style: /models lists every model, but
+    /// each model is served on one protocol): each forward serves what its own list names, and
+    /// a model both serve goes to the one that speaks the client's protocol.
+    #[test]
+    fn sibling_forwards_split_by_list_and_prefer_the_clients_protocol() {
+        let _guard = lock(&TEST_LOCK);
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let log = seen.clone();
+        let hits = Arc::new(AtomicU64::new(0));
+        let up = mock_upstream(hits, move |req| {
+            log.lock().unwrap().push(req.path.clone());
+            match req.path.as_str() {
+                "/v1/models" => http_resp("200 OK", "application/json", r#"{"data":[{"id":"glm"},{"id":"minimax"},{"id":"both"}]}"#),
+                "/v1/messages" => http_resp("200 OK", "application/json", r#"{"id":"m","type":"message","role":"assistant","model":"x","content":[{"type":"text","text":"a"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#),
+                _ => http_resp("200 OK", "application/json", r#"{"id":"c","object":"chat.completion","model":"x","choices":[{"index":0,"message":{"role":"assistant","content":"c"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#),
+            }
+        });
+        *lock(&TEST_ROUTES) = vec![
+            (Route { weight: 1000, ..test_route("u-chat", "chat", &[("glm", "glm"), ("both", "both")]) }, up.clone(), Some("k".into())),
+            (Route { weight: 1, ..test_route("u-anth", "anthropic", &[("minimax", "minimax"), ("both", "both")]) }, up, Some("k".into())),
+        ];
+        lock(&MODEL_CACHE).clear();
+        breaker::reset(None);
+        let port = gateway_n(3);
+        let client = reqwest::blocking::Client::new();
+        let call = |path: &str, model: &str| {
+            seen.lock().unwrap().retain(|p| p == "/v1/models");
+            let body = json!({ "model": model, "max_tokens": 8, "messages": [{ "role": "user", "content": "hi" }] });
+            let r = client.post(format!("http://127.0.0.1:{port}/u-chat+u-anth/v1{path}")).bearer_auth(test_key()).body(body.to_string()).send().unwrap();
+            assert_eq!(r.status().as_u16(), 200, "{model} via {path}");
+            seen.lock().unwrap().iter().filter(|p| *p != "/v1/models").cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(call("/messages", "glm"), ["/v1/chat/completions"], "only the chat forward lists glm");
+        assert_eq!(call("/chat/completions", "minimax"), ["/v1/messages"], "only the anthropic forward lists minimax");
+        assert_eq!(call("/messages", "both"), ["/v1/messages"], "no conversion wins over the weights");
+        lock(&TEST_ROUTES).clear();
+    }
+
+    #[test]
+    fn native_first_only_reorders_one_upstream() {
+        let t = |id: &str, api: &str, base: &str| Target { route: test_route(id, api, &[]), proto: Proto::from_api(api).unwrap(), base: base.into(), key: None, fp: 0 };
+        let mut order = vec![t("a-chat", "chat", "http://a"), t("b-anth", "anthropic", "http://b"), t("a-anth", "anthropic", "http://a")];
+        native_first(&mut order, Proto::Anthropic);
+        let ids: Vec<&str> = order.iter().map(|x| x.route.id.as_str()).collect();
+        assert_eq!(ids, ["a-anth", "b-anth", "a-chat"]);
+        let mut order = vec![t("a-chat", "chat", "http://a"), t("b-anth", "anthropic", "http://b")];
+        native_first(&mut order, Proto::Anthropic);
+        assert_eq!(order[0].route.id, "a-chat", "different upstreams keep the weighted order");
     }
 
     /// When every forward is paused, the log keeps each forward's reason, however long the
@@ -2653,6 +2763,48 @@ mod tests {
         assert_eq!(text, ok);
         assert_eq!(logged("whole").usage, Some((6, 2)));
         lock(&TEST_ROUTES).clear();
+    }
+
+    /// A chat client that doesn't ask for usage, straight to a chat upstream: the gateway asks
+    /// for it, so the tokens are counted.
+    #[test]
+    fn passthrough_chat_stream_asks_for_usage() {
+        let _guard = lock(&TEST_LOCK);
+        let seen: Arc<Mutex<Option<Value>>> = Arc::default();
+        let got = seen.clone();
+        let hits = Arc::new(AtomicU64::new(0));
+        let up = mock_upstream(hits, move |req| {
+            *got.lock().unwrap() = serde_json::from_slice(&req.body).ok();
+            let body = concat!(
+                "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            http_resp("200 OK", "text/event-stream", body)
+        });
+        one_route("usage", "chat", up);
+        let port = gateway_n(1);
+        let r = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/usage/v1/chat/completions"))
+            .bearer_auth(test_key())
+            .body(r#"{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}"#)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        let _ = r.text();
+        assert_eq!(seen.lock().unwrap().as_ref().unwrap()["stream_options"]["include_usage"], true);
+        assert_eq!(logged("usage").usage, Some((9, 4)));
+        lock(&TEST_ROUTES).clear();
+    }
+
+    #[test]
+    fn asking_for_stream_usage_keeps_the_clients_choice() {
+        let mut b = json!({ "stream": true, "stream_options": { "include_usage": false, "x": 1 } });
+        ask_stream_usage(&mut b);
+        assert_eq!(b["stream_options"], json!({ "include_usage": false, "x": 1 }));
+        let mut b = json!({ "stream": true, "stream_options": { "x": 1 } });
+        ask_stream_usage(&mut b);
+        assert_eq!(b["stream_options"], json!({ "include_usage": true, "x": 1 }));
     }
 
     /// A same-protocol stream mislabelled as text/plain that opens with an SSE comment line:

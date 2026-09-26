@@ -1,9 +1,24 @@
 import codexPng from "../assets/codex.png";
 import zcodePng from "../assets/zcode.png";
 import mimoPng from "../assets/mimo.png";
+// Marks from lobehub/lobe-icons (MIT), except pi (pi.dev), OpenCode (opencode.ai's
+// app icon) and Droid (factory.ai's favicon).
+import claudeSvg from "../assets/claude.svg";
+import geminiSvg from "../assets/gemini.svg";
+import geminiMarkSvg from "../assets/gemini-mark.svg";
+import qwenSvg from "../assets/qwen.svg";
+import kimiSvg from "../assets/kimi.svg";
+import codebuddySvg from "../assets/codebuddy.svg";
+import kiloSvg from "../assets/kilo.svg";
+import traeSvg from "../assets/trae.svg";
+import hermesSvg from "../assets/hermes.svg";
+import openclawSvg from "../assets/openclaw.svg";
+import piSvg from "../assets/pi.svg";
+import opencodeSvg from "../assets/opencode.svg";
+import droidSvg from "../assets/droid.svg";
 import type { AgentId } from "../api";
 
-/** A letter tile, for agents without an app icon of their own. */
+/** A letter tile, for vendors without an icon of their own. */
 function mono(text: string, bg: string, fg: string, size = 14) {
   return {
     bg, scale: 100,
@@ -16,49 +31,26 @@ function mono(text: string, bg: string, fg: string, size = 14) {
 }
 
 // Codex's app icon is a dark glyph on a light tile (outlined so it reads on the
-// light sidebar); ZCode's and MiMo's images are cropped to their own tiles.
+// light sidebar); ZCode's, MiMo's, Gemini CLI's and CodeBuddy's images are their own tiles.
 type Tile = { src?: string; glyph?: React.ReactNode; bg: string; scale: number; ring?: string };
+const LIGHT_RING = "inset 0 0 0 1px #D5DAE1";
+const DARK_RING = "inset 0 0 0 1px #2A2A2E";
 const AGENT_ICONS: Record<AgentId, Tile> = {
-  codex: { src: codexPng, bg: "#FFFFFF", scale: 66, ring: "inset 0 0 0 1px #D5DAE1" },
+  codex: { src: codexPng, bg: "#FFFFFF", scale: 66, ring: LIGHT_RING },
   zcode: { src: zcodePng, bg: "#000000", scale: 100 },
   mimo: { src: mimoPng, bg: "#000000", scale: 100 },
-  // Claude's starburst on its coral tile.
-  claude: {
-    bg: "#D97757", scale: 64,
-    glyph: (
-      <svg viewBox="0 0 24 24" fill="#FFFFFF" aria-hidden="true">
-        {[0, 30, 60, 90, 120, 150].map((a) => <rect key={a} x="11" y="2" width="2" height="20" rx="1" transform={`rotate(${a} 12 12)`} />)}
-      </svg>
-    ),
-  },
-  hermes: mono("H", "#1E1B4B", "#C4B5FD"),
-  gemini: {
-    bg: "#FFFFFF", scale: 70, ring: "inset 0 0 0 1px #D5DAE1",
-    glyph: (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <defs><linearGradient id="gem-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#4285F4" /><stop offset="1" stopColor="#A142F4" /></linearGradient></defs>
-        <path d="M12 2c.6 5.3 4.7 9.4 10 10-5.3.6-9.4 4.7-10 10-.6-5.3-4.7-9.4-10-10 5.3-.6 9.4-4.7 10-10Z" fill="url(#gem-g)" />
-      </svg>
-    ),
-  },
-  pi: mono("π", "#111827", "#FFFFFF", 17),
-  openclaw: mono("OC", "#DC2626", "#FFFFFF", 10),
-  qwen: mono("Q", "#615CED", "#FFFFFF"),
-  kimi: mono("K", "#000000", "#FFFFFF"),
-  droid: mono("D", "#F97316", "#FFFFFF"),
-  codebuddy: mono("CB", "#2563EB", "#FFFFFF", 10),
-  kilo: mono("K", "#F8F675", "#1F2937"),
-  trae: mono("T", "#0B0B0C", "#32F08C"),
-  // OpenCode: a terminal-style mark on a dark tile.
-  opencode: {
-    bg: "#0B0B0C", scale: 62, ring: "inset 0 0 0 1px #2A2A2E",
-    glyph: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <rect x="3" y="4" width="18" height="16" rx="3" strokeOpacity=".45" />
-        <path d="m8 10 3 2.5L8 15M13 15h4" />
-      </svg>
-    ),
-  },
+  claude: { src: claudeSvg, bg: "#D97757", scale: 64 },
+  hermes: { src: hermesSvg, bg: "#0B0B0C", scale: 78, ring: DARK_RING },
+  gemini: { src: geminiSvg, bg: "#1E1E2E", scale: 100 },
+  pi: { src: piSvg, bg: "#111111", scale: 52, ring: DARK_RING },
+  openclaw: { src: openclawSvg, bg: "#050810", scale: 78 },
+  qwen: { src: qwenSvg, bg: "#FFFFFF", scale: 70, ring: LIGHT_RING },
+  kimi: { src: kimiSvg, bg: "#000000", scale: 70 },
+  droid: { src: droidSvg, bg: "#020202", scale: 96 },
+  codebuddy: { src: codebuddySvg, bg: "#6C4DFF", scale: 100 },
+  kilo: { src: kiloSvg, bg: "#F8F675", scale: 66 },
+  trae: { src: traeSvg, bg: "#0B0B0C", scale: 72 },
+  opencode: { src: opencodeSvg, bg: "#131010", scale: 78, ring: DARK_RING },
 };
 
 export function AgentIcon({ id, size }: { id: AgentId; size: number }) {
@@ -77,11 +69,13 @@ const VENDOR_ICONS: Record<string, Tile> = {
   minimax: mono("M", "#E8374F", "#FFFFFF"),
   siliconflow: mono("硅", "#6E44FF", "#FFFFFF", 13),
   openrouter: mono("OR", "#111827", "#FFFFFF", 10),
+  opencode: AGENT_ICONS.opencode,
   tencent: mono("腾", "#0052D9", "#FFFFFF", 13),
   qianfan: mono("千", "#2932E1", "#FFFFFF", 13),
   openai: AGENT_ICONS.codex,
   anthropic: AGENT_ICONS.claude,
-  gemini: AGENT_ICONS.gemini,
+  // Gemini the model family: the sparkle, not Gemini CLI's app tile.
+  gemini: { src: geminiMarkSvg, bg: "#FFFFFF", scale: 70, ring: LIGHT_RING },
 };
 
 export function VendorIcon({ id, size }: { id: string; size: number }) {

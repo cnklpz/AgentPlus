@@ -237,9 +237,14 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
         }
     };
     let mut bodies = test_bodies(api, model, "Reply with exactly one word: pong").into_iter().peekable();
+    // OpenCode Go refuses requests without a conversation id; each test is its own conversation.
+    let session = crate::gateway::session::wants_session(base).then(|| format!("agp-test-{:x}", chrono::Utc::now().timestamp_micros()));
     let (status, text) = loop {
         let body = bodies.next().expect("test_bodies is never empty");
-        let req = with_key(client.post(&url).header("content-type", "application/json").body(body.to_string()), api == "anthropic", key);
+        let mut req = with_key(client.post(&url).header("content-type", "application/json").body(body.to_string()), api == "anthropic", key);
+        if let Some(s) = &session {
+            req = req.header(crate::gateway::session::HEADER, s).header("user-agent", concat!("AgentPlus/", env!("CARGO_PKG_VERSION")));
+        }
         let t0 = Instant::now();
         let resp = match req.send() {
             Ok(x) => x,

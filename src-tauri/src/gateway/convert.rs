@@ -518,9 +518,10 @@ fn usage_from_anthropic(u: &Value) -> Usage {
 }
 
 /// (input, output) tokens from any protocol's body, event or chunk that carries usage:
-/// top-level `usage`, or nested in `response` / `message` (Responses and Anthropic events).
+/// top-level `usage`, or nested in `response` / `message` (Responses and Anthropic events), or
+/// in the first choice (some chat providers, e.g. Moonshot, put it there).
 pub fn usage_tokens(v: &Value) -> Option<(u64, u64)> {
-    let u = [v.get("usage"), v.get("response").and_then(|r| r.get("usage")), v.get("message").and_then(|m| m.get("usage"))]
+    let u = [v.get("usage"), v.get("response").and_then(|r| r.get("usage")), v.get("message").and_then(|m| m.get("usage")), v.pointer("/choices/0/usage")]
         .into_iter()
         .flatten()
         .find(|u| u.is_object())?;
@@ -1581,6 +1582,11 @@ impl UpstreamStream {
                     let c = self.error_chunk(&error_message(&v).unwrap_or_default());
                     out.push(c);
                 } else if v.get("choices").is_some() {
+                    out.push(v);
+                } else if nonnull(v.get("usage")).is_some() {
+                    // A usage-only last chunk without `choices` (some providers leave it out).
+                    let mut v = v;
+                    v["choices"] = json!([]);
                     out.push(v);
                 }
             }
@@ -3587,6 +3593,18 @@ mod tests {
         assert_eq!(usage_tokens(&v), Some((3, 4)));
         let err = chat_from_chunks(&[json!({ "choices": [], "error": { "message": "boom" } })]).unwrap_err();
         assert_eq!(err, "boom");
+    }
+
+    #[test]
+    fn usage_in_the_first_choice_or_a_chunk_without_choices() {
+        // Moonshot style: usage inside the choice.
+        let kimi = json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop", "usage": { "prompt_tokens": 5, "completion_tokens": 2 } }] });
+        assert_eq!(usage_tokens(&kimi), Some((5, 2)));
+        // A usage-only last chunk that leaves out `choices` still reaches the converter.
+        let mut up = UpstreamStream::new(Proto::Chat);
+        let mut out = up.feed("data: {\"id\":\"c\",\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}\n\n");
+        out.extend(up.finish());
+        assert!(out.iter().any(|c| usage_tokens(c) == Some((7, 3)) && c["choices"] == json!([])), "{out:?}");
     }
 
     /// Indices come from the upstream: a huge one must not allocate that many slots, and

@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ProviderInput, api, isProjectId } from "../api";
-import { type Draft, type ViewProvider, isVisible, keys, viewModels } from "../draft";
+import { type Draft, type ViewProvider, isVisible, keys, settingValue, viewModels } from "../draft";
 import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { Modal } from "./Modal";
-import { ErrorBox, Seg, ToggleRow } from "./controls";
+import { ErrorBox, Seg, SegMulti, ToggleRow } from "./controls";
 import { ModelPicker, useModelPool } from "./ModelPicker";
 import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
-import type { Template } from "../templates";
-import { type TKey, t, tn } from "../i18n";
+import { type Template, modelsAfter, modelsFor, modelsOn } from "../templates";
+import { type TKey, t, tn, tx } from "../i18n";
 import { scrub } from "../privacy";
 import { errText, isHttpUrl, toggledIn } from "../util";
 
@@ -28,11 +28,16 @@ export interface ProviderSave {
   connect?: "direct" | "gateway" | null;
   /** New provider on the gateway's unified entry: make sure the gateway runs. */
   unified?: boolean;
+  /** New providers for the other protocols picked (the first one is `input`). */
+  extra?: ProviderInput[];
   /**
-   * Template the agent can't reach directly (its only protocol isn't offered): save this to
-   * the library, forward it through the gateway, and point the new provider there.
+   * New provider through the gateway (asked for, or the agent's only protocol isn't offered):
+   * save each protocol's address to the library, forward each, and point the new provider at
+   * the forward (several: their combined entry, which routes by model).
    */
-  viaForward?: { name: string; baseUrl: string; api: ApiKind; apiKey: string; models: string[]; officialAuth?: boolean } | null;
+  viaForward?: { name: string; apiKey: string; parts: { name: string; api: ApiKind; baseUrl: string; models: string[] }[]; models: string[]; officialAuth?: boolean } | null;
+  /** Agent switch settings to turn on as well (Codex: the official sign-in mix options). */
+  settingsOn?: string[];
 }
 
 interface Props {
@@ -56,6 +61,9 @@ const API_HINT: Record<ApiKind, TKey> = {
   anthropic: "common.apiHintAnthropic",
   gemini: "providerDialog.apiGeminiHint",
 };
+
+/** Codex settings that only matter with the official sign-in mix on. */
+const MIX_SETTINGS = ["quota_unlock", "hide_usage_banner"];
 
 const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -87,6 +95,10 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const [key, setKey] = useState("");
   /** Codex: keep the ChatGPT sign-in while requests go to this provider. */
   const [officialAuth, setOfficialAuth] = useState(editing?.officialAuth ?? false);
+  /** The official sign-in mix options still off (pending changes counted). */
+  const mixOff = codex ? st.settings.filter((s) => MIX_SETTINGS.includes(s.key) && settingValue(s, draft) !== true) : [];
+  const [mixSync, setMixSync] = useState(true);
+  const mixOn = officialAuth && mixSync ? mixOff.map((s) => s.key) : [];
   const viaGateway = gatewayRoute !== undefined;
   const [connect, setConnect] = useState<"direct" | "gateway">(viaGateway ? "gateway" : "direct");
   /** An existing provider that already points at the gateway's unified entry (or a combination of forwards). */
@@ -101,6 +113,15 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const [tpl, setTpl] = useState<Template | null>(null);
   /** Template without the agent's only protocol: reached through a gateway forward. */
   const tplForward = !!tpl && !!only && !tpl.endpoints[only];
+  /** New provider forwarded through the gateway on request. */
+  const [forwardOn, setForwardOn] = useState(false);
+  /** The new provider goes through a gateway forward: `kind` / `apis` are then the upstream's. */
+  const viaFwd = tplForward || forwardOn;
+  /** The protocol the agent is limited to, unless the gateway converts. */
+  const lockApi = viaFwd ? undefined : only;
+  /** New provider: the protocols to add it with (a provider, or a forward, each); `kind` is the first. */
+  const [apis, setApis] = useState<ApiKind[]>([kind]);
+  const multi = isNew && !unifiedNew;
 
   // ---- model list (per agent)
   const isCurrent = codex && !!editing && st.currentProvider === editing.id;
@@ -146,7 +167,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       } else if (!isNew && !key.trim() && editing && baseUrl.trim() === (editing.baseUrl ?? "")) {
         list = await api.fetchModels(st.id, editing.id);
       } else {
-        list = await api.fetchModelsUrl(baseUrl.trim(), key.trim() || null, tplForward ? tpl!.api : kind);
+        list = await api.fetchModelsUrl(baseUrl.trim(), key.trim() || null, kind);
       }
       setFetched(list);
       addToPool(list);
@@ -164,31 +185,64 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     setFetched((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
   };
 
+  /** The template's models on protocol `k`, in the picker and ticked. */
+  const applyTplModels = (tp: Template, k: ApiKind) => {
+    // A new Codex provider has no picker: it keeps the models ticked now.
+    if (codex && isNew) return resetPool(checked);
+    resetPool(modelsFor(tp, k));
+    setChecked(modelsFor(tp, k));
+  };
   const pickTpl = (tp: Template | null) => {
     setTpl(tp);
+    setForwardOn(false);
     setFetched([]);
     setErr(null);
     // Another template: the list starts over from the models ticked now (templates only show for a new provider).
-    resetPool(tp && !(codex && isNew) ? tp.models : checked);
-    if (!tp) return;
+    if (!tp) return resetPool(checked);
     setUnifiedNew(false);
     setName(tp.name);
+    // Without the agent's protocol the template is forwarded, and `kind` is the upstream's.
     const k = only && tp.endpoints[only] ? only : tp.api;
-    setKind(only ?? k);
+    setKind(k);
+    setApis([k]);
     setBaseUrl(tp.endpoints[k]!);
-    if (!(codex && isNew)) setChecked(tp.models);
+    applyTplModels(tp, k);
   };
   const setProto = (k: ApiKind) => {
     setKind(k);
-    // A template's other protocols live at their own address.
-    if (tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind]) setBaseUrl(tpl.endpoints[k]!);
+    if (!tpl) return;
+    // A template's other protocols live at their own address, and may serve other models.
+    if (tpl.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind]) setBaseUrl(tpl.endpoints[k]!);
+    if (modelsFor(tpl, k) !== modelsFor(tpl, kind)) applyTplModels(tpl, k);
+  };
+  /** New provider: the protocols picked. */
+  const pickApis = (next: ApiKind[]) => {
+    const k = next[0];
+    if (tpl) {
+      // A template's other protocols live at their own address, and may serve other models.
+      if (tpl.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind]) setBaseUrl(tpl.endpoints[k]!);
+      if (!(codex && isNew)) {
+        const m = modelsAfter(tpl, apis, next, checked);
+        resetPool([...new Set([...next.flatMap((x) => modelsFor(tpl, x)), ...m])]);
+        setChecked(m);
+      }
+    }
+    setApis(next);
+    setKind(k);
+  };
+  /** Through the gateway (any protocol, several at once), or direct (the agent's own). */
+  const setForward = (on: boolean) => {
+    setForwardOn(on);
+    if (!on && only) pickApis([only]);
+    // Gemini CLI's protocol isn't one a forward's upstream speaks.
+    if (on && only === "gemini") pickApis([tpl?.api ?? "chat"]);
   };
 
   /** Hands the result to the app; the button stays disabled until it is done (no double save). */
   const submit = async (out: ProviderSave) => {
     setSaving(true);
     try {
-      await onSave(out);
+      await onSave(mixOn.length ? { ...out, settingsOn: mixOn } : out);
     } catch (e) {
       setErr(errText(e));
     } finally {
@@ -198,8 +252,23 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   const save = () => {
     if (!canSave) return;
-    if (tplForward) {
-      void submit({ input: null, viaForward: { name: name.trim(), baseUrl: baseUrl.trim(), api: tpl!.api, apiKey: key.trim(), models: codex ? tpl!.models : checked, officialAuth: codex ? officialAuth : undefined } });
+    if (multi) {
+      const each = apis.map((k) => ({
+        api: k,
+        name: apis.length > 1 ? t("providerDialog.nameWithApi", { name: name.trim(), api: API_LABEL[k] }) : name.trim(),
+        // A template's other protocols live at their own address (unless the address was edited).
+        baseUrl: tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind] ? tpl.endpoints[k]! : baseUrl.trim(),
+        models: modelsOn(tpl, k, checked),
+      }));
+      if (viaFwd) {
+        // A new Codex provider has no picker: its forwards get the template's models.
+        const parts = codex ? each.map((p) => ({ ...p, models: tpl ? modelsFor(tpl, p.api) : [] })) : each;
+        void submit({ input: null, viaForward: { name: name.trim(), apiKey: key.trim(), parts, models: checked, officialAuth: codex ? officialAuth : undefined } });
+        return;
+      }
+      const auth = codex ? { officialAuth } : {};
+      const [head, ...rest] = each.map((p): ProviderInput => ({ id: null, name: p.name, baseUrl: p.baseUrl, api: p.api, apiKey: key.trim() || null, models: codex ? checked : p.models, ...auth }));
+      void submit({ input: head, extra: rest, draftKey: editing?.draftKey });
       return;
     }
     const url = onUnified ? poolBase : baseUrl.trim();
@@ -242,6 +311,14 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     : st.id === "pi" ? t("providerDialog.keyPi")
     : t("providerDialog.keyOther", { agent: st.name });
 
+  const protoOptions = (lockApi === "gemini" ? (["gemini"] as const) : PROTOCOLS).map((v: ApiKind) => {
+    const missing = !!tpl && !lockApi && !tpl.endpoints[v];
+    return {
+      value: v, label: API_LABEL[v], disabled: (!!lockApi && v !== lockApi) || missing,
+      title: lockApi && v !== lockApi ? t("providerDialog.onlySupports", { agent: st.name, api: API_LABEL[lockApi] }) : missing ? t("providerDialog.vendorNoApi", { vendor: tpl!.vendor, api: API_LABEL[v] }) : t(API_HINT[v]),
+    };
+  });
+
   const foot = (
     <>
       <span className="muted tiny grow">{t("common.pendingNote")}</span>
@@ -253,14 +330,23 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
       title={isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })} foot={foot}>
       {isNew && gatewayCapable(st.id) && !unifiedNew && <TemplatePicker value={tpl} onPick={pickTpl} />}
-      {tplForward && (
-        <ToggleRow on icon={<Icon.gateway size={16} />} title={t("providerDialog.viaGatewayTitle")}
-          hint={t("providerDialog.viaGatewayDesc", { vendor: tpl!.vendor, only: API_LABEL[only!], agent: st.name, api: API_LABEL[tpl!.api] })} />
-      )}
       <div className="field">
         <label htmlFor="pd-name">{t("common.name")}</label>
         <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />
       </div>
+      {isNew && gatewayCapable(st.id) && !tpl && (
+        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
+          hint={unifiedNew
+            ? pool.length
+              ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
+              : t("providerDialog.newPoolAll", { url: poolBase })
+            : t("providerDialog.newGwOff")}
+          onChange={() => {
+            if (!unifiedNew) setForwardOn(false);
+            setUnifiedNew((v) => !v);
+            if (!unifiedNew && !name.trim()) setName(t("providerDialog.gatewayName"));
+          }} />
+      )}
 
       {!isNew && editing?.baseUrl && !onUnified && gatewayCapable(st.id) && (
         <ToggleRow on={gw} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
@@ -289,20 +375,6 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
           <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />
         </>
       )}
-      {isNew && gatewayCapable(st.id) && (
-        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
-          hint={unifiedNew
-            ? pool.length
-              ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
-              : t("providerDialog.newPoolAll", { url: poolBase })
-            : t("providerDialog.newGwOff")}
-          onChange={() => {
-            if (!unifiedNew) setTpl(null);
-            setUnifiedNew((v) => !v);
-            if (!unifiedNew && !name.trim()) setName(t("providerDialog.gatewayName"));
-          }} />
-      )}
-
       {unifiedNew && <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />}
 
       {unifiedNew && !only && (
@@ -323,22 +395,18 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
           </div>
           <div className="form2">
             <div className="field">
-              <span className="field-label">{t("providerDialog.apiType")}</span>
-              <Seg value={kind} onChange={setProto} label={t("providerDialog.apiType")}
-                options={(only === "gemini" ? (["gemini"] as const) : PROTOCOLS).map((v: ApiKind) => {
-                  const missing = !!tpl && !only && !tpl.endpoints[v];
-                  return {
-                    value: v, label: API_LABEL[v], disabled: (!!only && v !== only) || missing,
-                    title: only && v !== only ? t("providerDialog.onlySupports", { agent: st.name, api: API_LABEL[only] }) : missing ? t("providerDialog.vendorNoApi", { vendor: tpl!.vendor, api: API_LABEL[v] }) : t(API_HINT[v]),
-                  };
-                })} />
+              <span className="field-label">{multi ? t("providerDialog.apiTypeMulti") : t("providerDialog.apiType")}</span>
+              {multi
+                ? <SegMulti value={apis} onChange={pickApis} label={t("providerDialog.apiTypeMulti")} options={protoOptions} />
+                : <Seg value={kind} onChange={setProto} label={t("providerDialog.apiType")} options={protoOptions} />}
+              {multi && apis.length > 1 && <em className="muted tiny">{viaFwd ? t("providerDialog.multiForward") : t("providerDialog.multiDirect")}</em>}
             </div>
             <div className="field">
               <label htmlFor="pd-key">{t("common.apiKeyLabel")}</label>
               <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
                 placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
               <em className="muted tiny">
-                {tplForward ? t("providerDialog.keyForward") : keyHint}
+                {viaFwd ? t("providerDialog.keyForward") : keyHint}
                 {tpl && <TemplateKeyLink tpl={tpl} />}
               </em>
             </div>
@@ -350,7 +418,33 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <ToggleRow on={officialAuth} onChange={setOfficialAuth} icon={<Icon.key size={16} />} title={t("providerDialog.officialAuth")}
           hint={officialAuth ? t("providerDialog.officialAuthOn") : t("providerDialog.officialAuthOff")} />
       )}
+      {officialAuth && mixOff.length > 0 && (
+        <label className="check-row mix-sync">
+          <input type="checkbox" checked={mixSync} onChange={(e) => setMixSync(e.target.checked)} />
+          <span className="grow minw0">
+            <span className="small">
+              {mixOff.length > 1
+                ? t("providerDialog.mixSyncTwo", { a: mixOff[0].label, b: mixOff[1].label })
+                : t("providerDialog.mixSyncOne", { a: mixOff[0].label })}
+            </span>
+            <em className="muted tiny">{t("providerDialog.mixSyncNote")}</em>
+          </span>
+        </label>
+      )}
 
+      {isNew && gatewayCapable(st.id) && !unifiedNew && (
+        <ToggleRow on={viaFwd} onChange={tplForward ? undefined : setForward} icon={<Icon.gateway size={16} />} title={t("providerDialog.fwdTitle")}
+          hint={tplForward
+            ? t("providerDialog.viaGatewayDesc", { vendor: tpl!.vendor, only: API_LABEL[only!], agent: st.name, api: API_LABEL[kind] })
+            : forwardOn
+              ? t("providerDialog.fwdOn")
+              : tpl?.session
+                ? tx("providerDialog.sessionHint", {
+                  vendor: tpl.name,
+                  more: <button type="button" className="link" onClick={() => api.openUrl(tpl.session!).catch(() => undefined)}>{t("providerDialog.learnMore")}</button>,
+                })
+                : t("providerDialog.fwdOff")} />
+      )}
       <div className="field">
         <div className="row between">
           <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>

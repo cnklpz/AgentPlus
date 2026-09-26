@@ -425,6 +425,10 @@ button, input, textarea, select { font-family: inherit; }
 .gw-toggle > svg { color: var(--muted); flex-shrink: 0; }
 .gw-toggle.on { border-color: var(--accent-line); background: var(--accent-bg); }
 .gw-toggle.on > svg { color: var(--accent); }
+/* Codex: turn on the official sign-in mix settings too (under that toggle, aligned with its text) */
+.mix-sync { display: flex; align-items: flex-start; gap: 12px; margin-top: -6px; padding: 0 14px 0 15px; }
+.mix-sync input { margin-top: 1px; }
+.mix-sync > span { display: flex; flex-direction: column; gap: 2px; }
 
 /* Gateway page: weights, delete, unified entry */
 .gw-weight { font: 600 11px var(--mono); color: var(--muted); background: var(--sunken); border-radius: 999px; padding: 1px 8px; flex-shrink: 0; }

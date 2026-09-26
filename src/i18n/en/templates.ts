@@ -37,6 +37,8 @@ const en: typeof zh = {
   noteArk: "Model IDs include a version date; you can also enter an inference endpoint ID from the console",
   noteBailian: "Beijing region; a key only works in the region where it was created",
   noteSiliconflow: "Models starting with Pro/ are the paid versions",
+  noteOpencodeGo: "Each model is served on one protocol, so the model list follows the protocol: Chat for GLM, Kimi, DeepSeek and MiMo, Anthropic for MiniMax and Qwen, Responses for GPT and Grok",
+  noteOpencodeZen: "Billed per use from your balance. Each model is served on one protocol, so the model list follows the protocol: Anthropic for Claude, Responses for GPT and Grok, Chat for the rest",
 };
 
 export default en;

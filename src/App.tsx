@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId } from "./api";
 import {
   CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, importProvider, isEnabled, isVisible, keys, opCount,
-  opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
 import { AgentPage, type Tab } from "./components/AgentPage";
@@ -26,7 +26,7 @@ import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
 import { type Prefs, applyPrefs, loadPrefs, savePrefs } from "./prefs";
 import { t, tn, useLang } from "./i18n";
 import {
-  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolIds, gatewayRouteId,
+  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
   hostKey, importKey, importOp, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
@@ -983,8 +983,8 @@ export default function App() {
   };
 
   /** Library entry the open provider dialog has already created (template through a forward). */
-  const dialogSaved = useRef<{ id: string | null }>({ id: null });
-  useEffect(() => { dialogSaved.current = { id: null }; }, [dialog]);
+  const dialogSaved = useRef<{ ids: string[] }>({ ids: [] });
+  useEffect(() => { dialogSaved.current = { ids: [] }; }, [dialog]);
   /** Provider dialog on an agent page: edits, connection (direct / gateway) and this agent's model list. */
   const saveProvider = async (sv: ProviderSave) => {
     if (!st) return;
@@ -995,14 +995,19 @@ export default function App() {
     let input: ProviderInput | null = sv.input;
     try {
       if (sv.viaForward) {
-        // Template the agent can't reach directly: library entry + gateway forward.
+        // New provider through the gateway: a library entry and a forward per protocol.
         const f = sv.viaForward;
-        // A retry after the forward failed updates the entry saved the first time.
-        const e = await api.librarySave({ id: slot.id, name: f.name, baseUrl: f.baseUrl, api: f.api, apiKey: f.apiKey, models: f.models, adoptFrom: null });
-        slot.id = e.id;
+        const routes: GatewayRouteView[] = [];
+        for (const [i, p] of f.parts.entries()) {
+          // A retry after a forward failed updates the entries saved the first time.
+          const e = await api.librarySave({ id: slot.ids[i] ?? null, name: p.name, baseUrl: p.baseUrl, api: p.api, apiKey: f.apiKey || null, models: p.models, adoptFrom: null });
+          slot.ids[i] = e.id;
+          routes.push(await routeForLib(e.id, e.api, e.name));
+        }
         await reloadLib();
-        const r = await routeForLib(e.id, e.api, e.name);
-        input = { ...gatewayEntry(r.localBase, st.id, apiFor(st.id, e.api), f.name, f.models), officialAuth: f.officialAuth };
+        // Several protocols: their combined entry, which routes each model to its forward.
+        const base = routes.length > 1 ? gatewayPoolBase((await api.gatewayStatus()).port, routes.map((r) => r.id)) : routes[0].localBase;
+        input = { ...gatewayEntry(base, st.id, apiFor(st.id, f.parts[0].api), f.name, f.models), officialAuth: f.officialAuth };
       }
       if (sv.connect && editing) {
         const base: ProviderInput = input ?? { id: editing.id, name: editing.name, baseUrl: editing.baseUrl ?? "", api: editing.api, apiKey: null, models: [] };
@@ -1038,6 +1043,8 @@ export default function App() {
     const build = (d0: Draft): Draft => {
       let d = d0;
       if (input) d = upsertProvider(d, input, sv.draftKey);
+      // Draft keys of their own, so each extra provider is a separate pending add.
+      for (const [i, x] of (sv.extra ?? []).entries()) d = upsertProvider(d, x, `pu:new-${Date.now()}-${i + 1}`);
       if (editing && sv.roles !== undefined) {
         d = withOp(d, keys.roles(editing.id), sv.roles ? { op: "set_model_roles", provider: editing.id, roles: sv.roles } : null);
       }
@@ -1050,6 +1057,10 @@ export default function App() {
           if (want !== undefined) d = setModelVisible(d, editing.id, m, want);
         }
         for (const id of sv.models.added) d = upsertModel(d, editing.id, { id, name: null, context: null });
+      }
+      for (const k of sv.settingsOn ?? []) {
+        const s = st.settings.find((x) => x.key === k);
+        if (s) d = setSetting(d, s, true);
       }
       return d;
     };

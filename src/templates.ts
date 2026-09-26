@@ -18,10 +18,42 @@ export interface Template {
   endpoints: Partial<Record<ApiKind, string>>;
   /** Protocol picked by default (must be in endpoints). */
   api: ApiKind;
+  /** Models for `api`. */
   models: string[];
+  /** Models for the other protocols, when the vendor serves each model on one protocol only. */
+  apiModels?: Partial<Record<ApiKind, string[]>>;
   /** Console page where the key is created. */
   keyUrl: string;
   note?: string;
+  /** The vendor routes by conversation and needs the agent to send a session header, which
+   * the gateway adds when forwarding: the page that explains the rule. */
+  session?: string;
+}
+
+/** Models the template offers on protocol `k`. */
+export const modelsFor = (tpl: Template, k: ApiKind) => (k === tpl.api ? tpl.models : tpl.apiModels?.[k] ?? tpl.models);
+
+/** Every model some protocol of the template names. */
+const named = (tpl: Template) => new Set((Object.keys(tpl.endpoints) as ApiKind[]).flatMap((k) => modelsFor(tpl, k)));
+
+/** Of the ticked models, those a provider on protocol `k` gets: the template's models for
+ * `k`, and models no protocol of it names (added by hand), which every protocol gets. */
+export function modelsOn(tpl: Template | null, k: ApiKind, checked: string[]): string[] {
+  if (!tpl) return checked;
+  const all = named(tpl);
+  const own = new Set(modelsFor(tpl, k));
+  return checked.filter((m) => own.has(m) || !all.has(m));
+}
+
+/** Ticked models after the protocols picked change from `prev` to `next`: models only the
+ * dropped protocols name are unticked, the added protocols' new models ticked (one the
+ * picked protocols already offered keeps its tick, or lack of it). */
+export function modelsAfter(tpl: Template, prev: ApiKind[], next: ApiKind[], checked: string[]): string[] {
+  const all = named(tpl);
+  const keep = new Set(next.flatMap((k) => modelsFor(tpl, k)));
+  const had = new Set(prev.flatMap((k) => modelsFor(tpl, k)));
+  const added = next.filter((k) => !prev.includes(k)).flatMap((k) => modelsFor(tpl, k)).filter((m) => !had.has(m));
+  return [...new Set([...checked.filter((m) => keep.has(m) || !all.has(m)), ...added])];
 }
 
 /** Translatable text in the table below: looked up when the field is read, since the
@@ -162,6 +194,32 @@ export const TEMPLATES: Template[] = ([
     endpoints: { chat: "https://openrouter.ai/api/v1", responses: "https://openrouter.ai/api/v1", anthropic: "https://openrouter.ai/api/v1" },
     api: "chat", models: ["anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5", "openai/gpt-6-sol", "deepseek/deepseek-v4-pro", "moonshotai/kimi-k3", "z-ai/glm-5.3"],
     keyUrl: "https://openrouter.ai/settings/keys",
+  },
+  // OpenCode serves each model on one protocol only (docs, 2026-09-25), so the model list
+  // follows the protocol. Go refuses requests without x-opencode-session since 2026-09-05;
+  // a gateway forward adds it (to Zen as well, which doesn't require it but routes by it).
+  {
+    id: "opencode-go", icon: "opencode", group: INTL, kind: "plan", vendor: "OpenCode", plan: "Go", name: "OpenCode Go",
+    endpoints: { chat: "https://opencode.ai/zen/go/v1", anthropic: "https://opencode.ai/zen/go/v1", responses: "https://opencode.ai/zen/go/v1" },
+    api: "chat", models: ["glm-5.3", "kimi-k3", "deepseek-v4-pro", "mimo-v2.6-pro", "kimi-k2.7-code", "glm-5.3-flash", "deepseek-v4.1-flash", "mimo-v2.6-flash"],
+    apiModels: {
+      anthropic: ["minimax-m3", "qwen3.8-max", "qwen3.7-max", "minimax-m2.7", "qwen3.8-flash", "qwen3.7-plus"],
+      responses: ["gpt-6-luna", "grok-4.7", "gpt-5.6-luna", "grok-4.6"],
+    },
+    keyUrl: "https://opencode.ai/auth",
+    note: L("templates.noteOpencodeGo"),
+    session: "https://opencode.ai/docs/go/#where-can-i-use-it",
+  },
+  {
+    id: "opencode-zen", icon: "opencode", group: INTL, kind: "payg", vendor: "OpenCode", plan: "Zen", name: "OpenCode Zen",
+    endpoints: { chat: "https://opencode.ai/zen/v1", anthropic: "https://opencode.ai/zen/v1", responses: "https://opencode.ai/zen/v1" },
+    api: "chat", models: ["kimi-k3", "glm-5.3", "deepseek-v4-pro", "minimax-m3", "qwen3.8-max", "big-pickle"],
+    apiModels: {
+      anthropic: ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-4-5", "qwen3.7-max"],
+      responses: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "grok-4.7"],
+    },
+    keyUrl: "https://opencode.ai/auth",
+    note: L("templates.noteOpencodeZen"),
   },
   {
     id: "openai", icon: "openai", group: INTL, kind: "payg", vendor: "OpenAI", plan: L("templates.planOfficialApi"), name: "OpenAI",

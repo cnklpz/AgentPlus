@@ -59,6 +59,27 @@ export function Seg<T extends string | number>({ value, options, onChange, label
   );
 }
 
+/** `Seg` with several options on at once; the last one on can't be turned off. */
+export function SegMulti<T extends string | number>({ value, options, onChange, label, className }: {
+  value: T[]; options: SegOption<T>[]; onChange: (v: T[]) => void; label?: string; className?: string;
+}) {
+  return (
+    <div className={`seg${className ? ` ${className}` : ""}`} role="group" aria-label={label}>
+      {options.map((o) => {
+        const on = value.includes(o.value);
+        return (
+          <button key={String(o.value)} type="button" aria-pressed={on} className={on ? "on" : ""}
+            title={o.title} disabled={o.disabled} lang={o.lang}
+            onClick={() => {
+              if (!on) onChange([...value, o.value]);
+              else if (value.length > 1) onChange(value.filter((v) => v !== o.value));
+            }}>{o.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * One row of a settings list (.srow): title and description on the left, the control
  * (children) on the right. `lead` goes before the text (a checkbox, a status dot); `note`

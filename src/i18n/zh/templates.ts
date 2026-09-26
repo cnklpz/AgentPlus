@@ -36,4 +36,6 @@ export default {
   noteArk: "模型 ID 带版本日期；也可以填控制台里的推理接入点 ID",
   noteBailian: "北京地域；Key 只在创建它的地域可用",
   noteSiliconflow: "Pro/ 开头的是付费版模型",
+  noteOpencodeGo: "每个模型只走一种协议，模型列表跟着协议换：Chat 是 GLM、Kimi、DeepSeek、MiMo，Anthropic 是 MiniMax、Qwen，Responses 是 GPT、Grok",
+  noteOpencodeZen: "余额按量扣费；每个模型只走一种协议，模型列表跟着协议换：Anthropic 是 Claude，Responses 是 GPT、Grok，其余走 Chat",
 };
