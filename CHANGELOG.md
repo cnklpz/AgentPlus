@@ -2,6 +2,22 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.2
+
+「过度」动画下滚动到边界会被拉扯变形，连续硬拉会把页面扯碎；触控板在边界不再一顿一顿。
+
+- 「过度」动画：滚动到顶部或底部后继续滑，内容像橡皮一样被拉长变形，松手后回弹时会轻微压扁再复原
+- 「过度」动画：在同一边界连续拉扯多次后还继续拉，页面会被扯碎，各块内容四散飞开；往反方向滑动可以一点点拼回来，按 Esc 立即复原
+- 触控板在滚动边界不再一顿一顿：手指减速时不再被误当成松手而突然弹回
+- 设置里「检查更新」的按钮和左侧文字垂直居中
+
+At the Excessive motion level, scrolling past an edge stretches the page, and pulling hard again and again tears it apart; the trackpad no longer stutters at edges.
+
+- Excessive motion: scrolling past the top or bottom stretches the content like rubber, and it springs back with a slight squash
+- Excessive motion: keep pulling the same edge several times in a row and the page tears, its blocks flying apart; scroll the other way to gather them back bit by bit, or press Esc to restore it at once
+- The trackpad no longer stutters at a scroll edge: fingers slowing down are no longer mistaken for a lift that snapped the stretch back
+- The Check for updates buttons in Settings are centred beside their text
+
 ## 0.2.1
 
 官方供应商也能测速了。
