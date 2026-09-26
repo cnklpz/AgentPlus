@@ -349,7 +349,8 @@ mod tests {
         assert_eq!(scrub("gateway http://127.0.0.1:18650/relay/v1"), "gateway http://127.0.0.1:18650/relay/v1");
         assert_eq!(scrub("connect 64.83.33.80:8080 refused"), "connect ***:8080 refused");
         assert_eq!(scrub(r"C:\Users\someone\.codex\config.toml"), r"C:\Users\***\.codex\config.toml");
-        assert_eq!(scrub("/home/klpz/.config/opencode"), "/home/***/.config/opencode");
+        // Someone else's home: a name that is not the test runner's, whose own home becomes `~` first.
+        assert_eq!(scrub("/home/someone/.config/opencode"), "/home/***/.config/opencode");
         assert_eq!(scrub("signed in as a.b@example.org"), "signed in as ***");
         assert_eq!(scrub(r#"{"apiKey": "k-123456"}"#), r#"{"apiKey": "***"}"#);
         assert_eq!(scrub("x-api-key: abcdefgh"), "x-api-key: ***");
