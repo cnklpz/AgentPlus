@@ -141,10 +141,68 @@ pub fn write_text_atomic(path: &Path, text: &str, meta: TextMeta) -> Result<()> 
 /// Replaces `path` with `bytes` as a whole (temp file + rename), so a reader never sees
 /// half a file. A symlinked config is written through (see `resolve_link`).
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, false)
+}
+
+/// App-owned credentials are private even when an older version created a public file.
+pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, true)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
+    use std::io::Write;
     let target = resolve_link(path)?;
     let tmp = tmp_sibling(&target);
-    fs::write(&tmp, bytes).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        // The temp never exposes credentials before its final permissions are applied.
+        options.mode(0o600);
+        if private {
+            fs::Permissions::from_mode(0o600)
+        } else {
+            match fs::metadata(&target) {
+                Ok(m) => m.permissions(),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => fs::Permissions::from_mode(0o600),
+                Err(e) => return Err(e.into()),
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let _ = private;
+    let mut file = options.open(&tmp).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()))?;
+    let written = (|| -> std::io::Result<()> {
+        file.write_all(bytes)?;
+        #[cfg(unix)]
+        file.set_permissions(permissions)?;
+        Ok(())
+    })();
+    drop(file);
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e).with_context(|| tr!("写入 {} 失败", "Failed to write {}", tmp.display()));
+    }
     replace_file(&tmp, &target, path)
+}
+
+/// Restricts AgentPlus's own data directory, including files made by older versions.
+pub fn ensure_private_dir(path: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// The file a write to `path` should replace: a symlinked config (dotfile managers) is
@@ -156,9 +214,11 @@ pub fn resolve_link(path: &Path) -> Result<PathBuf> {
     })
 }
 
-/// The temp file next to `target` that then replaces it: `config.toml.agentplus-tmp`.
+/// A distinct sibling for each write, so concurrent writes cannot share a temp file.
 pub fn tmp_sibling(target: &Path) -> PathBuf {
-    target.with_extension(format!("{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or("")))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    target.with_extension(format!("{}.{}-{}.agentplus-tmp", target.extension().and_then(|e| e.to_str()).unwrap_or(""), std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
 }
 
 /// Renames `tmp` over `target`, retrying for a moment while another program (antivirus,
@@ -616,6 +676,30 @@ mod tests {
         assert_eq!(fs::read_to_string(&real).unwrap(), "a = 3\n");
         assert!(fs::read_dir(&d).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("agentplus-tmp")));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_writes_keep_permissions_and_create_private_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = TestHome::new("private-writes");
+        let p = h.0.join("config.json");
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        fs::write(&p, "old").unwrap();
+        for bits in [0o600, 0o640] {
+            fs::set_permissions(&p, fs::Permissions::from_mode(bits)).unwrap();
+            write_bytes_atomic(&p, b"secret").unwrap();
+            assert_eq!(mode(&p), bits);
+        }
+        let link = h.0.join("link.json");
+        std::os::unix::fs::symlink(&p, &link).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        write_bytes_atomic(&link, b"new secret").unwrap();
+        assert_eq!(mode(&p), 0o600);
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        let new = h.0.join("new.json");
+        write_bytes_atomic(&new, b"secret").unwrap();
+        assert_eq!(mode(&new), 0o600);
     }
 
     #[test]

@@ -557,6 +557,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(update::Pending::default())
         .setup(|app| {
+            util::ensure_private_dir(&util::agentplus_dir())?;
             applog::init();
             applog::info("app", format!("AgentPlus {} started on {} {} ({})", app.package_info().version, std::env::consts::OS, std::env::consts::ARCH, os_version()));
             install_panic_hook();
