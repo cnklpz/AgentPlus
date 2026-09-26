@@ -2,6 +2,22 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.3
+
+「过度」动画下被扯坏的页面变成会飘落的碎纸，上下边界都能扯坏，也不会一滑就坏。
+
+- 页面被扯坏时，各块内容撕成锯齿边的碎纸，四散弹开后像纸一样摇摆、翻转着飘落，堆在底部；往反方向滑动，碎纸会飞回原位拼好，按 Esc 立即复原
+- 需要先在同一边界完整拉扯回弹 2 次，第 3 次继续用力拉才会扯坏，快速滑一下不会触发
+- 滚动到底部往下拉也能扯坏了（以前只有顶部可以）
+- 修复碎纸和原位置错位、撕开时卡顿的问题
+
+At the Excessive motion level, a torn page now becomes falling paper scraps; both edges can tear, and one fast swipe no longer does.
+
+- When the page tears, its blocks rip into jagged paper scraps that burst apart, then sway and spin down like paper and pile up at the bottom; scroll the other way to gather them back, or press Esc to restore at once
+- The edge must stretch and spring back twice first; only a third hard pull tears it, so a quick swipe never does
+- Pulling past the bottom edge can tear the page too (it used to work only at the top)
+- Scraps no longer start out of line with the page, and the tear no longer stutters
+
 ## 0.2.2
 
 「过度」动画下滚动到边界会被拉扯变形，连续硬拉会把页面扯碎；触控板在边界不再一顿一顿。
