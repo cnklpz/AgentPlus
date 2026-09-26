@@ -4,6 +4,27 @@ Tauri 2（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）。
 检查：前端 `npm run check`（`tsc --noEmit` + `vitest run`），后端在 `src-tauri/` 下
 `cargo clippy --all-targets`（保持零警告）/ `cargo test`。改动逻辑时给边界情况补单元测试。
 
+## 提交信息
+
+用英文写。格式：
+
+```
+Area: Short summary in imperative mood
+
+Why the change was needed, and anything not obvious from the diff.
+- One bullet per user-visible change when there are several
+```
+
+- 标题：祈使句（Add / Fix / Drop，不写 Added / Fixes），句首大写，结尾不加句号，不超过 72 个字符。
+- `Area:` 写改动所在的部分，如 `Codex`、`Claude Code`、`Gateway`、`Sessions`、`Updater`、
+  `macOS`、`Release`、`README`、`CLAUDE.md`。跨多个部分、说不清归属的可以省略。
+- 正文可选：标题说得清的就不写。要写就说原因和影响，不复述 diff；每行约 72 个字符换行。
+- 一次提交只做一件事，不相关的改动分开提交。
+- 关联 issue 在正文里写 `Fixes #12` / `Refs #12`。
+- 不加 `Co-Authored-By` 或任何 AI 署名。
+- 例外：`npm version` 生成的版本提交保持只有版本号（`0.1.7`）；更新日志写成 `Changelog: 0.1.7`。
+- 已推送的提交不改写历史。
+
 ## 多语言（i18n）
 
 界面支持简体中文和英文。**中文是源语言**，英文必须与之逐条对应。
