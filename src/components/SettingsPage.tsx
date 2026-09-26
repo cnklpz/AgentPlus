@@ -252,7 +252,7 @@ function UpdateRow({ flash }: { flash: Flash }) {
     : null;
   return (
     <div className="srow stacked" id="update-row">
-      <div className="row gap6">
+      <div className="row gap6 upd-head">
         <div className="grow minw0">
           <div className="slabel">
             {info ? t("settingsPage.updateFound", { version: info.version }) : t("settingsPage.checkUpdate")}
