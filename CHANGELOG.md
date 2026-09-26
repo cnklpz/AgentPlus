@@ -4,6 +4,22 @@
 
 Each version gets a `## <version>` section. On release it becomes the GitHub release text and is shown in AgentPlus's update prompt, so write it in both languages.
 
+## 0.1.6
+
+适配 Codex 26.924；重启 Agent 更快；更新完成后会提示。
+
+- 适配 Codex 26.924：「隐藏用量提示横幅」重新生效
+- 重启 Agent 时结束进程更快（先结束主进程，避免子进程被重新拉起），所有桌面端 Agent 都受益
+- Codex 界面注入更快：跳过不含界面脚本的窗口，悬浮窗不再白等，每次重启少等十几秒
+- 应用内更新完成、重新打开后，底部提示「已更新到 AgentPlus x.y.z」
+
+Supports Codex 26.924; restarting agents is faster; AgentPlus tells you when an update is done.
+
+- Codex 26.924: "Hide usage banners" works again
+- Restarting an agent ends its processes faster (the main process goes first, so child processes aren't relaunched); applies to every desktop agent
+- Codex UI patching is faster: windows without UI scripts are skipped and the overlay no longer waits for nothing, saving 10+ seconds per restart
+- After an in-app update, AgentPlus shows "Updated to AgentPlus x.y.z" when it reopens
+
 ## 0.1.5
 
 修复 Codex 自动更新后 AgentPlus 显示它没在运行的问题；新增诊断日志、启动方式提示和简约提示。

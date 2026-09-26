@@ -947,17 +947,24 @@ impl Drop for Awake {
 /// (macOS), killed otherwise (Windows) or when `force`.
 fn end_app(inst: &Install, force: bool) {
     let sys = processes();
-    for pid in app_of(&sys, inst) {
-        if let Some(p) = sys.process(pid) {
-            if force || p.kill_with(Signal::Term) != Some(true) {
-                p.kill();
-            }
+    let pids = app_of(&sys, inst);
+    // Parents first: an Electron main process relaunches a child that dies before it (a
+    // renderer, the GPU process), which only leaves more processes to wait for.
+    let mut procs: Vec<_> = pids.iter().filter_map(|pid| sys.process(*pid)).collect();
+    procs.sort_by_key(|p| p.parent().is_some_and(|pp| pids.contains(&pp)));
+    for p in procs {
+        if force || p.kill_with(Signal::Term) != Some(true) {
+            p.kill();
         }
     }
 }
 
-/// Ends the desktop app's processes and waits for them to exit; whatever is left after 5 s
-/// is killed.
+/// How long the app gets to quit by itself before what is left is killed. Only macOS asks
+/// it to quit; elsewhere it was killed right away, and this just catches stragglers.
+const QUIT_GRACE: Duration = Duration::from_secs(if cfg!(target_os = "macos") { 5 } else { 1 });
+
+/// Ends the desktop app's processes and waits for them to exit; whatever is left after
+/// [`QUIT_GRACE`] is killed.
 fn stop(inst: &Install, on: &dyn Fn(Progress)) -> Result<()> {
     end_app(inst, false);
     let t0 = Instant::now();
@@ -966,9 +973,10 @@ fn stop(inst: &Install, on: &dyn Fn(Progress)) -> Result<()> {
     loop {
         let left = app_of(&processes(), inst).len();
         if left == 0 {
+            crate::applog::info("restart", format!("app exited after {:.1}s{}", t0.elapsed().as_secs_f32(), if forced { " (killed stragglers)" } else { "" }));
             return Ok(());
         }
-        if !forced && t0.elapsed() > Duration::from_secs(5) {
+        if !forced && t0.elapsed() > QUIT_GRACE {
             forced = true;
             end_app(inst, true);
         }
@@ -1052,11 +1060,13 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     let done = Restarted { was_running: running > 0, cli_sessions: cli };
     check_cancel()?;
     on(Progress::step("start", "active", None));
+    let t1 = Instant::now();
     if let Some(aumid) = &inst.aumid {
         activate(aumid, args)?;
     } else if let Some(exe) = &inst.exe {
         start_exe(exe, args).map_err(|e| anyhow!(tr!("启动失败：{e}", "Failed to start: {e}")))?;
     }
+    crate::applog::info("restart", format!("{agent}: launch call returned after {:.1}s", t1.elapsed().as_secs_f32()));
     // Wait until its process shows up, so "done" means it is actually up.
     if inst.dir.is_some() {
         on(Progress::step("start", "active", Some(crate::i18n::l("等待进程出现", "Waiting for the process").into())));

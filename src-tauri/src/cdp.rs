@@ -121,11 +121,13 @@ fn patch_quota(src: &str) -> Option<String> {
 /// Makes the composer's usage-banner slot return its fallback content right away:
 ///   N=F($v,_);if(!n)return u;let P=pYe({hasImageGenerationLimit:…
 ///   → N=F($v,_);if(!0)return u;let P=…
+/// Since 26.924 the React compiler memoizes the call, so there is a cache check in between:
+///   if(!n)return u;let P=i!=null,F;t[11]!==f||…?(F=dCt({hasImageGenerationLimit:P,…
 /// The early return already exists (for `canShowUsageBanners` off), so every hook before
 /// it still runs as usual.
 fn patch_banner(src: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = cached(&RE, r"if\(![\w$]+\)return ([\w$]+);(let [\w$]+=[\w$]+\(\{hasImageGenerationLimit:)");
+    let re = cached(&RE, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
     replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
 }
 
@@ -307,9 +309,31 @@ struct Patched {
     complete: bool,
 }
 
-/// `Ok(None)` when no bundle request was seen. Once the first bundle is through, waits
-/// up to `lazy` for the rest, calling `waiting` first.
-fn via_fetch(s: &mut Session, want: Patches, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
+/// The UI bundles among a window's script URLs, each once.
+fn bundles_in(urls: &[String]) -> Vec<&'static str> {
+    let mut out = vec![];
+    for h in urls.iter().filter_map(|u| bundle_of(u)) {
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    out
+}
+
+/// The UI bundles the window has loaded so far: its scripts, and the modules it imported
+/// (each gets a `modulepreload` link).
+fn loaded_bundles(s: &mut Session) -> Result<Vec<&'static str>> {
+    let expr = "[...document.scripts].map(s=>s.src).concat([...document.querySelectorAll('link[rel=modulepreload]')].map(l=>l.href))";
+    let r = s.call("Runtime.evaluate", json!({ "expression": expr, "returnByValue": true }))?;
+    let urls: Vec<String> = serde_json::from_value(r["result"]["value"].clone()).unwrap_or_default();
+    Ok(bundles_in(&urls))
+}
+
+/// `Ok(None)` when no bundle request was seen. Stops once every bundle in `expect` is through
+/// (all of them when `None`); after the first one, waits up to `lazy` for the rest, calling
+/// `waiting` first.
+fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
+    let expect = expect.unwrap_or(&BUNDLE_HINTS);
     let patterns: Vec<Value> = BUNDLE_HINTS.iter().map(|h| json!({ "urlPattern": format!("*{h}*.js*"), "requestStage": "Response" })).collect();
     s.call("Fetch.enable", json!({ "patterns": patterns }))?;
     s.call("Network.enable", json!({}))?;
@@ -319,7 +343,7 @@ fn via_fetch(s: &mut Session, want: Patches, lazy: Duration, waiting: &dyn Fn())
     let mut seen: Vec<&str> = vec![];
     let mut missing: Option<Vec<&'static str>> = None;
     let result = (|| -> Result<()> {
-        while seen.len() < BUNDLE_HINTS.len() {
+        while !expect.iter().all(|h| seen.contains(h)) {
             let Some(ev) = s.next_event("Fetch.requestPaused", deadline)? else { break };
             let p = &ev["params"];
             let Some(h) = bundle_of(p["request"]["url"].as_str().unwrap_or("")) else {
@@ -407,6 +431,7 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
         crate::process::pause(Duration::from_millis(500))?;
     };
     on(Progress::step("port", "done", Some(tr!("{} 个窗口", "{} window(s)", pages.len()))));
+    crate::applog::info("inject", format!("debug port up after {:.1}s, {} window(s)", t0.elapsed().as_secs_f32(), pages.len()));
     // Let the first render settle before reloading.
     on(Progress::step("patch", "active", Some(crate::i18n::l("等待界面加载", "Waiting for the UI to load").into())));
     crate::process::pause(Duration::from_secs(2))?;
@@ -421,11 +446,23 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
     for (i, page) in pages.into_iter().enumerate() {
         // A window being patched is finished first: its requests are paused until then.
         crate::process::check_cancel()?;
+        let t1 = Instant::now();
         on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}", "Window {}/{}", i + 1, total))));
+        let url = page["url"].as_str().unwrap_or_default();
         let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("调试目标缺少 WebSocket 地址", "Debug target has no WebSocket URL")))?;
         let mut s = Session::open(ws)?;
+        // A secondary window (overlay, detached) only ever loads what it has already: reload it
+        // just for those, and not at all without any. Waiting for the rest took 5-10 s each.
+        // The main window may not have imported app-primary yet, so it waits for both.
+        let expect = if url.contains('?') { Some(loaded_bundles(&mut s)?) } else { None };
+        if expect.as_ref().is_some_and(|e| e.is_empty()) {
+            crate::applog::info("inject", format!("{url}: no UI bundle loaded, skipped"));
+            continue;
+        }
         let waiting = || on(Progress::step("patch", "active", Some(tr!("窗口 {}/{}：等待其余界面脚本加载", "Window {}/{}: waiting for the rest of the UI scripts", i + 1, total))));
-        let (how, r) = match via_fetch(&mut s, want, lazy, &waiting)? {
+        let fetched = via_fetch(&mut s, want, expect.as_deref(), lazy, &waiting)?;
+        crate::applog::info("inject", format!("{url}: {} in {:.1}s", if fetched.is_some() { "patched" } else { "no bundle request seen" }, t1.elapsed().as_secs_f32()));
+        let (how, r) = match fetched {
             Some(r) => (crate::i18n::l("响应拦截", "response interception"), r),
             None => match via_live_edit(&mut s, want)? {
                 Some(r) => (crate::i18n::l("热替换", "live patch"), r),
@@ -525,9 +562,49 @@ mod tests {
         assert!(missing.is_empty());
         assert_eq!(out, "N=F($v,_);if(!0)return u/*agentplus-banner*/;let P=pYe({hasImageGenerationLimit:i!=null,showModelLimit:f,showUpsell:g,showWorkspaceUsageLimit:h}),I=null;");
         assert_eq!(patch_source(&out, BANNER), (None, vec![]));
+        // Codex 26.924: the call is memoized by the React compiler.
+        let slot = "N=Y(zS,_);if(!n)return u;let P=i!=null,F;t[11]!==f||t[12]!==g||t[13]!==h||t[14]!==P?(F=dCt({hasImageGenerationLimit:P,showModelLimit:f,showUpsell:g,showWorkspaceUsageLimit:h}),t[11]=f,t[12]=g,t[13]=h,t[14]=P,t[15]=F):F=t[15];";
+        let (out, missing) = patch_source(slot, BANNER);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(out, slot.replacen("if(!n)return u;", "if(!0)return u/*agentplus-banner*/;", 1));
+        assert_eq!(patch_source(&out, BANNER), (None, vec![]));
+        // An unrelated early return farther away (a block in between) is not taken.
+        let far = "if(!a)return b;let c=()=>{x()};let P=dCt({hasImageGenerationLimit:P})";
+        assert_eq!(patch_source(far, BANNER).0, None);
         // The helper that picks the banner kind has the same key but isn't touched.
         let helper = "function pYe({hasImageGenerationLimit:e,showModelLimit:t}){return t}";
         assert_eq!(patch_source(helper, BANNER).0, None);
+    }
+
+    /// Checks a new Codex release: point `CODEX_ASSETS` at `webview/assets` of an extracted
+    /// app.asar and run `cargo test real_bundles -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_bundles() {
+        let dir = std::env::var("CODEX_ASSETS").expect("CODEX_ASSETS");
+        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true };
+        let mut missing = None;
+        for e in std::fs::read_dir(dir).unwrap() {
+            let path = e.unwrap().path();
+            if bundle_of(&path.to_string_lossy().replace('\\', "/")).is_some() {
+                let (_, miss) = patch_source(&std::fs::read_to_string(&path).unwrap(), all);
+                missing = Some(still_missing(missing, miss));
+            }
+        }
+        assert_eq!(missing, Some(vec![]));
+    }
+
+    #[test]
+    fn bundles_in_a_window() {
+        let urls = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Codex 26.924: the overlay, the main window and the detached window.
+        let overlay = urls(&["app://-/assets/index-90c6cda9bd3d.js", "app://-/assets/app-shared-c568b0b98683.js", "app://-/assets/app-initial-ff48311587c5.js"]);
+        assert_eq!(bundles_in(&overlay), ["app-initial-"]);
+        let main = urls(&["app://-/assets/app-initial-ff48311587c5.js", "app://-/assets/app-primary-2a3f3664ac09.js", "app://-/assets/app-initial-ff48311587c5.js"]);
+        assert_eq!(bundles_in(&main), ["app-initial-", "app-primary-"]);
+        let detached = urls(&["app://-/assets/detachedWindow-104b953a28b0.js", "app://-/assets/app-shared-c568b0b98683.js", ""]);
+        assert!(bundles_in(&detached).is_empty());
     }
 
     #[test]

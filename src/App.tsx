@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
 import {
@@ -19,7 +20,7 @@ import { HubAside } from "./components/HubAside";
 import { ServiceDetail } from "./components/ServiceDetail";
 import { type ServiceSave, ServiceDialog } from "./components/ServiceDialog";
 import { EnvSwitch } from "./components/EnvSwitch";
-import { checkUpdate, useUpdate } from "./updater";
+import { checkUpdate, takeJustUpdated, useUpdate } from "./updater";
 import { type SettingsTab, SettingsPage } from "./components/SettingsPage";
 import { PendingDialog } from "./components/PendingDialog";
 import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
@@ -188,6 +189,14 @@ export default function App() {
 
   // A new release: look once shortly after startup (设置 › 关于 › 启动时检查更新).
   const update = useUpdate();
+  // First start after an in-app update: say it is done.
+  useEffect(() => {
+    if (!inTauri) return;
+    getVersion().then((v) => {
+      const to = takeJustUpdated(v);
+      if (to) flash(t("app.updatedToast", { version: to }), false, 6000);
+    }).catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (!inTauri || !prefs.autoUpdate) return;
     const timer = window.setTimeout(() => {

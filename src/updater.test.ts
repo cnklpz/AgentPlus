@@ -7,11 +7,20 @@ const mock = vi.hoisted(() => ({
 }));
 vi.mock("./api", () => ({ api: mock }));
 
-const { checkUpdate, installUpdate, resetUpdate, updateState } = await import("./updater");
+const { checkUpdate, installUpdate, resetUpdate, takeJustUpdated, updateState } = await import("./updater");
 
 const INFO: UpdateInfo = { version: "0.2.0", current: "0.1.0", notes: null, date: null };
 
+const storage = new Map<string, string>();
+const fakeStorage = {
+  getItem: (k: string) => storage.get(k) ?? null,
+  setItem: (k: string, v: string) => void storage.set(k, v),
+  removeItem: (k: string) => void storage.delete(k),
+};
+vi.stubGlobal("localStorage", fakeStorage);
+
 beforeEach(() => {
+  storage.clear();
   resetUpdate();
   mock.updateCheck.mockReset();
   mock.updateInstall.mockReset();
@@ -69,5 +78,49 @@ describe("installUpdate", () => {
     mock.updateInstall.mockResolvedValueOnce(undefined);
     await installUpdate();
     expect(mock.updateInstall).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("takeJustUpdated", () => {
+  const install = async () => {
+    mock.updateCheck.mockResolvedValueOnce(INFO);
+    await checkUpdate();
+    mock.updateInstall.mockResolvedValueOnce(undefined);
+    await installUpdate();
+  };
+
+  it("names the new version once, on the first start after the install", async () => {
+    await install();
+    expect(takeJustUpdated("0.2.0")).toBe("0.2.0");
+    expect(takeJustUpdated("0.2.0")).toBeNull();
+  });
+
+  it("says nothing when the old version started again (installer cancelled)", async () => {
+    await install();
+    expect(takeJustUpdated("0.1.0")).toBeNull();
+    expect(takeJustUpdated("0.2.0")).toBeNull();
+  });
+
+  it("ignores a leading v", async () => {
+    await install();
+    expect(takeJustUpdated("v0.2.0")).toBe("0.2.0");
+  });
+
+  it("forgets a failed install", async () => {
+    mock.updateCheck.mockResolvedValueOnce(INFO);
+    await checkUpdate();
+    mock.updateInstall.mockRejectedValueOnce("offline");
+    await installUpdate();
+    expect(takeJustUpdated("0.2.0")).toBeNull();
+  });
+
+  it("is quiet on a normal start or without storage", () => {
+    expect(takeJustUpdated("0.2.0")).toBeNull();
+    vi.stubGlobal("localStorage", undefined);
+    try {
+      expect(takeJustUpdated("0.2.0")).toBeNull();
+    } finally {
+      vi.stubGlobal("localStorage", fakeStorage);
+    }
   });
 });

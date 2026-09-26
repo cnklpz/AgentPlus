@@ -126,6 +126,7 @@ const en: typeof zh = {
   privacyOnToast: "Privacy mode on",
   updateToast: "AgentPlus {version} is out; update it in Settings › About",
   updateDot: "Update available",
+  updatedToast: "Updated to AgentPlus {version}",
   privacyOffToast: "Privacy mode off",
   openDataDir: "Open AgentPlus data folder",
   gatewayKeysTitle: "Update the gateway key of {n} provider|Update the gateway keys of {n} providers",

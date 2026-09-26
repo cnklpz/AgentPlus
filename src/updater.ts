@@ -50,16 +50,48 @@ export async function checkUpdate(quiet = false): Promise<UpdateInfo | null> {
   }
 }
 
+/** The version an install was started for, so the restarted app can say it is done. */
+const INSTALLED_KEY = "agentplus.updatingTo";
+const bareVersion = (v: string) => v.trim().replace(/^v/i, "");
+
+function rememberInstall(version: string | null): void {
+  try {
+    if (version) localStorage.setItem(INSTALLED_KEY, version);
+    else localStorage.removeItem(INSTALLED_KEY);
+  } catch {
+    // Only the "updated" notice after the restart is lost.
+  }
+}
+
+/**
+ * Called once at startup with the running version: the version an update was just installed
+ * to, or null. The mark is cleared either way, so a cancelled installer (the old version starts
+ * again) says nothing, and the notice shows only once.
+ */
+export function takeJustUpdated(current: string): string | null {
+  let to: string | null = null;
+  try {
+    to = localStorage.getItem(INSTALLED_KEY);
+    if (to !== null) localStorage.removeItem(INSTALLED_KEY);
+  } catch {
+    return null;
+  }
+  return to && bareVersion(to) === bareVersion(current) ? to : null;
+}
+
 /** Downloads and installs the update found by the last check. On success the app restarts. */
 export async function installUpdate(): Promise<void> {
   const info = state.kind === "available" || state.kind === "error" ? state.info : null;
   if (!info) return;
   set({ kind: "downloading", info, done: 0, total: null });
+  // Written before the install: on Windows the installer ends this process without returning.
+  rememberInstall(info.version);
   try {
     await api.updateInstall((p) => {
       set(p.kind === "download" ? { kind: "downloading", info, done: p.done, total: p.total } : { kind: "installing", info });
     });
   } catch (e) {
+    rememberInstall(null);
     set({ kind: "error", error: errText(e), info });
   }
 }
