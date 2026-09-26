@@ -2,6 +2,32 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.0
+
+多设备同步上线：可加密、可自动同步、保留同步记录；macOS 有了菜单栏。
+
+- 多设备同步（侧边栏「多设备同步」）：选一个网盘、NAS 或 U 盘里的文件夹，在设备间同步供应商库和各 Agent 的供应商、模型列表
+- 同步密码：可以自己输入，也可以生成随机密钥（能复制或保存为 txt）。设置后同步文件用 AES-256-GCM 加密（密钥由 Argon2id 派生），密码保存在本机，由 Windows 加密保护
+- 「同步 API Key」：加密时可以连同 API Key 一起同步，导入的供应商直接可用。没设密码也能开，但会以明文写入，开启前会醒目警告
+- 自动同步：可选打开软件时同步、有变更时同步。另一台设备先同步了新内容时，会先提醒你对比导入，不会覆盖
+- 同步记录：每次导出都保留一份（最多 5–50 份可选），点一条可以和本机对比并恢复，也可以删除
+- macOS：新增菜单栏，有设置（⌘,）、检查更新、各页面和标准的编辑菜单
+- 设置说明随选项变化时，新旧文字淡入淡出切换
+- 切换动画级别时，页面标题等不再重播入场动画
+- 触控板惯性滚动到边缘时，回弹不再卡住，会立即弹回
+
+Multi-device sync is here, with encryption, automatic sync and sync records; macOS gets a menu bar.
+
+- Multi-device sync (Multi-device sync in the sidebar): pick a folder on a cloud drive, NAS or USB stick to sync the provider library and every agent's providers and model lists between devices
+- Sync password: type one or generate a random key (copy it or save it as .txt). The sync file is then encrypted with AES-256-GCM (key derived with Argon2id), and the password is kept on this device, protected by Windows
+- "Sync API keys": encrypted files can carry the API keys, so imported providers work right away. It also works without a password, but then the keys are written in plain text, after a prominent warning
+- Automatic sync: optionally sync when AgentPlus starts and after changes. When another device synced something new first, you're asked to compare and import it instead of it being overwritten
+- Sync records: every export keeps a copy (keep 5–50); click one to compare it with this device and restore from it, or delete it
+- macOS: a menu bar with Settings (⌘,), Check for Updates, the pages and the standard Edit menu
+- Setting descriptions fade between old and new wording when their value changes
+- Switching the motion level no longer replays entrance animations such as the page title
+- Trackpad momentum no longer holds the overscroll bounce at the edge; it springs back right away
+
 ## 0.1.8
 
 提示文字切换有了动画；macOS 改用苹方和系统字体。
