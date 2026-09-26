@@ -309,7 +309,8 @@ html, body, #root, .app { overflow: hidden; }
 .seg button svg { flex-shrink: 0; }
 
 /* ------------------------------------------------------------ Unified fonts
-   One UI face everywhere (Segoe UI Variable + Microsoft YaHei UI for CJK); monospace only
+   One UI face everywhere (Windows: Segoe UI Variable + Microsoft YaHei UI for CJK; macOS
+   below); monospace only
    for code-like values (addresses, model ids, paths), with the same CJK fallback so
    Chinese inside them never drops to SimSun. */
 :root {
@@ -322,6 +323,15 @@ button, input, textarea, select { font-family: inherit; }
 .dd-btn, .dd-item, .toolbar .seg button, .chip, .combo-input:not(.mono) { font-family: var(--sans); }
 .dd-btn { font-weight: 600; }
 .page-title h1, .gw-hero-title, .modal-head h2 { font-family: "Segoe UI Variable Display", var(--sans); }
+/* macOS: the system face (SF Pro, with PingFang SC for Chinese). The Windows stack must not
+   apply there: with Microsoft Office installed a Mac has Microsoft YaHei, which would win
+   over PingFang and draw Latin text with YaHei's glyphs too. */
+:root[data-os="mac"] {
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Monaco, "PingFang SC", monospace;
+}
+:root[data-os="mac"] body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+:root[data-os="mac"] :is(.page-title h1, .gw-hero-title, .modal-head h2) { font-family: var(--sans); }
 .tab-count, .hub-stats b, .count, .pavatar { font-variant-numeric: tabular-nums; }
 
 /* Context menu */

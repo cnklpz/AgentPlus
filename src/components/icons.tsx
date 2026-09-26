@@ -24,7 +24,7 @@ function mono(text: string, bg: string, fg: string, size = 14) {
     bg, scale: 100,
     glyph: (
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <text x="12" y="12" dominantBaseline="central" textAnchor="middle" fontSize={size} fontWeight={800} fill={fg} fontFamily="Segoe UI, sans-serif">{text}</text>
+        <text x="12" y="12" dominantBaseline="central" textAnchor="middle" fontSize={size} fontWeight={800} fill={fg} style={{ fontFamily: "var(--sans)" }}>{text}</text>
       </svg>
     ),
   };
