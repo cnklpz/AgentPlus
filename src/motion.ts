@@ -81,44 +81,47 @@ function rubberBand(e: WheelEvent) {
   let edge: HTMLElement | null = null;
   for (let n = e.target as HTMLElement | null; n && n !== document.body; n = n.parentElement) {
     if (!overflowing(n)) continue;
-    const atEdge = down ? n.scrollTop + n.clientHeight >= n.scrollHeight - 1 : n.scrollTop <= 0;
+    // Mid-pull the edge being pulled stays the edge, whatever the stretch does to the scroll size.
+    const pulled = n === obHost && pulling && stretchDir === (down ? 1 : -1);
+    const atEdge = pulled || (down ? n.scrollTop + n.clientHeight >= n.scrollHeight - 1 : n.scrollTop <= 0);
     if (!atEdge) {
-      streak = 0;
+      stretches = 0;
       return;
     }
     edge ??= n;
   }
   if (!edge) return;
   const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-  // One gesture is wheel events at the edge without a pause; bounces are counted per gesture,
-  // so a pull that slows down or stutters never counts twice.
-  const now = performance.now();
-  const newGesture = now - edgeWheelAt > 200;
-  const sinceLast = now - edgeWheelAt;
-  edgeWheelAt = now;
+  const dir = Math.sign(px);
   if (coast && obPull && obHost === edge) {
     // Momentum, or fingers slowing against the edge (they look alike): let go gradually along
     // with it rather than snapping back, so a pull that is still going just carries on.
     bumped = true;
     obPull *= 0.75;
+    // Eased back almost to rest: that stretch is done, and the next push is a new one.
+    if (Math.abs(obPull) < peak * 0.1) endStretch();
   } else if (coast) {
     if (bumped) return;
     bumped = true;
     settle(true);
     obHost = edge;
     // How hard the fling hit the edge sets the bump, briefly, then it springs back.
-    obPull = -Math.sign(px) * Math.min(Math.abs(px) * 3, 60);
+    startStretch(edge, dir);
+    obPull = -dir * Math.min(Math.abs(px) * 3, 60);
+    peak = Math.abs(obPull);
   } else {
     if (obHost !== edge) {
       settle(true);
       obHost = edge;
       obPull = 0;
     }
-    if (newGesture) countBounce(edge, Math.sign(px), sinceLast);
+    startStretch(edge, dir);
     obPull += -px * 0.5;
-    // Bounced off this edge again and again, and still pulling: it gives.
-    if (streak >= TEAR_AFTER && Math.abs(obPull) > 160) {
-      tear(edge, Math.sign(px));
+    peak = Math.max(peak, Math.abs(obPull));
+    tension += Math.abs(px);
+    // Stretched and sprung back TEAR_AFTER times, and the fingers push hard again: it gives.
+    if (stretches >= TEAR_AFTER && tension > TEAR_PX) {
+      tear(edge, dir);
       return;
     }
   }
@@ -133,15 +136,17 @@ function rubberBand(e: WheelEvent) {
 }
 
 /**
- * The pull stretches what is on screen like rubber held at the far edge: pulled past the top,
- * the content lengthens down from the visible bottom (and narrows a little); past the bottom,
- * up from the visible top. `off` is how far the pulled edge moves, in px.
+ * The pull stretches what is on screen like rubber pinned at the edge being pulled: past the
+ * top, the content lengthens downward from the top (and narrows a little); past the bottom,
+ * upward from the bottom. Growing away from the edge also keeps it inside what can be
+ * scrolled: stretched past the bottom it would add room to scroll into. `off` is how far the
+ * content moves at the far side, in px.
  */
 function stretch(host: HTMLElement, off: number) {
   // A short scroller would stretch to twice its height: measure against a page-sized one, capped.
   const sy = 1 + Math.min(Math.abs(off) / Math.max(host.clientHeight, 360), 0.14);
   // The fixed line, in the host's content coordinates.
-  const y = off > 0 ? host.scrollTop + host.clientHeight : host.scrollTop;
+  const y = off > 0 ? host.scrollTop : host.scrollTop + host.clientHeight;
   if (off !== 0) host.style.setProperty("--ob-y", `${y.toFixed(1)}px`);
   host.style.setProperty("--ob-sy", sy.toFixed(4));
   host.style.setProperty("--ob-sx", (1 - (sy - 1) * 0.35).toFixed(4));
@@ -160,6 +165,9 @@ function settle(now: boolean) {
   if (!host) return;
   window.clearTimeout(obRelease);
   host.classList.remove("ap-pulling");
+  // Let go by itself: one stretch done. Cut short (another edge, a tear): not counted.
+  if (now) resetPull();
+  else endStretch();
   // The spring overshoots: the stretched content squashes a touch before it comes to rest.
   stretch(host, 0);
   obPull = 0;
@@ -177,79 +185,299 @@ function settle(now: boolean) {
 // Pulled past the same edge several times in a row and still pulling, the page tears: the
 // blocks on screen fly apart, away from that edge. Scrolling the other way gathers them back
 // as far as it scrolls; Esc puts them back at once.
-const TEAR_AFTER = 4;
+/** Stretches seen at an edge before a pull can tear it. */
+const TEAR_AFTER = 2;
+/** How far the fingers push into the edge (px of wheel) to tear it, after TEAR_AFTER stretches. */
+const TEAR_PX = 200;
+/** A pull this big shows as a stretch; smaller ones aren't counted. */
+const SEEN_PULL = 20;
 const MEND_PX = 600;
-let streak = 0;
-let streakHost: HTMLElement | null = null;
-let streakDir = 0;
-/** When the last wheel event at a scroll edge arrived. */
-let edgeWheelAt = 0;
+/** Stretches in a row at one edge, one way, each within 1.5 s of the previous one. */
+let stretches = 0;
+let stretchHost: HTMLElement | null = null;
+let stretchDir = 0;
+let stretchEndAt = 0;
+/** The stretch under way: its largest pull, and how far the fingers pushed into it. */
+let pulling = false;
+let peak = 0;
+let tension = 0;
 
-interface Shard { el: HTMLElement; x: number; y: number; r: number }
-let torn: { host: HTMLElement; dir: number; shards: Shard[]; back: number } | null = null;
-
-/** A new gesture against `host`'s edge; `gap` is the pause since the previous one. */
-function countBounce(host: HTMLElement, dir: number, gap: number) {
-  const again = host === streakHost && dir === streakDir && gap < 1500;
-  streak = again ? streak + 1 : 1;
-  streakHost = host;
-  streakDir = dir;
+/** A push starts a stretch; at another edge, the other way or after a pause, the count starts over. */
+function startStretch(host: HTMLElement, dir: number) {
+  if (pulling) return;
+  if (host !== stretchHost || dir !== stretchDir || performance.now() - stretchEndAt > 1500) stretches = 0;
+  stretchHost = host;
+  stretchDir = dir;
+  pulling = true;
+  peak = 0;
+  tension = 0;
 }
 
-/** The blocks on screen: whole cards fly as one; only one taller than most of the view splits into its children. */
-function shards(root: HTMLElement, box: DOMRect): HTMLElement[] {
-  const out: HTMLElement[] = [];
+/** The stretch sprang back (let go, or eased off with the momentum): it counts if it showed. */
+function endStretch() {
+  if (pulling && peak >= SEEN_PULL) {
+    stretches++;
+    stretchEndAt = performance.now();
+  }
+  resetPull();
+}
+
+function resetPull() {
+  pulling = false;
+  peak = 0;
+  tension = 0;
+}
+
+/** One paper scrap: where it is relative to its spot in the page, and how it moves. */
+interface Scrap {
+  el: HTMLElement;
+  x: number; y: number; r: number;
+  vx: number; vy: number; vr: number;
+  /** Its centre on screen at rest, half its height, where it comes to lie (Infinity: it falls
+   *  out of view), its sway phase. */
+  ox: number; oy: number; hb: number; rest: number; phase: number;
+  landed: boolean;
+  /** Where it was when gathering back began. */
+  from?: { x: number; y: number; r: number };
+}
+
+let torn: {
+  host: HTMLElement; dir: number;
+  scraps: Scrap[];
+  /** Pieces hidden while their scraps fall; cards turned see-through; parents given a position. */
+  pieces: HTMLElement[]; shells: HTMLElement[]; lifted: HTMLElement[];
+  /** The view the scraps fall in (walls and floor). */
+  box: DOMRect;
+  frame: number; t0: number;
+  /** Gathering back: how far the wheel has taken it (0–1), and how far it is shown. */
+  goal: number; shown: number; quick: boolean;
+} | null = null;
+
+/**
+ * The pieces on screen: rows and small blocks. A card that gets split leaves an empty shell,
+ * so it turns see-through while the page is torn and each scrap carries the card's surface.
+ */
+function shards(root: HTMLElement, box: DOMRect): { pieces: HTMLElement[]; shells: HTMLElement[] } {
+  const pieces: HTMLElement[] = [];
+  const shells: HTMLElement[] = [];
   const walk = (el: Element) => {
     for (const c of el.children) {
-      if (!(c instanceof HTMLElement) || out.length >= 48 || c.classList.contains("ap-glider")) continue;
+      if (!(c instanceof HTMLElement) || pieces.length >= 30 || c.classList.contains("ap-glider")) continue;
       const r = c.getBoundingClientRect();
       if (r.width === 0 || r.height === 0 || r.bottom < box.top || r.top > box.bottom) continue;
-      if (r.height <= box.height * 0.6 || c.children.length === 0) out.push(c);
-      else walk(c);
+      if (r.height <= 96 || c.children.length === 0) pieces.push(c);
+      else {
+        shells.push(c);
+        walk(c);
+      }
     }
   };
   walk(root);
+  return { pieces, shells };
+}
+
+const rnd = (a: number) => (Math.random() - 0.5) * 2 * a;
+
+/**
+ * Tears a w x h piece into at most `max` scraps like paper: a jittered grid whose inner seams
+ * zigzag, the outer edges straight. Neighbours share their seams, so the scraps fit back
+ * together exactly.
+ */
+export function scraps(w: number, h: number, max = 24): { pts: [number, number][]; cx: number; cy: number }[] {
+  let cols = Math.min(6, Math.max(2, Math.round(w / 110)));
+  let rows = Math.min(4, Math.max(1, Math.round(h / 34)));
+  while (cols * rows > Math.max(2, max)) {
+    if (rows > 1 && rows * 3 >= cols) rows--;
+    else cols--;
+  }
+  const [cw, ch] = [w / cols, h / rows];
+  // Grid corners: inner ones wander, border ones only slide along their border.
+  const P = Array.from({ length: rows + 1 }, (_, i) => Array.from({ length: cols + 1 }, (_, j): [number, number] => [
+    j === 0 || j === cols ? j * cw : j * cw + rnd(cw * 0.3),
+    i === 0 || i === rows ? i * ch : i * ch + rnd(ch * 0.3),
+  ]));
+  // A zigzag point in the middle of each inner seam.
+  const mid = (a: [number, number], b: [number, number], across: "x" | "y", amp: number): [number, number] => {
+    const m: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    m[across === "x" ? 0 : 1] += rnd(amp);
+    return m;
+  };
+  const H = P.map((row, i) => row.slice(0, cols).map((p, j) => (i === 0 || i === rows ? null : mid(p, row[j + 1], "y", ch * 0.25))));
+  const V = P.slice(0, rows).map((row, i) => row.map((p, j) => (j === 0 || j === cols ? null : mid(p, P[i + 1][j], "x", cw * 0.2))));
+  const out = [];
+  for (let i = 0; i < rows; i++) {
+    for (let j = 0; j < cols; j++) {
+      const pts = [P[i][j], H[i][j], P[i][j + 1], V[i][j + 1], P[i + 1][j + 1], H[i + 1][j], P[i + 1][j], V[i][j]].filter((p): p is [number, number] => !!p);
+      const [a, b, c, d] = [P[i][j], P[i][j + 1], P[i + 1][j + 1], P[i + 1][j]];
+      out.push({ pts, cx: (a[0] + b[0] + c[0] + d[0]) / 4, cy: (a[1] + b[1] + c[1] + d[1]) / 4 });
+    }
+  }
   return out;
 }
 
-const place = (s: Shard, k: number, how: string) => {
-  s.el.style.transition = how;
-  s.el.style.translate = `${(s.x * k).toFixed(1)}px ${(s.y * k).toFixed(1)}px`;
-  s.el.style.rotate = `${(s.r * k).toFixed(2)}deg`;
+/** Scraps in all, spread over the pieces. */
+const SCRAPS = 72;
+/** Paper physics, per 60 Hz frame: gravity, the slow top speed of falling paper, air drag. */
+const GRAVITY = 0.28;
+const FALL_MAX = 3.4;
+const DRAG = 0.985;
+
+const show = (s: Scrap) => {
+  s.el.style.transform = `translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px) rotate(${s.r.toFixed(1)}deg)`;
 };
 
 function tear(host: HTMLElement, dir: number) {
   settle(true);
-  streak = 0;
+  stretches = 0;
+  // The stretch may still be easing back (some blocks transition every property): stop it at
+  // rest, or the pieces would be measured, and their scraps placed, where it had them.
+  const stilled = [...host.children].filter((c): c is HTMLElement => c instanceof HTMLElement);
+  for (const c of stilled) c.style.transition = "none";
   const box = host.getBoundingClientRect();
-  const list = shards(host, box).map((el): Shard => {
-    const r = el.getBoundingClientRect();
-    const side = (r.left + r.width / 2 - (box.left + box.width / 2)) / (box.width / 2 || 1);
-    // Near the pulled edge they fly furthest. Past the top (dir < 0) the page is dragged down.
-    const near = dir < 0 ? 1 - (r.top - box.top) / box.height : (r.bottom - box.top) / box.height;
-    const y = -dir * (70 + Math.max(0, near) * 260 + Math.random() * 90);
-    const x = side * (50 + Math.random() * 130) + (Math.random() - 0.5) * 90;
-    return { el, x, y, r: (Math.random() - 0.5) * 50 };
+  const { pieces, shells } = shards(host, box);
+  if (!pieces.length) {
+    for (const c of stilled) c.style.removeProperty("transition");
+    return;
+  }
+  const each = Math.max(2, Math.floor(SCRAPS / pieces.length));
+  // First the cards stop clipping and the pieces' parents get a position (a card that no
+  // longer clips drops any scroll it had inside), then everything is measured in that final
+  // layout, then built: one layout, not one per piece.
+  for (const s of shells) s.classList.add("ap-shell");
+  const lifted: HTMLElement[] = [];
+  for (const el of pieces) {
+    const parent = el.parentElement!;
+    if (!lifted.includes(parent) && getComputedStyle(parent).position === "static") {
+      parent.style.position = "relative";
+      lifted.push(parent);
+    }
+  }
+  // Layout positions, not screen ones: a piece may be mid-animation (an entrance, a glide),
+  // and its scraps belong where it rests.
+  const plans = pieces.map((el) => {
+    const parent = el.parentElement!;
+    const pr = parent.getBoundingClientRect();
+    let [left, top, w, h] = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
+    if (el.offsetParent !== parent) {
+      const r = el.getBoundingClientRect();
+      [left, top, w, h] = [r.left - pr.left - parent.clientLeft + parent.scrollLeft, r.top - pr.top - parent.clientTop + parent.scrollTop, r.width, r.height];
+    }
+    // Where it rests on screen, for the fall.
+    const r = { left: pr.left + parent.clientLeft - parent.scrollLeft + left, top: pr.top + parent.clientTop - parent.scrollTop + top, width: w, height: h };
+    return { el, parent, r, left, top };
   });
-  torn = { host, dir, shards: list, back: 0 };
+  const list: Scrap[] = [];
+  const cx0 = box.left + box.width / 2;
+  for (const p of plans) {
+    const frag = document.createDocumentFragment();
+    for (const bit of scraps(p.r.width, p.r.height, each)) {
+      // A copy of the piece next to it (so the page's styles still reach it), showing one bit.
+      const c = p.el.cloneNode(true) as HTMLElement;
+      for (const n of [c, ...c.querySelectorAll("[id]")]) n.removeAttribute("id");
+      c.classList.add("ap-scrap");
+      c.setAttribute("aria-hidden", "true");
+      c.inert = true;
+      Object.assign(c.style, {
+        position: "absolute", left: `${p.left}px`, top: `${p.top}px`, width: `${p.r.width}px`, height: `${p.r.height}px`,
+        margin: "0", boxSizing: "border-box", transformOrigin: `${bit.cx}px ${bit.cy}px`,
+        clipPath: `polygon(${bit.pts.map(([x, y]) => `${x.toFixed(1)}px ${y.toFixed(1)}px`).join(", ")})`,
+      });
+      frag.appendChild(c);
+      const ys = bit.pts.map(([, y]) => y);
+      const ox = p.r.left + bit.cx;
+      const side = (ox - cx0) / (box.width / 2 || 1);
+      // Torn apart: thrown out to the sides and up (harder when the pull dragged it up,
+      // dir > 0), spinning; then it falls like paper.
+      list.push({
+        el: c, x: 0, y: 0, r: 0,
+        vx: side * (2 + Math.random() * 6) + rnd(3),
+        vy: -(dir > 0 ? 5 : 2) - Math.random() * 6,
+        vr: rnd(9),
+        ox, oy: p.r.top + bit.cy, hb: (Math.max(...ys) - Math.min(...ys)) / 2,
+        rest: 0, phase: Math.random() * Math.PI * 2, landed: false,
+      });
+    }
+    p.parent.appendChild(frag);
+    // Scraps come to lie on the floor, a little heaped; ones that start down there already
+    // (a row across the bottom of the view) would jump into the heap, so they fall out instead.
+    for (const s of list) {
+      if (s.rest) continue;
+      const lie = box.bottom - 4 - Math.random() * 18 - s.hb;
+      s.rest = s.oy + s.hb < lie - 8 ? lie : Infinity;
+    }
+    p.el.classList.add("ap-torn-away");
+  }
+  for (const c of stilled) c.style.removeProperty("transition");
   host.classList.add("ap-torn");
-  for (const s of list) place(s, 1, `translate .7s ${SPRING}, rotate .7s ${SPRING}`);
+  torn = { host, dir, scraps: list, pieces, shells, lifted, box, frame: 0, t0: performance.now(), goal: 0, shown: 0, quick: false };
+  torn.frame = requestAnimationFrame(tick);
   document.addEventListener("wheel", mendWheel, { passive: false, capture: true });
   document.addEventListener("keydown", mendKey, { capture: true });
+}
+
+let lastTick = 0;
+
+/** One frame: the scraps fall (until they lie still), or gather back as far as asked. */
+function tick(now: number) {
+  const t = torn;
+  if (!t) return;
+  if (!t.host.isConnected) return mend(true);
+  const dt = Math.min(3, lastTick ? (now - lastTick) / 16.7 : 1);
+  lastTick = now;
+  if (t.goal > 0 || t.quick) {
+    // Gathering: ease the shown progress toward the wheel's, all scraps home from where they lay.
+    const target = t.quick ? 1 : t.goal;
+    t.shown += (target - t.shown) * Math.min(1, (t.quick ? 0.16 : 0.22) * dt);
+    if (target === 1 && t.shown > 0.995) return clearTorn(t);
+    const k = 1 - t.shown;
+    const ease = k * k * (3 - 2 * k);
+    for (const s of t.scraps) {
+      s.from ??= { x: s.x, y: s.y, r: s.r };
+      s.el.style.transform = `translate(${(s.from.x * ease).toFixed(1)}px, ${(s.from.y * ease).toFixed(1)}px) rotate(${(s.from.r * ease).toFixed(1)}deg)`;
+    }
+    // Caught up with the wheel: rest until it moves again.
+    t.frame = Math.abs(target - t.shown) > 0.001 ? requestAnimationFrame(tick) : 0;
+    if (!t.frame) lastTick = 0;
+    return;
+  }
+  const { box } = t;
+  let moving = false;
+  for (const s of t.scraps) {
+    if (s.landed) continue;
+    moving = true;
+    s.vy = Math.min(s.vy + GRAVITY * dt, FALL_MAX);
+    s.vx *= Math.pow(DRAG, dt);
+    s.vr *= Math.pow(0.99, dt);
+    // Paper doesn't drop straight: it sways side to side and rocks as it falls.
+    const sway = s.vy > 0 ? Math.sin((now - t.t0) * 0.005 + s.phase) : 0;
+    s.x += (s.vx + sway * 1.4) * dt;
+    s.y += s.vy * dt;
+    s.r += (s.vr + sway * 2.2) * dt;
+    const cx = s.ox + s.x;
+    if (cx < box.left + 10 || cx > box.right - 10) {
+      s.x = (cx < box.left + 10 ? box.left + 10 : box.right - 10) - s.ox;
+      s.vx *= -0.4;
+    }
+    if (s.vy > 0 && s.oy + s.y >= s.rest) {
+      s.y = s.rest - s.oy;
+      s.landed = true;
+    } else if (s.oy + s.y - s.hb > box.bottom + 40) s.landed = true; // fallen out of view
+    show(s);
+  }
+  t.frame = moving && now - t.t0 < 8000 ? requestAnimationFrame(tick) : 0;
+  if (!t.frame) lastTick = 0;
 }
 
 function mendWheel(e: WheelEvent) {
   const t = torn;
   if (!t) return;
   if (!t.host.isConnected) return mend(true);
-  // Torn, the page doesn't scroll: the wheel only gathers the pieces.
+  // Torn, the page doesn't scroll: the wheel only gathers the scraps.
   e.preventDefault();
   const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
   if (Math.sign(px) === t.dir || px === 0) return;
-  t.back += Math.abs(px);
-  const left = 1 - Math.min(1, t.back / MEND_PX);
-  if (left === 0) return mend(false);
-  for (const s of t.shards) place(s, left, "translate .16s ease-out, rotate .16s ease-out");
+  t.goal = Math.min(1, t.goal + Math.abs(px) / MEND_PX);
+  if (!t.frame) t.frame = requestAnimationFrame(tick);
 }
 
 function mendKey(e: KeyboardEvent) {
@@ -260,19 +488,26 @@ function mendKey(e: KeyboardEvent) {
   }
 }
 
+/** Puts the page back: at once, or with the scraps flying home. */
 function mend(now: boolean) {
   const t = torn;
   if (!t) return;
-  torn = null;
+  if (now) return clearTorn(t);
+  t.quick = true;
+  if (!t.frame) t.frame = requestAnimationFrame(tick);
+}
+
+function clearTorn(t: NonNullable<typeof torn>) {
+  if (torn === t) torn = null;
+  cancelAnimationFrame(t.frame);
+  lastTick = 0;
   document.removeEventListener("wheel", mendWheel, { capture: true });
   document.removeEventListener("keydown", mendKey, { capture: true });
-  const clear = () => {
-    for (const s of t.shards) for (const p of ["transition", "translate", "rotate"]) s.el.style.removeProperty(p);
-    t.host.classList.remove("ap-torn");
-  };
-  if (now) return clear();
-  for (const s of t.shards) place(s, 0, `translate .55s ${SPRING}, rotate .55s ${SPRING}`);
-  window.setTimeout(clear, 600);
+  for (const s of t.scraps) s.el.remove();
+  for (const p of t.pieces) p.classList.remove("ap-torn-away");
+  for (const p of t.lifted) p.style.removeProperty("position");
+  for (const s of t.shells) s.classList.remove("ap-shell");
+  t.host.classList.remove("ap-torn");
 }
 
 // ---------------------------------------------------------------- Edges: keyboard runs out, a disabled item is clicked

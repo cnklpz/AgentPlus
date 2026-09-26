@@ -147,6 +147,12 @@
   transition: scale .6s var(--ease-spring) !important;
 }
 .ap-ob.ap-pulling > :not(.ap-glider) { transition: scale .09s linear !important; }
+/* Torn page (motion.ts): split cards turn see-through (and stop clipping); the pieces hide
+   while their paper scraps (clipped copies) fall, each scrap carrying the card surface. */
+.ap-shell { background: transparent !important; border-color: transparent !important; box-shadow: none !important; overflow: visible !important; transition: background-color .2s, border-color .2s, box-shadow .2s; }
+.ap-torn-away { visibility: hidden !important; }
+/* Only the fall moves a scrap: no entrance or other animation of its own. */
+.ap-scrap { pointer-events: none; background: var(--surface); z-index: 2; will-change: transform; transition: none !important; animation: none !important; translate: none !important; rotate: none !important; scale: none !important; }
 
 /* Selection highlight gliding between siblings */
 :root[data-motion="rich"] .seg { position: relative; }
