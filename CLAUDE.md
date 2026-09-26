@@ -15,6 +15,7 @@ Tauri 2（Rust，`src-tauri/`）+ React 18 + TypeScript（`src/`）。
   seamless / effortless / powerful / comprehensive。
 - 中英文各按母语习惯写，不逐字对译，两边句子数量不必相同。
 - 「优化文案」指的是改文字，不是砍内容：不要顺手删条目、合并章节或把细节搬到别的文件。真想精简先单独确认。
+- README 开头不要铺垫段落（「每个 Agent 都有各自的配置格式…」这类），徽章和主截图之后直接进功能列表。
 - 文档里的数字（模板数、Agent 数、快捷键、路径）改了代码要一起核对：模板数看 `src/templates.ts` 的
   `TEMPLATES`，Agent 列表看 `src-tauri/src/adapters/`。
 
