@@ -4,9 +4,21 @@
 
 Each version gets a `## <version>` section. On release it becomes the GitHub release text and is shown in AgentPlus's update prompt, so write it in both languages.
 
-## 0.1.2
+## 0.1.3
 
-修复 macOS 上 Codex、Claude 等 Agent 识别不到的问题，窗口操作改成 Mac 的习惯（实验性）。
+模型参数智能匹配：添加模型时按模型 ID 自动填上上下文窗口、最大输出、能读的输入类型（图片、PDF 等）、是否推理和工具调用，和 ZCode 的做法类似。OpenCode Go / Zen 模板支持多协议。
+
+- 资料来自内置表（models.dev 上厂商官方的条目）和 models.dev 完整目录（后台每周更新一次）；带厂商前缀、日期后缀的 ID 也能认出来
+- 添加模型时边输入边填，标着「自动匹配」，可以再改；编辑已有模型可以点「智能匹配」，只补还空着的项
+- 拉取模型后批量添加、编辑供应商时新增的模型、新建供应商或从供应商页推送过去的模型，都会自动带上
+- 按各 Agent 自己的字段写入（OpenCode、Kilo、MiMo、pi、OpenClaw、CodeBuddy、Droid、Codex、Qwen Code、Kimi Code）；ZCode 自己会匹配，不插手
+- Codex 新增的自定义模型不再照抄别的模型的上下文和「能读图片」
+- OpenCode Go / Zen 模板可以多选接口类型，每个模型走它自己的协议；经本地网关时合成一个入口，同一模型优先走不用转换的协议
+- OpenCode Go 要求请求带会话 ID：本地网关转发和连通性测试会自动补上
+- 本地网关能统计更多供应商的用量（如 Moonshot）
+- Agent 图标换成各自的官方标识
+
+macOS（实验性）：修复 Codex、Claude 等 Agent 识别不到的问题，窗口操作改成 Mac 的习惯。
 
 - 按 Bundle ID 识别 App：Codex 现在是 ChatGPT.app（旧的 Codex.app 也认），Claude Desktop（Claude.app）算作已装 Claude Code
 - 更新 ZCode、CodeBuddy、Trae、OpenCode、OpenClaw、MiMo Desktop 的 Mac 识别方式
@@ -15,7 +27,19 @@ Each version gets a `## <version>` section. On release it becomes the GitHub rel
 - 窗口：红绿灯按钮在顶栏居中，顶栏不再显示图标和名字；关闭窗口只是隐藏，AgentPlus 留在 Dock 里继续运行（本地网关不中断），点 Dock 图标回来，⌘Q 退出；不再使用菜单栏托盘图标
 - 程序名显示为 AgentPlus（原来是小写的 agentplus）
 
-Fixes Codex, Claude and other agents not being detected on macOS, and makes the window behave the Mac way (experimental).
+Smart model settings: when you add a model, its context window, max output, input kinds (images, PDFs…), reasoning and tool calls are filled in from its ID, much like ZCode does. The OpenCode Go / Zen templates support several protocols.
+
+- The data comes from a built-in table (the vendors' own entries on models.dev) and models.dev's full catalog (refreshed weekly in the background); IDs with a vendor prefix or a date suffix are recognized too
+- In the add-model dialog the settings fill in as you type, marked "Auto-filled", and you can still change them; for an existing model, "Smart match" fills in only what isn't set yet
+- Models added in bulk after fetching, models added while editing a provider, and the models of a new provider (or one pushed from the Providers page) get their settings too
+- Written in each agent's own fields (OpenCode, Kilo, MiMo, pi, OpenClaw, CodeBuddy, Droid, Codex, Qwen Code, Kimi Code); ZCode matches models itself and is left alone
+- New custom Codex models no longer copy another model's context window and image support
+- The OpenCode Go / Zen templates let you pick several API types, each model on its own protocol; through the local gateway they share one entry, and a model goes to the protocol that needs no conversion first
+- OpenCode Go requires a session ID on every request: the local gateway and the connection test add it
+- The local gateway counts token usage for more providers (e.g. Moonshot)
+- Agent icons are now each agent's official mark
+
+macOS (experimental): fixes Codex, Claude and other agents not being detected, and makes the window behave the Mac way.
 
 - Apps are matched by bundle ID: Codex is now ChatGPT.app (an older Codex.app still counts), and Claude Desktop (Claude.app) counts as Claude Code
 - Updated macOS detection for ZCode, CodeBuddy, Trae, OpenCode, OpenClaw and MiMo Desktop
