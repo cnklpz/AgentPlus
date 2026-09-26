@@ -202,8 +202,13 @@ pub fn ensure_private_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // The store calls this on every write: one line in the log is enough.
+        static WARNED: AtomicBool = AtomicBool::new(false);
         if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
-            crate::applog::warn("fs", format!("chmod 700 {} failed: {e}", path.display()));
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                crate::applog::warn("fs", format!("chmod 700 {} failed: {e}", path.display()));
+            }
         }
     }
     Ok(())
