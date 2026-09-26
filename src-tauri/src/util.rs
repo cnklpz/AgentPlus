@@ -188,6 +188,8 @@ fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
 }
 
 /// Restricts AgentPlus's own data directory, including files made by older versions.
+/// Only creating it can fail: a file system that refuses the permission change (or a
+/// folder owned by someone else) is logged, and AgentPlus keeps working.
 pub fn ensure_private_dir(path: &Path) -> Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -200,7 +202,9 @@ pub fn ensure_private_dir(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
+            crate::applog::warn("fs", format!("chmod 700 {} failed: {e}", path.display()));
+        }
     }
     Ok(())
 }
