@@ -237,7 +237,8 @@ fn restore_in(id: &str) -> Result<String> {
             return Err(anyhow!(tr!("恢复 {} 失败：{e}（回滚前的文件备份在 {}）", "Failed to restore {}: {e} (the pre-rollback files are backed up in {})", to.display(), display_path(&safety))));
         }
     }
-    if !profiles.is_empty() {
+    let restored_profiles = !profiles.is_empty();
+    if restored_profiles {
         crate::store::update(|root| {
             for (scope, value) in profiles {
                 if value.is_null() {
@@ -251,7 +252,16 @@ fn restore_in(id: &str) -> Result<String> {
             Ok(())
         }).map_err(|e| anyhow!(tr!("恢复配置档失败：{e}（回滚前的备份在 {}）", "Failed to restore profiles: {e} (the pre-rollback backup is in {})", display_path(&safety))))?;
     }
-    Ok(tr!("已回滚 {} 个文件到 {stamp} 的状态（回滚前的文件备份在 {}）", "Rolled back {} file(s) to their state at {stamp} (the pre-rollback files are backed up in {})", entry.files.len(), display_path(&safety)))
+    Ok(restored_message(targets.len(), restored_profiles, stamp, &display_path(&safety)))
+}
+
+/// The profile snapshot is not a file of the agent's: it is named apart from the count.
+fn restored_message(files: usize, profiles: bool, stamp: &str, safety: &str) -> String {
+    match (files, profiles) {
+        (0, true) => tr!("已回滚 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）", "Rolled back the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})"),
+        (n, true) => tr!("已回滚 {n} 个文件和 AgentPlus 配置档到 {stamp} 的状态（回滚前的备份在 {safety}）", "Rolled back {n} file(s) and the AgentPlus profiles to their state at {stamp} (the pre-rollback backup is in {safety})"),
+        (n, false) => tr!("已回滚 {n} 个文件到 {stamp} 的状态（回滚前的文件备份在 {safety}）", "Rolled back {n} file(s) to their state at {stamp} (the pre-rollback files are backed up in {safety})"),
+    }
 }
 
 // ---------------------------------------------------------------- detail
@@ -506,7 +516,7 @@ mod tests {
         let p = d.files.iter().find(|f| f.name == "agentplus-profiles.json").unwrap();
         assert!(!p.same && p.added > 0 && p.removed > 0);
         assert!(p.diff.iter().all(|r| !r.text.contains("abcdefgh12345678") && !r.text.contains("unrelated")));
-        restore(&id).unwrap();
+        assert!(restore(&id).unwrap().starts_with("已回滚 1 个文件和 AgentPlus 配置档到"));
         let root = crate::store::load();
         assert_eq!(root[scope], initial[scope]);
         assert_eq!(root["library"], initial["library"]);
@@ -537,7 +547,7 @@ mod tests {
         crate::store::update(|r| { r["claude"]["profiles"] = json!({"relay":{}}); Ok(()) }).unwrap();
         let id = format!("{}/claude", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
         assert!(list().unwrap().iter().any(|e| e.id == id && e.restorable));
-        restore(&id).unwrap();
+        assert!(restore(&id).unwrap().starts_with("已回滚 AgentPlus 配置档到"), "no file was restored");
         assert_eq!(crate::store::load(), initial);
     }
 
