@@ -226,19 +226,22 @@ pub fn tmp_sibling(target: &Path) -> PathBuf {
 }
 
 /// Temp files `tmp_sibling` left next to `target` by a write that crashed (each write
-/// uses a fresh name, so nothing overwrites them). Recent ones may belong to a write
-/// still in progress and are kept.
+/// uses a fresh name, so nothing overwrites them). A crash leaves them from an earlier
+/// process: this process's own are writes in progress, whatever their time says (a
+/// rollback's `fs::copy` keeps the backup's old mtime). Recent ones are kept as well.
 fn remove_stale_tmps(target: &Path) {
     let (Some(dir), Some(name)) = (target.parent(), target.file_name().and_then(|n| n.to_str())) else { return };
     let Ok(entries) = fs::read_dir(dir) else { return };
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+    let me = std::process::id().to_string();
+    let digits = |x: &str| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit());
     for e in entries.flatten() {
         let file = e.file_name();
         let Some(mid) = file.to_str().and_then(|f| f.strip_prefix(name)).and_then(|r| r.strip_suffix(".agentplus-tmp")) else { continue };
         // "<pid>-<n>" after the extension's dots, or nothing (the fixed name older versions used).
         let mid = mid.trim_start_matches('.');
-        let ours = mid.is_empty() || mid.split_once('-').is_some_and(|(a, b)| [a, b].iter().all(|x| !x.is_empty() && x.bytes().all(|c| c.is_ascii_digit())));
-        if ours && e.metadata().is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < cutoff)) {
+        let stale = mid.is_empty() || mid.split_once('-').is_some_and(|(pid, n)| digits(pid) && digits(n) && pid != me);
+        if stale && e.metadata().is_ok_and(|m| m.is_file() && m.modified().is_ok_and(|t| t < cutoff)) {
             let _ = fs::remove_file(e.path());
         }
     }
@@ -746,8 +749,8 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
     }
 
-    /// Temps a crashed write left behind go once they are old; fresh ones (a write in
-    /// progress) and other files that merely look alike stay.
+    /// Temps a crashed write left behind go once they are old; fresh ones, this process's
+    /// own (writes in progress) and other files that merely look alike stay.
     #[test]
     fn successful_writes_clear_stale_temps() {
         let d = tmp("stale-temps");
@@ -760,14 +763,18 @@ mod tests {
             }
             p
         };
-        let stale = [make("config.toml.123-4.agentplus-tmp", true), make("config.toml.agentplus-tmp", true)];
+        // A crashed earlier process.
+        let other = std::process::id().wrapping_add(1);
+        let stale = [make(&format!("config.toml.{other}-4.agentplus-tmp"), true), make("config.toml.agentplus-tmp", true)];
         let kept = [
-            make("config.toml.123-5.agentplus-tmp", false),
-            make("config.json.123-4.agentplus-tmp", true),
+            make(&format!("config.toml.{other}-5.agentplus-tmp"), false),
+            make(&format!("config.json.{other}-4.agentplus-tmp"), true),
             make("config.toml.bak.agentplus-tmp", true),
             make("config.toml.bak", true),
+            // An old mtime from fs::copy, as a rollback in progress leaves it.
+            make(&format!("config.toml.{}-9.agentplus-tmp", std::process::id()), true),
         ];
-        let bare = [make("settings..9-1.agentplus-tmp", true), make(".env..9-2.agentplus-tmp", true)];
+        let bare = [make(&format!("settings..{other}-1.agentplus-tmp"), true), make(&format!(".env..{other}-2.agentplus-tmp"), true)];
         write_bytes_atomic(&d.join("config.toml"), b"new").unwrap();
         write_bytes_atomic(&d.join("settings"), b"new").unwrap();
         write_bytes_atomic(&d.join(".env"), b"new").unwrap();
