@@ -3,6 +3,8 @@
 // <html data-motion="rich"> and the system isn't asking for reduced motion.
 // Styles for the classes used here live in styles-motion.css.
 
+import { type WheelTrack, isMomentum } from "./wheel";
+
 const SPRING =
   "linear(0, 0.103, 0.331, 0.589, 0.815, 0.98, 1.079, 1.122, 1.123, 1.101, 1.069, 1.038, 1.012, 0.996, 0.987, 0.984, 0.986, 0.989, 0.993, 0.997, 1, 1.001, 1.002, 1.002, 1.002, 1.001, 1.001, 1, 1)";
 const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -50,9 +52,35 @@ let obHost: HTMLElement | null = null;
 let obPull = 0;
 let obRelease = 0;
 let obClear = 0;
+// Trackpads keep sending wheel events after the fingers lift (momentum), each smaller than
+// the last, for a second or more. Fed into the pull they would hold it at the edge until
+// the inertia dies out, so once the stream is decaying the pull lets go and the rest of it
+// is ignored.
+// A fling that runs into the edge still gets one short bump, as with a native scroller.
+let wheelAt = 0;
+let wheelLast = 0;
+let decaying = 0;
+let coasting = false;
+let bumped = false;
+
+function momentum(e: WheelEvent): boolean {
+  const s: WheelTrack = { at: wheelAt, last: wheelLast, decaying, coasting };
+  const was = coasting;
+  isMomentum(s, e.timeStamp, Math.abs(e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY));
+  ({ at: wheelAt, last: wheelLast, decaying, coasting } = s);
+  if (!coasting || !was) bumped = false;
+  return coasting;
+}
 
 function rubberBand(e: WheelEvent) {
   if (e.ctrlKey || Math.abs(e.deltaY) < Math.abs(e.deltaX) || e.deltaY === 0) return;
+  const coast = momentum(e);
+  // Fingers lifted mid-pull: spring back now instead of riding the momentum.
+  if (coast && obPull && !bumped) {
+    bumped = true;
+    settle(false);
+    return;
+  }
   const down = e.deltaY > 0;
   // The browser chains a wheel to the next ancestor that can still scroll; only when
   // none can does the innermost scroller at its edge stretch.
@@ -64,20 +92,29 @@ function rubberBand(e: WheelEvent) {
     edge ??= n;
   }
   if (!edge) return;
-  if (obHost !== edge) {
+  const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+  if (coast) {
+    if (bumped) return;
+    bumped = true;
     settle(true);
     obHost = edge;
-    obPull = 0;
+    // How hard the fling hit the edge sets the bump, briefly, then it springs back.
+    obPull = -Math.sign(px) * Math.min(Math.abs(px) * 3, 60);
+  } else {
+    if (obHost !== edge) {
+      settle(true);
+      obHost = edge;
+      obPull = 0;
+    }
+    obPull += -px * 0.5;
   }
-  const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
-  obPull += -px * 0.5;
   const max = 56;
   const off = Math.sign(obPull) * max * (1 - Math.exp(-Math.abs(obPull) / (max * 1.6)));
   window.clearTimeout(obClear);
   edge.classList.add("ap-ob", "ap-pulling");
   edge.style.setProperty("--ob", `${off.toFixed(1)}px`);
   window.clearTimeout(obRelease);
-  obRelease = window.setTimeout(() => settle(false), 110);
+  obRelease = window.setTimeout(() => settle(false), coast ? 70 : 110);
 }
 
 function settle(now: boolean) {
