@@ -1,7 +1,43 @@
 // Small form controls shared by the pages and dialogs. They render the same markup the
 // stylesheets (and motion.ts) expect: .switch, .gw-toggle, .seg, .srow, .err.
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useReducer, useRef } from "react";
+import { useLang } from "../i18n";
 import { scrub } from "../privacy";
+
+/**
+ * Text that changes wording in place (a setting's description following its value): the new
+ * text eases in while the old one fades out over it. Only plain text animates, and not on a
+ * language switch, where everything changes at once.
+ */
+export function Swap({ children }: { children: ReactNode }) {
+  const lang = useLang();
+  const text = typeof children === "string" || typeof children === "number" ? String(children) : null;
+  const [, redraw] = useReducer((n: number) => n + 1, 0);
+  const seen = useRef<{ text: string | null; lang: string; node: ReactNode; n: number; old: ReactNode }>();
+  seen.current ??= { text, lang, node: children, n: 0, old: null };
+  const s = seen.current;
+  if (text !== s.text) {
+    const animate = text !== null && s.text !== null && lang === s.lang && document.documentElement.dataset.motion !== "off";
+    if (animate) {
+      s.old = s.node;
+      s.n++;
+    }
+    s.text = text;
+  }
+  s.lang = lang;
+  s.node = children;
+  useEffect(() => {
+    if (!s.n) return;
+    const timer = window.setTimeout(() => { s.old = null; redraw(); }, 320);
+    return () => window.clearTimeout(timer);
+  }, [s.n]);
+  return (
+    <span className="swap">
+      <span key={s.n} className={s.n ? "swap-in" : undefined}>{children}</span>
+      {s.old != null && <span className="swap-out" aria-hidden="true">{s.old}</span>}
+    </span>
+  );
+}
 
 /** On/off switch. `fast`: the orange "fast mode" colour when on. */
 export function Switch({ on, onChange, label, disabled, fast }: {
@@ -31,7 +67,7 @@ export function ToggleRow({ icon, title, hint, keepHint, on, onChange, disabled,
       {icon}
       <div className="grow minw0">
         <div className="small strong">{title}</div>
-        {hint && <div className={`tiny muted${onChange && !keepHint ? " hint" : ""}`}>{hint}</div>}
+        {hint && <div className={`tiny muted${onChange && !keepHint ? " hint" : ""}`}><Swap>{hint}</Swap></div>}
       </div>
       {onChange && <Switch on={on} onChange={onChange} disabled={disabled} label={label ?? (typeof title === "string" ? title : "")} />}
     </div>
@@ -99,7 +135,7 @@ export function SettingRow({ label, desc, descClassName, keepDesc, note, lead, c
       {lead}
       <div className="grow minw0">
         <div className="slabel">{label}</div>
-        {desc != null && <div className={`muted small${keepDesc ? "" : " hint"}${descClassName ? ` ${descClassName}` : ""}`}>{desc}</div>}
+        {desc != null && <div className={`muted small${keepDesc ? "" : " hint"}${descClassName ? ` ${descClassName}` : ""}`}><Swap>{desc}</Swap></div>}
         {note}
       </div>
       {children}

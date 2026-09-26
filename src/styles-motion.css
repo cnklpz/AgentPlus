@@ -38,6 +38,12 @@
 @keyframes ap-out-menu { to { opacity: 0; transform: translateY(-6px) scale(.96); } }
 @keyframes ap-out-toast { to { opacity: 0; transform: translate(-50%, 14px) scale(.94); } }
 
+/* Text changing wording: blurs in and out as well */
+@keyframes ap-swap-in-rich { from { opacity: 0; transform: translateY(6px); filter: blur(4px); } }
+@keyframes ap-swap-out-rich { to { opacity: 0; transform: translateY(-6px); filter: blur(4px); } }
+:root[data-motion="rich"] .swap-in { animation: ap-swap-in-rich .42s var(--ease-smooth) backwards; }
+:root[data-motion="rich"] .swap-out { animation: ap-swap-out-rich .26s var(--ease-smooth) forwards; }
+
 /* Pages and overlays */
 :root[data-motion="rich"] .page-top { animation: ap-drop var(--t) var(--ease-out) backwards; }
 :root[data-motion="rich"] .page-body.slide-fwd { animation: ap-slide-fwd var(--t-slow) var(--ease-out) backwards; }

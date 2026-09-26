@@ -117,6 +117,15 @@
 .agent-row.active::before { animation: ap-bar var(--t) var(--ease-out) backwards; }
 .dempty { animation: ap-fade var(--t-slow) var(--ease-out) backwards; }
 
+/* Text changing wording in place (Swap in controls.tsx): the new text rises in, the old
+   fades out over it */
+.swap { display: block; position: relative; }
+.swap > span { display: block; }
+.swap-in { animation: ap-swap-in .32s var(--ease-out) backwards; }
+.swap-out { position: absolute; left: 0; top: 0; width: 100%; pointer-events: none; animation: ap-swap-out .2s var(--ease-out) forwards; }
+@keyframes ap-swap-in { from { opacity: 0; transform: translateY(calc(var(--rise) * .5)); } }
+@keyframes ap-swap-out { to { opacity: 0; transform: translateY(calc(var(--rise) * -.5)); } }
+
 /* State transitions */
 .btn, .icon-btn, .pbtn, .link, .seg button, .tab, .agent-row, .side-link, .rail-item, .chip, .opt, .opt-check, .toggle, .search-box,
 .input, .search-input, .dd-btn, .dd-item, .pcard, .hcard, .hcard-add, .acct, .use, .apick, .env-btn, .env-card, .palette-item,
