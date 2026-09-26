@@ -36,6 +36,10 @@ pub struct BackupFile {
     profile_scope: Option<String>,
 }
 
+/// Agents whose config files are written from AgentPlus profiles: a rollback has to bring
+/// the profiles back too, or the next edit writes the newer model into the file again.
+const PROFILE_AGENTS: [&str; 2] = [crate::adapters::claude::ID, crate::adapters::gemini::ID];
+
 /// Adds the profiles that belong to the config being backed up. The manifest records
 /// the environment now, so restoring a Windows backup while viewing WSL stays in Windows.
 pub fn backup_profiles(dir: &Path, scope: &str, root: &Value) -> Result<()> {
@@ -126,8 +130,9 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
     let mut blocked_missing = false;
     let blocked = if agent.starts_with("codex-") {
         Some(l("数据库类备份，请在「会话」页撤销或手动处理", "Database backup: undo it on the Sessions page or handle it manually").to_string())
-    } else if agent == "claude" && !files.iter().any(|f| f.profile_scope.is_some()) {
-        Some(l("备份缺少 Claude Code 配置档，请手动恢复并核对配置", "The backup has no Claude Code profiles. Restore it manually and check the config").to_string())
+    } else if PROFILE_AGENTS.contains(&agent.as_str()) && !files.iter().any(|f| f.profile_scope.is_some()) {
+        let name = crate::adapters::display_name(&agent);
+        Some(tr!("备份缺少 {name} 配置档，请手动恢复并核对配置", "The backup has no {name} profiles. Restore it manually and check the config"))
     } else if files.is_empty() || files.iter().any(|f| f.path.is_none()) {
         Some(l("不知道原文件放在哪", "Unknown original file location").to_string())
     } else if !missing.is_empty() {
@@ -549,6 +554,22 @@ mod tests {
         assert!(list().unwrap().iter().any(|e| e.id == id && e.restorable));
         assert!(restore(&id).unwrap().starts_with("已回滚 AgentPlus 配置档到"), "no file was restored");
         assert_eq!(crate::store::load(), initial);
+    }
+
+    /// Profile agents' backups made before the snapshot existed can't be rolled back
+    /// automatically; other agents' backups are unaffected.
+    #[test]
+    fn profile_agent_backups_without_a_snapshot_are_blocked() {
+        let h = TestHome::new("profile-agents-blocked");
+        let cfg = h.0.join("settings.json");
+        fs::write(&cfg, "{}").unwrap();
+        for (agent, blocked) in [("claude", true), ("gemini", true), ("codebuddy", false)] {
+            let dir = backup(agent, std::slice::from_ref(&cfg)).unwrap();
+            let id = format!("{}/{agent}", dir.parent().unwrap().file_name().unwrap().to_string_lossy());
+            let e = list().unwrap().into_iter().find(|e| e.id == id).unwrap();
+            assert_eq!(!e.restorable, blocked, "{agent}");
+            assert_eq!(e.blocked.is_some_and(|b| b.contains("配置档")), blocked, "{agent}");
+        }
     }
 
     #[test]
