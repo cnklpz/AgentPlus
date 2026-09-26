@@ -1,5 +1,6 @@
 // Per-install UI preferences (animations, auto latency, language). Browser storage may be
 // unavailable, so every access is guarded and defaults always work.
+import { setHints } from "./hintsFx";
 import { type LangPref, setLang } from "./i18n";
 import { setPrivacy } from "./privacy";
 
@@ -74,7 +75,7 @@ export function applyPrefs(p: Prefs): void {
   applyMotion(p.motion);
   applyTheme(p.theme);
   // CSS hook: `.hint` elements (descriptions, explanations) are hidden in brief mode.
-  document.documentElement.dataset.hints = p.hints;
+  setHints(p.hints);
   void setLang(p.lang);
   setPrivacy(p.privacy);
 }

@@ -566,3 +566,8 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 :root[data-hints="brief"] .hint { display: none !important; }
 /* A hint that is also a row's spacer (`grow`) keeps its space, empty, so buttons stay put. */
 :root[data-hints="brief"] .hint.grow { display: block !important; visibility: hidden; height: 0; overflow: hidden; }
+/* Switching between the two (hintsFx.ts): characters are hidden or dimmed in place with
+   highlights; a shattering character's pieces fly on the .ap-shards canvas. */
+.ap-folding { overflow: hidden !important; min-height: 0 !important; min-width: 0 !important; }
+::highlight(ap-hint-gone) { color: transparent; }
+.ap-shards { position: fixed; left: 0; top: 0; z-index: 2147483000; pointer-events: none; }
