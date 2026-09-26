@@ -30,7 +30,7 @@ const en: typeof zh = {
   pausedBanner: "{n} route paused after repeated errors (circuit breaker)|{n} routes paused after repeated errors (circuit breaker)",
   resumeAll: "Resume all",
   staleKeysBanner: "{n} agent provider still uses an old gateway key|{n} agent providers still use an old gateway key",
-  staleKeysHint: "The gateway now gives every agent its own key, to check requests and count traffic per agent. The old key still works for now, but calls made with it can't be told apart.",
+  staleKeysHint: "The gateway gives every agent its own key to check requests and count traffic per agent. The old shared key is no longer accepted. Update the keys in your configs before connecting.",
   updateKeys: "Update keys",
   resumeNow: "Resume now",
   step1: "Start the gateway",

@@ -10,12 +10,9 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 /// What the UI puts in a provider that points at the gateway; `adapters::plan` swaps it
-/// for the agent's own key. Configs written before per-agent keys still carry it, so the
-/// gateway keeps accepting it (as `LEGACY`) until those entries are rewritten.
+/// for the agent's own key. It is never an inbound credential; old configs must be
+/// rewritten with the gateway page's key update action.
 pub const PLACEHOLDER: &str = "agentplus-gateway";
-
-/// Caller of requests that carry `PLACEHOLDER`.
-pub const LEGACY: &str = "legacy";
 
 /// Tests bypass the store.
 #[cfg(test)]
@@ -24,7 +21,7 @@ pub static TEST_KEYS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex
 fn parse(root: &Value) -> Vec<(String, String)> {
     root.get("gatewayKeys")
         .and_then(|v| v.as_object())
-        .map(|m| m.iter().filter_map(|(a, k)| k.as_str().map(|k| (a.clone(), k.to_string()))).collect())
+        .map(|m| m.iter().filter_map(|(a, k)| k.as_str().filter(|k| !k.trim().is_empty() && k.trim() != PLACEHOLDER).map(|k| (a.clone(), k.to_string()))).collect())
         .unwrap_or_default()
 }
 
@@ -72,11 +69,11 @@ pub fn is_gateway_key(key: &str) -> bool {
     key == PLACEHOLDER || stored_in(&store::load()).iter().any(|(_, k)| k == key)
 }
 
-/// Which agent a key belongs to (`LEGACY` for the placeholder), in a store snapshot.
+/// Which agent a real key belongs to, in a store snapshot.
 pub fn caller_in(root: &Value, key: &str) -> Option<String> {
     let key = key.trim();
-    if key == PLACEHOLDER {
-        return Some(LEGACY.into());
+    if key.is_empty() || key == PLACEHOLDER {
+        return None;
     }
     stored_in(root).into_iter().find(|(_, k)| k == key).map(|(a, _)| a)
 }
@@ -103,5 +100,14 @@ mod tests {
         let root = json!({ "gatewayKeys": { "codex": "agp-1", "claude": "agp-2", "bad": 3 } });
         assert_eq!(parse(&root), vec![("codex".into(), "agp-1".into()), ("claude".into(), "agp-2".into())]);
         assert_eq!(crate::adapters::base_agent("opencode@D:/x"), "opencode");
+    }
+
+    #[test]
+    fn placeholder_is_never_an_inbound_credential() {
+        for root in [json!({}), json!({ "gatewayKeys": { "codex": PLACEHOLDER } })] {
+            assert_eq!(caller_in(&root, PLACEHOLDER), None);
+            assert_eq!(caller_in(&root, &format!(" {PLACEHOLDER} ")), None);
+        }
+        assert!(parse(&json!({ "gatewayKeys": { "codex": PLACEHOLDER, "claude": "" } })).is_empty());
     }
 }

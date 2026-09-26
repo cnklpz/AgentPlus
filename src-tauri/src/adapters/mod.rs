@@ -639,6 +639,22 @@ mod tests {
     }
 
     #[test]
+    fn gateway_placeholder_is_replaced_when_writing_a_provider() {
+        let _h = TestHome::new("gateway-key-migration");
+        let op: Op = serde_json::from_value(serde_json::json!({
+            "op": "upsert_provider", "provider": {
+                "id": null, "name": "Gateway", "baseUrl": "http://127.0.0.1:18650/v1",
+                "api": "anthropic", "apiKey": crate::gateway::keys::PLACEHOLDER, "models": []
+            }
+        })).unwrap();
+        store::transaction(|| plan_resolved(claude::ID, &[op], false)).unwrap();
+        let (_, key, _) = claude::provider_endpoint("gateway").unwrap();
+        let key = key.unwrap();
+        assert!(key.starts_with("agp-") && key.len() == 44);
+        assert_eq!(store::load()["gatewayKeys"]["claude"], key);
+    }
+
+    #[test]
     fn library_entries_have_endpoints() {
         let _h = TestHome::new("adapters-library-endpoint");
         let lib = serde_json::json!([

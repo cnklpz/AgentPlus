@@ -175,8 +175,8 @@ pub struct LogEntry {
     /// The upstream broke off mid-stream; counts toward the breaker (the error text is translated).
     #[serde(skip)]
     pub upstream_broken: bool,
-    /// Agent whose gateway key the request carried (`keys::LEGACY` for the old shared key,
-    /// "agentplus" for AgentPlus's own test); None when it was refused.
+    /// Agent whose gateway key the request carried ("agentplus" for AgentPlus's own test);
+    /// None when it was refused.
     pub agent: Option<String>,
 }
 
@@ -1875,6 +1875,7 @@ mod tests {
         let seen = Arc::new(Mutex::new(None));
         let up = chat_upstream(seen.clone());
         let _guard = lock(&TEST_LOCK);
+        *keys::TEST_KEYS.lock().unwrap() = vec![("codex".into(), "agp-client-test".into())];
         *lock(&TEST_ROUTES) = vec![(test_route("relay", "chat", &[("gpt-5.5", "glm-5")]), up, Some("up-key".into()))];
 
         let gw = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1890,7 +1891,7 @@ mod tests {
         });
         let resp = reqwest::blocking::Client::new()
             .post(format!("http://127.0.0.1:{port}/relay/v1/responses"))
-            .bearer_auth(keys::PLACEHOLDER)
+            .bearer_auth("agp-client-test")
             .body(body.to_string())
             .send()
             .unwrap();
@@ -1922,6 +1923,7 @@ mod tests {
         assert_eq!(call["arguments"], r#"{"cmd":"ls"}"#);
         assert_eq!(done["response"]["usage"]["output_tokens"], 7);
         lock(&TEST_ROUTES).clear();
+        keys::TEST_KEYS.lock().unwrap().clear();
     }
 
     /// Mock upstream answering every request with `reply(request)` (repeatable). Model calls
@@ -2152,6 +2154,7 @@ mod tests {
     #[test]
     fn breaker_pauses_failing_forward() {
         let _guard = lock(&TEST_LOCK);
+        *keys::TEST_KEYS.lock().unwrap() = vec![("codex".into(), "agp-client-test".into())];
         let hits = Arc::new(AtomicU64::new(0));
         let up = fixed_upstream(401, r#"{"error":{"message":"invalid api key"}}"#, hits.clone());
         *lock(&TEST_ROUTES) = vec![(test_route("flaky", "chat", &[]), up, None)];
@@ -2168,9 +2171,9 @@ mod tests {
             (r.status().as_u16(), r.text().unwrap())
         };
         for _ in 0..3 {
-            assert_eq!(call(keys::PLACEHOLDER).0, 401);
+            assert_eq!(call("agp-client-test").0, 401);
         }
-        let (st, text) = call(keys::PLACEHOLDER);
+        let (st, text) = call("agp-client-test");
         assert_eq!(st, 503);
         assert!(text.contains("熔断") && text.contains("HTTP 401 密钥无效或未授权：invalid api key"), "{text}");
         assert_eq!(hits.load(Ordering::SeqCst), 3, "paused forward is not called");
@@ -2179,14 +2182,16 @@ mod tests {
         assert_eq!(call(test_key()).0, 401);
         assert_eq!(hits.load(Ordering::SeqCst), 4);
         breaker::reset(Some("flaky"));
-        assert_eq!(call(keys::PLACEHOLDER).0, 401, "reset lets requests through again");
+        assert_eq!(call("agp-client-test").0, 401, "reset lets requests through again");
         lock(&TEST_ROUTES).clear();
+        keys::TEST_KEYS.lock().unwrap().clear();
     }
 
     /// A long JSON error body: the pause names its message, not a cut-off piece of JSON.
     #[test]
     fn breaker_reason_from_a_long_error_body() {
         let _guard = lock(&TEST_LOCK);
+        *keys::TEST_KEYS.lock().unwrap() = vec![("codex".into(), "agp-client-test".into())];
         let hits = Arc::new(AtomicU64::new(0));
         let body = json!({"error": {"type": "insufficient_quota", "param": "x".repeat(400), "message": "out of credit"}}).to_string();
         let up = fixed_upstream(402, body, hits.clone());
@@ -2195,7 +2200,7 @@ mod tests {
         let port = gateway_n(4);
         let client = reqwest::blocking::Client::new();
         let call = || {
-            let r = client.post(format!("http://127.0.0.1:{port}/broke/v1/chat/completions")).bearer_auth(keys::PLACEHOLDER).body(r#"{"model":"m","messages":[]}"#).send().unwrap();
+            let r = client.post(format!("http://127.0.0.1:{port}/broke/v1/chat/completions")).bearer_auth("agp-client-test").body(r#"{"model":"m","messages":[]}"#).send().unwrap();
             (r.status().as_u16(), r.text().unwrap())
         };
         for _ in 0..3 {
@@ -2206,6 +2211,7 @@ mod tests {
         assert!(text.contains("HTTP 402 余额不足：out of credit") && !text.contains("insufficient_quota"), "{text}");
         breaker::reset(Some("broke"));
         lock(&TEST_ROUTES).clear();
+        keys::TEST_KEYS.lock().unwrap().clear();
     }
 
     /// "/a+b/v1" only uses forwards a and b.
@@ -2398,7 +2404,7 @@ mod tests {
         let up = fixed_upstream(200, ok, hits.clone());
         *lock(&TEST_ROUTES) = vec![(test_route("authr", "chat", &[]), up, None)];
         *keys::TEST_KEYS.lock().unwrap() = vec![("codex".into(), "agp-codex-test".into())];
-        let port = gateway_n(6);
+        let port = gateway_n(8);
         let client = reqwest::blocking::Client::new();
         let url = format!("http://127.0.0.1:{port}/authr/v1/chat/completions");
         let send = |rb: reqwest::blocking::RequestBuilder| {
@@ -2409,6 +2415,8 @@ mod tests {
 
         assert_eq!(send(client.post(&url)).0, 401, "no key");
         assert_eq!(send(client.post(&url).bearer_auth("sk-guess")).0, 401, "unknown key");
+        assert_eq!(send(client.post(&url).bearer_auth(keys::PLACEHOLDER)).0, 401, "public placeholder");
+        assert_eq!(send(client.post(&url).bearer_auth(keys::PLACEHOLDER).header("origin", "http://localhost:4321")).0, 401, "local web page with public placeholder");
         assert_eq!(send(client.post(&url).bearer_auth("agp-codex-test").header("origin", "https://evil.example")).0, 403, "web page");
         assert_eq!(send(client.post(&url).bearer_auth("agp-codex-test").header("host", "evil.example")).0, 403, "DNS rebinding");
         assert_eq!(hits.load(Ordering::SeqCst), 0, "refused requests never reach the upstream");
