@@ -327,7 +327,7 @@ export function plainRoute(r: GatewayRouteView): GatewayRoute {
 
 /** Stable id of a sync suggestion (its agent and draft keys; its text changes with the language). */
 export function syncSuggestionId(s: SyncSuggestion): string {
-  return `${s.agent}\n${s.ops.map(([k]) => k).join("\n")}`;
+  return `${s.agent}\n${s.lib ? s.lib.key : s.ops.map(([k]) => k).join("\n")}`;
 }
 
 /** `syncSuggestionId` for a whole list, unique within it: two suggestions can touch the same

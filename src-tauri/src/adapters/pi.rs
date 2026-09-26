@@ -282,7 +282,7 @@ mod tests {
 
     fn prov(name: &str, api: &str, key: Option<&str>, models: &[&str]) -> Op {
         Op::UpsertProvider {
-            provider: ProviderInput { id: None, name: name.into(), base_url: "https://new.example.com/v1".into(), api: api.into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, official_auth: None },
+            provider: ProviderInput { id: None, name: name.into(), base_url: "https://new.example.com/v1".into(), api: api.into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, key_from_sync: None, official_auth: None },
         }
     }
 
@@ -373,7 +373,7 @@ mod tests {
         assert!(read("models.json")["providers"]["openai-2"].is_object());
 
         // Edit: name, url, api; key kept when None.
-        let edit = Op::UpsertProvider { provider: ProviderInput { id: Some("myproxy".into()), name: "Proxy".into(), base_url: "https://b.example.com/v1".into(), api: "responses".into(), api_key: None, models: vec![], key_from_library: None, official_auth: None } };
+        let edit = Op::UpsertProvider { provider: ProviderInput { id: Some("myproxy".into()), name: "Proxy".into(), base_url: "https://b.example.com/v1".into(), api: "responses".into(), api_key: None, models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
         plan(&[edit], false).unwrap();
         let v = read("models.json");
         assert_eq!(v["providers"]["myproxy"]["api"], "openai-responses");
@@ -382,11 +382,11 @@ mod tests {
         assert_eq!(v["providers"]["myproxy"]["headers"], json!({ "X-Team": "a" }));
 
         // Changing the api of a provider on an unsupported protocol is refused.
-        let bad = Op::UpsertProvider { provider: ProviderInput { id: Some("bedrock-ish".into()), name: "bedrock-ish".into(), base_url: "https://bedrock.example.com".into(), api: "chat".into(), api_key: None, models: vec![], key_from_library: None, official_auth: None } };
+        let bad = Op::UpsertProvider { provider: ProviderInput { id: Some("bedrock-ish".into()), name: "bedrock-ish".into(), base_url: "https://bedrock.example.com".into(), api: "chat".into(), api_key: None, models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
         assert!(plan(&[bad], true).is_err());
 
         // Key for a provider whose key lives in auth.json stays in auth.json.
-        let k = Op::UpsertProvider { provider: ProviderInput { id: Some("envy".into()), name: "envy".into(), base_url: "https://env.example.com".into(), api: "anthropic".into(), api_key: Some("sk-rotated-7777".into()), models: vec![], key_from_library: None, official_auth: None } };
+        let k = Op::UpsertProvider { provider: ProviderInput { id: Some("envy".into()), name: "envy".into(), base_url: "https://env.example.com".into(), api: "anthropic".into(), api_key: Some("sk-rotated-7777".into()), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
         let (_, w, _) = plan(&[k], false).unwrap();
         assert_eq!(w, vec![auth_path()]);
         assert_eq!(read("auth.json")["envy"]["key"], "sk-rotated-7777");

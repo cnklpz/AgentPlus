@@ -683,7 +683,7 @@ mod tests {
         crate::modelinfo::test_cache_acme();
         let f = write_cfg(&h, json!({}));
         let (mut cfg, _, _) = f.load(true).unwrap();
-        let p = ProviderInput { id: None, name: "Relay".into(), base_url: "https://r.example.com/v1".into(), api: "chat".into(), api_key: None, models: vec!["acme-vision-9".into(), "mystery-x".into()], key_from_library: None, official_auth: None };
+        let p = ProviderInput { id: None, name: "Relay".into(), base_url: "https://r.example.com/v1".into(), api: "chat".into(), api_key: None, models: vec!["acme-vision-9".into(), "mystery-x".into()], key_from_library: None, key_from_sync: None, official_auth: None };
         let (mut diff, mut dirty) = (Diff::default(), Dirty::default());
         f.apply(&Op::UpsertProvider { provider: p }, &mut cfg, &mut json!({}), &mut None, &mut diff, &mut dirty).unwrap();
         assert_eq!(cfg["provider"]["relay"]["models"]["acme-vision-9"], json!({

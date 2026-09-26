@@ -430,7 +430,7 @@ mod tests {
         d.groups.iter().flat_map(|g| g.lines.iter().map(move |l| format!("{} | {}", g.file, l.text))).collect::<Vec<_>>().join("\n")
     }
     fn edit(id: &str, name: &str, url: &str, api: &str, key: Option<&str>) -> Op {
-        Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: name.into(), base_url: url.into(), api: api.into(), api_key: key.map(String::from), models: vec![], key_from_library: None, official_auth: None } }
+        Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: name.into(), base_url: url.into(), api: api.into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } }
     }
 
     #[test]
@@ -488,7 +488,7 @@ mod tests {
     fn create_edit_delete_provider() {
         let _g = setup("crud", Some(STRICT));
         let create = Op::UpsertProvider {
-            provider: ProviderInput { id: None, name: "My Relay".into(), base_url: "https://r.example.com/v1".into(), api: "chat".into(), api_key: Some("sk-relay-key-abcd".into()), models: vec!["m1".into()], key_from_library: None, official_auth: None },
+            provider: ProviderInput { id: None, name: "My Relay".into(), base_url: "https://r.example.com/v1".into(), api: "chat".into(), api_key: Some("sk-relay-key-abcd".into()), models: vec!["m1".into()], key_from_library: None, key_from_sync: None, official_auth: None },
         };
         let (d, w, _) = plan(&[create], false).unwrap();
         assert!(lines(&d).contains("••••abcd") && !lines(&d).contains("sk-relay"));
@@ -577,7 +577,7 @@ mod tests {
         let _g = setup("missing", None);
         let st = state(&Install::default());
         assert!(!st.readonly && st.providers.is_empty());
-        plan(&[Op::UpsertProvider { provider: ProviderInput { id: None, name: "r".into(), base_url: "https://r.example.com".into(), api: "anthropic".into(), api_key: None, models: vec![], key_from_library: None, official_auth: None } }], false).unwrap();
+        plan(&[Op::UpsertProvider { provider: ProviderInput { id: None, name: "r".into(), base_url: "https://r.example.com".into(), api: "anthropic".into(), api_key: None, models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } }], false).unwrap();
         assert_eq!(cfg(), json!({ "models": { "providers": { "r": { "baseUrl": "https://r.example.com", "api": "anthropic-messages", "models": [] } } } }));
     }
 
@@ -596,7 +596,7 @@ mod tests {
             println!("  {} = {}", k.k, k.v);
         }
         println!("notes={:?}", st.notes);
-        let op = Op::UpsertProvider { provider: ProviderInput { id: None, name: "Dump Probe".into(), base_url: "https://probe.example.com/v1".into(), api: "chat".into(), api_key: Some("sk-dump-probe-0000".into()), models: vec!["m".into()], key_from_library: None, official_auth: None } };
+        let op = Op::UpsertProvider { provider: ProviderInput { id: None, name: "Dump Probe".into(), base_url: "https://probe.example.com/v1".into(), api: "chat".into(), api_key: Some("sk-dump-probe-0000".into()), models: vec!["m".into()], key_from_library: None, key_from_sync: None, official_auth: None } };
         let (d, written, backup) = plan(&[op], true).unwrap();
         for g in &d.groups {
             for l in &g.lines {

@@ -1372,7 +1372,7 @@ http_headers = { X = \"1\" }
             api: "responses".into(),
             api_key: Some("sk-new".into()),
             models: vec![],
-            key_from_library: None,
+            key_from_library: None, key_from_sync: None,
             official_auth: Some(false),
         };
         plan(&[Op::UpsertProvider { provider: input }], false).unwrap();
@@ -1402,7 +1402,7 @@ http_headers = { X = \"1\" }
             api: "responses".into(),
             api_key: Some(key.into()),
             models: vec![],
-            key_from_library: None,
+            key_from_library: None, key_from_sync: None,
             official_auth: None,
         }
     }
@@ -1453,7 +1453,7 @@ http_headers = { X = \"1\" }
             api: "responses".into(),
             api_key: key.map(String::from),
             models: vec![],
-            key_from_library: None,
+            key_from_library: None, key_from_sync: None,
             official_auth: Some(false),
         };
         let (diff, written, _) = plan(&[Op::UpsertProvider { provider: input(Some("sk-new")) }], false).unwrap();

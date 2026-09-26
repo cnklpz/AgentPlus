@@ -72,6 +72,8 @@ export interface ProviderInput {
   models: string[];
   /** Use this library entry's key (the backend fills it in). */
   keyFromLibrary?: string | null;
+  /** Use the key the encrypted sync file holds under this fingerprint (the backend fills it in). */
+  keyFromSync?: string | null;
   /** Codex: keep the ChatGPT sign-in while requests go to this provider. Omitted/null = keep. */
   officialAuth?: boolean | null;
 }
@@ -437,13 +439,71 @@ export interface SyncStatus {
   fileExists: boolean;
   exportedAt: string | null;
   machine: string | null;
+  /** The sync file is encrypted. */
+  fileEncrypted: boolean;
+  /** A sync password is saved on this device. */
+  hasPassword: boolean;
+  /** Why the saved password can't be used. */
+  passwordError: string | null;
+  /** The saved password is protected by the OS (Windows DPAPI), not only by file permissions. */
+  systemProtected: boolean;
+  /** Exports carry the API keys (in plain text when there is no password). */
+  includeKeys: boolean;
+  /** The sync file in the folder is not encrypted and holds API keys. */
+  filePlainKeys: boolean;
+  options: SyncOptions;
+  /** The sync file holds another device's export this device hasn't compared yet. */
+  remotePending: boolean;
+}
+
+export interface SyncOptions {
+  /** Sync when AgentPlus starts. */
+  onStart: boolean;
+  /** Sync after AgentPlus writes a config, the provider library or a rollback. */
+  onChange: boolean;
+  /** Sync records kept in the folder (1–100). */
+  keep: number;
+}
+
+/** One earlier export kept in the sync folder. */
+export interface SyncHistoryEntry {
+  id: string;
+  exportedAt: string | null;
+  machine: string | null;
+  encrypted: boolean;
+  /** Exported by this device. */
+  mine: boolean;
+  /** The same export as the current sync file. */
+  current: boolean;
+}
+
+export interface SyncAutoResult {
+  outcome: "off" | "unchanged" | "exported" | "remotePending" | "failed";
+  message: string | null;
+}
+
+/** A provider library change proposed by the sync file (written directly, not through a draft). */
+export interface SyncLibChange {
+  /** Stable id of the change. */
+  key: string;
+  /** The library entry to update; null adds one. */
+  id: string | null;
+  name: string;
+  baseUrl: string;
+  api: ApiKind;
+  /** Models to add. */
+  models: string[];
+  /** The sync file holds a key for it (the backend reads it). */
+  keyFp: string | null;
 }
 
 export interface SyncSuggestion {
-  agent: AgentId;
+  /** The agent whose draft gets `ops`, or "library" for a `lib` change. */
+  agent: AgentId | "library";
   title: string;
   detail: string;
   ops: [string, Op][];
+  lib: SyncLibChange | null;
 }
 
 export interface DiffGroup {
@@ -586,7 +646,19 @@ const real = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   syncSetFolder: (path: string) => invoke<void>("sync_set_folder", { path }),
   syncExport: () => invoke<string>("sync_export"),
-  syncPreview: () => invoke<SyncSuggestion[]>("sync_preview"),
+  /** Compares the sync file, or the sync record `snapshot`, with this device. */
+  syncPreview: (snapshot?: string) => invoke<SyncSuggestion[]>("sync_preview", { snapshot: snapshot ?? null }),
+  syncHistory: () => invoke<SyncHistoryEntry[]>("sync_history"),
+  syncDeleteRecords: (ids: string[]) => invoke<string>("sync_delete_records", { ids }),
+  syncSetOptions: (options: SyncOptions) => invoke<void>("sync_set_options", { options }),
+  syncAuto: (trigger: "start") => invoke<SyncAutoResult>("sync_auto", { trigger }),
+  /** null turns encryption off; `verify` only accepts a password that opens the current file. */
+  syncSetPassword: (password: string | null, verify: boolean) => invoke<string>("sync_set_password", { password, verify }),
+  syncGeneratePassword: () => invoke<string>("sync_generate_password"),
+  /** Saves a generated key as a .txt file (save dialog); null when cancelled. */
+  syncSaveKey: (key: string) => invoke<string | null>("sync_save_key", { key }),
+  syncSetIncludeKeys: (on: boolean) => invoke<void>("sync_set_include_keys", { on }),
+  syncAdoptLibrary: (changes: SyncLibChange[]) => invoke<string>("sync_adopt_library", { changes }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   dismissFixedPrompt: () => invoke<void>("codex_dismiss_fixed_prompt"),
@@ -621,7 +693,8 @@ const real = {
   projectsList: () => invoke<ProjectEntry[]>("projects_list"),
   projectOpen: (path: string) => invoke<ProjectEntry>("project_open", { path }),
   projectForget: (path: string) => invoke<void>("project_forget", { path }),
-  pickFolder: (start: string | null) => invoke<string | null>("pick_folder", { start }),
+  /** Native folder dialog; `purpose` sets its title. null when cancelled. */
+  pickFolder: (start: string | null, purpose?: "sync") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
   /** A newer release, or null when this is the latest. */
   updateCheck: () => invoke<UpdateInfo | null>("update_check"),
   /** Downloads, verifies and installs the update found by the last check; the app then restarts. */
@@ -667,6 +740,13 @@ async function fixture(): Promise<AgentState[]> {
 }
 
 let demoEnv = "windows";
+const demoSync: SyncStatus = { folder: null, fileExists: false, exportedAt: null, machine: null, fileEncrypted: false, hasPassword: false, passwordError: null, systemProtected: true, includeKeys: false, filePlainKeys: false,
+  options: { onStart: true, onChange: false, keep: 10 }, remotePending: false };
+const demoHistory: SyncHistoryEntry[] = [
+  { id: "20260927T021500.000Z_DEMO-PC.json", exportedAt: "2026-09-27T10:15:00+08:00", machine: "DEMO-PC", encrypted: true, mine: true, current: true },
+  { id: "20260926T123000.000Z_LAPTOP.json", exportedAt: "2026-09-26T20:30:00+08:00", machine: "LAPTOP", encrypted: true, mine: false, current: false },
+  { id: "20260925T010000.000Z_DEMO-PC.json", exportedAt: "2026-09-25T09:00:00+08:00", machine: "DEMO-PC", encrypted: false, mine: true, current: false },
+];
 const demoLog: LogInfo = { enabled: true, days: 7, files: 3, bytes: 184_320, dir: "~/.agentplus/logs" };
 let demoLib: LibEntry[] = [];
 const demoOfficial: OfficialFetch = { active: false, startedAt: "15:20:01", backupDir: "C:\\Users\\me\\.agentplus\\backups\\20260923-152001\\codex", cacheReady: false, cacheModels: 0, cachePath: "~/.codex/models_cache.json", catalogPath: "~/.codex/models.json", chatgptLogin: true };
@@ -843,10 +923,33 @@ const demo: typeof real = {
     }],
   }),
   restoreBackup: async () => "（演示）已回滚",
-  syncStatus: async () => ({ folder: null, fileExists: false, exportedAt: null, machine: null }),
-  syncSetFolder: async () => undefined,
-  syncExport: async () => "（演示）已导出",
-  syncPreview: async () => [],
+  syncStatus: async () => ({ ...demoSync }),
+  syncSetFolder: async (path) => { demoSync.folder = path; },
+  syncHistory: async () => (demoSync.folder ? demoHistory.slice(0, demoSync.options.keep) : []),
+  syncSetOptions: async (options) => { demoSync.options = options; },
+  syncDeleteRecords: async (ids) => {
+    for (const id of ids) demoHistory.splice(demoHistory.findIndex((h) => h.id === id), 1);
+    return `（演示）已删除 ${ids.length} 条同步记录`;
+  },
+  syncAuto: async () => ({ outcome: "off", message: null }),
+  syncExport: async () => {
+    const exportedAt = new Date().toISOString();
+    Object.assign(demoSync, { fileExists: true, fileEncrypted: demoSync.hasPassword, filePlainKeys: !demoSync.hasPassword && demoSync.includeKeys, exportedAt, machine: "DEMO-PC" });
+    for (const h of demoHistory) h.current = false;
+    demoHistory.unshift({ id: `${exportedAt}.json`, exportedAt, machine: "DEMO-PC", encrypted: demoSync.hasPassword, mine: true, current: true });
+    return "（演示）已导出";
+  },
+  syncPreview: async () => {
+    if (demoSync.fileEncrypted && !demoSync.hasPassword) throw new Error("（演示）同步文件已加密，请先填写同步密码");
+    return [
+      { agent: "library", title: "（演示）供应商库添加「Relay」", detail: "https://relay.example.com/v1 · 3 个模型 · 含密钥", ops: [], lib: { key: "lib:relay", id: null, name: "Relay", baseUrl: "https://relay.example.com/v1", api: "chat", models: ["glm-5.3"], keyFp: "0123456789" } },
+    ];
+  },
+  syncSetPassword: async (password) => { Object.assign(demoSync, { hasPassword: password != null }); return "（演示）已保存"; },
+  syncSaveKey: async () => "（演示）同步密钥已保存到 ~\\Documents\\AgentPlus-sync-key.txt",
+  syncGeneratePassword: async () => "7K3M-QX9A-2PDV-H8WN-5TGE-R4CB-M1ZF-Y6JS",
+  syncSetIncludeKeys: async (on) => { demoSync.includeKeys = on; },
+  syncAdoptLibrary: async (changes) => `（演示）已更新 ${changes.length} 项`,
   openPath: async () => undefined,
   openUrl: async (url) => { window.open(url, "_blank"); },
   dismissFixedPrompt: async () => undefined,

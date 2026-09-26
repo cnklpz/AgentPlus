@@ -1706,7 +1706,7 @@ hooks:
     }
 
     fn pi(id: Option<&str>, name: &str, base: &str, api: &str, key: Option<&str>, models: &[&str]) -> ProviderInput {
-        ProviderInput { id: id.map(String::from), name: name.into(), base_url: base.into(), api: api.into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, official_auth: None }
+        ProviderInput { id: id.map(String::from), name: name.into(), base_url: base.into(), api: api.into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, key_from_sync: None, official_auth: None }
     }
 
     /// The file minus the blocks AgentPlus may rewrite: must never change.

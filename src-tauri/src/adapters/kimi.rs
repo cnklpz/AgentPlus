@@ -954,7 +954,7 @@ max_steps_per_run = 100 # keep
             api: api.into(),
             api_key: key.map(String::from),
             models: models.iter().map(|m| m.to_string()).collect(),
-            key_from_library: None,
+            key_from_library: None, key_from_sync: None,
             official_auth: None,
         }
     }

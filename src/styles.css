@@ -309,6 +309,10 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 .sgroup h2 { padding: 10px 16px; font-size: 12.5px; font-weight: 600; color: var(--ink3); background: var(--head); border-bottom: 1px solid var(--line2); }
 .srow { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line2); }
 .srow:last-child { border-bottom: 0; }
+/* One height for every setting, whatever its control (a switch is shorter than a segmented
+   control or a button): with brief hints the rows would otherwise go 45 / 61 / 62px. Tall
+   enough for a label with one line of description, so detailed hints barely change it. */
+.settings .srow:not(.stacked) { min-height: 62px; }
 .slabel { font-size: 13.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .unsaved { font-size: 10.5px; font-weight: 600; color: var(--fast-ink); background: var(--fast-soft); border-radius: 4px; padding: 0 5px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: 380px; }
@@ -400,6 +404,83 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 .hdot.error { background: var(--err-dot); }
 .hdot.info { background: #60A5FA; }
 .check-row { cursor: pointer; }
+/* Sync page: status chips, row tiles and the password dialog. */
+.sync-chip { white-space: nowrap; flex-shrink: 0; }
+.sync-label { display: inline-flex; align-items: center; gap: 8px; }
+.sync-label .sync-chip { font-size: 11px; padding: 1px 7px; }
+.sync-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.sync-actions .btn { white-space: nowrap; }
+.sync-row-icon { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--muted); background: var(--sunken); }
+.sync-row-icon.on { color: var(--accent); background: var(--accent-soft); }
+/* "Excessive" motion only: full-screen warning before API keys go into an unencrypted sync file. Two hazard tapes fly
+   in from opposite sides and cross over the whole window as an X; the card then pops up in the
+   middle. The tapes keep marching afterwards. Colours stay yellow/black in dark mode. */
+.hz-screen { --hz-y: #FFD000; --hz-k: #16130A; position: fixed; inset: 0; z-index: 1000; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(12, 10, 4, .78); animation: hz-dim .3s ease-out backwards; }
+.hz-tape { position: absolute; left: 50%; top: 50%; width: 160vmax; height: 56px; margin: -28px 0 0 -80vmax;
+  background: repeating-linear-gradient(-45deg, var(--hz-k) 0 26px, var(--hz-y) 26px 52px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .55); }
+.hz-tape.a { transform: rotate(28deg); animation: hz-fly-a .6s .08s cubic-bezier(.2, .85, .25, 1) backwards, hz-march 1.6s .7s linear infinite; }
+.hz-tape.b { transform: rotate(-28deg); animation: hz-fly-b .6s .2s cubic-bezier(.2, .85, .25, 1) backwards, hz-march-rev 1.6s .8s linear infinite; }
+.hz-card { position: relative; z-index: 1; width: min(520px, 100%); padding: 26px 26px 20px; border-radius: 16px; color: var(--hz-k); background: var(--hz-y);
+  border: 3px solid var(--hz-k); box-shadow: 0 0 0 6px var(--hz-y), 0 30px 80px -10px rgba(0, 0, 0, .7);
+  animation: hz-pop .42s .62s cubic-bezier(.2, .9, .3, 1.25) backwards; }
+.hz-sign { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: var(--hz-y); background: var(--hz-k); }
+.hz-card h2 { margin: 14px 0 8px; font-size: 20px; font-weight: 800; letter-spacing: .01em; }
+.hz-card p { margin: 0; font-size: 13.5px; line-height: 1.65; font-weight: 500; }
+.hz-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 20px; }
+.btn.hz-btn { white-space: nowrap; color: var(--hz-k); background: transparent; border: 1.5px solid var(--hz-k); font-weight: 700; }
+.btn.hz-btn:hover:not(:disabled) { background: rgba(0, 0, 0, .1); border-color: var(--hz-k); }
+.btn.hz-btn.solid { color: var(--hz-y); background: var(--hz-k); }
+.btn.hz-btn.solid:hover:not(:disabled) { background: #000; }
+.btn.hz-btn:focus-visible { outline: 2px solid var(--hz-k); outline-offset: 2px; }
+@keyframes hz-dim { from { background-color: rgba(12, 10, 4, 0); } }
+@keyframes hz-fly-a { from { transform: rotate(28deg) translateX(-110%); } }
+@keyframes hz-fly-b { from { transform: rotate(-28deg) translateX(110%); } }
+@keyframes hz-pop { from { opacity: 0; transform: scale(.7) rotate(-3deg); } }
+@keyframes hz-march { to { background-position: 73.5px 0; } }
+@keyframes hz-march-rev { to { background-position: -73.5px 0; } }
+@media (prefers-reduced-motion: reduce) { .hz-screen, .hz-screen * { animation: none !important; } }
+.srow.sync-locked { background: var(--warn-bg); }
+.srow.sync-folder { gap: 8px; }
+.sync-file { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+/* A path box with its buttons inside: one border, one focus ring. */
+.path-field { display: flex; align-items: center; height: 38px; padding: 0 4px 0 12px; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
+.path-field:focus-within { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.path-field.dirty { border-color: var(--accent); }
+.path-field input { flex-grow: 1; min-width: 0; height: 100%; border: 0; outline: 0; padding: 0; background: none; color: var(--ink); font-size: 13px; }
+.path-field input::placeholder { color: var(--muted); font-family: inherit; }
+.pf-btn { flex-shrink: 0; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: none; color: var(--ink3); font: inherit; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.pf-btn:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.pf-btn + .pf-btn { position: relative; margin-left: 5px; }
+.pf-btn + .pf-btn::before { content: ""; position: absolute; left: -4px; top: 7px; bottom: 7px; width: 1px; background: var(--line); }
+.pf-btn.accent { color: #fff; background: var(--accent); }
+.pf-btn.accent:hover:not(:disabled) { color: #fff; background: var(--accent); filter: brightness(1.08); }
+.pf-btn.accent + .pf-btn::before, .pf-btn + .pf-btn.accent::before { display: none; }
+/* Right pane: automatic sync options, then the records filling the rest. */
+.sync-aside .gw-toggle { margin: 0; }
+.sync-keep { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sync-history-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px 8px; }
+.sync-history { flex-grow: 1; min-height: 0; overflow-y: auto; padding: 0 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.sync-rec { position: relative; flex-shrink: 0; border: 1px solid transparent; border-radius: 10px; }
+.sync-rec:hover { background: var(--hover); }
+.sync-rec.on { background: var(--accent-soft); border-color: var(--accent); }
+.sync-rec-main { display: flex; flex-direction: column; align-items: stretch; gap: 3px; width: 100%; text-align: left; padding: 9px 40px 9px 10px; border: 0; border-radius: 10px; background: none; color: var(--ink); font: inherit; }
+/* Delete: shown on hover or keyboard focus, so the list stays calm. */
+.sync-rec-del { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 7px; background: none; color: var(--muted); opacity: 0; }
+.sync-rec:hover .sync-rec-del, .sync-rec-del:focus-visible { opacity: 1; }
+.sync-rec-del:hover:not(:disabled) { color: var(--del); background: var(--del-bg); }
+.sync-rec-time { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sync-rec-meta { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.sync-tag { flex-shrink: 0; font-size: 10.5px; font-weight: 600; padding: 0 6px; border-radius: 999px; line-height: 17px; color: var(--ink3); background: var(--sunken); }
+.sync-tag.accent { color: var(--accent); background: var(--accent-soft); }
+.sync-tag.warn { color: var(--warn); background: var(--warn-bg); }
+.sync-pw-err { margin-top: 6px; }
+.modal.sync-pw-dialog { width: min(480px, 100%); }
+.sync-pw-dialog p { margin: 0; line-height: 1.55; }
+.sync-key { letter-spacing: .06em; text-align: center; font-size: 14px; }
+.sync-kept { cursor: pointer; margin-top: 2px; }
+.sync-kept input { accent-color: var(--accent); margin: 0; }
 .check-row input { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
 .sgroup h2.row { display: flex; }
 

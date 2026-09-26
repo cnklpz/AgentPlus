@@ -561,7 +561,7 @@ mod tests {
     }
 
     fn edit(id: &str, name: &str, url: &str, key: Option<&str>) -> Op {
-        Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: name.into(), base_url: url.into(), api: "chat".into(), api_key: key.map(String::from), models: vec![], key_from_library: None, official_auth: None } }
+        Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: name.into(), base_url: url.into(), api: "chat".into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } }
     }
 
     #[test]

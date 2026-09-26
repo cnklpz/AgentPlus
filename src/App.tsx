@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
 import {
   CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, guessedModel, importProvider, isEnabled, isVisible, keys, opCount,
   opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
@@ -327,7 +327,6 @@ export default function App() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-
   // macOS menu bar (appmenu.rs): its AgentPlus items arrive as `menu` events.
   const menuRef = useRef((_id: string) => {});
   menuRef.current = (id: string) => {
@@ -344,6 +343,21 @@ export default function App() {
   useEffect(() => {
     if (!inTauri || !isMac) return;
     const off = listen<string>("menu", (e) => menuRef.current(e.payload));
+    return () => { off.then((f) => f()); };
+  }, []);
+
+  /** Bumped after an automatic sync, so an open sync page reloads its status and records. */
+  const [syncTick, setSyncTick] = useState(0);
+  // Automatic sync: once at start; after changes the backend runs it and reports here.
+  useEffect(() => {
+    if (!SYNC_ENABLED || !inTauri) return;
+    const report = (r: SyncAutoResult) => {
+      if (r.outcome === "off" || r.outcome === "unchanged") return;
+      setSyncTick((n) => n + 1);
+      if (r.message) flash(r.message, r.outcome === "failed");
+    };
+    api.syncAuto("start").then(report).catch(() => undefined);
+    const off = listen<SyncAutoResult>("sync-auto", (e) => report(e.payload));
     return () => { off.then((f) => f()); };
   }, []);
 
@@ -1106,15 +1120,34 @@ export default function App() {
     flash(t(sv.connect === "gateway" || sv.viaForward ? "app.queuedViaGateway" : sv.connect === "direct" ? "app.queuedDirect" : "app.queuedApply"));
   };
 
-  const adoptSync = (list: SyncSuggestion[]) => {
+  /** Library changes are written right away; agent changes go to the drafts. False when writing failed. */
+  const adoptSync = async (list: SyncSuggestion[]): Promise<boolean> => {
+    const libChanges = list.flatMap((s) => (s.lib ? [s.lib] : []));
+    const agentSugs = list.filter((s): s is SyncSuggestion & { agent: AgentId } => !s.lib && s.agent !== "library");
+    let libDone: string | null = null;
+    if (libChanges.length > 0) {
+      try {
+        libDone = await api.syncAdoptLibrary(libChanges);
+        reloadLib();
+      } catch (e) {
+        flash(errText(e), true);
+        return false;
+      }
+    }
+    if (agentSugs.length === 0) {
+      if (libDone) flash(libDone);
+      return true;
+    }
     setDrafts((all) => {
       const next = { ...all };
-      for (const s of list) next[s.agent] = { ...(next[s.agent] ?? {}), ...Object.fromEntries(s.ops) };
+      for (const s of agentSugs) next[s.agent] = { ...(next[s.agent] ?? {}), ...Object.fromEntries(s.ops) };
       return next;
     });
-    const agentsTouched = [...new Set(list.map((s) => s.agent))];
-    if (agentsTouched[0]) openAgent(agentsTouched[0]);
-    flash(tn("app.queuedAgents", agentsTouched.length));
+    const agentsTouched = [...new Set(agentSugs.map((s) => s.agent))];
+    openAgent(agentsTouched[0]);
+    const queued = tn("app.queuedAgents", agentsTouched.length);
+    flash(libDone ? `${libDone} · ${queued}` : queued);
+    return true;
   };
 
   // ------------------------------------------------------------ right-click menu
@@ -1317,7 +1350,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`body${page === "settings" ? " solo" : page && !["providers", "history", ...(gateway?.running ? ["gateway"] : [])].includes(page) ? " wide" : ""}`}>
+      <div className={`body${page === "settings" ? " solo" : page && !["providers", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
         {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} />}
 
         {page === "providers" && (
@@ -1381,7 +1414,7 @@ export default function App() {
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
-        {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} />}
+        {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "settings" && (
           <SettingsPage
             tab={settingsTab}

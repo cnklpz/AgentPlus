@@ -521,7 +521,7 @@ fn resolve_import(agent: &str, from: &str, provider: &str, api: Option<&str>, na
         _ => {}
     }
     Ok(Op::UpsertProvider {
-        provider: ProviderInput { id: None, name: name.map(String::from).unwrap_or(src_name), base_url, api, api_key: key, models, key_from_library: None, official_auth: None },
+        provider: ProviderInput { id: None, name: name.map(String::from).unwrap_or(src_name), base_url, api, api_key: key, models, key_from_library: None, key_from_sync: None, official_auth: None },
     })
 }
 
@@ -541,6 +541,12 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
                 let mut p = p.clone();
                 p.api_key = key;
                 p.key_from_library = None;
+                Ok(Op::UpsertProvider { provider: p })
+            }
+            Op::UpsertProvider { provider: p } if p.key_from_sync.is_some() => {
+                let mut p = p.clone();
+                p.api_key = Some(crate::sync::key(p.key_from_sync.as_deref().unwrap())?);
+                p.key_from_sync = None;
                 Ok(Op::UpsertProvider { provider: p })
             }
             other => Ok(other.clone()),

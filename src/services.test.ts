@@ -196,7 +196,13 @@ describe("plainRoute", () => {
 
 describe("syncSuggestionId", () => {
   const sug = (agent: SyncSuggestion["agent"], keys: string[], title = "t"): SyncSuggestion =>
-    ({ agent, title, detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]) });
+    ({ agent, title, detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]), lib: null });
+  const lib = (key: string): SyncSuggestion =>
+    ({ agent: "library", title: "t", detail: "", ops: [], lib: { key, id: null, name: "n", baseUrl: "https://x/v1", api: "chat", models: [], keyFp: null } });
+  it("tells library changes apart by their key", () => {
+    expect(syncSuggestionId(lib("lib:a|chat"))).not.toBe(syncSuggestionId(lib("lib:b|chat")));
+    expect(syncSuggestionId(lib("lib:a|chat"))).toBe(syncSuggestionId(lib("lib:a|chat")));
+  });
   it("does not depend on the (translated) text", () => {
     expect(syncSuggestionId(sug("codex", ["a"], "新增"))).toBe(syncSuggestionId(sug("codex", ["a"], "Add")));
   });
@@ -208,7 +214,7 @@ describe("syncSuggestionId", () => {
 });
 
 describe("syncSuggestionIds", () => {
-  const sug = (keys: string[]): SyncSuggestion => ({ agent: "codex", title: "t", detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]) });
+  const sug = (keys: string[]): SyncSuggestion => ({ agent: "codex", title: "t", detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]), lib: null });
   it("keeps ids unique when two suggestions touch the same keys", () => {
     const ids = syncSuggestionIds([sug(["a"]), sug(["b"]), sug(["a"]), sug(["a"])]);
     expect(new Set(ids).size).toBe(4);

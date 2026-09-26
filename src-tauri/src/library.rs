@@ -112,6 +112,7 @@ pub fn save(input: LibInput) -> Result<LibEntry> {
         root["library"] = Value::Array(list);
         Ok(e)
     })?;
+    crate::sync::changed();
     Ok(to_entry(&e))
 }
 
@@ -120,7 +121,9 @@ pub fn delete(id: &str) -> Result<()> {
         let list: Vec<Value> = entries(root).into_iter().filter(|e| str_field(e, "id") != id).collect();
         root["library"] = Value::Array(list);
         Ok(())
-    })
+    })?;
+    crate::sync::changed();
+    Ok(())
 }
 
 /// A library entry with its key, for copying into an agent or calling its upstream.

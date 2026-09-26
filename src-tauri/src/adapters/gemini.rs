@@ -632,7 +632,7 @@ mod tests {
     }
 
     fn pi(id: Option<&str>, name: &str, base: &str, key: Option<&str>, models: &[&str]) -> ProviderInput {
-        ProviderInput { id: id.map(String::from), name: name.into(), base_url: base.into(), api: "gemini".into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, official_auth: None }
+        ProviderInput { id: id.map(String::from), name: name.into(), base_url: base.into(), api: "gemini".into(), api_key: key.map(String::from), models: models.iter().map(|s| s.to_string()).collect(), key_from_library: None, key_from_sync: None, official_auth: None }
     }
 
     fn diff_text(d: &Diff) -> String {

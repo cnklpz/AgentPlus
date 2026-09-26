@@ -116,7 +116,7 @@ pub fn forget(path: &str) -> Result<()> {
 
 /// Native "choose folder" dialog owned by the AgentPlus window. None when cancelled.
 #[cfg(windows)]
-pub fn pick_folder(owner: isize, start: Option<&str>) -> Result<Option<String>> {
+pub fn pick_folder(owner: isize, start: Option<&str>, title: &str) -> Result<Option<String>> {
     use windows::core::HSTRING;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
@@ -127,7 +127,7 @@ pub fn pick_folder(owner: isize, start: Option<&str>) -> Result<Option<String>> 
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
         dlg.SetOptions(dlg.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
-        dlg.SetTitle(&HSTRING::from(crate::i18n::l("Choose project folder", "选择项目文件夹")))?;
+        dlg.SetTitle(&HSTRING::from(title))?;
         if let Some(s) = start.map(crate::env::resolve_path).filter(|p| p.is_dir()) {
             if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(s.as_os_str()), None) {
                 let _ = dlg.SetFolder(&item);
@@ -145,7 +145,7 @@ pub fn pick_folder(owner: isize, start: Option<&str>) -> Result<Option<String>> 
 
 /// Native "choose folder" dialog (AppleScript's `choose folder`). None when cancelled.
 #[cfg(target_os = "macos")]
-pub fn pick_folder(_owner: isize, start: Option<&str>) -> Result<Option<String>> {
+pub fn pick_folder(_owner: isize, start: Option<&str>, title: &str) -> Result<Option<String>> {
     // Arguments go in through `argv`, never pasted into the script.
     const SCRIPT: &str = "on run argv
   activate
@@ -161,7 +161,7 @@ pub fn pick_folder(_owner: isize, start: Option<&str>) -> Result<Option<String>>
   end try
 end run";
     let mut cmd = std::process::Command::new("osascript");
-    cmd.args(["-e", SCRIPT, crate::i18n::l("Choose project folder", "选择项目文件夹")]);
+    cmd.args(["-e", SCRIPT, title]);
     if let Some(s) = start.map(crate::env::resolve_path).filter(|p| p.is_dir()) {
         cmd.arg(s);
     }
@@ -175,7 +175,7 @@ end run";
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-pub fn pick_folder(_owner: isize, _start: Option<&str>) -> Result<Option<String>> {
+pub fn pick_folder(_owner: isize, _start: Option<&str>, _title: &str) -> Result<Option<String>> {
     Err(anyhow!(crate::i18n::l("Folder picking isn't supported on this system. Enter the path directly", "当前系统不支持选择文件夹，请直接输入路径")))
 }
 

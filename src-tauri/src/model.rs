@@ -290,6 +290,9 @@ pub struct ProviderInput {
     /// Take the key from this library entry (resolved in the backend; the UI never has it).
     #[serde(default)]
     pub key_from_library: Option<String>,
+    /// Take the key stored under this fingerprint in the encrypted sync file (resolved in the backend).
+    #[serde(default)]
+    pub key_from_sync: Option<String>,
     /// Codex: official sign-in mixed with this provider. None = keep as is.
     #[serde(default)]
     pub official_auth: Option<bool>,

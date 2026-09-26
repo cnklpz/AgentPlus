@@ -18,6 +18,8 @@ mod process;
 mod projects;
 mod sessions;
 mod store;
+mod dialog;
+mod seal;
 mod sync;
 mod tray;
 mod update;
@@ -96,6 +98,7 @@ async fn apply(agent: String, ops: Vec<Op>) -> Result<ApplyResult, String> {
         // on worker threads; the transaction keeps each write's store load/save atomic.
         let ops = adapters::resolve(&agent, &ops)?;
         let (_, files, backup) = store::transaction(|| adapters::plan_resolved(&agent, &ops, false))?;
+        sync::changed();
         Ok(ApplyResult {
             state: adapters::state(&agent)?,
             files: files.iter().map(|f| util::display_path(f)).collect(),
@@ -253,7 +256,12 @@ async fn backup_detail(id: String) -> Result<history::BackupDetail, String> {
 
 #[tauri::command]
 async fn restore_backup(id: String) -> Result<String, String> {
-    blocking(move || history::restore(&id)).await
+    blocking(move || {
+        let msg = history::restore(&id)?;
+        sync::changed();
+        Ok(msg)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -274,8 +282,63 @@ async fn sync_export() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn sync_preview() -> Result<Vec<sync::Suggestion>, String> {
-    blocking(sync::preview_import).await
+async fn sync_preview(snapshot: Option<String>) -> Result<Vec<sync::Suggestion>, String> {
+    blocking(move || sync::preview_import(snapshot.as_deref())).await
+}
+
+#[tauri::command]
+async fn sync_history() -> Result<Vec<sync::HistoryEntry>, String> {
+    blocking(|| Ok(sync::history())).await
+}
+
+#[tauri::command]
+async fn sync_delete_records(ids: Vec<String>) -> Result<String, String> {
+    blocking(move || sync::delete_records(&ids)).await
+}
+
+#[tauri::command]
+async fn sync_set_options(options: sync::SyncOptions) -> Result<(), String> {
+    blocking(move || sync::set_options(options)).await
+}
+
+/// `trigger`: "start" (the window calls it once after loading). "change" runs from the backend.
+#[tauri::command]
+async fn sync_auto(trigger: String) -> Result<sync::AutoResult, String> {
+    blocking(move || Ok(sync::auto(&trigger))).await
+}
+
+/// `password: None` turns encryption off. `verify`: only accept a password that opens the current file.
+#[tauri::command]
+async fn sync_set_password(password: Option<String>, verify: bool) -> Result<String, String> {
+    blocking(move || sync::set_password(password.as_deref(), verify)).await
+}
+
+#[tauri::command]
+fn sync_generate_password() -> Result<String, String> {
+    sync::generate_password().map_err(err)
+}
+
+/// Saves a generated sync key as a .txt file through the save dialog. None when cancelled.
+#[tauri::command]
+async fn sync_save_key(window: tauri::WebviewWindow, key: String) -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    let owner = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(windows))]
+    let owner = {
+        let _ = window;
+        0
+    };
+    blocking(move || sync::save_key(owner, &key)).await
+}
+
+#[tauri::command]
+async fn sync_set_include_keys(on: bool) -> Result<(), String> {
+    blocking(move || sync::set_include_keys(on)).await
+}
+
+#[tauri::command]
+async fn sync_adopt_library(changes: Vec<sync::LibChange>) -> Result<String, String> {
+    blocking(move || sync::adopt_library(changes)).await
 }
 
 #[tauri::command]
@@ -535,12 +598,17 @@ fn project_forget(path: String) -> Result<(), String> {
 
 /// Native folder picker, owned by the AgentPlus window.
 #[tauri::command]
-async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>) -> Result<Option<String>, String> {
+async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>, purpose: Option<String>) -> Result<Option<String>, String> {
     #[cfg(windows)]
     let owner = window.hwnd().map(|h| h.0 as isize).unwrap_or(0);
     #[cfg(not(windows))]
     let owner = { let _ = window; 0 };
-    blocking(move || projects::pick_folder(owner, start.as_deref())).await
+    // `purpose` only picks the dialog title: "sync" for the sync folder, else a project folder.
+    let title = match purpose.as_deref() {
+        Some("sync") => i18n::l("Choose sync folder", "选择同步文件夹"),
+        _ => i18n::l("Choose project folder", "选择项目文件夹"),
+    };
+    blocking(move || projects::pick_folder(owner, start.as_deref(), title)).await
 }
 
 /// Panics (a worker thread, the gateway) go to the diagnostic log before the default report.
@@ -565,6 +633,7 @@ pub fn run() {
         .manage(update::Pending::default())
         .setup(|app| {
             applog::init();
+            sync::init(app.handle().clone());
             // Not fatal: the store retries creating the folder on its first write.
             if let Err(e) = util::ensure_private_dir(&util::agentplus_dir()) {
                 applog::warn("app", format!("Can't create {}: {e}", util::agentplus_dir().display()));
@@ -624,6 +693,15 @@ pub fn run() {
             sync_set_folder,
             sync_export,
             sync_preview,
+            sync_set_password,
+            sync_generate_password,
+            sync_save_key,
+            sync_set_include_keys,
+            sync_adopt_library,
+            sync_history,
+            sync_delete_records,
+            sync_set_options,
+            sync_auto,
             open_path,
             open_url,
             codex_dismiss_fixed_prompt,
