@@ -2,6 +2,24 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.4
+
+可以用中转站的「导入到 CC Switch」按钮添加供应商了。
+
+- 支持导入链接：点中转站（Sub2API、New API 等）的导入按钮，会打开填好地址、API Key 和模型的「添加供应商」对话框，确认后点「添加」才会保存
+- 设置 → 导入链接：可以让 AgentPlus 打开 ccswitch:// 链接（仅 Windows），关闭后交还给原来处理它的程序（如 CC Switch）
+- 供应商页新增「链接导入」：也可以复制按钮的链接地址粘贴进来
+- 从链接打开的对话框会自动拉取一次模型列表
+- 新增 agentplus:// 链接，参数与 CC Switch 相同，中转站只要换个协议名就能直接对接（说明见 README）
+
+Providers can now be added from a relay's "Import to CC Switch" button.
+
+- Import links: a relay's import button (Sub2API, New API…) opens the add-provider dialog with the URL, API key and models filled in; nothing is saved until you click Add
+- Settings → Import links: let AgentPlus open ccswitch:// links (Windows only); turning it off hands them back to the program that had them (such as CC Switch)
+- Providers → Import link: paste the button's link address instead
+- A dialog opened from a link fetches the provider's model list once
+- New agentplus:// links take the same parameters as CC Switch's, so a relay only needs to swap the scheme (see the README)
+
 ## 0.2.3
 
 「过度」动画下被扯坏的页面变成会飘落的碎纸，上下边界都能扯坏，也不会一滑就坏。
