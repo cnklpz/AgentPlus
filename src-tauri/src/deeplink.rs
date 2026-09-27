@@ -398,8 +398,8 @@ pub fn set_ccswitch(on: bool) -> Result<LinkHandler> {
 }
 
 /// At start: keep the `ccswitch://` takeover pointing at this copy of AgentPlus.
+#[cfg(windows)]
 pub fn refresh_ccswitch() {
-    #[cfg(windows)]
     win::refresh();
 }
 
