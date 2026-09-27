@@ -1706,15 +1706,26 @@ impl UsageSniff {
 fn sniff_sse(r: &mut impl Read) -> std::io::Result<(bool, Vec<u8>)> {
     let mut head = vec![];
     let mut buf = [0u8; 1024];
-    while head.len() < 4096 && head.iter().all(u8::is_ascii_whitespace) {
-        let n = r.read(&mut buf)?;
+    const PREFIXES: [&[u8]; 3] = [b"data:", b"event:", b":"];
+    while head.len() < 4096 {
+        let t = head.trim_ascii_start();
+        if PREFIXES.iter().any(|p| t.starts_with(p)) {
+            return Ok((true, head));
+        }
+        // A short read may end halfway through a field name. Keep reading while it
+        // could still become SSE, but stop immediately on JSON or another body.
+        if !PREFIXES.iter().any(|p| p.starts_with(t)) {
+            break;
+        }
+        let remaining = (4096 - head.len()).min(buf.len());
+        let n = r.read(&mut buf[..remaining])?;
         if n == 0 {
             break;
         }
         head.extend_from_slice(&buf[..n]);
     }
     let t = head.trim_ascii_start();
-    Ok((t.starts_with(b"data:") || t.starts_with(b"event:") || t.starts_with(b":"), head))
+    Ok((PREFIXES.iter().any(|p| t.starts_with(p)), head))
 }
 
 /// Passes the upstream's answer through as it arrives; returns its status.
@@ -2813,6 +2824,34 @@ mod tests {
         let mut r: &[u8] = b": ping\n\ndata: {}\n";
         assert!(sniff_sse(&mut r).unwrap().0);
         lock(&TEST_ROUTES).clear();
+    }
+
+    #[test]
+    fn sniff_sse_handles_fragmented_prefixes_and_replays_every_byte() {
+        // Force every possible first-read boundary, including inside data: and event:.
+        for body in ["data: {}\n\n", "event: x\ndata: {}\n\n", " \r\n\tdata: {}\n\n", ": ping\n\n"] {
+            for split in 1..body.len() {
+                let bytes = body.as_bytes();
+                let mut reader = (&bytes[..split]).chain(&bytes[split..]);
+                let (sse, mut head) = sniff_sse(&mut reader).unwrap();
+                assert!(sse, "split {split} of {body:?}");
+                reader.read_to_end(&mut head).unwrap();
+                assert_eq!(head, bytes);
+            }
+        }
+        for body in ["", "  \n", "d", "eve", "datax", "{\"data\":1}"] {
+            let mut reader = body.as_bytes();
+            let (sse, mut head) = sniff_sse(&mut reader).unwrap();
+            assert!(!sse, "{body:?}");
+            reader.read_to_end(&mut head).unwrap();
+            assert_eq!(head, body.as_bytes());
+        }
+        let body = format!("{}data: {{}}\n\n", " ".repeat(4096));
+        let mut reader = body.as_bytes();
+        let (sse, head) = sniff_sse(&mut reader).unwrap();
+        assert!(!sse);
+        assert_eq!(head.len(), 4096);
+        assert_eq!(reader, b"data: {}\n\n");
     }
 
     /// A same-protocol streaming request the upstream answered with one JSON document:
