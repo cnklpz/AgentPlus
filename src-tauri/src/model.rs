@@ -163,6 +163,8 @@ pub struct Setting {
     pub options: Vec<String>,
     /// One short explanation per option (same order), may be empty.
     pub hints: Vec<String>,
+    /// Switches turned off when this one is turned on (mutually exclusive), by key.
+    pub excludes: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -445,6 +447,7 @@ pub fn bool_setting(key: &str, group: &str, label: &str, desc: &str, value: bool
         value: Value::Bool(value),
         options: vec![],
         hints: vec![],
+        excludes: vec![],
     }
 }
 
@@ -458,12 +461,18 @@ pub fn chips_setting(key: &str, group: &str, label: &str, desc: &str, value: Vec
         value: Value::from(value),
         options: options.iter().map(|s| s.to_string()).collect(),
         hints: vec![],
+        excludes: vec![],
     }
 }
 
 impl Setting {
     pub fn with_hints(mut self, hints: &[&str]) -> Self {
         self.hints = hints.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    pub fn excluding(mut self, keys: &[&str]) -> Self {
+        self.excludes = keys.iter().map(|s| s.to_string()).collect();
         self
     }
 }

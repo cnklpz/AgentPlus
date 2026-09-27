@@ -131,6 +131,8 @@ export interface Setting {
   options: string[];
   /** One short explanation per option (may be empty). */
   hints: string[];
+  /** Switches turned off when this one is turned on (mutually exclusive), by key. */
+  excludes?: string[];
 }
 
 export type SettingValue = boolean | string | string[];

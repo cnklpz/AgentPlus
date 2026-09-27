@@ -87,6 +87,41 @@ export function setSetting(d: Draft, s: Setting, value: SettingValue): Draft {
   return withOp(d, keys.setting(s.key), sameValue(value, s.value, s.kind === "list") ? null : { op: "set_setting", key: s.key, value });
 }
 
+/** The switches `s` excludes that are on in the draft (turning `s` on turns them off). */
+export function excludedOn(d: Draft, all: Setting[], s: Setting): Setting[] {
+  return all.filter((o) => s.excludes?.includes(o.key) && settingValue(o, d) === true);
+}
+
+// Undo information belongs to the enabling op, stays out of the wire payload, and expires
+// with the draft. Op identity also prevents undo from overwriting a later manual edit.
+const excludedUndo = new WeakMap<Op, { key: string; before: Op | undefined; after: Op | undefined }[]>();
+
+/**
+ * Like `setSetting`, for mutually exclusive switches: turning one on turns off the ones it
+ * excludes; turning it off again before applying puts those back as they were.
+ */
+export function setSettingIn(d: Draft, all: Setting[], s: Setting, value: SettingValue): Draft {
+  if (settingValue(s, d) === value) return d;
+  const previous = d[keys.setting(s.key)];
+  let out = setSetting(d, s, value);
+  if (value === true) {
+    const undo = [];
+    for (const o of excludedOn(out, all, s)) {
+      const key = keys.setting(o.key);
+      const before = out[key];
+      out = setSetting(out, o, false);
+      undo.push({ key, before, after: out[key] });
+    }
+    const enabling = out[keys.setting(s.key)];
+    if (enabling && undo.length) excludedUndo.set(enabling, undo);
+  } else if (value === false && previous) {
+    for (const { key, before, after } of excludedUndo.get(previous) ?? []) {
+      if (out[key] === after) out = withOp(out, key, before ?? null);
+    }
+  }
+  return out;
+}
+
 /** Number of pending changes in a draft. */
 export function opCount(d: Draft | undefined): number {
   return d ? Object.keys(d).length : 0;

@@ -25,44 +25,58 @@ fn inject_file() -> &'static str {
 }
 
 /// A UI injection AgentPlus applies when it restarts the desktop app: the setting key,
-/// the store flag, and the (en, zh) diff lines for turning it on and off.
+/// the store flag, the (en, zh) diff lines for turning it on and off, and the injection
+/// it can't be combined with (turned off when this one is turned on).
 pub struct Injection {
     pub key: &'static str,
     flag: &'static str,
     on: (&'static str, &'static str),
     off: (&'static str, &'static str),
+    excludes: Option<&'static str>,
 }
 
-/// Fast display, full model names, send after the quota runs out, hidden usage banners.
-pub const INJECTIONS: [Injection; 4] = [
+/// Fast display, full model names, send after the quota runs out, hidden usage banners,
+/// and dropping the "GPT-" prefix under the official sign-in mix.
+pub const INJECTIONS: [Injection; 5] = [
     Injection {
         key: "fast_inject",
         flag: "fastInject",
         on: ("+ Enable Fast display injection (takes effect after restarting Codex via AgentPlus)", "+ 启用 Fast 显示注入（通过 AgentPlus 重启 Codex 后生效）"),
         off: ("- Disable Fast display injection", "- 停用 Fast 显示注入"),
+        excludes: None,
     },
     Injection {
         key: "full_names",
         flag: "fullModelNames",
         on: ("+ Enable full model name injection (takes effect after restarting Codex via AgentPlus)", "+ 启用完整模型名注入（通过 AgentPlus 重启 Codex 后生效）"),
         off: ("- Disable full model name injection", "- 停用完整模型名注入"),
+        excludes: Some("short_names"),
     },
     Injection {
         key: "quota_unlock",
         flag: "quotaUnlock",
         on: ("+ Enable send-after-quota injection (takes effect after restarting Codex via AgentPlus)", "+ 启用额度用完仍可发送注入（通过 AgentPlus 重启 Codex 后生效）"),
         off: ("- Disable send-after-quota injection", "- 停用额度用完仍可发送注入"),
+        excludes: None,
     },
     Injection {
         key: "hide_usage_banner",
         flag: "hideUsageBanner",
         on: ("+ Enable hide-usage-banner injection (takes effect after restarting Codex via AgentPlus)", "+ 启用隐藏用量提示横幅注入（通过 AgentPlus 重启 Codex 后生效）"),
         off: ("- Disable hide-usage-banner injection", "- 停用隐藏用量提示横幅注入"),
+        excludes: None,
+    },
+    Injection {
+        key: "short_names",
+        flag: "shortModelNames",
+        on: ("+ Enable GPT- prefix dropping injection (takes effect after restarting Codex via AgentPlus)", "+ 启用省略 GPT- 前缀注入（通过 AgentPlus 重启 Codex 后生效）"),
+        off: ("- Disable GPT- prefix dropping injection", "- 停用省略 GPT- 前缀注入"),
+        excludes: Some("full_names"),
     },
 ];
 
 /// Which injections are on, in `INJECTIONS` order.
-fn injections_on(store: &Value) -> [bool; 4] {
+fn injections_on(store: &Value) -> [bool; 5] {
     INJECTIONS.map(|i| store::get_flag(store, ID, i.flag))
 }
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
@@ -638,7 +652,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.notes.push(l("config.toml has no model_catalog_json, so Codex fetches the model list online and it can't be edited here.", "config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。").into());
     }
 
-    let [inject, full_names, quota, hide_banner] = injections_on(&store);
+    let [inject, full_names, quota, hide_banner, short_names] = injections_on(&store);
     let tier = service_tier(&doc);
     let sl = status_line(&doc);
     let effs = efforts(&doc);
@@ -668,13 +682,18 @@ pub fn state(inst: &Install) -> AgentState {
             ]),
         bool_setting("full_names", l("Interface", "界面"), l("Show full model names", "显示完整模型名"),
             l("Codex shows full model names only when signed in with a ChatGPT account; with custom providers it drops the \"GPT-\" prefix (GPT-6 Sol shows as 6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and turns this shortening off when the UI loads.",
-              "Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。"), full_names),
+              "Codex 只在 ChatGPT 账号登录时显示完整模型名，用自定义供应商会去掉「GPT-」前缀（GPT-6 Sol 显示成 6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时关掉这个缩写。"), full_names)
+            .excluding(&["short_names"]),
         bool_setting("quota_unlock", l("Official sign-in mix", "官方登录混用"), l("Keep sending after the ChatGPT quota runs out", "ChatGPT 额度用完后仍可发送"),
             l("Signed in with a ChatGPT account, Codex disables the send button once the account's quota runs out, even with the official sign-in mix on and requests actually going to the relay. When on, restarting Codex through AgentPlus launches it with a debug port and lifts this restriction when the UI loads (hide the usage banner with the next option).",
               "用 ChatGPT 账号登录时，账号额度用完后 Codex 会禁用发送按钮，即使开启了官方登录混用、请求其实发往中转站。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这条限制（额度提示横幅用下一项隐藏）。"), quota),
         bool_setting("hide_usage_banner", l("Official sign-in mix", "官方登录混用"), l("Hide usage banners", "隐藏用量提示横幅"),
             l("Signed in with a ChatGPT account, Codex shows that account's usage banners above the composer (\"You're out of Codex and Work usage\", running-low warnings, upgrade and reset-usage buttons), which have nothing to do with the relay's quota. When on, restarting Codex through AgentPlus launches it with a debug port and removes these banners when the UI loads.",
               "用 ChatGPT 账号登录时，输入框上方会显示这个账号的额度横幅（「Codex 和工作使用额度已用完」、即将用完的提醒、升级和重置使用量按钮），与中转站的额度无关。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这些横幅。"), hide_banner),
+        bool_setting("short_names", l("Official sign-in mix", "官方登录混用"), l("Drop the GPT- prefix from model names", "模型名省略 GPT- 前缀"),
+            l("Signed in with a ChatGPT account, Codex shows full model names (GPT-6 Sol), while with custom providers it drops the \"GPT-\" prefix (6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and shortens names the same way under the official sign-in mix.",
+              "用 ChatGPT 账号登录时 Codex 显示完整模型名（GPT-6 Sol），用自定义供应商则会去掉「GPT-」前缀（6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，在官方登录混用下也像自定义供应商那样省略前缀。"), short_names)
+            .excluding(&["full_names"]),
         bool_setting("ctx_usage", l("Interface", "界面"), l("Show context usage", "显示上下文用量"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
         bool_setting("plain", l("Interface", "界面"), l("Plain text composer", "纯文本输入框"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
     ];
@@ -1041,11 +1060,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 other => {
                     let inj = INJECTIONS.iter().find(|i| i.key == other).ok_or_else(|| msg::unknown_setting(other))?;
                     let on = v.as_bool().unwrap_or(false);
-                    if store::get_flag(&store, ID, inj.flag) != on {
-                        store::set_flag(&mut store, ID, inj.flag, on);
-                        let (en, zh) = if on { inj.on } else { inj.off };
-                        diff.push(inject_file(), l(en, zh), on);
-                        store_dirty = true;
+                    // Turning one on turns off the injection it can't be combined with.
+                    let partner = inj.excludes.filter(|_| on).and_then(|k| INJECTIONS.iter().find(|i| i.key == k));
+                    for (inj, on) in partner.map(|p| (p, false)).into_iter().chain([(inj, on)]) {
+                        if store::get_flag(&store, ID, inj.flag) != on {
+                            store::set_flag(&mut store, ID, inj.flag, on);
+                            let (en, zh) = if on { inj.on } else { inj.off };
+                            diff.push(inject_file(), l(en, zh), on);
+                            store_dirty = true;
+                        }
                     }
                 }
             },
@@ -1137,8 +1160,8 @@ pub fn dismiss_fixed_prompt() -> Result<()> {
 
 /// UI patches to apply when AgentPlus restarts Codex.
 pub fn ui_patches() -> crate::cdp::Patches {
-    let [fast, full_names, quota, usage_banner] = injections_on(&store::load());
-    crate::cdp::Patches { fast, full_names, quota, usage_banner }
+    let [fast, full_names, quota, usage_banner, short_names] = injections_on(&store::load());
+    crate::cdp::Patches { fast, full_names, quota, usage_banner, short_names }
 }
 
 #[cfg(test)]
@@ -1472,17 +1495,29 @@ http_headers = { X = \"1\" }
     #[test]
     fn injection_settings_toggle_their_store_flags() {
         let _h = codex_home_with("codex-inject", "", None);
-        for (i, inj) in INJECTIONS.iter().enumerate() {
+        // Every injection but the last (short names, exclusive with full names).
+        for (i, inj) in INJECTIONS[..4].iter().enumerate() {
             let (diff, _, _) = plan(&[setting(inj.key, true)], false).unwrap();
             assert_eq!(diff_lines(&diff), [("AgentPlus · Codex 界面注入".to_string(), inj.on.1.to_string())]);
-            let mut want = [false; 4];
+            let mut want = [false; 5];
             want[..=i].fill(true);
             assert_eq!(injections_on(&store::load()), want);
             // Already on: no change.
             assert!(plan(&[setting(inj.key, true)], false).unwrap().0.groups.is_empty());
         }
         let p = ui_patches();
-        assert!(p.fast && p.full_names && p.quota && p.usage_banner);
+        assert!(p.fast && p.full_names && p.quota && p.usage_banner && !p.short_names);
+        // Short names turn full names off, and the other way round.
+        let file = "AgentPlus · Codex 界面注入".to_string();
+        let (diff, _, _) = plan(&[setting("short_names", true)], false).unwrap();
+        assert_eq!(diff_lines(&diff), [(file.clone(), "- 停用完整模型名注入".to_string()), (file.clone(), INJECTIONS[4].on.1.to_string())]);
+        assert_eq!(injections_on(&store::load()), [true, false, true, true, true]);
+        let (diff, _, _) = plan(&[setting("full_names", true)], false).unwrap();
+        assert_eq!(diff_lines(&diff), [(file.clone(), "- 停用省略 GPT- 前缀注入".to_string()), (file, INJECTIONS[1].on.1.to_string())]);
+        assert_eq!(injections_on(&store::load()), [true, true, true, true, false]);
+        // Turning one off leaves the other alone.
+        assert!(plan(&[setting("short_names", false)], false).unwrap().0.groups.is_empty());
+        assert!(ui_patches().full_names);
         let (diff, _, _) = plan(&[setting("quota_unlock", false)], false).unwrap();
         assert_eq!(diff_lines(&diff)[0].1, "- 停用额度用完仍可发送注入");
         assert!(!ui_patches().quota);

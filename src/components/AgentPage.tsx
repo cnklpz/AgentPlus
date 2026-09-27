@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
   CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, deleteModel, guessedModel, isEnabled, isVisible, keys, mergeExtra, opCount,
-  providerModelCount, setModelVisible, setSetting, settingValue, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
+  providerModelCount, setModelVisible, setSetting, setSettingIn, settingValue, excludedOn, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
@@ -231,7 +231,17 @@ export function AgentPage(props: Props) {
           const shown = fixedPre ? st.settings.map((s) => (s.key === "fixed_id" ? { ...s, value: true } : s)) : st.settings;
           return (
             <Settings settings={shown} draft={draft} readonly={st.readonly}
-              onChange={(s, v) => (fixedPre && s.key === "fixed_id" ? props.onDeclineFixed() : setDraft(setSetting(draft, s, v)))}
+              onChange={async (s, v) => {
+                if (fixedPre && s.key === "fixed_id") return props.onDeclineFixed();
+                // Mutually exclusive switches: confirm only when the other one is on.
+                if (v === true) {
+                  for (const o of excludedOn(draft, st.settings, s)) {
+                    const ok = await ask({ title: t("agentPage.exclusiveConfirm", { other: o.label }), message: t("agentPage.exclusiveConfirmMsg", { name: s.label, other: o.label }), confirmText: t("agentPage.exclusiveTurnOn") });
+                    if (!ok) return;
+                  }
+                }
+                setDraft(setSettingIn(draft, st.settings, s, v));
+              }}
               notes={fixedPre ? {
                 fixed_id: <div className="set-note">{t("agentPage.fixedPreNote")}</div>,
               } : undefined} />

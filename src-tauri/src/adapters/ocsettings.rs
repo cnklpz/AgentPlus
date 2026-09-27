@@ -128,6 +128,7 @@ pub fn rows(cfg: &Value, global: Option<&Value>, scope: Scope, models: &[String]
             value: Value::Null,
             options: vec![],
             hints: vec![],
+            excludes: vec![],
         };
         match &s.kind {
             Kind::Bool(def) if scope == Scope::Global => {

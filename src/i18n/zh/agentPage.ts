@@ -54,6 +54,9 @@ const zh: typeof en = {
   total: "共 {n} 个模型",
   totalFiltered: "共 {n} 个模型 · 筛选出 {shown} 个",
   unapplied: "未应用",
+  exclusiveConfirm: "关闭「{other}」？",
+  exclusiveConfirmMsg: "「{name}」和「{other}」不能同时开启，开启后会关闭「{other}」。应用前再把它关掉，「{other}」会恢复原样。",
+  exclusiveTurnOn: "开启",
   selectedCount: "已选 {n} / {total}",
   onePerLine: "每行一个",
 };

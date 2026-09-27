@@ -15,6 +15,9 @@
 //!   (server-sent `rate_limit_upsell` ones like "You're out of Codex and Work usage", and
 //!   the app's own warnings). Those are about the ChatGPT quota, not the relay, so we
 //!   make the slot always show what it would without them.
+//! - Short model names: the opposite of full names, for the official sign-in mix. Signed
+//!   in with ChatGPT, the Statsig gate above is on and names keep "GPT-"; we make every
+//!   read of that gate false, so names are shortened just as with custom providers.
 //!
 //! The patches live in different bundles (app-initial, app-primary); every bundle is
 //! tried with every patch, and a patch is missing only when no bundle has it.
@@ -42,6 +45,7 @@ const FAST_MARK: &str = "/*agentplus-fast*/";
 const NAMES_MARK: &str = "/*agentplus-names*/";
 const QUOTA_MARK: &str = "/*agentplus-quota*/";
 const BANNER_MARK: &str = "/*agentplus-banner*/";
+const SHORT_MARK: &str = "/*agentplus-short*/";
 const BUNDLE_HINTS: [&str; 2] = ["app-initial-", "app-primary-"];
 
 /// Which UI patches to apply.
@@ -51,6 +55,7 @@ pub struct Patches {
     pub full_names: bool,
     pub quota: bool,
     pub usage_banner: bool,
+    pub short_names: bool,
 }
 
 impl Patches {
@@ -58,17 +63,18 @@ impl Patches {
         self.flags().contains(&true)
     }
 
-    fn flags(self) -> [bool; 4] {
-        [self.fast, self.full_names, self.quota, self.usage_banner]
+    fn flags(self) -> [bool; 5] {
+        [self.fast, self.full_names, self.quota, self.usage_banner, self.short_names]
     }
 
     /// Display names, in the order `patch_source` applies them.
-    fn names() -> [&'static str; 4] {
+    fn names() -> [&'static str; 5] {
         [
             "Fast",
             crate::i18n::l("Full model names", "完整模型名"),
             crate::i18n::l("Send after quota runs out", "额度用完仍可发送"),
             crate::i18n::l("Hide usage banners", "隐藏用量提示横幅"),
+            crate::i18n::l("Drop the GPT- prefix", "省略 GPT- 前缀"),
         ]
     }
 
@@ -131,11 +137,30 @@ fn patch_banner(src: &str) -> Option<String> {
     replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
 }
 
+/// Turns every read of the "keep the GPT- prefix" Statsig gate into false, keeping the
+/// hook call so the component's hook order stays the same:
+///   l=Y(Zd,`3849065407`)  →  l=(Y(Zd,`3849065407`),!1)
+///   I=Y(b?Zd:!1,`3849065407`)  →  I=(Y(b?Zd:!1,`3849065407`),!1)
+fn patch_short(src: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = cached(&RE, r"[\w$]+\([^(),]{1,40},`3849065407`\)");
+    match re.replace_all(src, format!("($0,!1{SHORT_MARK})")) {
+        Cow::Borrowed(_) => None,
+        Cow::Owned(s) => Some(s),
+    }
+}
+
 /// Applies the wanted patches that aren't in `src` yet. Returns the patched source
 /// (`None` when nothing changed) and the patches whose code couldn't be found.
 pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static str>) {
     type Patch = (&'static str, fn(&str) -> Option<String>);
-    let patches: [Patch; 4] = [(FAST_MARK, patch_fast), (NAMES_MARK, patch_names), (QUOTA_MARK, patch_quota), (BANNER_MARK, patch_banner)];
+    let patches: [Patch; 5] = [
+        (FAST_MARK, patch_fast),
+        (NAMES_MARK, patch_names),
+        (QUOTA_MARK, patch_quota),
+        (BANNER_MARK, patch_banner),
+        (SHORT_MARK, patch_short),
+    ];
     let mut out: Option<String> = None;
     let mut missing = vec![];
     for (i, ((mark, f), on)) in patches.into_iter().zip(want.flags()).enumerate() {
@@ -498,12 +523,13 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
 mod tests {
     use super::*;
 
-    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false };
-    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false };
-    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false };
-    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true };
-    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false };
-    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false };
+    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false };
+    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false, short_names: false };
+    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false, short_names: false };
+    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true, short_names: false };
+    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false, short_names: false };
+    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false, short_names: false };
+    const SHORT: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: true };
     const GATE: &str = "let x=1;d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;";
     const STRIP: &str = "join(``);return t?r.replace(/^GPT-/iu,``):r}function Cpa(){";
     // Codex 26.917 app-primary bundle.
@@ -538,6 +564,22 @@ mod tests {
         let (out, missing) = patch_source(STRIP, BOTH);
         assert!(out.unwrap().contains("/*agentplus-names*/"));
         assert_eq!(missing, vec!["Fast"]);
+    }
+
+    #[test]
+    fn drops_gpt_prefix_like_custom_providers() {
+        // Codex 26.924 app-primary bundle: the gate is read in several components.
+        let src = "c=o!==void 0&&o,l=Y(Zd,`3849065407`),u;if(r!=null){let e=c&&!l,n;I=Y(b?Zd:!1,`3849065407`),L=Y(zS,`local`)&&b;";
+        let (out, missing) = patch_source(src, SHORT);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(
+            out,
+            "c=o!==void 0&&o,l=(Y(Zd,`3849065407`),!1/*agentplus-short*/),u;if(r!=null){let e=c&&!l,n;I=(Y(b?Zd:!1,`3849065407`),!1/*agentplus-short*/),L=Y(zS,`local`)&&b;"
+        );
+        assert_eq!(patch_source(&out, SHORT), (None, vec![]));
+        // Other gates are left alone.
+        assert_eq!(patch_source("L=Y(zS,`local`),M=Y(Zd,`1234567890`)", SHORT).0, None);
     }
 
     #[test]
@@ -583,16 +625,20 @@ mod tests {
     #[ignore]
     fn real_bundles() {
         let dir = std::env::var("CODEX_ASSETS").expect("CODEX_ASSETS");
-        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true };
-        let mut missing = None;
-        for e in std::fs::read_dir(dir).unwrap() {
-            let path = e.unwrap().path();
-            if bundle_of(&path.to_string_lossy().replace('\\', "/")).is_some() {
-                let (_, miss) = patch_source(&std::fs::read_to_string(&path).unwrap(), all);
-                missing = Some(still_missing(missing, miss));
+        // Full and short names are exclusive: check each set on its own.
+        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true, short_names: false };
+        let short = Patches { short_names: true, ..Patches::default() };
+        for want in [all, short] {
+            let mut missing = None;
+            for e in std::fs::read_dir(&dir).unwrap() {
+                let path = e.unwrap().path();
+                if bundle_of(&path.to_string_lossy().replace('\\', "/")).is_some() {
+                    let (_, miss) = patch_source(&std::fs::read_to_string(&path).unwrap(), want);
+                    missing = Some(still_missing(missing, miss));
+                }
             }
+            assert_eq!(missing, Some(vec![]));
         }
-        assert_eq!(missing, Some(vec![]));
     }
 
     #[test]

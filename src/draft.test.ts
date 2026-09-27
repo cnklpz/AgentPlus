@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentState, Model, Op, Provider, Setting } from "./api";
 import {
   type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
-  parseCtx, pendingTotal, providerModelCount, removeProvider, setModelVisible, setProviderEnabled, setSetting, settingOn, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  parseCtx, pendingTotal, providerModelCount, removeProvider, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp,
 } from "./draft";
 
@@ -88,6 +88,69 @@ describe("setSetting", () => {
     expect(d[keys.setting("instructions")]).toEqual({ op: "set_setting", key: "instructions", value: ["b", "a"] });
     expect(setSetting(d, l, ["a", "b"])).toEqual({});
     expect(setSetting({}, l, ["a", "b", "c"])).not.toEqual({});
+  });
+});
+
+describe("setSettingIn", () => {
+  const sw = (key: string, value: boolean, excludes?: string[]) => ({ key, kind: "bool", value, excludes }) as unknown as Setting;
+  const full = sw("full_names", true, ["short_names"]);
+  const short = sw("short_names", false, ["full_names"]);
+  const all = [full, short, sw("quota_unlock", true)];
+  it("turns off the switch it excludes", () => {
+    const d = setSettingIn({}, all, short, true);
+    expect(settingValue(short, d)).toBe(true);
+    expect(settingValue(full, d)).toBe(false);
+    expect(settingValue(all[2], d)).toBe(true);
+  });
+  it("lists the excluded switches that are on", () => {
+    expect(excludedOn({}, all, short)).toEqual([full]);
+    expect(excludedOn(setSettingIn({}, all, full, false), all, short)).toEqual([]);
+    expect(excludedOn({}, all, all[2])).toEqual([]);
+  });
+  it("switching back restores the pending state both ways", () => {
+    const d = setSettingIn(setSettingIn({}, all, short, true), all, full, true);
+    expect(d).toEqual({});
+  });
+  it("turning it off before applying puts the excluded switch back", () => {
+    const d = setSettingIn(setSettingIn({}, all, short, true), all, short, false);
+    expect(d).toEqual({});
+  });
+  it("turning an applied switch off leaves the others alone", () => {
+    const d = setSettingIn({}, all, full, false);
+    expect(Object.keys(d)).toEqual([keys.setting("full_names")]);
+    const a = [sw("full_names", false, ["short_names"]), sw("short_names", true, ["full_names"])];
+    expect(Object.keys(setSettingIn({}, a, a[1], false))).toEqual([keys.setting("short_names")]);
+  });
+  it("an already-off excluded switch gets no op", () => {
+    const off = [sw("full_names", false, ["short_names"]), short];
+    expect(Object.keys(setSettingIn({}, off, short, true))).toEqual([keys.setting("short_names")]);
+  });
+  it("preserves a manual disable made before toggling the other switch", () => {
+    const manual = setSettingIn({}, all, full, false);
+    const d = setSettingIn(setSettingIn(manual, all, short, true), all, short, false);
+    expect(d).toEqual(manual);
+    expect(settingValue(full, d)).toBe(false);
+    expect(settingValue(short, d)).toBe(false);
+  });
+  it("restores a pending enable displaced by the other switch", () => {
+    const off = [sw("full_names", false, ["short_names"]), short];
+    const manual = setSettingIn({}, off, off[0], true);
+    const d = setSettingIn(setSettingIn(manual, off, short, true), off, short, false);
+    expect(d).toEqual(manual);
+    expect(settingValue(off[0], d)).toBe(true);
+  });
+  it("keeps undo information across unrelated edits and repeated enables", () => {
+    const enabled = setSettingIn({}, all, short, true);
+    const repeated = setSettingIn(enabled, all, short, true);
+    const edited = setSettingIn(repeated, all, all[2], false);
+    expect(setSettingIn(edited, all, short, false)).toEqual(setSetting({}, all[2], false));
+    expect(JSON.stringify(enabled)).not.toContain("before");
+  });
+  it("does not restore a linked setting after a later explicit edit", () => {
+    const enabled = setSettingIn({}, all, short, true);
+    const edited = setSetting(enabled, full, false);
+    const d = setSettingIn(edited, all, short, false);
+    expect(d).toEqual(setSetting({}, full, false));
   });
 });
 

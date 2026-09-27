@@ -52,6 +52,9 @@ export default {
   total: "{n} model|{n} models",
   totalFiltered: "{n} model · {shown} shown by filter|{n} models · {shown} shown by filter",
   unapplied: "Not applied",
+  exclusiveConfirm: "Turn off \"{other}\"?",
+  exclusiveConfirmMsg: "\"{name}\" can't be on together with \"{other}\": turning it on turns \"{other}\" off. Turn it off again before applying and \"{other}\" goes back as it was.",
+  exclusiveTurnOn: "Turn on",
   selectedCount: "{n} / {total} selected",
   onePerLine: "One per line",
 };

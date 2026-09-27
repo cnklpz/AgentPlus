@@ -251,6 +251,7 @@ fn desktop_setting(agent: &str, name: &str, inst: &process::Install) -> Option<S
         value: serde_json::Value::from(value),
         options,
         hints,
+        excludes: vec![],
     })
 }
 
