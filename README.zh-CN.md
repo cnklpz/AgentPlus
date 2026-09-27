@@ -24,6 +24,7 @@
 ## 主要功能
 
 - **供应商库**：API 地址和密钥填一次，所有 Agent 共用。内置 21 套模板，覆盖常见厂商和编程套餐，多数只要贴一个 Key。
+- **导入链接**：中转站（Sub2API、New API 等）的「导入到 CC Switch」按钮可以直接填好添加供应商的表单：在「供应商 → 链接导入」里粘贴链接，或者让 AgentPlus 打开 `ccswitch://` 链接（设置里开启，仅 Windows）。见[导入链接](#导入链接)。
 - **模型列表**：拉取供应商提供的模型，再挑出每个 Agent 要显示的那些。
 - **改动预览**：没看过 diff 就不会写入，被替换的文件先存到 `~/.agentplus/backups/`，之后随时能还原。
 - **本地网关**：在 OpenAI Chat、OpenAI Responses、Anthropic Messages 之间互转，流式输出和工具调用都支持——Claude Code 要接一家只提供 OpenAI 接口的服务，靠的就是它。
@@ -144,6 +145,20 @@ AgentPlus 能识别 15 个 Agent，读取和写入这些配置文件：
 - 配置里的 `$VAR`、`${VAR}`、`env_key` 等变量引用会原样保留。
 
 </details>
+
+## 导入链接
+
+AgentPlus 能打开 `agentplus://v1/import?…` 链接，参数和 CC Switch 的 `ccswitch://v1/import?…` 供应商链接相同：已经有「导入到 CC Switch」按钮的网站只要换掉协议名即可。
+
+```text
+agentplus://v1/import?resource=provider&app=claude&name=My%20Relay&endpoint=https%3A%2F%2Frelay.example.com&apiKey=sk-...&model=claude-sonnet-5
+```
+
+- `app`：`claude`（Anthropic）、`codex`（OpenAI Responses，`endpoint` 要带 `/v1`）、`gemini`、`opencode`、`openclaw`、`hermes`；其他值按 OpenAI Chat 兼容接口添加。表单里会勾选对应的 Agent。
+- `name`、`endpoint`（逗号分隔时取第一个）、`apiKey`、`homepage`，以及组成模型列表的 `model` / `sonnetModel` / `opusModel` / `haikuModel`。也会读取 CC Switch 的 base64 `config`；`usage*` 参数忽略。
+- `agentplus://` 链接还可以带 `api`（`responses`、`chat`、`anthropic`、`gemini`）和 `models`（逗号分隔）。
+
+链接只负责填表：点「添加」之前不会保存任何内容。
 
 ## 从源码构建
 

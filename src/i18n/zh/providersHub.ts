@@ -4,6 +4,8 @@ import type en from "../en/providersHub";
 const zh: typeof en = {
   intro: "按服务地址归成中转站，一个中转站可以有多个分组（不同协议、路径或密钥）。地址和密钥在这里维护，模型在各 Agent 的「模型列表」里设置。当前环境：{env}",
   testLatency: "测试延迟",
+  importLink: "链接导入",
+  importLinkHint: "从 agentplus:// 或 ccswitch:// 链接添加供应商",
   filterAll: "全部",
   filterUsed: "已接入",
   filterIdle: "未使用",

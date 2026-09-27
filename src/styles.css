@@ -664,3 +664,8 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .ap-folding { overflow: hidden !important; min-height: 0 !important; min-width: 0 !important; }
 ::highlight(ap-hint-gone) { color: transparent; }
 .ap-shards { position: fixed; left: 0; top: 0; z-index: 2147483000; pointer-events: none; }
+
+/* Add-provider dialog filled in from an import link (ImportLink.tsx) */
+.import-note { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--ink); }
+.import-note > svg { color: var(--accent); flex: none; }
+.import-link-input { resize: vertical; min-height: 84px; word-break: break-all; line-height: 1.5; }

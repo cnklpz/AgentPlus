@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ProviderInput, api, isProjectId } from "../api";
+import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api, isProjectId } from "../api";
 import { type Draft, type ViewProvider, isVisible, keys, settingValue, viewModels } from "../draft";
 import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
+import { ImportNote } from "./ImportLink";
 import { Modal } from "./Modal";
 import { ErrorBox, Seg, SegMulti, ToggleRow } from "./controls";
 import { ModelPicker, useModelPool } from "./ModelPicker";
@@ -53,6 +54,8 @@ interface Props {
   gateway: GatewayStatus | null;
   /** Turns the gateway on if needed and returns its status. */
   ensureGateway: () => Promise<GatewayStatus>;
+  /** New provider from an import link: the fields it fills in. */
+  imported?: ImportRequest | null;
 }
 
 const API_HINT: Record<ApiKind, TKey> = {
@@ -78,7 +81,7 @@ const ROLES: { role: string; label: TKey; hint: TKey }[] = [
 ];
 const HERMES_ROLES: typeof ROLES = [{ role: "default", label: "providerDialog.roleDefault", hint: "providerDialog.hermesDefaultHint" }];
 
-export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway }: Props) {
+export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, imported }: Props) {
   const isNew = !editing || !!editing.isNew;
   const codex = st.id === "codex";
   const claude = st.id === "claude";
@@ -89,10 +92,10 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const unmanaged = claude && editing?.id === "settings-env";
   /** Model roles this agent lets you assign (Claude: several; Hermes: the default model). */
   const roleList = claude ? ROLES : st.id === "hermes" ? HERMES_ROLES : [];
-  const [name, setName] = useState(editing?.name ?? "");
-  const [baseUrl, setBaseUrl] = useState(editing?.baseUrl ?? "");
-  const [kind, setKind] = useState<ApiKind>(only ?? editing?.api ?? "chat");
-  const [key, setKey] = useState("");
+  const [name, setName] = useState(editing?.name ?? imported?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(editing?.baseUrl ?? imported?.baseUrl ?? "");
+  const [kind, setKind] = useState<ApiKind>(only ?? editing?.api ?? imported?.api ?? "chat");
+  const [key, setKey] = useState(imported?.apiKey ?? "");
   /** Codex: keep the ChatGPT sign-in while requests go to this provider. */
   const [officialAuth, setOfficialAuth] = useState(editing?.officialAuth ?? false);
   /** The official sign-in mix options still off (pending changes counted). */
@@ -130,7 +133,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const codexStart = pmOp && pmOp.op === "set_provider_models" ? pmOp.models : codexOriginal;
   const perModels = editing && !isNew && !listMode ? viewModels(editing.id, editing.models, draft).filter((m) => !m.isDeleted) : [];
   const [checked, setChecked] = useState<string[]>(() =>
-    isNew ? editing?.models.map((m) => m.id) ?? [] : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id),
+    isNew ? editing?.models.map((m) => m.id) ?? imported?.models ?? [] : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id),
   );
   const [fetched, setFetched] = useState<string[]>([]);
   const [fetching, setFetching] = useState(false);
@@ -178,6 +181,14 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       setFetching(false);
     }
   };
+
+  // From an import link: fetch the provider's models once, right away (the link's own stay ticked).
+  const autoFetched = useRef(false);
+  useEffect(() => {
+    if (!imported || autoFetched.current || !isHttpUrl(imported.baseUrl)) return;
+    autoFetched.current = true;
+    void fetchList();
+  }, []);
 
   const addManual = (ids: string[]) => {
     addToPool(ids);
@@ -329,7 +340,8 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   return (
     <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
       title={isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })} foot={foot}>
-      {isNew && gatewayCapable(st.id) && !unifiedNew && <TemplatePicker value={tpl} onPick={pickTpl} />}
+      {imported && <ImportNote req={imported} />}
+      {isNew && gatewayCapable(st.id) && !unifiedNew && !imported && <TemplatePicker value={tpl} onPick={pickTpl} />}
       <div className="field">
         <label htmlFor="pd-name">{t("common.name")}</label>
         <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />

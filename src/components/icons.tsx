@@ -105,6 +105,7 @@ export const Icon = {
   folder: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />, sw),
   refresh: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8" /><path d="M21 3v5h-5" /></>, sw),
   download: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M12 4v11" /><path d="m7 10 5 5 5-5" /><path d="M5 20h14" /></>, sw),
+  link: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>, sw),
   external: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>, sw),
   play: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M7 4.5v15l12.5-7.5Z" />, sw),
   layers: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>, sw),

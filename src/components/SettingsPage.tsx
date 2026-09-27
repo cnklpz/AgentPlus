@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { type AgentDetect, type AgentId, type EnvInfo, type LogInfo, api } from "../api";
+import { type AgentDetect, type AgentId, type EnvInfo, type LinkHandler, type LogInfo, api } from "../api";
 import { inTauri } from "../tauri";
 import type { CloseAction, Hints, Motion, Prefs, RestartProgressPref, Theme } from "../prefs";
 import { LANGS, type LangPref, type TKey, locale, t, tn, useLang } from "../i18n";
@@ -167,6 +167,8 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         </SettingRow>
       </section>
 
+      <LinkSection flash={flash} />
+
       <LogSection flash={flash} />
 
       <section className="sgroup">
@@ -178,6 +180,38 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         </SettingRow>
       </section>
     </div>
+  );
+}
+
+/** Import links: whether ccswitch:// links (relays' "Import to CC Switch" buttons) open in AgentPlus. Windows only. */
+function LinkSection({ flash }: { flash: Flash }) {
+  const [h, setH] = useState<LinkHandler | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.ccswitchLink().then((x) => { if (alive) setH(x); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (!h?.supported) return null;
+  const set = async (on: boolean) => {
+    setBusy(true);
+    try {
+      setH(await api.setCcswitchLink(on));
+      flash(t(on ? "settingsPage.ccswitchOnToast" : "settingsPage.ccswitchOffToast"));
+    } catch (e) {
+      flash(errText(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="sgroup">
+      <h2>{t("settingsPage.linksTitle")}</h2>
+      <SettingRow label={t("settingsPage.ccswitchLinks")} keepDesc={!h.on && !!h.other}
+        desc={h.on ? t("settingsPage.ccswitchOnHint") : h.other ? t("settingsPage.ccswitchOtherHint", { app: h.other }) : t("settingsPage.ccswitchOffHint")}>
+        <Switch on={h.on} disabled={busy} onChange={(v) => { void set(v); }} label={t("settingsPage.ccswitchLinks")} />
+      </SettingRow>
+    </section>
   );
 }
 

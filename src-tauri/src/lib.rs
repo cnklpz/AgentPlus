@@ -4,6 +4,7 @@ mod adapters;
 mod applog;
 mod appmenu;
 mod cdp;
+mod deeplink;
 mod dotenv;
 mod env;
 mod gateway;
@@ -623,12 +624,80 @@ fn install_panic_hook() {
     }));
 }
 
+/// Import links: the one this launch was started with, macOS's "open URL" events, and the
+/// registration of `agentplus://` (and of `ccswitch://`, when the user took it over).
+fn setup_links(app: &tauri::App) {
+    // Only queued: the page takes it once loaded, and the window shows itself then.
+    for a in std::env::args().skip(1) {
+        if deeplink::is_link(&a) {
+            deeplink::queue(&a);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_deep_link::DeepLinkExt;
+        let h = app.handle().clone();
+        app.deep_link().on_open_url(move |e| {
+            for u in e.urls() {
+                deeplink::receive(&h, u.as_str());
+            }
+        });
+        if let Ok(Some(urls)) = app.deep_link().get_current() {
+            for u in urls {
+                deeplink::queue(u.as_str());
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        use tauri_plugin_deep_link::DeepLinkExt;
+        // The installer registers agentplus://; a release build also points it back at itself
+        // when it was moved (portable copy, another install folder). Dev builds leave it alone.
+        let dl = app.deep_link();
+        if !cfg!(debug_assertions) && !dl.is_registered(deeplink::SCHEME).unwrap_or(true) {
+            if let Err(e) = dl.register(deeplink::SCHEME) {
+                applog::warn("import", format!("Can't register {}://: {e}", deeplink::SCHEME));
+            }
+        }
+        deeplink::refresh_ccswitch();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = app;
+}
+
+/// Import links that came in since the last call, each parsed (or why it can't be imported).
+#[tauri::command]
+fn take_imports() -> Vec<deeplink::ImportItem> {
+    deeplink::take()
+}
+
+/// A pasted import link.
+#[tauri::command]
+fn parse_import_link(link: String) -> Result<deeplink::ImportRequest, String> {
+    deeplink::parse(&link).map_err(err)
+}
+
+#[tauri::command]
+async fn ccswitch_link_status() -> Result<deeplink::LinkHandler, String> {
+    blocking(|| Ok(deeplink::ccswitch_status())).await
+}
+
+#[tauri::command]
+async fn set_ccswitch_link(on: bool) -> Result<deeplink::LinkHandler, String> {
+    blocking(move || deeplink::set_ccswitch(on)).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // Registered first: a second launch (e.g. while this one sits in the tray) exits
         // right away and brings this window forward instead of starting a second gateway.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+        // A second launch may carry an import link (agentplus:// or ccswitch://).
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            tray::show_main(app);
+            deeplink::receive_args(app, args);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(update::Pending::default())
         .setup(|app| {
@@ -642,6 +711,7 @@ pub fn run() {
             install_panic_hook();
             tray::setup(app.handle())?;
             appmenu::setup(app.handle())?;
+            setup_links(app);
             // Off the startup path: binding the port and stopping an old listener can wait.
             std::thread::spawn(gateway::server::autostart);
             // macOS: ask the login shell for PATH now, before the first detection needs it.
@@ -733,6 +803,10 @@ pub fn run() {
             log_client,
             log_export,
             open_log_dir,
+            take_imports,
+            parse_import_link,
+            ccswitch_link_status,
+            set_ccswitch_link,
             update::update_check,
             update::update_install
         ])

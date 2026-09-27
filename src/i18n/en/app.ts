@@ -37,6 +37,8 @@ export default {
   savedQueued: "Saved to the provider library; queued {n} agent change|Saved to the provider library; queued {n} agent changes",
   savedViaQueued: "Saved to the provider library, forwarded through the gateway at {url}; queued {n} agent change|Saved to the provider library, forwarded through the gateway at {url}; queued {n} agent changes",
   savedToLib: "Saved to the provider library",
+  importFailed: "Can't import the link: {err}",
+  importNeedsGemini: "This link is for Gemini CLI, which AgentPlus can't find here",
   forwardFailed: "Couldn't turn on the forward: {err}",
   routeDeletedRestored: "Forward deleted; queued restoring {n} provider to its original URL|Forward deleted; queued restoring {n} providers to their original URL",
   gatewayPortMoved: "The local gateway is now on port {port}: queued moving {n} provider address from the old port. Agents switch once you apply|The local gateway is now on port {port}: queued moving {n} provider addresses from the old port. Agents switch once you apply",

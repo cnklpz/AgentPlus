@@ -2,6 +2,8 @@
 export default {
   intro: "Providers are grouped into relays by service URL; a relay can have several groups (different protocols, paths or API keys). Manage URLs and API keys here, and set models in each agent's \"Model list\". Current environment: {env}",
   testLatency: "Test latency",
+  importLink: "Import link",
+  importLinkHint: "Add a provider from an agentplus:// or ccswitch:// link",
   filterAll: "All",
   filterUsed: "In use",
   filterIdle: "Unused",

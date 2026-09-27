@@ -24,6 +24,7 @@ English | [简体中文](README.zh-CN.md)
 ## Features
 
 - **Provider library.** Put an API URL and key in once and every agent can use it. There are 21 templates for common providers and coding plans; most need nothing from you but a key.
+- **Import links.** A relay's "Import to CC Switch" button (Sub2API, New API…) can fill in the add-provider dialog: paste its link under Providers → Import link, or let AgentPlus open `ccswitch://` links (Settings, Windows). See [Import links](#import-links).
 - **Model lists.** Fetch what a provider offers, then choose what each agent shows.
 - **Change preview.** Nothing is written until you've looked at the diff, and whatever gets replaced is saved to `~/.agentplus/backups/` first.
 - **Local gateway.** Converts between OpenAI Chat, OpenAI Responses and Anthropic Messages, streaming and tool calls included — which is how Claude Code can use a provider that only speaks OpenAI.
@@ -144,6 +145,20 @@ Only the agents it finds show up in the app. If yours is installed somewhere unu
 - Variable references (`$VAR`, `${VAR}`, `env_key`) are left alone.
 
 </details>
+
+## Import links
+
+AgentPlus opens `agentplus://v1/import?…` links, which take the same query parameters as CC Switch's `ccswitch://v1/import?…` provider links: a site that already has an "Import to CC Switch" button only needs to swap the scheme.
+
+```text
+agentplus://v1/import?resource=provider&app=claude&name=My%20Relay&endpoint=https%3A%2F%2Frelay.example.com&apiKey=sk-...&model=claude-sonnet-5
+```
+
+- `app`: `claude` (Anthropic), `codex` (OpenAI Responses; include `/v1` in `endpoint`), `gemini`, `opencode`, `openclaw`, `hermes`; anything else is added as an OpenAI Chat-compatible provider. The agent named is ticked in the dialog.
+- `name`, `endpoint` (the first of a comma-separated list), `apiKey`, `homepage`, and `model` / `sonnetModel` / `opusModel` / `haikuModel` for the model list. CC Switch's base64 `config` is read too; `usage*` parameters are ignored.
+- `agentplus://` links may also set `api` (`responses`, `chat`, `anthropic`, `gemini`) and `models` (comma-separated).
+
+A link only fills in the dialog: nothing is saved until you click Add.
 
 ## Building from source
 

@@ -54,6 +54,13 @@ export default {
   dataDir: "AgentPlus data folder",
   dataDirHint: "~/.agentplus · provider library, per-agent switches, backups taken before each write",
   backups: "Backups & rollback",
+  linksTitle: "Import links",
+  ccswitchLinks: "Open CC Switch import links",
+  ccswitchOffHint: "Relay sites (Sub2API, New API…) offer \"Import to CC Switch\" buttons. Turn this on to open those ccswitch:// links in AgentPlus: they fill in the add-provider dialog. agentplus:// links always open here.",
+  ccswitchOtherHint: "ccswitch:// links open in {app} now. Turn this on to open them in AgentPlus instead; turning it off gives them back to {app}.",
+  ccswitchOnHint: "ccswitch:// links open in AgentPlus and fill in the add-provider dialog. Turn this off to give them back to the program that had them before.",
+  ccswitchOnToast: "CC Switch import links now open in AgentPlus",
+  ccswitchOffToast: "CC Switch import links handed back",
 
   logTitle: "Diagnostic log",
   logEnabled: "Keep a diagnostic log",

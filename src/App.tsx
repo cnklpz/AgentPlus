@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportRequest, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
 import {
   CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, guessedModel, importProvider, isEnabled, isVisible, keys, opCount,
   opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
@@ -19,6 +19,7 @@ import { ProviderDialog, type ProviderSave } from "./components/ProviderDialog";
 import { ProvidersHub } from "./components/ProvidersHub";
 import { HubAside } from "./components/HubAside";
 import { ServiceDetail } from "./components/ServiceDetail";
+import { ImportLinkDialog } from "./components/ImportLink";
 import { type ServiceSave, ServiceDialog } from "./components/ServiceDialog";
 import { EnvSwitch } from "./components/EnvSwitch";
 import { checkUpdate, takeJustUpdated, useUpdate } from "./updater";
@@ -65,9 +66,10 @@ function WindowControls() {
   );
 }
 
-type Dialog = { editing: ViewProvider | null } | null;
-/** Hub dialog: undefined = closed; group null = add (optionally inside a station). */
-type HubDialog = { group: Group | null; prefill?: { name: string; baseUrl: string; station: string } } | undefined;
+/** `imported`: a new provider filled in from an import link; `n` tells one import from the next. */
+type Dialog = { editing: ViewProvider | null; imported?: ImportRequest; n?: number } | null;
+/** Hub dialog: undefined = closed; group null = add (optionally inside a station, or from an import link). */
+type HubDialog = { group: Group | null; prefill?: { name: string; baseUrl: string; station: string }; imported?: ImportRequest; n?: number } | undefined;
 
 export default function App() {
   const [agents, setAgents] = useState<AgentState[]>([]);
@@ -1005,6 +1007,43 @@ export default function App() {
     setProjPath(null);
   };
 
+  // Import links (agentplus://, or ccswitch:// when taken over): each opens the add-provider
+  // dialog filled in. The backend keeps them until they are taken here, so a link that
+  // started the app waits for the agents to load.
+  const [linkOpen, setLinkOpen] = useState(false);
+  const importSeq = useRef(0);
+  const importRef = useRef((_r: ImportRequest) => {});
+  importRef.current = (r: ImportRequest) => {
+    const n = ++importSeq.current;
+    setLinkOpen(false);
+    setPalette(false);
+    // Gemini CLI speaks only Gemini's protocol, which the provider library doesn't keep: its own dialog.
+    if (r.api === "gemini") {
+      if (!shown.some((a) => a.id === "gemini" && !a.readonly)) {
+        flash(t("app.importNeedsGemini"), true);
+        return;
+      }
+      setHubDialog(undefined);
+      openAgent("gemini");
+      setDialog({ editing: null, imported: r, n });
+      return;
+    }
+    setDialog(null);
+    setPage("providers");
+    setHubDialog({ group: null, imported: r, n });
+  };
+  useEffect(() => {
+    if (!inTauri || !agentsReady) return;
+    const take = () => api.takeImports().then((items) => {
+      for (const i of items) if (i.error) flash(t("app.importFailed", { err: i.error }), true);
+      const last = items.filter((i) => i.request).pop()?.request;
+      if (last) importRef.current(last);
+    }).catch(() => undefined);
+    void take();
+    const off = listen("import-link", () => { void take(); });
+    return () => { off.then((f) => f()); };
+  }, [agentsReady]);
+
   const goTo = (target: Target) => {
     if (target.kind === "page") {
       if (target.page === "settings") {
@@ -1361,6 +1400,7 @@ export default function App() {
             selected={hubSel}
             onSelect={setHubSel}
             onAdd={() => setHubDialog({ group: null })}
+            onImportLink={() => setLinkOpen(true)}
             onTestAll={() => testHub(true)}
             onTestOne={testOne}
             envLabel={curEnv?.label ?? localEnvLabel()}
@@ -1517,10 +1557,11 @@ export default function App() {
         )}
       </div>
 
-      {dialog && st && <ProviderDialog st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onSave={saveProvider} onClose={() => setDialog(null)} />}
+      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onSave={saveProvider} onClose={() => setDialog(null)} />}
       {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
-      {hubDialog !== undefined && <ServiceDialog agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} onSave={hubSave} onClose={() => setHubDialog(undefined)} />}
+      {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} onSave={hubSave} onClose={() => setHubDialog(undefined)} />}
+      {linkOpen && <ImportLinkDialog onImport={(r) => importRef.current(r)} onClose={() => setLinkOpen(false)} />}
       {envAsk && (
         <PendingDialog
           title={t("app.beforeSwitch", { env: envs.find((e) => e.id === envAsk)?.label ?? envAsk })}

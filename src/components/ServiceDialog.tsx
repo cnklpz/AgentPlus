@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { type AgentId, type AgentState, type ApiKind, api } from "../api";
+import { type AgentId, type AgentState, type ApiKind, type ImportRequest, api } from "../api";
 import { AGENT_NAME, API_LABEL, type Group, ONLY_API, PROTOCOLS, type Protocol, type Use, freeAgents, gatewayCapable, useKey } from "../services";
 import { AgentIcon, Icon } from "./icons";
+import { ImportNote } from "./ImportLink";
 import { Modal } from "./Modal";
 import { ErrorBox, Seg, ToggleRow } from "./controls";
 import { ModelPicker, useModelPool } from "./ModelPicker";
@@ -32,6 +33,8 @@ interface Props {
   group: Group | null;
   /** New group inside an existing station: suggested name and address. */
   prefill?: { name: string; baseUrl: string; station: string } | null;
+  /** New provider from an import link: the fields it fills in (and the agent it was made for). */
+  imported?: ImportRequest | null;
   onSave: (v: ServiceSave) => Promise<void>;
   onClose: () => void;
 }
@@ -42,14 +45,14 @@ const API_HINT: Record<Protocol, TKey> = {
   anthropic: "common.apiHintAnthropic",
 };
 
-export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props) {
+export function ServiceDialog({ agents, group, prefill, imported, onSave, onClose }: Props) {
   const isNew = !group;
-  const [name, setName] = useState(group?.name ?? prefill?.name ?? "");
-  const [baseUrl, setBaseUrl] = useState(group?.baseUrl ?? prefill?.baseUrl ?? "");
-  const [kind, setKind] = useState<ApiKind>(group?.api ?? "responses");
-  const [key, setKey] = useState("");
-  const [models, setModels] = useState<string[]>(group?.lib?.models ?? []);
-  const [pool, addToPool, resetPool] = useModelPool(() => group?.lib?.models ?? []);
+  const [name, setName] = useState(group?.name ?? prefill?.name ?? imported?.name ?? "");
+  const [baseUrl, setBaseUrl] = useState(group?.baseUrl ?? prefill?.baseUrl ?? imported?.baseUrl ?? "");
+  const [kind, setKind] = useState<ApiKind>(group?.api ?? imported?.api ?? "responses");
+  const [key, setKey] = useState(imported?.apiKey ?? "");
+  const [models, setModels] = useState<string[]>(group?.lib?.models ?? imported?.models ?? []);
+  const [pool, addToPool, resetPool] = useModelPool(() => group?.lib?.models ?? imported?.models ?? []);
   const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -58,7 +61,8 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   const editable = (group?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && u.state !== "removing");
   const [sync, setSync] = useState<Set<string>>(new Set(editable.map(useKey)));
   const free = freeAgents(agents, group);
-  const [addTo, setAddTo] = useState<Set<AgentId>>(new Set());
+  // An import link made for an agent: ticked for it (when it is here).
+  const [addTo, setAddTo] = useState<Set<AgentId>>(() => new Set(imported?.agent && free.some((a) => a.id === imported.agent) ? [imported.agent] : []));
   const [viaGw, setViaGw] = useState(false);
   const [tpl, setTpl] = useState<Template | null>(null);
   const pickTpl = (tp: Template | null) => {
@@ -117,6 +121,14 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
     }
   };
 
+  // From an import link: fetch the provider's models once, right away (the link's own stay ticked).
+  const autoFetched = useRef(false);
+  useEffect(() => {
+    if (!imported || autoFetched.current || !isHttpUrl(imported.baseUrl)) return;
+    autoFetched.current = true;
+    void fetchList();
+  }, []);
+
   const addManual = (ids: string[]) => {
     addToPool(ids);
     setModels((l) => [...l, ...ids.filter((i) => !l.includes(i))]);
@@ -130,7 +142,7 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
       await onSave({
         name: name.trim(), baseUrl: url, api: kind, apiKey: key.trim() || null, models,
         sync: changed ? editable.filter((u) => sync.has(useKey(u))) : [],
-        addTo: [...addTo].filter((a) => !blockedBy(a) && !altFor(a)),
+        addTo: [...addTo].filter((a) => free.some((f) => f.id === a) && !blockedBy(a) && !altFor(a)),
         gateway: viaGw,
         alt: (["responses", "chat", "anthropic", "gemini"] as ApiKind[]).map((k) => ({
           api: k, baseUrl: tpl?.endpoints[k] ?? "", addTo: [...addTo].filter((a) => altFor(a) === k),
@@ -152,7 +164,8 @@ export function ServiceDialog({ agents, group, prefill, onSave, onClose }: Props
   return (
     <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
       title={isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("common.addProvider")) : t("serviceDialog.editGroup", { name: group!.name })} foot={foot}>
-      {isNew && !prefill && <TemplatePicker value={tpl} onPick={pickTpl} />}
+      {imported && <ImportNote req={imported} />}
+      {isNew && !prefill && !imported && <TemplatePicker value={tpl} onPick={pickTpl} />}
       <div className="form2">
         <label className="field">
           <span>{t("common.name")}</span>

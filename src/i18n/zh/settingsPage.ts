@@ -56,6 +56,13 @@ const zh: typeof en = {
   dataDir: "AgentPlus 数据目录",
   dataDirHint: "~/.agentplus · 供应商库、各 Agent 的开关、写入前的备份",
   backups: "备份与回滚",
+  linksTitle: "导入链接",
+  ccswitchLinks: "打开 CC Switch 导入链接",
+  ccswitchOffHint: "中转站（Sub2API、New API 等）提供「导入到 CC Switch」按钮。开启后，这些 ccswitch:// 链接会在 AgentPlus 里打开并填好添加供应商的表单。agentplus:// 链接始终在这里打开。",
+  ccswitchOtherHint: "ccswitch:// 链接目前由 {app} 打开。开启后改由 AgentPlus 打开；关闭即交还给 {app}。",
+  ccswitchOnHint: "ccswitch:// 链接会在 AgentPlus 里打开并填好添加供应商的表单。关闭后交还给之前处理它的程序。",
+  ccswitchOnToast: "CC Switch 导入链接改由 AgentPlus 打开",
+  ccswitchOffToast: "已交还 CC Switch 导入链接",
 
   logTitle: "诊断日志",
   logEnabled: "记录诊断日志",

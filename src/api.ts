@@ -608,6 +608,33 @@ export interface UpdateInfo {
   date: string | null;
 }
 
+/** What an import link (agentplus:// or CC Switch's ccswitch://) asks to add. */
+export interface ImportRequest {
+  name: string;
+  baseUrl: string;
+  api: ApiKind;
+  apiKey: string;
+  models: string[];
+  /** The agent the link was made for, when AgentPlus has it. */
+  agent: AgentId | null;
+  homepage: string | null;
+  source: "agentplus" | "ccswitch";
+}
+
+/** An import link taken from the backend: what it asks for, or why it can't be imported. */
+export interface ImportItem {
+  request: ImportRequest | null;
+  error: string | null;
+}
+
+/** Whether ccswitch:// links open in AgentPlus (Windows only). */
+export interface LinkHandler {
+  supported: boolean;
+  on: boolean;
+  /** The program that opens them now, when it isn't AgentPlus. */
+  other: string | null;
+}
+
 /** Sent by the backend while an update downloads and installs. */
 export type UpdateProgress =
   | { kind: "download"; done: number; total: number | null }
@@ -697,6 +724,11 @@ const real = {
   projectForget: (path: string) => invoke<void>("project_forget", { path }),
   /** Native folder dialog; `purpose` sets its title. null when cancelled. */
   pickFolder: (start: string | null, purpose?: "sync") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
+  /** Import links that came in since the last call (the backend keeps them until then). */
+  takeImports: () => invoke<ImportItem[]>("take_imports"),
+  parseImportLink: (link: string) => invoke<ImportRequest>("parse_import_link", { link }),
+  ccswitchLink: () => invoke<LinkHandler>("ccswitch_link_status"),
+  setCcswitchLink: (on: boolean) => invoke<LinkHandler>("set_ccswitch_link", { on }),
   /** A newer release, or null when this is the latest. */
   updateCheck: () => invoke<UpdateInfo | null>("update_check"),
   /** Downloads, verifies and installs the update found by the last check; the app then restarts. */
@@ -751,6 +783,7 @@ const demoHistory: SyncHistoryEntry[] = [
 ];
 const demoLog: LogInfo = { enabled: true, days: 7, files: 3, bytes: 184_320, dir: "~/.agentplus/logs" };
 let demoLib: LibEntry[] = [];
+const demoLinks: LinkHandler = { supported: true, on: false, other: "CC Switch.exe" };
 const demoOfficial: OfficialFetch = { active: false, startedAt: "15:20:01", backupDir: "C:\\Users\\me\\.agentplus\\backups\\20260923-152001\\codex", cacheReady: false, cacheModels: 0, cachePath: "~/.codex/models_cache.json", catalogPath: "~/.codex/models.json", chatgptLogin: true };
 let demoOfficialAt = 0;
 const demoGateway: { enabled: boolean; port: number; routes: GatewayRoute[]; breaker: GatewayBreaker; cleared: string[] } = {
@@ -975,6 +1008,24 @@ const demo: typeof real = {
   },
   libraryDelete: async (id) => { demoLib = demoLib.filter((x) => x.id !== id); },
   openDataDir: async () => undefined,
+  takeImports: async () => [],
+  parseImportLink: async (link) => {
+    // Just enough of the backend's parser to try the dialog in the browser.
+    const u = new URL(link.trim());
+    const q = (k: string) => u.searchParams.get(k)?.trim() || null;
+    const app = q("app");
+    const endpoint = q("endpoint")?.split(",")[0].replace(/\/+$/, "");
+    if (!/^(agentplus|ccswitch):$/i.test(u.protocol) || !endpoint) throw new Error("（演示）这不是导入链接");
+    const agent = (["claude", "codex", "gemini", "opencode", "openclaw", "hermes"].includes(app ?? "") ? app : null) as AgentId | null;
+    return {
+      name: q("name") ?? new URL(endpoint).host, baseUrl: endpoint, apiKey: q("apiKey") ?? "",
+      api: agent === "claude" ? "anthropic" : agent === "codex" ? "responses" : agent === "gemini" ? "gemini" : "chat",
+      models: [...new Set(["model", "sonnetModel", "opusModel", "haikuModel"].map(q).filter((m): m is string => !!m))],
+      agent, homepage: q("homepage"), source: u.protocol.toLowerCase().startsWith("ccswitch") ? "ccswitch" : "agentplus",
+    };
+  },
+  ccswitchLink: async () => ({ ...demoLinks }),
+  setCcswitchLink: async (on) => { Object.assign(demoLinks, { on, other: on ? null : "CC Switch.exe" }); return { ...demoLinks }; },
   logInfo: async () => ({ ...demoLog }),
   logSet: async (enabled, days) => { Object.assign(demoLog, { enabled, days }); return { ...demoLog }; },
   logClear: async () => { Object.assign(demoLog, { files: 0, bytes: 0 }); return { ...demoLog }; },

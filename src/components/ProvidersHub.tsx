@@ -14,6 +14,8 @@ interface Props {
   selected: string | null;
   onSelect: (key: string | null) => void;
   onAdd: () => void;
+  /** Paste an import link (agentplus:// / ccswitch://). */
+  onImportLink: () => void;
   onTestAll: () => void;
   onTestOne: (url: string) => void;
   envLabel: string;
@@ -26,7 +28,7 @@ const FILTERS: [Filter, TKey][] = [["all", "providersHub.filterAll"], ["used", "
 const used = (s: Station) => s.groups.some((g) => liveUses(g).length > 0);
 
 /** Every provider in one place, by station (host) and its groups. Address and key live here; model lists live in each agent. */
-export function ProvidersHub({ agents, stations, latency, selected, onSelect, onAdd, onTestAll, onTestOne, envLabel }: Props) {
+export function ProvidersHub({ agents, stations, latency, selected, onSelect, onAdd, onImportLink, onTestAll, onTestOne, envLabel }: Props) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const shown = writableAgents(agents);
@@ -56,6 +58,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
             </span>
           </div>
           <button className="btn" onClick={onTestAll}><Icon.pulse />{t("providersHub.testLatency")}</button>
+          <button className="btn" onClick={onImportLink} title={t("providersHub.importLinkHint")}><Icon.link />{t("providersHub.importLink")}</button>
           <button className="btn primary" onClick={onAdd}><Icon.plus />{t("common.addProvider")}</button>
         </div>
         <div className="toolbar">

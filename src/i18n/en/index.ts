@@ -31,6 +31,7 @@ import providersHub from "./providersHub";
 import providerCard from "./providerCard";
 import providerDetail from "./providerDetail";
 import copyProviderDialog from "./copyProviderDialog";
+import importLink from "./importLink";
 import commandPalette from "./commandPalette";
 import sidebar from "./sidebar";
 import aside from "./aside";
@@ -71,6 +72,7 @@ export default {
   providerCard,
   providerDetail,
   copyProviderDialog,
+  importLink,
   commandPalette,
   sidebar,
   aside,

@@ -39,6 +39,8 @@ const zh: typeof en = {
   savedQueued: "已保存到供应商库，{n} 处 Agent 改动已加入待写入",
   savedViaQueued: "已保存到供应商库，经网关 {url} 转发，{n} 处 Agent 改动已加入待写入",
   savedToLib: "已保存到供应商库",
+  importFailed: "无法导入链接：{err}",
+  importNeedsGemini: "这个链接是给 Gemini CLI 用的，但这里没有检测到 Gemini CLI",
   forwardFailed: "开启转发失败：{err}",
   routeDeletedRestored: "已删除转发，{n} 个供应商改回原地址已加入待写入",
   gatewayPortMoved: "本地网关现在在端口 {port}：{n} 个指向旧端口的供应商地址已改到新端口并加入待写入，写入后 Agent 才会连新端口",
