@@ -762,14 +762,14 @@ fn agent_suggestions(a: &str, remote: &Value, local: &AgentState, keys: &Value) 
         let base = rp["baseUrl"].as_str().unwrap_or_default();
         let name = rp["name"].as_str().unwrap_or_default();
         let api = rp["api"].as_str().unwrap_or("chat");
-        let lp = local.providers.iter().find(|p| p.base_url.as_deref().map(norm_url) == Some(norm_url(base)));
+        let lp = local.providers.iter().find(|p| p.api == api && p.base_url.as_deref().map(norm_url) == Some(norm_url(base)));
         let rmodels: Vec<Value> = rp["models"].as_array().cloned().unwrap_or_default();
         match lp {
             None => {
                 let ids: Vec<String> = rmodels.iter().filter(|m| m["visible"].as_bool().unwrap_or(true)).filter_map(|m| m["id"].as_str().map(String::from)).collect();
                 let fp = remote_key(&rp, keys);
-                // Per address too: two remote providers can share a name.
-                let key = format!("pu:sync-{a}-{}-{}", slug(name), slug(base));
+                // Per address and protocol too: remote providers can share both name and URL.
+                let key = format!("pu:sync-{a}-{}-{}-{api}", slug(name), slug(base));
                 out.push(Suggestion {
                     agent: a.into(),
                     title: tr!("Add provider \"{name}\"", "添加供应商「{name}」"),
@@ -992,6 +992,36 @@ mod tests {
         assert!(!serde_json::to_string(&s[0].ops).unwrap().contains("sk-p"));
         let s = agent_suggestions("zcode", &remote, &local, &json!({}));
         assert_eq!(s[0].ops[0].1["provider"]["keyFromSync"], Value::Null);
+    }
+
+    #[test]
+    fn agent_imports_keep_protocols_at_the_same_address_separate() {
+        use crate::model::{Model, Provider};
+        let remote = json!({ "providers": [
+            { "name": "Relay", "baseUrl": "https://relay.example.com/v1", "api": "chat", "models": [{ "id": "m" }] },
+            { "name": "Relay", "baseUrl": "https://relay.example.com/v1", "api": "responses", "models": [{ "id": "m" }] }
+        ] });
+        let keys = json!({});
+        let mut local = AgentState::default();
+        let added = agent_suggestions("opencode", &remote, &local, &keys);
+        assert_eq!(added.len(), 2);
+        assert_ne!(added[0].ops[0].0, added[1].ops[0].0);
+        local.providers.push(Provider {
+            id: "chat-relay".into(), api: "chat".into(), base_url: Some("https://Relay.example.com/v1/".into()),
+            models: vec![Model { id: "m".into(), ..Default::default() }], ..Default::default()
+        });
+        let added = agent_suggestions("opencode", &remote, &local, &keys);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0].ops[0].1["op"], "upsert_provider");
+        assert_eq!(added[0].ops[0].1["provider"]["api"], "responses");
+        local.providers.push(Provider {
+            id: "responses-relay".into(), api: "responses".into(), base_url: Some("https://relay.example.com/v1".into()),
+            ..Default::default()
+        });
+        let updated = agent_suggestions("opencode", &remote, &local, &keys);
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].ops[0].1["op"], "upsert_model");
+        assert_eq!(updated[0].ops[0].1["provider"], "responses-relay");
     }
 
     #[test]
