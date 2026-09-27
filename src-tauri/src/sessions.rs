@@ -647,6 +647,11 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
     if codex_busy() {
         return Err(anyhow!(l("Codex is running. Quit Codex (including the CLI) before repairing", "Codex 正在运行，请先退出 Codex（包括 CLI）再修复")));
     }
+    repair_in(ids, target)
+}
+
+/// The file/DB operation, separated from process detection so tests use an isolated home.
+fn repair_in(ids: &[String], target: &str) -> Result<String> {
     let db = state_path();
     let conn = Connection::open(&db)?;
     if migration_version(&conn) != Some(STATE_VERSION) {
@@ -658,6 +663,7 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
     let mut entries = vec![];
     // Files rewritten so far: put back if anything fails before the commit.
     let mut done: Vec<(PathBuf, String)> = vec![];
+    let mut repair_log = None;
     let tx = conn.unchecked_transaction()?;
     let result = (|| -> Result<()> {
         for id in ids {
@@ -676,17 +682,24 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
             tx.execute("UPDATE threads SET model_provider = ?1 WHERE id = ?2", params![target, id])?;
             entries.push(json!({ "id": id, "old": old, "files": files }));
         }
+        // Persist the undo information before committing. A full disk or an unwritable
+        // repairs folder must roll back both the database and the rollout changes.
+        if !entries.is_empty() {
+            repair_log = Some(write_repair_log(&serde_json::to_string(&json!({ "target": target, "backup": dir.to_string_lossy(), "entries": entries, "undone": false }))?)?);
+        }
         Ok(())
     })();
     if let Err(e) = result.and_then(|_| tx.commit().map_err(Into::into)) {
         restore_lines(&done);
+        if let Some(path) = repair_log {
+            let _ = fs::remove_file(path);
+        }
         return Err(e);
     }
     let n = entries.len();
     if n == 0 {
         return Ok(tr!("The selected sessions already belong to \"{target}\"; nothing to migrate", "选中的会话已经属于「{target}」，没有需要迁移的"));
     }
-    write_repair_log(&serde_json::to_string(&json!({ "target": target, "backup": dir.to_string_lossy(), "entries": entries, "undone": false }))?)?;
     Ok(tr!("Migrated {n} session(s) to \"{target}\". Takes effect after restarting Codex (can be undone)", "已把 {n} 个会话迁移到「{target}」，重启 Codex 后生效（可撤销）"))
 }
 
@@ -736,6 +749,66 @@ pub fn undo_repair(stamp: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REPAIR_ID: &str = "01a07797-7b0f-78d3-84b0-b7a65f7a6632";
+
+    fn repair_fixture() -> (TestHome, Connection, PathBuf, String) {
+        let h = TestHome::new("repair-atomic");
+        let dir = codex_home().join("sessions");
+        fs::create_dir_all(&dir).unwrap();
+        let conn = Connection::open(state_path()).unwrap();
+        conn.execute_batch("CREATE TABLE _sqlx_migrations (version INTEGER); INSERT INTO _sqlx_migrations VALUES (55);
+            CREATE TABLE threads (id TEXT PRIMARY KEY, model_provider TEXT);").unwrap();
+        conn.execute("INSERT INTO threads VALUES (?1, 'old')", [REPAIR_ID]).unwrap();
+        let path = dir.join(format!("rollout-2026-09-27T10-00-00-{REPAIR_ID}.jsonl"));
+        let text = format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{REPAIR_ID}\",\"model_provider\":\"old\"}}}}\r\n{{\"type\":\"event_msg\"}}\r\n");
+        fs::write(&path, &text).unwrap();
+        (h, conn, path, text)
+    }
+
+    fn repaired_provider(conn: &Connection) -> String {
+        conn.query_row("SELECT model_provider FROM threads WHERE id = ?1", [REPAIR_ID], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn repair_log_failure_restores_database_and_rollout() {
+        let (_h, conn, path, original) = repair_fixture();
+        fs::create_dir_all(agentplus_dir()).unwrap();
+        // A file where the log directory should be makes writing fail on every platform.
+        fs::write(repairs_dir(), "blocked").unwrap();
+        assert!(repair_in(&[REPAIR_ID.into()], "new").is_err());
+        assert_eq!(repaired_provider(&conn), "old");
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert!(last_repair().is_none());
+    }
+
+    #[test]
+    fn repair_commit_failure_removes_the_prepared_log() {
+        let (_h, conn, path, original) = repair_fixture();
+        // A reader permits the update but prevents committing it in rollback-journal mode.
+        conn.execute_batch("PRAGMA journal_mode=DELETE; BEGIN;").unwrap();
+        assert_eq!(repaired_provider(&conn), "old");
+        assert!(repair_in(&[REPAIR_ID.into()], "new").is_err());
+        conn.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(repaired_provider(&conn), "old");
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert_eq!(fs::read_dir(repairs_dir()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn successful_repair_keeps_undo_information_and_noop_keeps_the_log() {
+        let (_h, conn, path, original) = repair_fixture();
+        repair_in(&[REPAIR_ID.into()], "new").unwrap();
+        assert_eq!(repaired_provider(&conn), "new");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original.replace("\"old\"", "\"new\""));
+        let summary = last_repair().unwrap();
+        let log: Value = serde_json::from_str(&fs::read_to_string(repairs_dir().join(format!("{}.json", summary.stamp))).unwrap()).unwrap();
+        assert_eq!(log["entries"][0]["old"], "old");
+        assert_eq!(log["entries"][0]["files"][0]["line"], original.lines().next().unwrap());
+        repair_in(&[REPAIR_ID.into()], "new").unwrap();
+        assert_eq!(last_repair().unwrap().stamp, summary.stamp);
+        assert_eq!(fs::read_dir(repairs_dir()).unwrap().count(), 1);
+    }
 
     #[test]
     fn swaps_only_provider_field() {
