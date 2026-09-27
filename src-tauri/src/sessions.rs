@@ -611,10 +611,26 @@ fn swap_provider(line: &str, target: &str) -> Option<String> {
 }
 
 /// Puts back the first lines of files already rewritten by a repair that then failed.
-fn restore_lines(done: &[(PathBuf, String)]) {
+fn restore_lines(done: &[(PathBuf, String)]) -> Result<()> {
+    let mut failures = vec![];
     for (path, line) in done.iter().rev() {
-        let _ = rewrite_first_line(path, |_| Some(line.clone()));
+        if let Err(e) = rewrite_first_line(path, |_| Some(line.clone())) {
+            failures.push(tr!("Failed to restore {}: {e:#}", "恢复 {} 失败：{e:#}", path.display()));
+        }
     }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(failures.join("\n")))
+    }
+}
+
+fn rollback_error(error: anyhow::Error, rollback: anyhow::Error, record: Option<&Path>) -> anyhow::Error {
+    let recovery = match record {
+        Some(path) => tr!("Recovery record retained at {}. Retry undo after resolving the file errors.", "恢复记录已保留在 {}。解决文件错误后可重试撤销。", path.display()),
+        None => l("No recovery record could be saved.", "未能保存恢复记录。").to_string(),
+    };
+    error.context(tr!("Rollout rollback was incomplete: {rollback:#}\n{recovery}", "会话文件回滚未完成：{rollback:#}\n{recovery}"))
 }
 
 /// Writes a repair log under a name no earlier repair uses (milliseconds, so they sort in
@@ -690,7 +706,9 @@ fn repair_in(ids: &[String], target: &str) -> Result<String> {
         Ok(())
     })();
     if let Err(e) = result.and_then(|_| tx.commit().map_err(Into::into)) {
-        restore_lines(&done);
+        if let Err(rollback) = restore_lines(&done) {
+            return Err(rollback_error(e, rollback, repair_log.as_deref()));
+        }
         if let Some(path) = repair_log {
             let _ = fs::remove_file(path);
         }
@@ -711,6 +729,10 @@ pub fn undo_repair(stamp: &str) -> Result<String> {
     if codex_busy() {
         return Err(anyhow!(l("Codex is running. Quit Codex before undoing", "Codex 正在运行，请先退出 Codex 再撤销")));
     }
+    undo_repair_in(stamp)
+}
+
+fn undo_repair_in(stamp: &str) -> Result<String> {
     let p = repairs_dir().join(format!("{stamp}.json"));
     let mut log: Value = serde_json::from_str(&fs::read_to_string(&p)?)?;
     if log["undone"].as_bool().unwrap_or(false) {
@@ -738,7 +760,9 @@ pub fn undo_repair(stamp: &str) -> Result<String> {
         Ok(())
     })();
     if let Err(e) = result.and_then(|_| tx.commit().map_err(Into::into)) {
-        restore_lines(&done);
+        if let Err(rollback) = restore_lines(&done) {
+            return Err(rollback_error(e, rollback, Some(&p)));
+        }
         return Err(e);
     }
     log["undone"] = json!(true);
@@ -793,6 +817,75 @@ mod tests {
         assert_eq!(repaired_provider(&conn), "old");
         assert_eq!(fs::read_to_string(path).unwrap(), original);
         assert_eq!(fs::read_dir(repairs_dir()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn repair_commit_and_rollback_failure_keeps_a_usable_recovery_log() {
+        let (_h, conn, path, original) = repair_fixture();
+        conn.execute_batch("PRAGMA journal_mode=DELETE; BEGIN;").unwrap();
+        assert_eq!(repaired_provider(&conn), "old");
+        let logs = repairs_dir();
+        let tmp = PathBuf::from(format!("{}.agentplus-tmp", path.display()));
+        let blocked = tmp.clone();
+        // Once the log exists, the rollout has been rewritten and commit is blocked by
+        // our reader. A directory at the temp path makes rollback fail on every platform.
+        let blocker = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if fs::read_dir(&logs).is_ok_and(|mut entries| entries.next().is_some()) {
+                    fs::create_dir(&blocked).unwrap();
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "repair log was not prepared");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+        let result = repair_in(&[REPAIR_ID.into()], "new");
+        blocker.join().unwrap();
+        let error = result.unwrap_err();
+        conn.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(repaired_provider(&conn), "old");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original.replace("\"old\"", "\"new\""));
+        let summary = last_repair().expect("incomplete rollback must retain its log");
+        let log_path = repairs_dir().join(format!("{}.json", summary.stamp));
+        let log: Value = serde_json::from_str(&fs::read_to_string(&log_path).unwrap()).unwrap();
+        assert_eq!(log["entries"][0]["files"][0]["line"], original.lines().next().unwrap());
+        assert!(!summary.undone);
+        let message = format!("{error:#}");
+        assert!(message.contains("会话文件回滚未完成"), "{message}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains(&log_path.display().to_string()), "{message}");
+        assert!(message.contains("database is locked"), "{message}");
+
+        fs::remove_dir(tmp).unwrap();
+        undo_repair_in(&summary.stamp).unwrap();
+        assert_eq!(repaired_provider(&conn), "old");
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
+        assert!(last_repair().unwrap().undone);
+    }
+
+    #[test]
+    fn restore_lines_continues_after_errors_and_reports_every_failed_path() {
+        let h = TestHome::new("repair-rollback");
+        let path = h.0.join("restorable.jsonl");
+        let missing = h.0.join("missing.jsonl");
+        let also_missing = h.0.join("also-missing.jsonl");
+        fs::write(&path, "new\r\ntail\r\n").unwrap();
+        // Restore runs in reverse, so both failures happen before the writable file.
+        let done = vec![(path.clone(), "old".into()), (missing.clone(), "old".into()), (also_missing.clone(), "old".into())];
+        let error = restore_lines(&done).unwrap_err().to_string();
+        assert!(error.contains(&missing.display().to_string()));
+        assert!(error.contains(&also_missing.display().to_string()));
+        assert_eq!(fs::read_to_string(path).unwrap(), "old\r\ntail\r\n");
+    }
+
+    #[test]
+    fn rollback_error_reports_when_no_recovery_record_was_saved() {
+        let error = rollback_error(anyhow!("original failure"), anyhow!("restore failure"), None);
+        let message = format!("{error:#}");
+        assert!(message.contains("original failure"));
+        assert!(message.contains("restore failure"));
+        assert!(message.contains("未能保存恢复记录"));
     }
 
     #[test]
