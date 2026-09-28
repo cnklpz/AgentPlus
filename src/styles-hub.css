@@ -90,7 +90,9 @@
 /* Only "from" frames: each animation ends on the element's own style, so dimmed items (disabled cards) fade straight to their dim opacity instead of flashing full first. */
 @keyframes ap-rise { from { opacity: 0; transform: translateY(var(--rise)); filter: var(--fx); } }
 @keyframes ap-fade { from { opacity: 0; } }
-@keyframes ap-pop { from { opacity: 0; transform: translateY(calc(var(--rise) * 1.5)) scale(var(--pop)); filter: var(--fx); } }
+/* Dialogs: no scale and no filter. Scaling or blurring a layer of text rasterises it at the wrong size, so the glyphs look
+   thicker or thinner mid-animation and snap to the real weight at the end. Move and fade only. */
+@keyframes ap-pop { from { opacity: 0; transform: translateY(calc(var(--rise) * 1.5)); } }
 @keyframes ap-menu { from { opacity: 0; transform: translateY(calc(var(--rise) * -0.7)) scale(var(--pop)); } }
 @keyframes ap-slide { from { opacity: 0; transform: translateX(var(--slide)); filter: var(--fx); } }
 @keyframes ap-toast { from { opacity: 0; transform: translate(-50%, calc(var(--rise) * 1.5)); } }

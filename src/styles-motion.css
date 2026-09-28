@@ -34,7 +34,7 @@
 /* Exits (motion.ts plays them on a clone of the removed popover) */
 @keyframes ap-out-fade { to { opacity: 0; } }
 @keyframes ap-out-backdrop { to { background-color: rgba(18, 23, 34, 0); backdrop-filter: blur(0); } }
-@keyframes ap-out-pop { to { opacity: 0; transform: translateY(10px) scale(.95); filter: blur(4px); } }
+@keyframes ap-out-pop { to { opacity: 0; transform: translateY(10px); } }
 @keyframes ap-out-menu { to { opacity: 0; transform: translateY(-6px) scale(.96); } }
 @keyframes ap-out-toast { to { opacity: 0; transform: translate(-50%, 14px) scale(.94); } }
 
