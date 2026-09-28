@@ -13,8 +13,9 @@
 //! The in-progress state lives in store.json, so a restart of AgentPlus can resume or undo.
 //!
 //! Without a ChatGPT login (relays), `from_codex` uses the list built into the installed
-//! Codex instead: `codex debug models` run with an empty CODEX_HOME prints it, with no
-//! sign-in and no network.
+//! Codex instead: `codex debug models --bundled` run with an empty CODEX_HOME prints it,
+//! with no sign-in and no network. When no copy of Codex can be run, the list is read
+//! straight out of the program, where Codex compiles it in.
 
 use crate::adapters::codex::{catalog_path, chatgpt_signed_in, codex_home, config_path, load_doc, ID};
 use crate::store;
@@ -23,9 +24,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use toml_edit::{value, DocumentMut};
 
 const CACHE: &str = "models_cache.json";
@@ -222,37 +224,127 @@ fn point_at(catalog: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Codex's built-in model list as AgentPlus ships it, for when no installed Codex yields one.
+/// Refresh it with a new Codex: `codex debug models --bundled` with CODEX_HOME set to an
+/// empty folder, keeping only `{"models": [...]}` (see `snapshot_is_a_catalog`).
+const SNAPSHOT: &str = include_str!("codex_models.json");
+
 /// Replaces the catalog with the model list built into the installed Codex (backing up
-/// config.toml and the old catalog first) and points config.toml at it.
+/// config.toml and the old catalog first) and points config.toml at it. Each copy of Codex
+/// is asked in turn; when none can be run, the list is read out of the program file, and
+/// failing that AgentPlus's own copy of it is used.
 pub fn from_codex() -> Result<Vec<FetchModel>> {
-    let exe = crate::process::codex_cli().ok_or_else(|| {
-        anyhow!(crate::i18n::l("Codex's command-line program wasn't found; install or update Codex first", "找不到 Codex 自带的命令行程序，请先安装或更新 Codex"))
-    })?;
-    install(builtin_models(&exe)?)
+    let exes = crate::process::codex_clis();
+    for exe in &exes {
+        match builtin_models(exe) {
+            Ok(v) => return install(v),
+            Err(e) => crate::applog::warn("catalog", format!("codex debug models failed with {}: {e}", exe.display())),
+        }
+    }
+    for exe in &exes {
+        match fs::read(exe).ok().and_then(|b| embedded_catalog(&b)) {
+            Some(v) => {
+                crate::applog::info("catalog", format!("model list read from {}", exe.display()));
+                return install(v);
+            }
+            None => crate::applog::warn("catalog", format!("no model list found in {}", exe.display())),
+        }
+    }
+    crate::applog::info("catalog", format!("using AgentPlus's copy of the model list ({} Codex programs found)", exes.len()));
+    install(parse_models(SNAPSHOT.as_bytes()).ok_or_else(|| anyhow!("codex_models.json"))?)
 }
 
-/// `codex debug models` with an empty CODEX_HOME: the list compiled into Codex, untouched by
-/// the user's config, catalog or cache.
-fn builtin_models(exe: &Path) -> Result<Value> {
+/// `codex debug models --bundled` with an empty CODEX_HOME: the list compiled into Codex,
+/// untouched by the user's config, catalog or cache, and no network. Without `--bundled`
+/// once more, for a Codex too old to know it.
+fn builtin_models(exe: &Path) -> std::result::Result<Value, String> {
     let home = std::env::temp_dir().join(format!("agentplus-codex-models-{}", std::process::id()));
-    fs::create_dir_all(&home)?;
-    let out = crate::process::output_within(Command::new(exe).args(["debug", "models"]).env("CODEX_HOME", &home), Duration::from_secs(60));
+    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+    let mut last = String::new();
+    for args in [&["debug", "models", "--bundled"][..], &["debug", "models"]] {
+        match run(exe, args, &home) {
+            Ok(out) => {
+                let found = parse_models(&out).ok_or_else(|| crate::i18n::l("unexpected output", "输出格式不对").to_string());
+                let _ = fs::remove_dir_all(&home);
+                return found;
+            }
+            Err(e) => last = e,
+        }
+    }
     let _ = fs::remove_dir_all(&home);
-    let out = out.filter(|o| o.status.success()).ok_or_else(|| {
-        anyhow!(crate::i18n::l("Codex didn't list its models (codex debug models failed)", "Codex 没有列出模型（codex debug models 执行失败）"))
-    })?;
-    parse_models(&out.stdout)
+    Err(last)
+}
+
+/// Runs Codex and returns its output; the error says why it failed (exit code and the last
+/// line it printed, or why it couldn't start).
+fn run(exe: &Path, args: &[&str], home: &Path) -> std::result::Result<Vec<u8>, String> {
+    let mut cmd = Command::new(exe);
+    cmd.args(args).env("CODEX_HOME", home).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    crate::process::with_login_path(crate::process::no_window(&mut cmd));
+    let mut child = cmd.spawn().map_err(|e| tr!("couldn't start ({e})", "无法启动（{e}）"))?;
+    // Read on threads so a chatty child can't fill a pipe and stall.
+    let read = |mut r: Box<dyn Read + Send>| std::thread::spawn(move || {
+        let mut buf = vec![];
+        let _ = r.read_to_end(&mut buf);
+        buf
+    });
+    let out = read(Box::new(child.stdout.take().expect("piped")));
+    let err = read(Box::new(child.stderr.take().expect("piped")));
+    let t0 = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) if t0.elapsed() < Duration::from_secs(60) => std::thread::sleep(Duration::from_millis(50)),
+            other => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(match other {
+                    Err(e) => e.to_string(),
+                    _ => crate::i18n::l("no answer within 60 s", "60 秒内没有结果").to_string(),
+                });
+            }
+        }
+    };
+    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    if status.success() {
+        return Ok(out);
+    }
+    let err = String::from_utf8_lossy(&err);
+    let said = err.lines().map(str::trim).rfind(|l| !l.is_empty() && !l.starts_with("WARNING: proceeding")).unwrap_or_default();
+    let code = status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+    Err(if said.is_empty() { tr!("exit code {code}", "退出码 {code}") } else { tr!("exit code {code}: {}", "退出码 {code}：{}", crate::util::clip(said, 200)) })
 }
 
 /// The catalog in `codex debug models` output: a non-empty `models` list whose entries have slugs.
-fn parse_models(stdout: &[u8]) -> Result<Value> {
-    let v: Value = serde_json::from_slice(stdout).unwrap_or(Value::Null);
-    let models = v
-        .get("models")
-        .and_then(|m| m.as_array())
-        .filter(|a| !a.is_empty() && a.iter().all(|m| m.get("slug").and_then(|s| s.as_str()).is_some()))
-        .ok_or_else(|| anyhow!(crate::i18n::l("Codex's model list has an unexpected format", "Codex 的模型列表格式不对")))?;
-    Ok(json!({ "models": models }))
+fn parse_models(stdout: &[u8]) -> Option<Value> {
+    catalog_in(&serde_json::from_slice(stdout).ok()?)
+}
+
+fn catalog_in(v: &Value) -> Option<Value> {
+    let models = v.get("models")?.as_array().filter(|a| !a.is_empty() && a.iter().all(|m| m.get("slug").and_then(|s| s.as_str()).is_some()))?;
+    Some(json!({ "models": models }))
+}
+
+/// The model list Codex compiles into its program (`include_str!` of its models.json), found
+/// in the file's bytes: the object around a `"models"` key whose entries all have a slug and
+/// a display name.
+fn embedded_catalog(bytes: &[u8]) -> Option<Value> {
+    const KEY: &[u8] = b"\"models\"";
+    let mut from = 0;
+    for _ in 0..200 {
+        let hit = from + bytes[from..].windows(KEY.len()).position(|w| w == KEY)?;
+        from = hit + 1;
+        // The object starts right before the key.
+        let lo = hit.saturating_sub(200);
+        let Some(open) = bytes[lo..hit].iter().rposition(|&b| b == b'{') else { continue };
+        let json = &bytes[lo + open..bytes.len().min(lo + open + 16_000_000)];
+        let Some(Ok(v)) = serde_json::Deserializer::from_slice(json).into_iter::<Value>().next() else { continue };
+        let named = v.get("models").and_then(|m| m.as_array()).is_some_and(|a| a.len() >= 3 && a.iter().all(|m| m.get("display_name").is_some()));
+        if let Some(c) = catalog_in(&v).filter(|_| named) {
+            return Some(c);
+        }
+    }
+    None
 }
 
 /// Writes `new` as the catalog (after backing up config.toml and the old catalog) and points
@@ -394,8 +486,43 @@ mod tests {
         let v = parse_models(br#"{"models":[{"slug":"gpt-a","display_name":"A"},{"slug":"gpt-b"}],"extra":1}"#).unwrap();
         assert_eq!(v, json!({ "models": [{ "slug": "gpt-a", "display_name": "A" }, { "slug": "gpt-b" }] }), "only the models are kept");
         for bad in [&b"not json"[..], br#"{"models":[]}"#, br#"{"models":[{"display_name":"no slug"}]}"#, br#"{"other":[]}"#, b""] {
-            assert!(parse_models(bad).is_err(), "{}", String::from_utf8_lossy(bad));
+            assert!(parse_models(bad).is_none(), "{}", String::from_utf8_lossy(bad));
         }
+    }
+
+    /// The fallback when Codex won't run: the list compiled into the program, found among
+    /// other bytes and other "models" keys.
+    #[test]
+    fn embedded_catalog_is_found_in_program_bytes() {
+        let list = r#"{"models":[{"slug":"a","display_name":"A","priority":1},{"slug":"b","display_name":"B"},{"slug":"c","display_name":"C"}]}"#;
+        let mut bytes = b"\x00\xffMZ junk {\"models\": 3} more {\"models\":[{\"slug\":\"x\"}]}\x00\x01".to_vec();
+        bytes.extend_from_slice(list.as_bytes());
+        bytes.extend_from_slice(b"\x00trailing {\"not\":\"json");
+        let v = embedded_catalog(&bytes).unwrap();
+        assert_eq!(v["models"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap()).collect::<Vec<_>>(), ["a", "b", "c"]);
+        assert!(embedded_catalog(b"no catalog here \"models\" {\"models\":[]}").is_none());
+    }
+
+    /// A Codex that can't be run says why, instead of a bare "failed".
+    #[test]
+    fn failed_runs_say_why() {
+        let home = std::env::temp_dir();
+        let err = run(Path::new("Z:/nowhere/codex.exe"), &["debug", "models"], &home).unwrap_err();
+        assert!(err.starts_with("无法启动"), "{err}");
+        #[cfg(windows)]
+        {
+            let err = run(Path::new("cmd"), &["/c", "echo WARNING: proceeding, even so 1>&2 & echo boom 1>&2 & exit 3"], &home).unwrap_err();
+            assert_eq!(err, "退出码 3：boom");
+        }
+    }
+
+    /// AgentPlus's own copy of Codex's list, the last fallback, must stay a usable catalog.
+    #[test]
+    fn snapshot_is_a_catalog() {
+        let v = parse_models(SNAPSHOT.as_bytes()).expect("codex_models.json");
+        let models = v["models"].as_array().unwrap();
+        assert!(models.len() >= 3);
+        assert!(models.iter().all(|m| m.get("display_name").is_some() && m.get("context_window").is_some()));
     }
 
     /// No catalog yet (an older setup): the built-in list becomes ~/.codex/models.json and
@@ -432,10 +559,14 @@ mod tests {
     #[test]
     #[ignore]
     fn real_codex_lists_models() {
-        let exe = crate::process::codex_cli().expect("Codex not installed");
-        let v = builtin_models(&exe).unwrap();
-        let slugs: Vec<_> = v["models"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap().to_string()).collect();
-        println!("{} → {slugs:?}", exe.display());
-        assert!(!slugs.is_empty());
+        let slugs = |v: &Value| v["models"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let exes = crate::process::codex_clis();
+        assert!(!exes.is_empty(), "Codex not installed");
+        for exe in &exes {
+            let ran = builtin_models(exe).map(|v| slugs(&v));
+            let read = embedded_catalog(&fs::read(exe).unwrap()).map(|v| slugs(&v));
+            println!("{}\n  run: {ran:?}\n  read: {read:?}", exe.display());
+            assert_eq!(ran.ok(), read, "running and reading give the same list");
+        }
     }
 }

@@ -697,14 +697,30 @@ pub(crate) fn detect_codex() -> Install {
     inst
 }
 
-/// The Codex command-line program of the installed Codex: the one the desktop app ships
-/// (`app\resources\codex.exe` in the Windows package, `Contents/Resources/codex` in the
-/// macOS bundle), or the CLI itself when only that is installed.
-pub(crate) fn codex_cli() -> Option<PathBuf> {
+/// Codex command-line programs of the installed Codex, best first: the one the desktop app
+/// ships (`app\resources\codex.exe` in the Windows package, `Contents/Resources/codex` in
+/// the macOS bundle), the copies the Windows app unpacks under
+/// `%LOCALAPPDATA%\OpenAI\Codex\bin` (newest first; some systems won't let other programs
+/// run what is inside WindowsApps), or the CLI itself when only that is installed.
+pub(crate) fn codex_clis() -> Vec<PathBuf> {
     let inst = detect_codex();
     let mut found = vec![];
     if let Some(dir) = &inst.dir {
         found.push(dir.join("app").join("resources").join("codex.exe"));
+    }
+    if cfg!(windows) {
+        if let Some(bin) = dirs::data_local_dir().map(|d| d.join("OpenAI").join("Codex").join("bin")) {
+            let mut copies: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&bin)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path().join("codex.exe"))
+                .chain([bin.join("codex.exe")])
+                .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
+                .collect();
+            copies.sort_by_key(|c| std::cmp::Reverse(c.0));
+            found.extend(copies.into_iter().map(|(_, p)| p));
+        }
     }
     if let Some(exe) = &inst.exe {
         if let Some(app) = exe.ancestors().find(|d| d.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))) {
@@ -714,7 +730,21 @@ pub(crate) fn codex_cli() -> Option<PathBuf> {
             found.push(exe.clone());
         }
     }
-    found.into_iter().find(|p| p.is_file())
+    let mut out: Vec<PathBuf> = vec![];
+    for p in found {
+        if p.is_file() && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Gives `cmd` the login shell's PATH, which an npm CLI (a `#!/usr/bin/env node` script) needs.
+pub(crate) fn with_login_path(cmd: &mut Command) -> &mut Command {
+    if let Some(p) = LOGIN_PATH.get() {
+        cmd.env("PATH", p);
+    }
+    cmd
 }
 
 /// ZCode desktop: ZCode.app on macOS; on Windows its uninstall entry names the install folder.
