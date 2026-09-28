@@ -2,6 +2,30 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.5
+
+新增模型归因测试，Codex 新建供应商时能直接选好模型列表。
+
+- 模型归因测试：在模型上右键「归因测试」，向已保存的地址（或它经过的网关转发）发送指纹题，看回答最像哪个已知模型；结果按模型保存在历史里。会消耗该供应商的额度
+- Codex 添加供应商：模型列表默认使用 Codex 内置模型，可逐个取消勾选；关掉开关后可从地址拉取或手动添加。修复以前拉取后没有任何反应、选的模型也不会保存的问题
+- Codex 其他设置：新增「滚动优化」（去掉让长对话滚动卡顿的大量合成层）和「减少动态效果」（与 Codex 自己的设置相同）
+- Codex 其他设置 → 本地网关：可以让经过本地网关的请求向模型报告另一个时区
+- Hermes：模型右键菜单可「设为默认模型」；没有设置项时不再显示空的「其他设置」
+- 填写地址的示例会随接口类型变化（Anthropic、Gemini 不再都显示 /v1）
+- 对话框里已经输入过内容时，点背景不会再把它关掉
+- 精简添加供应商对话框里的多余说明文字
+
+Adds a model attribution test, and new Codex providers get their model list at once.
+
+- Model attribution test: right-click a model and pick "Attribution test" to send fingerprint challenges to the saved address (or the gateway forward it uses) and see which known model the answers match best; results are kept per model. It uses the provider's quota
+- Adding a Codex provider: the model list starts from Codex's built-in models, each of which can be unticked; switch that off to fetch the provider's own models or type them in. Fetching used to do nothing, and the picked models weren't saved
+- Codex other settings: new "Smoother scrolling" (drops the hundreds of compositor layers that made long threads stutter) and "Reduce motion" (the same as Codex's own setting)
+- Codex other settings → Local gateway: requests through the local gateway can report another time zone to the model
+- Hermes: "Set as default model" in the model's right-click menu; the empty "Other settings" tab is gone
+- The base URL example follows the API type (Anthropic and Gemini no longer both show /v1)
+- A click on the backdrop no longer closes a dialog you've typed in
+- Fewer redundant notes in the add-provider dialog
+
 ## 0.2.4
 
 可以用中转站的「导入到 CC Switch」按钮添加供应商了。
