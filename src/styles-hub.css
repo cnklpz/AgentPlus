@@ -602,6 +602,7 @@ button, input, textarea, select { font-family: inherit; }
 .gw-breaker.open .gw-trip-why, .gw-breaker.probe .gw-trip-why { color: var(--del); }
 .gw-breaker.closed .gw-trip-why { color: var(--warn); }
 .gw-breaker-form { flex-wrap: wrap; }
+.gw-tz-form { max-width: 420px; }
 .fwd-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px; }
 .fwd-opt { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); cursor: pointer; transition: border-color var(--t-fast) var(--ease-out), background-color var(--t-fast) var(--ease-out); }
 .fwd-opt:hover { border-color: var(--line-hover); }

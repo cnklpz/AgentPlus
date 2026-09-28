@@ -51,6 +51,8 @@ interface Props {
   onCopyProvider?: () => void;
   /** OpenCode: body of the Projects tab (per-folder configs) and how many projects there are. */
   projectsTab?: { body: ReactNode; count: number };
+  /** Sections after the settings read from the agent's config (AgentPlus's own, saved right away). */
+  settingsExtra?: ReactNode;
 }
 
 export function AgentPage(props: Props) {
@@ -244,7 +246,8 @@ export function AgentPage(props: Props) {
               }}
               notes={fixedPre ? {
                 fixed_id: <div className="set-note">{t("agentPage.fixedPreNote")}</div>,
-              } : undefined} />
+              } : undefined}
+              extra={props.settingsExtra} />
           );
         })()}
       </div>
@@ -478,10 +481,12 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
   );
 }
 
-function Settings({ settings, draft, readonly, onChange, notes }: {
+function Settings({ settings, draft, readonly, onChange, notes, extra }: {
   settings: Setting[]; draft: Draft; readonly: boolean; onChange: (s: Setting, v: SettingValue) => void;
   /** Extra line under a setting's description, by key. */
   notes?: Record<string, ReactNode>;
+  /** Sections appended after the groups. */
+  extra?: ReactNode;
 }) {
   const groups = [...new Set(settings.map((s) => s.group))];
   return (
@@ -563,6 +568,7 @@ function Settings({ settings, draft, readonly, onChange, notes }: {
           })}
         </section>
       ))}
+      {extra}
     </div>
   );
 }

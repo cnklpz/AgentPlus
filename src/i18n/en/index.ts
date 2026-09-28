@@ -17,6 +17,7 @@ import templatePicker from "./templatePicker";
 import modelPicker from "./modelPicker";
 import envSwitch from "./envSwitch";
 import comboBox from "./comboBox";
+import codexTimezone from "./codexTimezone";
 import closeDialog from "./closeDialog";
 import settingsPage from "./settingsPage";
 import sessionsTab from "./sessionsTab";
@@ -58,6 +59,7 @@ export default {
   modelPicker,
   envSwitch,
   comboBox,
+  codexTimezone,
   closeDialog,
   settingsPage,
   sessionsTab,

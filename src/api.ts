@@ -317,6 +317,8 @@ export interface GatewayStatus {
   /** Unified entry (picks a forward by model): http://127.0.0.1:<port>/v1 */
   unifiedBase: string;
   breaker: GatewayBreaker;
+  /** IANA time zone put in Codex's environment context; null leaves the one Codex sends. */
+  timezone: string | null;
   /** Agent → fingerprint of its own gateway key (compare with `Provider.keyFp`). */
   keyFps: Record<string, string>;
   /** Fingerprint of the old shared key "agentplus-gateway". */
@@ -717,6 +719,8 @@ const real = {
   gatewaySaveRoute: (route: GatewayRoute, oldId: string | null) => invoke<GatewayStatus>("gateway_save_route", { route, oldId }),
   gatewayDeleteRoute: (id: string) => invoke<GatewayStatus>("gateway_delete_route", { id }),
   gatewaySetBreaker: (breaker: GatewayBreaker) => invoke<GatewayStatus>("gateway_set_breaker", { breaker }),
+  /** Time zone put in Codex's environment context; null stops rewriting it. */
+  gatewaySetTimezone: (timezone: string | null) => invoke<GatewayStatus>("gateway_set_timezone", { timezone }),
   /** Un-pause one forward, or all with null. */
   gatewayResetBreaker: (id: string | null) => invoke<GatewayStatus>("gateway_reset_breaker", { id }),
   gatewayTest: (route: string, api: ApiKind, model: string) => invoke<TestResult>("gateway_test", { route, api, model }),
@@ -788,8 +792,8 @@ let demoLib: LibEntry[] = [];
 const demoLinks: LinkHandler = { supported: true, on: false, other: "CC Switch.exe" };
 const demoOfficial: OfficialFetch = { active: false, startedAt: "15:20:01", backupDir: "C:\\Users\\me\\.agentplus\\backups\\20260923-152001\\codex", cacheReady: false, cacheModels: 0, cachePath: "~/.codex/models_cache.json", catalogPath: "~/.codex/models.json", chatgptLogin: true };
 let demoOfficialAt = 0;
-const demoGateway: { enabled: boolean; port: number; routes: GatewayRoute[]; breaker: GatewayBreaker; cleared: string[] } = {
-  enabled: false, port: 18650, routes: [], breaker: { enabled: true, threshold: 3, cooldownSecs: 60 }, cleared: [],
+const demoGateway: { enabled: boolean; port: number; routes: GatewayRoute[]; breaker: GatewayBreaker; timezone: string | null; cleared: string[] } = {
+  enabled: false, port: 18650, routes: [], breaker: { enabled: true, threshold: 3, cooldownSecs: 60 }, timezone: null, cleared: [],
 };
 /** Demo: the second forward shows up paused by the breaker until it is reset. */
 const demoBreaker = (r: GatewayRoute, i: number): GatewayBreakerView | null =>
@@ -801,6 +805,7 @@ const demoGw = (): GatewayStatus => ({
   requests: demoGateway.enabled ? 12 : 0, failures: 1, active: 0,
   unifiedBase: `http://127.0.0.1:${demoGateway.port}/v1`,
   breaker: demoGateway.breaker,
+  timezone: demoGateway.timezone,
   routes: demoGateway.routes.map((r, i) => {
     const e = demoLib.find((x) => x.id === r.library);
     return { ...r, models: e?.models ?? [], localBase: `http://127.0.0.1:${demoGateway.port}/${r.id}/v1`, upstreamName: e?.name ?? r.library, upstreamUrl: e?.baseUrl ?? null, upstreamMissing: false, breaker: demoBreaker(r, i) };
@@ -1079,6 +1084,7 @@ const demo: typeof real = {
   gatewaySaveRoute: async (route, oldId) => { demoGateway.routes = [...demoGateway.routes.filter((r) => r.id !== (oldId ?? route.id)), route]; return demoGw(); },
   gatewayDeleteRoute: async (id) => { demoGateway.routes = demoGateway.routes.filter((r) => r.id !== id); return demoGw(); },
   gatewaySetBreaker: async (b) => { demoGateway.breaker = b; return demoGw(); },
+  gatewaySetTimezone: async (tz) => { demoGateway.timezone = tz?.trim() || null; return demoGw(); },
   gatewayResetBreaker: async (id) => { demoGateway.cleared.push(...(id === null ? demoGateway.routes.map((r) => r.id) : [id])); return demoGw(); },
   gatewayTest: async (route, apiKind, model) => {
     await sleep(600);

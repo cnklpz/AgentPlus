@@ -20,7 +20,7 @@
 
 use super::breaker::{self, Outcome};
 use super::convert::{self, DownstreamStream, Proto, UpstreamStream};
-use super::{clip, keys, lock, session};
+use super::{clip, envctx, keys, lock, session};
 use crate::i18n::l;
 use crate::{library, store};
 use anyhow::{anyhow, Result};
@@ -90,11 +90,14 @@ pub struct Config {
     /// port are recognised as this gateway (and moved to the new one by the UI).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub former_ports: Vec<u16>,
+    /// IANA time zone put in Codex's environment context (see `envctx`); None leaves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { enabled: false, port: DEFAULT_PORT, routes: vec![], breaker: breaker::Config::default(), former_ports: vec![] }
+        Config { enabled: false, port: DEFAULT_PORT, routes: vec![], breaker: breaker::Config::default(), former_ports: vec![], timezone: None }
     }
 }
 
@@ -123,6 +126,7 @@ fn decode(root: &Value) -> (Config, Vec<Value>) {
         routes,
         breaker: field::<breaker::Config>(g, "breaker").unwrap_or_default().clamped(),
         former_ports: field(g, "formerPorts").unwrap_or_default(),
+        timezone: field::<String>(g, "timezone").filter(|tz| envctx::valid_timezone(tz)),
     };
     (c, bad)
 }
@@ -304,6 +308,8 @@ pub struct Status {
     /// Unified entry that picks a forward by model: http://127.0.0.1:<port>/v1
     pub unified_base: String,
     pub breaker: breaker::Config,
+    /// Time zone put in Codex's environment context; None leaves the one Codex sends.
+    pub timezone: Option<String>,
     /// Earlier ports; agent addresses at these still belong to the gateway.
     pub former_ports: Vec<u16>,
     /// Agent → fingerprint of its gateway key, to spot entries still on an old key.
@@ -364,6 +370,7 @@ pub fn status() -> Status {
         now: chrono::Local::now().timestamp(),
         unified_base: format!("http://127.0.0.1:{port}/v1"),
         breaker: c.breaker.clone(),
+        timezone: c.timezone.clone(),
         former_ports: c.former_ports.iter().copied().filter(|&p| p != port).collect(),
         key_fps: keys::fingerprints_in(&root),
         legacy_fp: crate::model::key_fingerprint(keys::PLACEHOLDER),
@@ -629,6 +636,25 @@ pub fn set_breaker(b: breaker::Config) -> Result<()> {
 /// Lets a paused forward (or every one) take requests again right away.
 pub fn reset_breaker(id: Option<&str>) {
     breaker::reset(id);
+}
+
+/// The time zone to put in Codex's environment context; empty or None stops rewriting it.
+pub fn set_timezone(tz: Option<String>) -> Result<()> {
+    let tz = tz.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    if let Some(t) = tz.as_deref().filter(|t| !envctx::valid_timezone(t)) {
+        return Err(anyhow!(tr!("\"{t}\" isn't a time zone name such as Asia/Shanghai", "「{t}」不是 Asia/Shanghai 这样的时区名")));
+    }
+    update_config(|c| {
+        c.timezone = tz;
+        Ok(())
+    })
+}
+
+/// Applies the gateway's time zone override (if any) to a client's request body.
+fn override_timezone(root: &Value, body: &mut Value) {
+    if let Some(tz) = config_in(root).timezone {
+        envctx::set_timezone(body, &tz);
+    }
 }
 
 fn breaker_cfg(root: &Value) -> breaker::Config {
@@ -1278,10 +1304,11 @@ fn serve(s: &mut TcpStream, req: &Request, log: &mut LogEntry) -> Result<u16> {
     if rest == "/messages/count_tokens" && req.method == "POST" {
         return count_tokens(s, Some(&t), req, log);
     }
-    let (inbound, body) = match parse_call(s, req, &rest, log) {
+    let (inbound, mut body) = match parse_call(s, req, &rest, log) {
         Ok(call) => call,
         Err(status) => return Ok(status),
     };
+    override_timezone(&root, &mut body);
     let cfg = breaker_cfg(&root);
     let ticket = if is_test(req) {
         breaker::Ticket::TEST
@@ -1335,10 +1362,11 @@ fn serve_unified(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntr
     if rest == "/messages/count_tokens" && req.method == "POST" {
         return count_tokens(s, None, req, log);
     }
-    let (inbound, body) = match parse_call(s, req, rest, log) {
+    let (inbound, mut body) = match parse_call(s, req, rest, log) {
         Ok(call) => call,
         Err(status) => return Ok(status),
     };
+    override_timezone(root, &mut body);
     let model = body.get("model").and_then(|m| m.as_str()).unwrap_or_default().to_string();
 
     // Forwards that list the model; unknown lists count as "maybe" and come after. Ids are
@@ -3066,5 +3094,38 @@ mod tests {
         fn json_body(self) -> Value {
             serde_json::from_str(&self.text().unwrap()).unwrap()
         }
+    }
+
+    /// The time zone setting: validated when saved, dropped when the store holds a bad one,
+    /// and applied to Codex's environment context only while set.
+    #[test]
+    fn timezone_override_is_saved_and_applied() {
+        let _h = crate::util::TestHome::new("gateway-timezone");
+        let ctx = "<environment_context>\n  <timezone>Asia/Singapore</timezone>\n</environment_context>";
+        let body = json!({ "input": [{ "type": "message", "role": "user", "content": [{ "type": "input_text", "text": ctx }] }] });
+        let sent = |root: &Value| {
+            let mut b = body.clone();
+            override_timezone(root, &mut b);
+            b["input"][0]["content"][0]["text"].as_str().unwrap().to_string()
+        };
+        assert_eq!(sent(&store::load()), ctx, "nothing set: left alone");
+
+        set_timezone(Some("  America/New_York ".into())).unwrap();
+        assert_eq!(load_config().timezone.as_deref(), Some("America/New_York"));
+        assert_eq!(status().timezone.as_deref(), Some("America/New_York"));
+        assert!(sent(&store::load()).contains("<timezone>America/New_York</timezone>"));
+
+        assert!(set_timezone(Some("+08:00".into())).is_err());
+        assert_eq!(load_config().timezone.as_deref(), Some("America/New_York"), "a bad name saves nothing");
+
+        set_timezone(Some(" ".into())).unwrap();
+        assert_eq!(load_config().timezone, None);
+        assert!(store::load()["gateway"].get("timezone").is_none(), "unset isn't written");
+        assert_eq!(sent(&store::load()), ctx);
+
+        // Hand-edited store: a bad value is ignored, the rest of the config still loads.
+        let root = json!({ "gateway": { "enabled": true, "port": 18650, "timezone": "not a zone" } });
+        assert_eq!(config_in(&root).timezone, None);
+        assert!(config_in(&root).enabled);
     }
 }

@@ -12,10 +12,12 @@ interface Props {
   placeholder?: string;
   disabled?: boolean;
   label?: string;
+  /** Second line under an option in the menu; typing matches it too. */
+  describe?: (option: string) => string;
 }
 
 /** Text input with a styled suggestion menu (same look as Dropdown); free text is allowed. */
-export function ComboBox({ value, options, onChange, onEnter, placeholder, disabled, label }: Props) {
+export function ComboBox({ value, options, onChange, onEnter, placeholder, disabled, label, describe }: Props) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -24,7 +26,7 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
   // Show everything until the user types; then filter by what they typed.
   const listFor = (text: string, filtered: boolean) => {
     const q = text.trim().toLowerCase();
-    return filtered && q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+    return filtered && q ? options.filter((o) => o.toLowerCase().includes(q) || !!describe?.(o).toLowerCase().includes(q)) : options;
   };
   const list = listFor(value, typed);
   const nav = useListNav(list.length);
@@ -80,7 +82,12 @@ export function ComboBox({ value, options, onChange, onEnter, placeholder, disab
             <button key={o} type="button" role="option" aria-selected={o === value}
               className={`dd-item${i === nav.hi ? " hi" : ""}${o === value ? " sel" : ""}`}
               onMouseEnter={() => nav.setHi(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(o)}>
-              <span className="grow minw0 ellipsis">{o}</span>
+              {describe ? (
+                <span className="grow minw0">
+                  <span className="block ellipsis">{o}</span>
+                  <span className="block tiny muted ellipsis">{describe(o)}</span>
+                </span>
+              ) : <span className="grow minw0 ellipsis">{o}</span>}
               {o === value && <Icon.check size={13} sw={2.6} />}
             </button>
           ))}

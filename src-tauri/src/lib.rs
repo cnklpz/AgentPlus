@@ -429,6 +429,12 @@ fn gateway_set_breaker(breaker: gateway::breaker::Config) -> Result<gateway::ser
     with_status(gateway::server::set_breaker(breaker))
 }
 
+/// Time zone the gateway puts in Codex's environment context; null stops rewriting it.
+#[tauri::command]
+fn gateway_set_timezone(timezone: Option<String>) -> Result<gateway::server::Status, String> {
+    with_status(gateway::server::set_timezone(timezone))
+}
+
 /// Lets a forward paused by the error breaker (or every one, with no id) work again now.
 #[tauri::command]
 fn gateway_reset_breaker(id: Option<String>) -> gateway::server::Status {
@@ -799,6 +805,7 @@ pub fn run() {
             gateway_save_route,
             gateway_delete_route,
             gateway_set_breaker,
+            gateway_set_timezone,
             gateway_reset_breaker,
             gateway_test,
             set_agent_dir,

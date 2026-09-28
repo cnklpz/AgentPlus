@@ -36,6 +36,7 @@ import { type Page, Sidebar } from "./components/Sidebar";
 import { SyncPage } from "./components/SyncPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
+import { CodexTimezone } from "./components/CodexTimezone";
 import { GatewayAside } from "./components/GatewayAside";
 import { ConfirmHost, ask, askCheck } from "./components/Confirm";
 import { ContextMenu, type MenuItem, editableOf, insertText, selectedIn } from "./components/ContextMenu";
@@ -1500,6 +1501,8 @@ export default function App() {
                 onOpenDir={() => attempt(api.openPath(projSt.configDir))} />
             ) : undefined}
             onCopyProvider={projSt ? () => setCopyOpen(true) : undefined}
+            settingsExtra={st.id === "codex" && gateway
+              ? <CodexTimezone zone={gateway.timezone} setStatus={setGateway} flash={flash} /> : undefined}
             projectsTab={st.id === "opencode" ? {
               count: projects.length,
               body: (
