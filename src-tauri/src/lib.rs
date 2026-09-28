@@ -133,9 +133,14 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
             steps.extend(["port", "patch"]);
         }
         report(process::Progress::Plan { steps });
-        let r = process::restart(&agent, &args, &report)?;
+        // Failures are logged: the restart dialog offers the log for export.
+        let logged = |e: anyhow::Error| {
+            applog::error("restart", format!("{agent}: {e:#}"));
+            e
+        };
+        let r = process::restart(&agent, &args, &report).map_err(logged)?;
         let mut msg = if inject {
-            cdp::inject(cdp::PORT, patches, &report)?
+            cdp::inject(cdp::PORT, patches, &report).map_err(logged)?
         } else if r.was_running {
             i18n::l("Restarted", "已重启").into()
         } else {

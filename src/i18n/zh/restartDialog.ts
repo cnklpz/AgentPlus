@@ -19,6 +19,8 @@ const zh: typeof en = {
   background: "后台运行",
   cancelStart: "取消启动",
   cancelRestart: "取消重启",
+  exportLog: "导出日志",
+  logExported: "日志已导出到 {path}，反馈问题时请附上。",
 };
 
 export default zh;

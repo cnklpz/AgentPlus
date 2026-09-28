@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentId, RestartProgress, RestartStatus, RestartStep } from "../api";
+import { type AgentId, type RestartProgress, type RestartStatus, type RestartStep, api } from "../api";
 import { type TKey, locale, t } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
 import { Modal } from "./Modal";
 import { scrub } from "../privacy";
+import { errText } from "../util";
 
 export interface RunStep {
   id: RestartStep;
@@ -90,6 +91,18 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
   }, [clean]);
   const btnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => { btnRef.current?.focus(); }, [!!result]);
+  // A failure or warning can be sent in with the diagnostic log, which has the details.
+  const [exported, setExported] = useState<{ busy: boolean; path?: string; err?: string }>({ busy: false });
+  const exportLog = async () => {
+    setExported({ busy: true });
+    try {
+      const path = await api.logExport();
+      setExported({ busy: false, path });
+      api.revealPath(path).catch(() => undefined);
+    } catch (e) {
+      setExported({ busy: false, err: errText(e) });
+    }
+  };
 
   const now = Date.now();
   const vars = { name: run.name };
@@ -105,6 +118,9 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
   const foot = (
     <>
       {!result && <button className="btn" onClick={onCancel}>{t(run.starting ? "restartDialog.cancelStart" : "restartDialog.cancelRestart")}</button>}
+      {result && !clean && (
+        <button className="btn" disabled={exported.busy} onClick={() => { void exportLog(); }}><Icon.download size={13} />{t("restartDialog.exportLog")}</button>
+      )}
       <span className="grow" />
       <button ref={btnRef} className={`btn${result ? " primary" : ""}`} onClick={onClose}>{t(result ? "common.close" : "restartDialog.background")}</button>
     </>
@@ -138,6 +154,11 @@ export function RestartDialog({ run, onClose, onCancel }: { run: RestartRun; onC
         })}
       </ol>
       {showMsg && <div className={`rs-result${result!.ok ? "" : " error"}`}>{scrub(result!.msg)}</div>}
+      {(exported.path || exported.err) && (
+        <div className={`rs-log tiny${exported.err ? " error" : " muted"}`} role="status">
+          {exported.path ? t("restartDialog.logExported", { path: scrub(exported.path) }) : exported.err}
+        </div>
+      )}
     </Modal>
   );
 }

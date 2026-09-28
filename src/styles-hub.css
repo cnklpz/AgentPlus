@@ -493,6 +493,8 @@ button, input, textarea, select { font-family: inherit; }
 :root[data-motion="off"] .rs-ring { border-right-color: var(--accent); }
 .rs-result { margin: -4px 20px 16px; padding: 10px 12px; border-radius: 8px; background: var(--ok-bg); border: 1px solid var(--ok-line); color: var(--ok-ink); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
 .rs-result.error { background: var(--del-bg2); border-color: var(--del-line); color: var(--del-ink); }
+.rs-log { margin: -8px 20px 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.rs-log.error { color: var(--del-ink); }
 .confirm-check { margin-top: 12px; padding: 9px 12px; gap: 10px; }
 .af-replace { margin-top: 6px; padding: 9px 12px; gap: 10px; }
 .confirm-list { margin: 4px 0 0; padding-left: 18px; }

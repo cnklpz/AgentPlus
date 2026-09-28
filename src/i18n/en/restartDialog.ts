@@ -17,4 +17,6 @@ export default {
   background: "Run in background",
   cancelStart: "Cancel start",
   cancelRestart: "Cancel restart",
+  exportLog: "Export log",
+  logExported: "Log exported to {path}. Send it with your report.",
 };
