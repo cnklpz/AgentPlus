@@ -239,7 +239,7 @@ export default function App() {
     const load = reloadGateway;
     load();
     if (!gwOn && page !== "gateway") return;
-    const timer = window.setInterval(load, page === "gateway" ? 2000 : 5000);
+    const timer = window.setInterval(load, page === "gateway" ? 1000 : 5000);
     return () => window.clearInterval(timer);
   }, [gwOn, page, lang]);
 

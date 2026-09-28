@@ -22,7 +22,7 @@ export default {
   range60: "1 hour",
   quiet15: "No requests in the last 15 minutes.",
   quiet60: "No requests in the last hour.",
-  liveNote: "Per-minute stats, refreshed every 2 seconds; reset when the app restarts.",
+  liveNote: "Per-minute stats, refreshed every second; reset when the app restarts.",
   chartLabel: "{label}, last {n} minutes",
   chartLabelLog: "{label}, last {n} minutes, log scale",
   now: "Now",

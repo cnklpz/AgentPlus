@@ -561,6 +561,8 @@ button, input, textarea, select { font-family: inherit; }
 .gwc-sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--c); margin-right: 4px; vertical-align: 0; }
 .gwc-tip-row { display: inline-flex; align-items: baseline; gap: 2px; }
 .gwc-chart svg { display: block; overflow: visible; }
+/* Grid lines and labels glide when the y scale changes; same duration and curve as the lines (TWEEN_MS / ease in GatewayAside.tsx). */
+.gwc-gl { transition: transform .52s cubic-bezier(.33, 1, .68, 1); animation: ap-fade var(--t) var(--ease-out) backwards; }
 .gwc-grid { stroke: var(--line2); stroke-width: 1; }
 .gwc-base { stroke: var(--line); stroke-width: 1; }
 .gwc-axis { font: 10px var(--sans); fill: var(--faint); font-variant-numeric: tabular-nums; }

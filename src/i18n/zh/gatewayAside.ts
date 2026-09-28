@@ -24,7 +24,7 @@ const zh: typeof en = {
   range60: "1 小时",
   quiet15: "最近 15 分钟没有请求。",
   quiet60: "最近 1 小时没有请求。",
-  liveNote: "按分钟统计，每 2 秒刷新；重启应用后清零。",
+  liveNote: "按分钟统计，每秒刷新；重启应用后清零。",
   chartLabel: "{label}，最近 {n} 分钟",
   chartLabelLog: "{label}，最近 {n} 分钟，对数刻度",
   now: "现在",

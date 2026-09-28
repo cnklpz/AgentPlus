@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentId, AgentState, GatewayAgentUse, GatewayMinute, GatewayStatus } from "../api";
 import { type TKey, t, tn } from "../i18n";
 import { AGENT_NAME, agentLabel } from "../services";
@@ -231,6 +231,39 @@ function AgentUsage({ minutes, agents }: { minutes: GatewayMinute[]; agents: Age
 const H = 92;
 const PAD = { top: 8, right: 6, bottom: 18, left: 34 };
 
+/** Chart points in pixels, one map (minute → point) per series; y null = no data that minute. */
+type Frame = Map<number, { x: number; y: number | null }>[];
+const TWEEN_MS = 520;
+/** easeOutCubic; the same curve as `.gwc-gl`'s transition, so the grid and the lines move together. */
+const ease = (p: number) => 1 - (1 - p) ** 3;
+const lerp = (a: number, b: number, p: number) => a + (b - a) * p;
+
+function motionOff(): boolean {
+  return document.documentElement.dataset.motion === "off" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/**
+ * The frame p (0..1) of the way from `a` to `b`. Minutes in both move and change height; a
+ * minute only in `b` grows out of the right edge from the old last value, one only in `a`
+ * slides out of the left edge (the chart clips both).
+ */
+function blend(a: Frame, b: Frame, p: number, step: number): Frame {
+  return b.map((to, i) => {
+    const from = a[i];
+    let last: number | null = null;
+    for (const pt of [...from].sort((u, v) => v[0] - u[0])) if (pt[1].y != null) { last = pt[1].y; break; }
+    const out: Frame[number] = new Map();
+    for (const tm of new Set([...from.keys(), ...to.keys()])) {
+      const f = from.get(tm);
+      const g = to.get(tm);
+      if (f && g) out.set(tm, { x: lerp(f.x, g.x, p), y: g.y == null ? null : f.y == null ? g.y : lerp(f.y, g.y, p) });
+      else if (g) out.set(tm, { x: lerp(g.x + step, g.x, p), y: g.y == null ? null : lerp(last ?? g.y, g.y, p) });
+      else if (f) out.set(tm, { x: lerp(f.x, f.x - step, p), y: f.y });
+    }
+    return out;
+  });
+}
+
 function LineChart({ times, series, fmt, axis, log, label }: {
   times: number[];
   series: { name: string; tone: Tone; fmt?: (v: number) => string; values: (number | null)[] }[];
@@ -268,17 +301,48 @@ function LineChart({ times, series, fmt, axis, log, label }: {
     ? [0, ...Array.from({ length: decades }, (_, k) => 10 ** (k + 1))].map((v, k) => ({ v, label: k === 0 || k % step === 0 || k === decades }))
     : [0, max / 2, max].map((v) => ({ v, label: true }));
 
-  const paths = series.map((s) => {
+  // Points in pixels, keyed by minute. A new poll blends the frame on screen into this one,
+  // so values glide to their new height and a new minute slides the whole line one step left.
+  const frame: Frame = series.map((s) => new Map(times.map((tm, i) => [tm, { x: x(i), y: s.values[i] == null ? null : y(s.values[i]!) }])));
+  const layout = `${n}|${w}|${log ? 1 : 0}`;
+  const sig = `${layout}|${times[0]}|${frame.map((m) => [...m.values()].map((p) => (p.y == null ? "" : Math.round(p.y * 10))).join(",")).join(";")}`;
+  const st = useRef<{ sig: string; layout: string; frame: Frame } | null>(null);
+  const anim = useRef<{ from: Frame; to: Frame; t0: number } | null>(null);
+  const [, setTick] = useState(0);
+  const at = () => (anim.current ? Math.min(1, (performance.now() - anim.current.t0) / TWEEN_MS) : 1);
+  const shown = () => (anim.current && at() < 1 ? blend(anim.current.from, anim.current.to, ease(at()), iw / Math.max(1, n - 1)) : st.current!.frame);
+  if (!st.current) {
+    st.current = { sig, layout, frame };
+  } else if (st.current.sig !== sig) {
+    // Range, width or axis type changed: the old points mean something else, so just cut.
+    anim.current = st.current.layout === layout && !motionOff() ? { from: shown(), to: frame, t0: performance.now() } : null;
+    st.current = { sig, layout, frame };
+  }
+  const cur = shown();
+  useEffect(() => {
+    if (!anim.current) return;
+    let id = 0;
+    const tick = () => {
+      setTick((k) => k + 1);
+      if (at() < 1) id = requestAnimationFrame(tick);
+      else { anim.current = null; setTick((k) => k + 1); }
+    };
+    id = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(id);
+  }, [sig]);
+  const clip = `gwc-clip-${useId().replace(/\W/g, "")}`;
+
+  const paths = series.map((s, si) => {
     // Split into runs at nulls so gaps stay gaps.
     const runs: [number, number][][] = [];
-    let cur: [number, number][] = [];
-    s.values.forEach((v, i) => {
-      if (v == null) {
-        if (cur.length) runs.push(cur);
-        cur = [];
-      } else cur.push([x(i), y(v)]);
+    let run: [number, number][] = [];
+    [...cur[si]].sort((a, b) => a[0] - b[0]).forEach(([, p]) => {
+      if (p.y == null) {
+        if (run.length) runs.push(run);
+        run = [];
+      } else run.push([p.x, p.y]);
     });
-    if (cur.length) runs.push(cur);
+    if (run.length) runs.push(run);
     const line = runs.map((r) => r.map(([a, b], k) => `${k ? "L" : "M"}${a.toFixed(1)},${b.toFixed(1)}`).join("")).join("");
     const area = runs
       .filter((r) => r.length > 1)
@@ -300,10 +364,13 @@ function LineChart({ times, series, fmt, axis, log, label }: {
   return (
     <div ref={box} className="gwc-chart">
       <svg width={w} height={H} role="img" aria-label={t(log ? "gatewayAside.chartLabelLog" : "gatewayAside.chartLabel", { label, n })}>
+        <defs>
+          <clipPath id={clip}><rect x={PAD.left - 1} y={0} width={iw + 3} height={H} /></clipPath>
+        </defs>
         {grid.map(({ v, label: shown }) => (
-          <g key={v}>
-            <line x1={PAD.left} x2={w - PAD.right} y1={y(v)} y2={y(v)} className={v === 0 ? "gwc-base" : "gwc-grid"} />
-            {shown && <text x={PAD.left - 6} y={y(v) + 3.5} textAnchor="end" className="gwc-axis">{v === 0 ? "0" : axis(v)}</text>}
+          <g key={v} className="gwc-gl" style={{ transform: `translateY(${y(v)}px)` }}>
+            <line x1={PAD.left} x2={w - PAD.right} y1={0} y2={0} className={v === 0 ? "gwc-base" : "gwc-grid"} />
+            {shown && <text x={PAD.left - 6} y={3.5} textAnchor="end" className="gwc-axis">{v === 0 ? "0" : axis(v)}</text>}
           </g>
         ))}
         {ticks.map((i, k) => (
@@ -312,7 +379,7 @@ function LineChart({ times, series, fmt, axis, log, label }: {
           </text>
         ))}
         {paths.map((p) => (
-          <g key={p.name} className={`t-${p.tone}`}>
+          <g key={p.name} className={`t-${p.tone}`} clipPath={`url(#${clip})`}>
             {fill && <path d={p.area} className="gwc-area" />}
             <path d={p.line} className="gwc-line" />
             {p.lone.map(([a, b], i) => <circle key={i} cx={a} cy={b} r={2.5} className="gwc-pt" />)}
