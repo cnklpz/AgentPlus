@@ -55,7 +55,6 @@ export default {
   providerNamePlaceholder: "e.g. Relay A",
   baseUrlLabel: "Base URL",
   apiKeyLabel: "API key",
-  pendingNote: "Saved changes go to \"Pending changes\" and are written to the config file when you click \"Apply\".",
   useGateway: "Use local gateway",
   copyUrl: "Copy URL",
   closeDetails: "Close details",

@@ -143,7 +143,7 @@ export function ModelDialog({ agent, agentName, hasNames, nameIsUpstream = false
 
   const foot = (
     <>
-      <span className="muted tiny grow hint">{t("common.pendingNote")}</span>
+      <span className="grow" />
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!canSave} onClick={save}>{initial ? t("common.save") : t("common.add")}</button>
     </>

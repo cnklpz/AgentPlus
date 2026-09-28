@@ -57,7 +57,6 @@ const zh: typeof en = {
   providerNamePlaceholder: "例如：中转 A",
   baseUrlLabel: "地址（Base URL）",
   apiKeyLabel: "API Key",
-  pendingNote: "保存后加入「待写入的改动」，点「应用」才会写入配置文件。",
   useGateway: "使用本地网关",
   copyUrl: "复制地址",
   closeDetails: "关闭详情",

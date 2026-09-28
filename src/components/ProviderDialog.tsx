@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api, isProjectId } from "../api";
+import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api } from "../api";
 import { type Draft, type ViewProvider, isVisible, keys, settingValue, viewModels } from "../draft";
 import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
 import { Dropdown } from "./Dropdown";
@@ -330,18 +330,6 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     void submit(out);
   };
 
-  const keyHint = codex ? t("providerDialog.keyCodex")
-    : claude ? t("providerDialog.keyClaude")
-    : st.id === "opencode" || isProjectId(st.id) ? t("providerDialog.keyOpencode")
-    : st.id === "zcode" ? t("providerDialog.keyZcode")
-    : st.id === "mimo" ? t("providerDialog.keyMimo")
-    : st.id === "hermes" ? t("providerDialog.keyHermes")
-    : st.id === "gemini" ? t("providerDialog.keyGemini")
-    : st.id === "qwen" ? t("providerDialog.keyQwen")
-    : st.id === "kilo" ? t("providerDialog.keyKilo")
-    : st.id === "pi" ? t("providerDialog.keyPi")
-    : t("providerDialog.keyOther", { agent: st.name });
-
   const protoOptions = (lockApi === "gemini" ? (["gemini"] as const) : PROTOCOLS).map((v: ApiKind) => {
     const missing = !!tpl && !lockApi && !tpl.endpoints[v];
     return {
@@ -352,7 +340,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   const foot = (
     <>
-      <span className="muted tiny grow hint">{t("common.pendingNote")}</span>
+      <span className="grow" />
       <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
       <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
     </>
@@ -437,10 +425,12 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
               <label htmlFor="pd-key">{t("common.apiKeyLabel")}</label>
               <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
                 placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
-              <em className={`muted tiny${tpl ? "" : " hint"}`}>
-                {viaFwd ? t("providerDialog.keyForward") : keyHint}
-                {tpl && <TemplateKeyLink tpl={tpl} />}
-              </em>
+              {(viaFwd || tpl) && (
+                <em className={`muted tiny${tpl ? "" : " hint"}`}>
+                  {viaFwd && t("providerDialog.keyForward")}
+                  {tpl && <TemplateKeyLink tpl={tpl} />}
+                </em>
+              )}
             </div>
           </div>
         </>
