@@ -22,10 +22,11 @@
 //! The patches live in different bundles (app-initial, app-primary); every bundle is
 //! tried with every patch, and a patch is missing only when no bundle has it.
 //!
-//! Strategy 1: intercept the bundle responses on reload (Fetch domain). The cache is off
-//! for the reload: app-primary is otherwise often served from the memory cache, which
-//! never reaches the interception.
-//! Strategy 2: live-edit the already-loaded scripts (Debugger.setScriptSource).
+//! The bundle responses are intercepted on reload (Fetch domain). The cache is off for the
+//! reload: app-primary is otherwise often served from the memory cache, which never
+//! reaches the interception. When no bundle request shows up the window is reloaded once
+//! more with a longer wait. (Live-editing the loaded scripts is no option: Codex's
+//! Chromium answers `Debugger.setScriptSource` with "functionality no longer available".)
 
 use crate::i18n::join;
 use crate::process::Progress;
@@ -47,6 +48,9 @@ const QUOTA_MARK: &str = "/*agentplus-quota*/";
 const BANNER_MARK: &str = "/*agentplus-banner*/";
 const SHORT_MARK: &str = "/*agentplus-short*/";
 const BUNDLE_HINTS: [&str; 2] = ["app-initial-", "app-primary-"];
+/// How long after a reload the first bundle request may take, and on the second try.
+const FIRST_BUNDLE: Duration = Duration::from_secs(10);
+const FIRST_BUNDLE_RETRY: Duration = Duration::from_secs(30);
 
 /// Which UI patches to apply.
 #[derive(Clone, Copy, Default)]
@@ -203,7 +207,7 @@ fn not_found(missing: &[&str]) -> anyhow::Error {
 
 /// Events kept for `next_event`; others (Network.* while the cache is off) are dropped.
 fn buffered(msg: &Value) -> bool {
-    matches!(msg.get("method").and_then(|m| m.as_str()), Some("Fetch.requestPaused" | "Debugger.scriptParsed"))
+    msg.get("method").and_then(|m| m.as_str()) == Some("Fetch.requestPaused")
 }
 
 struct Session {
@@ -354,17 +358,17 @@ fn loaded_bundles(s: &mut Session) -> Result<Vec<&'static str>> {
     Ok(bundles_in(&urls))
 }
 
-/// `Ok(None)` when no bundle request was seen. Stops once every bundle in `expect` is through
-/// (all of them when `None`); after the first one, waits up to `lazy` for the rest, calling
-/// `waiting` first.
-fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
+/// `Ok(None)` when no bundle request was seen within `first`. Stops once every bundle in
+/// `expect` is through (all of them when `None`); after the first one, waits up to `lazy`
+/// for the rest, calling `waiting` first.
+fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, first: Duration, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
     let expect = expect.unwrap_or(&BUNDLE_HINTS);
     let patterns: Vec<Value> = BUNDLE_HINTS.iter().map(|h| json!({ "urlPattern": format!("*{h}*.js*"), "requestStage": "Response" })).collect();
     s.call("Fetch.enable", json!({ "patterns": patterns }))?;
     s.call("Network.enable", json!({}))?;
     s.call("Network.setCacheDisabled", json!({ "cacheDisabled": true }))?;
     s.call("Page.reload", json!({ "ignoreCache": true }))?;
-    let mut deadline = Instant::now() + Duration::from_secs(10);
+    let mut deadline = Instant::now() + first;
     let mut seen: Vec<&str> = vec![];
     let mut missing: Option<Vec<&'static str>> = None;
     let result = (|| -> Result<()> {
@@ -394,50 +398,6 @@ fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, lazy: Dura
     let _ = s.call("Network.disable", json!({}));
     result?;
     Ok(missing.map(|missing| Patched { missing, complete: seen.len() == BUNDLE_HINTS.len() }))
-}
-
-/// `Ok(None)` when the window has no bundle loaded (overlay and detached windows don't);
-/// otherwise what was patched.
-fn via_live_edit(s: &mut Session, want: Patches) -> Result<Option<Patched>> {
-    s.call("Debugger.enable", json!({}))?;
-    // Already-loaded scripts are reported right away; stop once they've gone quiet.
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let mut quiet = Instant::now() + Duration::from_millis(1500);
-    let mut scripts: Vec<(&str, String)> = vec![];
-    while scripts.len() < BUNDLE_HINTS.len() {
-        let Some(ev) = s.next_event("Debugger.scriptParsed", deadline.min(quiet))? else { break };
-        quiet = Instant::now() + Duration::from_millis(1500);
-        if let (Some(h), Some(id)) = (bundle_of(ev["params"]["url"].as_str().unwrap_or("")), ev["params"]["scriptId"].as_str()) {
-            if !scripts.iter().any(|(x, _)| *x == h) {
-                scripts.push((h, id.to_string()));
-            }
-        }
-    }
-    if scripts.is_empty() {
-        let _ = s.call("Debugger.disable", json!({}));
-        return Ok(None);
-    }
-    let result = (|| -> Result<Vec<&'static str>> {
-        let mut missing: Option<Vec<&'static str>> = None;
-        for (_, id) in &scripts {
-            let src = s.call("Debugger.getScriptSource", json!({ "scriptId": id }))?;
-            let (patched, miss) = patch_source(src["scriptSource"].as_str().unwrap_or_default(), want);
-            missing = Some(still_missing(missing.take(), miss));
-            let Some(patched) = patched else { continue };
-            let r = s.call("Debugger.setScriptSource", json!({ "scriptId": id, "scriptSource": patched }))?;
-            if let Some(ex) = r.get("exceptionDetails") {
-                return Err(anyhow!(tr!("Live patch failed: {ex}", "热替换失败：{ex}")));
-            }
-            if let Some(st) = r.get("status").and_then(|x| x.as_str()) {
-                if st != "Ok" {
-                    return Err(anyhow!(tr!("Live patch failed: {st}", "热替换失败：{st}")));
-                }
-            }
-        }
-        Ok(missing.unwrap_or_default())
-    })();
-    let _ = s.call("Debugger.disable", json!({}));
-    Ok(Some(Patched { missing: result?, complete: scripts.len() == BUNDLE_HINTS.len() }))
 }
 
 /// Waits for Codex windows on the debug port and patches each one.
@@ -485,17 +445,28 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
             continue;
         }
         let waiting = || on(Progress::step("patch", "active", Some(tr!("Window {}/{}: waiting for the rest of the UI scripts", "窗口 {}/{}：等待其余界面脚本加载", i + 1, total))));
-        let fetched = via_fetch(&mut s, want, expect.as_deref(), lazy, &waiting)?;
+        let mut fetched = via_fetch(&mut s, want, expect.as_deref(), FIRST_BUNDLE, lazy, &waiting)?;
+        if fetched.is_none() {
+            let loaded = loaded_bundles(&mut s)?;
+            if loaded.is_empty() {
+                crate::applog::info("inject", format!("{url}: no bundle request seen and no UI bundle loaded, skipped"));
+                continue;
+            }
+            // A busy renderer (right after Codex starts, on a slow machine) can take longer
+            // than FIRST_BUNDLE to request the bundles again: reload once more, waiting longer.
+            crate::applog::warn("inject", format!("{url}: no bundle request seen within {}s of the reload (loaded: {}), reloading again", FIRST_BUNDLE.as_secs(), loaded.join(", ")));
+            on(Progress::step("patch", "active", Some(tr!("Window {}/{}: reloading again", "窗口 {}/{}：再次重新加载", i + 1, total))));
+            fetched = via_fetch(&mut s, want, expect.as_deref(), FIRST_BUNDLE_RETRY, lazy, &waiting)?;
+        }
         crate::applog::info("inject", format!("{url}: {} in {:.1}s", if fetched.is_some() { "patched" } else { "no bundle request seen" }, t1.elapsed().as_secs_f32()));
-        let (how, r) = match fetched {
-            Some(r) => (crate::i18n::l("response interception", "响应拦截"), r),
-            None => match via_live_edit(&mut s, want)? {
-                Some(r) => (crate::i18n::l("live patch", "热替换"), r),
-                // No UI bundle in this window: nothing to patch.
-                None => continue,
-            },
+        let Some(r) = fetched else {
+            return Err(anyhow!(tr!(
+                "Codex didn't reload its UI scripts within {}s, so the UI couldn't be patched. Restart Codex to try again",
+                "Codex 在 {} 秒内没有重新加载界面脚本，界面没能注入。请重启 Codex 再试",
+                FIRST_BUNDLE_RETRY.as_secs()
+            )));
         };
-        done.push(how);
+        done.push(crate::i18n::l("response interception", "响应拦截"));
         if r.complete {
             lazy = Duration::from_secs(5);
         }
