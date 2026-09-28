@@ -319,6 +319,18 @@ export { API_LABEL };
 export const PROTOCOLS = ["responses", "chat", "anthropic"] as const;
 export type Protocol = (typeof PROTOCOLS)[number];
 
+/**
+ * Example base URL per protocol. OpenAI and Anthropic bases end in the version
+ * (/models, /responses, /messages… are appended to it); a Gemini base may leave it out
+ * (v1beta is then used).
+ */
+export const URL_PLACEHOLDER: Record<ApiKind, string> = {
+  responses: "https://api.example.com/v1",
+  chat: "https://api.example.com/v1",
+  anthropic: "https://api.example.com/anthropic/v1",
+  gemini: "https://api.example.com/v1beta",
+};
+
 /** A gateway route as saved: the view-only fields the backend adds are left out. */
 export function plainRoute(r: GatewayRouteView): GatewayRoute {
   const { localBase: _a, upstreamName: _b, upstreamUrl: _c, upstreamMissing: _d, models: _e, breaker: _f, ...route } = r;

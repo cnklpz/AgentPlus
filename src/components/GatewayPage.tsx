@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type ApiKind, type GatewayBreaker, type GatewayBreakerView, type GatewayRoute, type GatewayRouteView, type GatewayStatus, type TestResult, api } from "../api";
 import {
-  API_LABEL, DEFAULT_GATEWAY_PORT, type Group, type Station, apiFor, findRoute, gatewayCapable, gatewayRouteId, isGatewayHost, plainRoute, tripped,
+  API_LABEL, DEFAULT_GATEWAY_PORT, type Group, type Station, URL_PLACEHOLDER, apiFor, findRoute, gatewayCapable, gatewayRouteId, isGatewayHost, plainRoute, tripped,
   writableAgents,
 } from "../services";
 import { ComboBox } from "./ComboBox";
@@ -393,7 +393,7 @@ function AddForward({ groups, onForward, onClose }: {
           </div>
           <div className="field">
             <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
-            <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+            <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={URL_PLACEHOLDER[apiKind]} />
             {url && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
           </div>
           <div className="field">

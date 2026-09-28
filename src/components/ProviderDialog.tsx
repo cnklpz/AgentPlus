@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api, isProjectId } from "../api";
 import { type Draft, type ViewProvider, isVisible, keys, settingValue, viewModels } from "../draft";
-import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
+import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { ImportNote } from "./ImportLink";
@@ -422,7 +422,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <>
           <div className="field">
             <label htmlFor="pd-url">{t("common.baseUrlLabel")}</label>
-            <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+            <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={URL_PLACEHOLDER[kind]} />
             {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
           </div>
           <div className="form2">

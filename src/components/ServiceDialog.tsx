@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type ApiKind, type ImportRequest, api } from "../api";
-import { AGENT_NAME, API_LABEL, type Group, ONLY_API, PROTOCOLS, type Protocol, type Use, freeAgents, gatewayCapable, useKey } from "../services";
+import { AGENT_NAME, API_LABEL, type Group, ONLY_API, PROTOCOLS, type Protocol, URL_PLACEHOLDER, type Use, freeAgents, gatewayCapable, useKey } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { ImportNote } from "./ImportLink";
 import { Modal } from "./Modal";
@@ -173,7 +173,7 @@ export function ServiceDialog({ agents, group, prefill, imported, onSave, onClos
         </label>
         <label className="field">
           <span>{t("common.baseUrlLabel")}</span>
-          <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+          <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={URL_PLACEHOLDER[kind]} />
           {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
         </label>
       </div>
