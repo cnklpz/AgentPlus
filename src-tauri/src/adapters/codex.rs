@@ -495,6 +495,10 @@ fn load_catalog(doc: &DocumentMut) -> Option<(PathBuf, Value, TextMeta)> {
     Some((p, v, meta))
 }
 
+/// Store key: catalog models Codex itself hides (`visibility: hide` when AgentPlus wrote the
+/// catalog from Codex's list), so a new list doesn't tick them by default.
+pub(crate) const CODEX_HIDDEN: &str = "codexHidden";
+
 fn custom_models(store: &Value) -> Vec<String> {
     crate::util::str_list(crate::store::agent_get(store, ID, "customModels")).unwrap_or_default()
 }
@@ -608,7 +612,7 @@ fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff
     Ok(true)
 }
 
-fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
+fn catalog_models(v: &Value, custom: &[String], codex_hidden: &[String]) -> Vec<Model> {
     let empty = vec![];
     let list = v.get("models").and_then(|m| m.as_array()).unwrap_or(&empty);
     list.iter()
@@ -626,6 +630,8 @@ fn catalog_models(v: &Value, custom: &[String]) -> Vec<Model> {
             }
             if is_custom {
                 tags.push(Tag::new("custom", l("Custom", "自定义")));
+            } else if codex_hidden.contains(&id) {
+                tags.push(Tag::new("codex-hidden", l("Hidden by Codex", "Codex 默认隐藏")));
             }
             let context = m.get("context_window").and_then(|x| x.as_u64());
             Some(Model {
@@ -665,7 +671,8 @@ pub fn state(inst: &Install) -> AgentState {
     if let Some((p, v, _)) = load_catalog(&doc) {
         st.files.push(display_path(&p));
         st.catalog_file = Some(display_path(&p));
-        st.catalog = Some(catalog_models(&v, &custom_models(&store)));
+        let codex_hidden = crate::util::str_list(crate::store::agent_get(&store, ID, CODEX_HIDDEN)).unwrap_or_default();
+        st.catalog = Some(catalog_models(&v, &custom_models(&store), &codex_hidden));
         // Each provider's own list: the live catalog for the current one, the stored list for others.
         let live = visible_slugs(&v);
         for p in st.providers.iter_mut() {
@@ -1245,6 +1252,16 @@ mod tests {
         assert_eq!((&e["context_window"], &e["input_modalities"]), (&json!(64000), &json!(["text", "image"])));
         assert_eq!(catalog_entry(&mut v, "mystery-x").unwrap()["context_window"], 1050000, "nothing known: the copied entry's values stay");
         assert_eq!(custom_models(&store), ["acme-vision-9", "mystery-x"]);
+    }
+
+    #[test]
+    fn catalog_tags_custom_and_codex_hidden_models() {
+        let v = json!({ "models": [{ "slug": "a" }, { "slug": "day", "visibility": "hide" }, { "slug": "mine" }] });
+        let tags = catalog_models(&v, &["mine".into()], &["day".into(), "mine".into()])
+            .into_iter()
+            .map(|m| (m.id, m.tags.into_iter().map(|t| t.id).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        assert_eq!(tags, [("a".into(), vec![]), ("day".into(), vec!["codex-hidden".to_string()]), ("mine".into(), vec!["custom".to_string()])]);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentState, Model, Op, Provider, Setting } from "./api";
 import {
-  type Draft, type ViewProvider, agentsWithOps, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
+  type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp,
 } from "./draft";
@@ -68,6 +68,21 @@ describe("withOp", () => {
 
   it("removing a missing key is a no-op", () => {
     expect(withOp({}, "nope", null)).toEqual({});
+  });
+});
+
+describe("codexDefaultModels", () => {
+  const tag = (id: string) => [{ id, label: id }];
+  it("leaves out custom models and the ones Codex hides", () => {
+    const cat = [model("a"), model("daybreak", { tags: tag("codex-hidden") }), model("old", { tags: tag("codex-hidden"), visible: false }), model("mine", { tags: tag("custom") })];
+    expect(codexDefaultModels(cat)).toEqual(["a"]);
+  });
+  it("falls back to what the catalog shows when Codex's hidden ones weren't noted", () => {
+    expect(codexDefaultModels([model("a"), model("b", { visible: false }), model("mine", { tags: tag("custom") })])).toEqual(["a"]);
+  });
+  it("ticks every built-in model rather than none", () => {
+    expect(codexDefaultModels([model("a", { visible: false }), model("b", { visible: false })])).toEqual(["a", "b"]);
+    expect(codexDefaultModels([model("mine", { tags: tag("custom") })])).toEqual([]);
   });
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api } from "../api";
-import { type Draft, type ViewProvider, isVisible, keys, settingValue, viewModels } from "../draft";
+import { type Draft, type ViewProvider, codexDefaultModels, isVisible, keys, settingValue, viewModels } from "../draft";
 import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
@@ -137,6 +137,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   /** Codex: the models Codex itself ships (its catalog, minus the ones AgentPlus added). */
   const catalogIds = (custom: boolean) => (codex ? (st.catalog ?? []) : []).filter((m) => m.tags.some((g) => g.id === "custom") === custom).map((m) => m.id);
   const builtinIds = catalogIds(false);
+  const builtinDefault = codex ? codexDefaultModels(st.catalog ?? []) : [];
   /** Codex, with the built-in list off: the models AgentPlus added (an existing provider lists the whole catalog). */
   const ownPool = () => (isNew ? catalogIds(true) : [...catalogIds(true), ...builtinIds]);
   const startChecked = isNew ? editing?.models.map((m) => m.id) ?? imported?.models ?? null : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id);
@@ -144,7 +145,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const [builtin, setBuiltin] = useState(() =>
     builtinIds.length > 0 && (startChecked === null || ((startChecked.length > 0 || !isNew) && startChecked.every((m) => builtinIds.includes(m)))),
   );
-  const [checked, setChecked] = useState<string[]>(() => startChecked ?? (builtin ? builtinIds : []));
+  const [checked, setChecked] = useState<string[]>(() => startChecked ?? (builtin ? builtinDefault : []));
   const [fetched, setFetched] = useState<string[]>([]);
   const [fetching, setFetching] = useState(false);
   const rolesOp = editing ? draft[keys.roles(editing.id)] : undefined;
@@ -161,7 +162,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     setBuiltin(on);
     setFetched([]);
     const kept = checked.filter((m) => builtinIds.includes(m) === on);
-    const next = on && kept.length === 0 ? builtinIds : kept;
+    const next = on && kept.length === 0 ? builtinDefault : kept;
     resetPool([...(on ? builtinIds : ownPool()), ...next]);
     setChecked(next);
   };

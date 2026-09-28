@@ -289,6 +289,18 @@ export function setModelVisible(d: Draft, pid: string, m: Model, visible: boolea
   return withOp(d, keys.visible(pid, m.id), visible === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible });
 }
 
+/**
+ * Codex: the built-in catalog models a new list ticks by default: not AgentPlus's custom
+ * ones, nor the ones Codex itself hides (internal or retired, tagged `codex-hidden`). A
+ * catalog written before AgentPlus noted those falls back to what it shows now.
+ */
+export function codexDefaultModels(catalog: Model[]): string[] {
+  const has = (m: Model, tag: string) => m.tags.some((g) => g.id === tag);
+  const own = catalog.filter((m) => !has(m, "custom"));
+  const pick = own.some((m) => has(m, "codex-hidden")) ? own.filter((m) => !has(m, "codex-hidden")) : own.filter((m) => m.visible);
+  return (pick.length ? pick : own).map((m) => m.id);
+}
+
 /** Agents whose providers each have a default model (the backend tags it `role:default`). */
 export const hasDefaultModel = (agent: string) => agent === "hermes";
 

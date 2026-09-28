@@ -17,7 +17,7 @@
 //! with no sign-in and no network. When no copy of Codex can be run, the list is read
 //! straight out of the program, where Codex compiles it in.
 
-use crate::adapters::codex::{catalog_path, chatgpt_signed_in, codex_home, config_path, load_doc, ID};
+use crate::adapters::codex::{catalog_path, chatgpt_signed_in, codex_home, config_path, load_doc, CODEX_HIDDEN, ID};
 use crate::store;
 use crate::util::{backup_tagged, display_path, read_json, str_field, str_list, write_bytes_atomic, write_json, write_text_atomic, TextMeta};
 use anyhow::{anyhow, bail, Context, Result};
@@ -170,7 +170,7 @@ pub fn finish() -> Result<Vec<FetchModel>> {
 
     // New catalog = the cache file as-is, plus AgentPlus's custom models from the old one.
     let (cache, _) = read_json(&cache_path())?;
-    let models = write_catalog(&catalog, cache, &root)?;
+    let models = write_catalog(&catalog, cache, &mut root)?;
 
     // Put the user's config back, making sure it reads the catalog we just wrote.
     restore_config(&st)?;
@@ -180,9 +180,20 @@ pub fn finish() -> Result<Vec<FetchModel>> {
 }
 
 /// Writes `new` (`{"models": [...]}`) to `catalog`, keeping AgentPlus's custom models from
-/// the catalog there now. Returns the models it lists.
-fn write_catalog(catalog: &Path, mut new: Value, root: &Value) -> Result<Vec<FetchModel>> {
+/// the catalog there now, and notes in `root` (the caller saves it) which models Codex
+/// itself hides (internal or retired ones), so they aren't ticked by default later.
+/// Returns the models it lists.
+fn write_catalog(catalog: &Path, mut new: Value, root: &mut Value) -> Result<Vec<FetchModel>> {
     let custom: Vec<String> = str_list(store::agent_get(root, ID, "customModels")).unwrap_or_default();
+    let hidden: Vec<String> = new
+        .get("models")
+        .and_then(|m| m.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|m| m.get("visibility").and_then(|x| x.as_str()) == Some("hide"))
+        .filter_map(|m| m.get("slug").and_then(|s| s.as_str()).map(String::from))
+        .collect();
+    store::set_value(root, ID, CODEX_HIDDEN, json!(hidden));
     let (old, meta) = match read_json(catalog) {
         Ok((v, m)) => (Some(v), m),
         Err(_) => (None, TextMeta::NEW),
@@ -237,7 +248,10 @@ pub fn from_codex() -> Result<Vec<FetchModel>> {
     let exes = crate::process::codex_clis();
     for exe in &exes {
         match builtin_models(exe) {
-            Ok(v) => return install(v),
+            Ok(v) => {
+                crate::applog::info("catalog", format!("model list from codex debug models ({})", exe.display()));
+                return install(v);
+            }
             Err(e) => crate::applog::warn("catalog", format!("codex debug models failed with {}: {e}", exe.display())),
         }
     }
@@ -350,7 +364,7 @@ fn embedded_catalog(bytes: &[u8]) -> Option<Value> {
 /// Writes `new` as the catalog (after backing up config.toml and the old catalog) and points
 /// config.toml at it.
 fn install(new: Value) -> Result<Vec<FetchModel>> {
-    let root = store::load();
+    let mut root = store::load();
     if state(&root).is_some() {
         bail!("{}", crate::i18n::l("A fetch of the official list is in progress. Finish or cancel it first", "正在获取官方模型列表，先完成或取消它"));
     }
@@ -362,7 +376,8 @@ fn install(new: Value) -> Result<Vec<FetchModel>> {
     }
     let (en, zh) = crate::history::REASON_BUILTIN;
     backup_tagged(ID, &files, crate::i18n::l(en, zh))?;
-    let models = write_catalog(&catalog, new, &root)?;
+    let models = write_catalog(&catalog, new, &mut root)?;
+    store::save(&root)?;
     point_at(&catalog)?;
     Ok(models)
 }
@@ -541,6 +556,8 @@ mod tests {
         let cfg = fs::read_to_string(codex.join("config.toml")).unwrap();
         assert_eq!(cfg, original.replace("\n\n", "\nmodel_catalog_json = \"~/.codex/models.json\"\n\n"), "a top-level key, the rest as it was");
         assert_eq!(read_json(&codex.join("models.json")).unwrap().0, built_in);
+        let hidden = || str_list(store::agent_get(&store::load(), ID, CODEX_HIDDEN)).unwrap_or_default();
+        assert_eq!(hidden(), ["gpt-old"], "what Codex hides is noted");
         assert!(crate::history::list().unwrap().iter().any(|b| b.agent == ID), "config.toml was backed up first");
 
         // Again, with a custom model AgentPlus added in the meantime: it survives the refresh.
@@ -552,6 +569,8 @@ mod tests {
         store::save(&root).unwrap();
         let models = install(json!({ "models": [{ "slug": "gpt-b" }] })).unwrap();
         assert_eq!(models.iter().map(|m| m.slug.as_str()).collect::<Vec<_>>(), ["gpt-b", "mine"]);
+        assert!(hidden().is_empty(), "a new list replaces the note");
+        assert_eq!(str_list(store::agent_get(&store::load(), ID, "customModels")).unwrap(), ["mine"], "saving the note keeps the rest of the store");
         assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), cfg, "already pointing at the catalog: untouched");
     }
 
