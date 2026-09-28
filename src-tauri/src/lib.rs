@@ -1,6 +1,7 @@
 #[macro_use]
 mod i18n;
 mod adapters;
+mod attribution;
 mod applog;
 mod appmenu;
 mod cdp;
@@ -225,6 +226,36 @@ async fn test_provider(agent: String, provider: String, model: String) -> Result
         Ok(net::test_call(&base, key.as_deref(), &api, model.trim()))
     })
     .await
+}
+
+/// What an attribution test of `model` in `provider`'s list (or Codex's catalog, "*") goes to.
+#[tauri::command]
+async fn attribution_target(agent: String, provider: String, model: String) -> Result<attribution::Target, String> {
+    blocking(move || attribution::target(&agent, &provider, &model)).await
+}
+
+/// Sends one attribution challenge; `fp` is the target's, so every sample of a run goes to
+/// the same endpoint. The answer streams to `on_live` as it arrives.
+#[tauri::command]
+async fn attribution_sample(agent: String, provider: String, model: String, prompt: String, fp: String, on_live: tauri::ipc::Channel<attribution::Live>) -> Result<attribution::SampleResult, String> {
+    blocking(move || attribution::sample(&agent, &provider, &model, &prompt, &fp, &|e| { let _ = on_live.send(e); })).await
+}
+
+/// Past attribution results, newest first.
+#[tauri::command]
+async fn attribution_history() -> Result<Vec<serde_json::Value>, String> {
+    blocking(|| Ok(attribution::history())).await
+}
+
+#[tauri::command]
+async fn attribution_history_add(entry: serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    blocking(move || attribution::history_add(entry)).await
+}
+
+/// Deletes these results, or all of them with no ids.
+#[tauri::command]
+async fn attribution_history_delete(ids: Option<Vec<String>>) -> Result<Vec<serde_json::Value>, String> {
+    blocking(move || attribution::history_delete(ids)).await
 }
 
 /// Model ids straight from a library entry's upstream (used while an agent goes through the gateway).
@@ -796,6 +827,11 @@ pub fn run() {
             quit_app,
             detect_agents,
             test_provider,
+            attribution_target,
+            attribution_sample,
+            attribution_history,
+            attribution_history_add,
+            attribution_history_delete,
             codex_official_status,
             codex_official_start,
             codex_official_finish,

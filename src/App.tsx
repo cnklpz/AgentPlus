@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportRequest, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, sameLaunch } from "./api";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportRequest, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
 import {
   CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, guessedModel, importProvider, isEnabled, isVisible, keys, opCount,
   opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
@@ -39,6 +39,8 @@ import { GatewayPage } from "./components/GatewayPage";
 import { CodexTimezone } from "./components/CodexTimezone";
 import { GatewayAside } from "./components/GatewayAside";
 import { ConfirmHost, ask, askCheck } from "./components/Confirm";
+import { AttributionDialog } from "./components/AttributionDialog";
+import { type Bank, type Match, loadBank, matchCandidate } from "./attribution/bank";
 import { ContextMenu, type MenuItem, editableOf, insertText, selectedIn } from "./components/ContextMenu";
 import { ProjectHead, ProjectList } from "./components/ProjectsPage";
 import { type CopyPick, CopyProviderDialog } from "./components/CopyProviderDialog";
@@ -115,6 +117,12 @@ export default function App() {
   const [projPath, setProjPath] = useState<string | null>(null);
   const [projStates, setProjStates] = useState<Record<string, AgentState>>({});
   const [copyOpen, setCopyOpen] = useState(false);
+  // Attribution test: the fingerprint bank (which models are supported comes from it) and the open dialog.
+  const [attrBank, setAttrBank] = useState<Bank | "failed" | null>(null);
+  const [attr, setAttr] = useState<{ n: number; agent: string; provider: string; model: string; match: Match; names: Record<string, string>; pending: (pid: string) => boolean } | null>(null);
+  useEffect(() => {
+    loadBank().then(setAttrBank).catch((e) => { setAttrBank("failed"); logClient("error", "attribution bank", e); });
+  }, []);
   const setPrefs = (p: Prefs) => { setPrefsState(p); savePrefs(p); };
   useEffect(() => applyPrefs(prefs), [prefs.motion, prefs.theme, prefs.lang, prefs.privacy, prefs.hints]);
   // The window starts hidden (tauri.conf.json) so the WebView's blank white never shows;
@@ -1257,9 +1265,27 @@ export default function App() {
         const m = viewModels(pid, base, draft).find((x) => x.id === mid);
         if (!m) return [];
         const vis = isVisible(pid, m, draft);
+        // Attribution test: only models the bank covers; tests use the saved config, so
+        // changes to this model or its provider (or a provider switch for Codex's catalog)
+        // must be applied first. A read-only config can still be tested.
+        const attrItems = (): MenuItem[] => {
+          if (attrBank === "failed") return [{ label: t("app.attributionTest"), icon: <Icon.pulse size={13} />, disabled: true, hint: t("app.attributionBankError"), action: () => undefined }];
+          const match = attrBank && matchCandidate(mid, attrBank.models);
+          if (!match) return [];
+          const catalog = pid === CATALOG;
+          const pending = (p: string) => !!(draft[keys.upsertProvider(p)] || draft[keys.deleteProvider(p)] || (catalog && draft[keys.cur()]));
+          const target = catalog ? st.currentProvider : pid;
+          const blocked = !!(m.isNew || m.isDeleted || (catalog && draft[keys.cur()]) || (target && pending(target)));
+          const names = Object.fromEntries(st.providers.map((p) => [p.id, p.name]));
+          return ["sep", {
+            label: t("app.attributionTest"), icon: <Icon.pulse size={13} />, disabled: blocked, hint: blocked ? t("app.attributionPending") : undefined,
+            action: () => setAttr({ n: Date.now(), agent: st.id, provider: pid, model: mid, match, names, pending }),
+          }];
+        };
         return [
           { label: t("app.copyModelId"), icon: <Icon.copy size={13} />, action: () => copy(mid) },
           ...(!m.isDeleted && !m.readonly ? [{ label: t(vis ? "app.hideInPicker" : "app.showInPicker"), disabled: st.readonly, action: () => setDraft(setModelVisible(draft, pid, m, !vis)) }] : []),
+          ...attrItems(),
           ...((m.deletable && !m.isDeleted) ? ["sep" as const, { label: t("app.deleteModelMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly, action: async () => {
             if (!(await ask({ title: t("app.deleteModelTitle", { id: mid }), message: t("app.deleteModelMsg"), danger: true }))) return;
             setDraft(deleteModel(draft, pid, mid));
@@ -1564,6 +1590,10 @@ export default function App() {
       {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} onSave={hubSave} onClose={() => setHubDialog(undefined)} />}
+      {attr && attrBank && attrBank !== "failed" && (
+        <AttributionDialog key={attr.n} agent={attr.agent} provider={attr.provider} model={attr.model} match={attr.match} bank={attrBank}
+          names={attr.names} pending={attr.pending} onClose={() => setAttr(null)} />
+      )}
       {linkOpen && <ImportLinkDialog onImport={(r) => importRef.current(r)} onClose={() => setLinkOpen(false)} />}
       {envAsk && (
         <PendingDialog

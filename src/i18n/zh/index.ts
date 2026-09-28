@@ -38,6 +38,7 @@ import commandPalette from "./commandPalette";
 import sidebar from "./sidebar";
 import aside from "./aside";
 import providerTest from "./providerTest";
+import attributionDialog from "./attributionDialog";
 import restartDialog from "./restartDialog";
 import format from "./format";
 
@@ -80,6 +81,7 @@ const zh: typeof en = {
   sidebar,
   aside,
   providerTest,
+  attributionDialog,
   restartDialog,
   format,
 };

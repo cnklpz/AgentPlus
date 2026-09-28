@@ -37,6 +37,7 @@ import commandPalette from "./commandPalette";
 import sidebar from "./sidebar";
 import aside from "./aside";
 import providerTest from "./providerTest";
+import attributionDialog from "./attributionDialog";
 import restartDialog from "./restartDialog";
 import format from "./format";
 
@@ -79,6 +80,7 @@ export default {
   sidebar,
   aside,
   providerTest,
+  attributionDialog,
   restartDialog,
   format,
 };

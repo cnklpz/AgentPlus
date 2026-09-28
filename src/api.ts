@@ -357,6 +357,64 @@ export interface TestResult {
   usage: [number, number] | null;
 }
 
+/** How an attribution test reaches the model through the local gateway. */
+export interface AttributionGatewayPath {
+  /** The provider's address: one forward, the unified entry, or a combined address. */
+  entry: "route" | "unified" | "combined";
+  route: string;
+  routeName: string;
+  upstreamName: string;
+  upstreamUrl: string;
+  upstreamApi: string;
+  /** What the forward's model map sends upstream instead of the requested model. */
+  mappedModel: string | null;
+  /** A unified or combined entry sent straight to its one forward for this model. */
+  pinned: boolean;
+  /** Forwards the entry could fail over to, left out of the pinned test. */
+  skipped: string[];
+}
+
+/** What an attribution test of a model row goes to, from the saved config (never a draft). */
+export interface AttributionTarget {
+  agent: string;
+  /** The provider tested; for Codex's shared catalog, the one Codex is on. */
+  provider: string;
+  /** The config entry read instead, when it isn't `provider` (Codex's fixed-id mirror). */
+  entry: string | null;
+  /** The model id sent: always the row's own id. */
+  model: string;
+  api: string;
+  url: string;
+  hasKey: boolean;
+  gateway: AttributionGatewayPath | null;
+  /** `code`: "noEndpoint" | "signIn" | "protocol" | "gatewayOff" | "gatewayRoute" | "gatewayPool". */
+  blocked: { code: string; message: string } | null;
+  /** Identifies endpoint, protocol, key and model; each sample of a run passes it back. */
+  fp: string;
+}
+
+/** One attribution challenge sent. `kind` is stable; `error` is display text. */
+export interface AttributionSample {
+  ok: boolean;
+  /** The whole final answer (reasoning left out); only when ok. */
+  text: string | null;
+  kind: string | null;
+  error: string | null;
+  status: number | null;
+  /** HTTP requests sent for this sample. */
+  requests: number;
+  ms: number;
+  usage: [number, number] | null;
+}
+
+/** What a sample reports while it runs: a request going out, its HTTP status, and the
+ *  answer (and any reasoning) as it streams in. */
+export type AttributionLive =
+  | { type: "request"; n: number }
+  | { type: "status"; status: number }
+  | { type: "text"; text: string }
+  | { type: "reasoning"; text: string };
+
 /** Result of looking for an agent in the current environment. */
 export interface AgentDetect {
   id: AgentId;
@@ -710,6 +768,18 @@ const real = {
   quitApp: () => invoke<void>("quit_app"),
   detectAgents: () => invoke<AgentDetect[]>("detect_agents"),
   testProvider: (agent: string, provider: string, model: string) => invoke<TestResult>("test_provider", { agent, provider, model }),
+  /** `provider` is the model list's: a provider id, or `CATALOG` for Codex's shared catalog. */
+  attributionTarget: (agent: string, provider: string, model: string) => invoke<AttributionTarget>("attribution_target", { agent, provider, model }),
+  attributionSample: (agent: string, provider: string, model: string, prompt: string, fp: string, onLive?: (e: AttributionLive) => void) => {
+    const ch = new Channel<AttributionLive>();
+    if (onLive) ch.onmessage = onLive;
+    return invoke<AttributionSample>("attribution_sample", { agent, provider, model, prompt, fp, onLive: ch });
+  },
+  /** Past results, newest first (entries as written by `attributionHistoryAdd`, plus `id` and `at`). */
+  attributionHistory: () => invoke<unknown[]>("attribution_history"),
+  attributionHistoryAdd: (entry: object) => invoke<unknown[]>("attribution_history_add", { entry }),
+  /** Deletes these results, or all with null. */
+  attributionHistoryDelete: (ids: string[] | null) => invoke<unknown[]>("attribution_history_delete", { ids }),
   officialStatus: () => invoke<OfficialFetch>("codex_official_status"),
   officialStart: () => invoke<OfficialFetch>("codex_official_start"),
   officialFinish: () => invoke<FetchedModel[]>("codex_official_finish"),
@@ -754,6 +824,9 @@ const demoRunning: Record<string, boolean> = {};
 /** Browser demo: a pause that stands in for real work. */
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 let demoCancel = false;
+/** Browser demo: attribution samples sent so far. */
+let demoAttrCalls = 0;
+let demoAttrHistory: unknown[] = [];
 
 // The snapshot is local-only (.gitignore): a glob resolves to nothing when it is missing, so a
 // fresh clone still type-checks and builds, and the demo just starts empty.
@@ -1089,6 +1162,49 @@ const demo: typeof real = {
   gatewayTest: async (route, apiKind, model) => {
     await sleep(600);
     return { ok: true, status: 200, ms: 980, model, url: `http://127.0.0.1:${demoGateway.port}/${route}/v1/${apiKind === "chat" ? "chat/completions" : apiKind === "anthropic" ? "messages" : "responses"}`, reply: "pong", error: null, usage: [12, 2] };
+  },
+  attributionTarget: async (agent, provider, model) => {
+    await sleep(300);
+    const shown = provider === "*" ? (await demo.getAgent(agent as AgentId)).currentProvider ?? "openai" : provider;
+    return { agent, provider: shown, entry: null, model, api: "responses", url: "http://demo/v1/responses", hasKey: true, gateway: null, blocked: null, fp: "demo" };
+  },
+  // Answers drawn from the enrolled numbers of the candidate the model is compared as; every
+  // third sample of a "luna" model fails, to show a partial result.
+  attributionSample: async (_a, _p, model, prompt, _fp, onLive) => {
+    onLive?.({ type: "request", n: 1 });
+    await sleep(400);
+    if (model.includes("luna") && ++demoAttrCalls % 3 === 2) {
+      onLive?.({ type: "status", status: 504 });
+      return { ok: false, text: null, kind: "http", error: "Gateway Timeout (HTTP 504)", status: 504, requests: 1, ms: 30_000, usage: null };
+    }
+    onLive?.({ type: "status", status: 200 });
+    const { loadBank, matchCandidate } = await import("./attribution/bank");
+    const bank = await loadBank();
+    const id = matchCandidate(model, bank.models)?.candidate ?? bank.models[0].id;
+    const counts = bank.models.find((m) => m.id === id)!.counts;
+    const total = counts.reduce((a, b) => a + b, 0);
+    const n = Number(/(\d+) 个 1 到 355/.exec(prompt)?.[1] ?? 300);
+    const numbers = Array.from({ length: n }, () => {
+      let pick = Math.random() * total, v = 0;
+      while (pick >= counts[v]) pick -= counts[v++];
+      return v + 1;
+    });
+    const text = numbers.join(", ");
+    // Streamed in pieces, as a real answer arrives.
+    for (let i = 0; i < text.length; i += 60) {
+      onLive?.({ type: "text", text: text.slice(i, i + 60) });
+      await sleep(25);
+    }
+    return { ok: true, text, kind: null, error: null, status: 200, requests: 1, ms: 8123, usage: [180, n * 2] };
+  },
+  attributionHistory: async () => demoAttrHistory,
+  attributionHistoryAdd: async (entry) => {
+    demoAttrHistory = [{ ...entry, id: String(Date.now()), at: Date.now() }, ...demoAttrHistory].slice(0, 200);
+    return demoAttrHistory;
+  },
+  attributionHistoryDelete: async (ids) => {
+    demoAttrHistory = ids ? demoAttrHistory.filter((e) => !ids.includes((e as { id: string }).id)) : [];
+    return demoAttrHistory;
   },
   testProvider: async (_a, _p, model) => {
     await sleep(700);

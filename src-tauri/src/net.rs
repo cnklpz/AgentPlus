@@ -17,7 +17,7 @@ pub fn with_key(req: reqwest::blocking::RequestBuilder, anthropic: bool, key: Op
     }
 }
 
-fn with_api_key(req: reqwest::blocking::RequestBuilder, api: &str, key: Option<&str>) -> reqwest::blocking::RequestBuilder {
+pub(crate) fn with_api_key(req: reqwest::blocking::RequestBuilder, api: &str, key: Option<&str>) -> reqwest::blocking::RequestBuilder {
     if api == "gemini" {
         match key { Some(k) => req.header("x-goog-api-key", k), None => req }
     } else {
@@ -29,7 +29,7 @@ fn client() -> Result<reqwest::blocking::Client, String> {
     client_with(Duration::from_secs(12))
 }
 
-fn client_with(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
+pub(crate) fn client_with(timeout: Duration) -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(timeout)
         .redirect(same_host_redirects())
@@ -60,7 +60,7 @@ const MAX_MODELS_BODY: u64 = 32 << 20;
 const MAX_TEST_BODY: u64 = 4 << 20;
 
 /// For a redirect that wasn't followed (another host, port or scheme), what to tell the user.
-fn moved_to(resp: &reqwest::blocking::Response) -> Option<String> {
+pub(crate) fn moved_to(resp: &reqwest::blocking::Response) -> Option<String> {
     if !resp.status().is_redirection() {
         return None;
     }
@@ -285,6 +285,21 @@ fn from_sse(api: &str, text: &str) -> Option<Result<serde_json::Value, String>> 
     }))
 }
 
+/// What a model request's error answer means, with the server's own message.
+pub(crate) fn http_error(status: reqwest::StatusCode, text: &str) -> String {
+    let v: Option<serde_json::Value> = serde_json::from_str(text).ok();
+    let msg = v.as_ref().and_then(crate::gateway::convert::error_message).unwrap_or_else(|| clip(text.trim(), 160));
+    let hint = match status.as_u16() {
+        401 | 403 => crate::i18n::l("Invalid API key or no permission", "密钥无效或没有权限"),
+        404 => crate::i18n::l("Wrong base URL or API type, or no such model", "地址或接口类型不对，或者没有这个模型"),
+        429 => crate::i18n::l("Too many requests or quota exhausted", "请求太频繁或额度用完"),
+        400 | 422 => crate::i18n::l("Request rejected; the model name may be wrong or the API type mismatched", "请求被拒绝，可能是模型名不对或接口类型不匹配"),
+        s if s >= 500 => crate::i18n::l("Server error", "服务端出错"),
+        _ => crate::i18n::l("Request failed", "请求失败"),
+    };
+    if msg.is_empty() { tr!("{hint} (HTTP {status})", "{hint}（HTTP {status}）") } else { tr!("{hint} (HTTP {}): {}", "{hint}（HTTP {}）：{}", status.as_u16(), clip(msg.trim(), 200)) }
+}
+
 /// Sends one tiny real request with the provider's key and model, so the address,
 /// key, protocol and model are all checked (the request uses a few tokens).
 pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> TestResult {
@@ -348,16 +363,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
     r.status = Some(status.as_u16());
     let v: Option<serde_json::Value> = serde_json::from_str(&text).ok();
     if !status.is_success() {
-        let msg = v.as_ref().and_then(crate::gateway::convert::error_message).unwrap_or_else(|| clip(text.trim(), 160));
-        let hint = match status.as_u16() {
-            401 | 403 => crate::i18n::l("Invalid API key or no permission", "密钥无效或没有权限"),
-            404 => crate::i18n::l("Wrong base URL or API type, or no such model", "地址或接口类型不对，或者没有这个模型"),
-            429 => crate::i18n::l("Too many requests or quota exhausted", "请求太频繁或额度用完"),
-            400 | 422 => crate::i18n::l("Request rejected; the model name may be wrong or the API type mismatched", "请求被拒绝，可能是模型名不对或接口类型不匹配"),
-            s if s >= 500 => crate::i18n::l("Server error", "服务端出错"),
-            _ => crate::i18n::l("Request failed", "请求失败"),
-        };
-        r.error = Some(if msg.is_empty() { tr!("{hint} (HTTP {status})", "{hint}（HTTP {status}）") } else { tr!("{hint} (HTTP {}): {}", "{hint}（HTTP {}）：{}", status.as_u16(), clip(msg.trim(), 200)) });
+        r.error = Some(http_error(status, &text));
         return r;
     }
     let v = match v.map(Ok).or_else(|| from_sse(api, &text)) {

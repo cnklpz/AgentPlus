@@ -777,6 +777,14 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     Ok((base, key, api.into()))
 }
 
+/// The provider Codex sends its requests with, as saved in config.toml: (the entry it reads,
+/// the provider AgentPlus shows as current). They differ in fixed-id mode, where Codex reads
+/// the `agentplus` mirror of the current provider.
+pub fn active_provider() -> Result<(String, String)> {
+    let (doc, _) = load_doc()?;
+    Ok((configured_provider(&doc), current_provider(&doc, &store::load())))
+}
+
 // ---------------------------------------------------------------- write
 
 /// Official sign-in mix: `requires_openai_auth = true` keeps Codex on the ChatGPT sign-in

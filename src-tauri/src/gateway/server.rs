@@ -961,7 +961,7 @@ fn client() -> &'static reqwest::blocking::Client {
 // ---------------------------------------------------------------- request handling
 
 /// "/<route>/v1/chat/completions" → (route, "/chat/completions"). "/v1" is optional.
-fn split_path(path: &str) -> Option<(String, String)> {
+pub(crate) fn split_path(path: &str) -> Option<(String, String)> {
     let path = path.split('?').next().unwrap_or(path);
     let mut it = path.trim_start_matches('/').splitn(2, '/');
     let route = it.next()?.to_string();
@@ -1647,12 +1647,41 @@ fn user_agent(req: &Request) -> String {
 
 fn apply_model_map(body: &mut Value, map: &[(String, String)]) {
     let Some(m) = body.get("model").and_then(|m| m.as_str()).map(String::from) else { return };
-    for (from, to) in map {
-        if !to.trim().is_empty() && (from == "*" || from == &m) {
-            body["model"] = json!(to.trim());
-            return;
+    if let Some(to) = mapped_model(map, &m) {
+        body["model"] = json!(to);
+    }
+}
+
+/// The model a forward sends upstream instead of `model` (its first matching rewrite), or
+/// None when the map leaves it as is.
+pub fn mapped_model(map: &[(String, String)], model: &str) -> Option<String> {
+    map.iter().find(|(from, to)| !to.trim().is_empty() && (from == "*" || from == model)).map(|(_, to)| to.trim().to_string())
+}
+
+/// The enabled forwards an entry could hand `model` to, as the unified entry picks them but
+/// without any network call (cached upstream lists only): (forwards that list the model or
+/// map every model, forwards whose model list isn't known yet). `only` is a combined
+/// address's forwards; None is the unified entry.
+pub fn serving_forwards(only: Option<&[String]>, model: &str) -> (Vec<Route>, Vec<Route>) {
+    let root = store::load();
+    let want = convert::bare_model(model);
+    let targets: Vec<Target> = routes(&root)
+        .iter()
+        .filter(|r| r.enabled && only.is_none_or(|ids| ids.contains(&r.id)))
+        .filter_map(|r| target(&root, r).ok())
+        .collect();
+    let (mut sure, mut maybe) = (vec![], vec![]);
+    for t in &targets {
+        let sibling = targets.iter().any(|o| o.proto != t.proto && same_upstream(o, t));
+        let listed = if sibling { listed_models(&root, &t.route) } else { vec![] };
+        let list = if listed.is_empty() { known_models(&root, &t.route) } else { listed };
+        if t.route.model_map.iter().any(|(f, _)| f == "*") || list.iter().any(|m| convert::bare_model(m) == want) {
+            sure.push(t.route.clone());
+        } else if list.is_empty() {
+            maybe.push(t.route.clone());
         }
     }
+    (sure, maybe)
 }
 
 fn models(s: &mut TcpStream, t: &Target, req: &Request, log: &mut LogEntry) -> Result<u16> {
@@ -1886,6 +1915,31 @@ mod tests {
             weight: 100,
             replaced: vec![],
         }
+    }
+
+    /// The attribution test asks which forwards an entry could use, without the network.
+    #[test]
+    fn serving_forwards_follow_the_unified_entry_offline() {
+        let _h = crate::util::TestHome::new("gateway-serving");
+        let _guard = lock(&TEST_LOCK);
+        let up = |id: &str| format!("http://127.0.0.1:9/{id}");
+        *lock(&TEST_ROUTES) = vec![
+            (test_route("sa", "chat", &[("gpt-5.5", "x")]), up("sa"), None),
+            (test_route("sb", "anthropic", &[("*", "claude")]), up("sb"), None),
+            (test_route("sc", "chat", &[]), up("sc"), None),
+            (Route { enabled: false, ..test_route("sd", "chat", &[("gpt-5.5", "y")]) }, up("sd"), None),
+        ];
+        let ids = |v: Vec<Route>| v.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        let (sure, maybe) = serving_forwards(None, "gpt-5.5");
+        assert_eq!((ids(sure), ids(maybe)), (vec!["sa".to_string(), "sb".into()], vec!["sc".to_string()]));
+        // A combined address only has its own forwards; ids compare without "models/".
+        let (sure, maybe) = serving_forwards(Some(&["sa".into(), "sc".into()]), "models/gpt-5.5");
+        assert_eq!((ids(sure), ids(maybe)), (vec!["sa".to_string()], vec!["sc".to_string()]));
+        let (sure, maybe) = serving_forwards(Some(&["sa".into()]), "other");
+        assert!(sure.is_empty() && maybe.is_empty());
+        assert_eq!(mapped_model(&test_route("m", "chat", &[("a", " b "), ("*", "")]).model_map, "a").as_deref(), Some("b"));
+        assert_eq!(mapped_model(&test_route("m", "chat", &[("*", "")]).model_map, "a"), None);
+        lock(&TEST_ROUTES).clear();
     }
 
     /// A whole HTTP response with a body of known length.
