@@ -71,7 +71,8 @@ export function CommandPalette({ agents, onGo, onClose }: Props) {
     ];
     for (const a of agents) {
       out.push({ label: a.name, hint: "Agent", group: "agent", agent: a.id, target: { kind: "agent", agent: a.id }, haystack: a.name });
-      const tabs: [Tab, TKey][] = [["prov", "common.providers"], ["models", "commandPalette.tabModels"], ["set", "commandPalette.tabSettings"]];
+      const tabs: [Tab, TKey][] = [["prov", "common.providers"], ["models", "commandPalette.tabModels"]];
+      if (a.settings.length > 0) tabs.push(["set", "commandPalette.tabSettings"]);
       if (a.id === "codex") tabs.push(["sessions", "commandPalette.tabSessions"], ["maint", "commandPalette.tabMaint"]);
       for (const [tab, k] of tabs) {
         const l = t(k);

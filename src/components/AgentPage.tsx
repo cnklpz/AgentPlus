@@ -60,14 +60,18 @@ export function AgentPage(props: Props) {
   const cur = currentProvider(st, draft);
   const providers = viewProviders(st, draft, isProjectId(st.id));
 
+  /** Agents with nothing to set (Hermes) get no settings tab. */
+  const hasSettings = st.settings.length > 0 || !!props.settingsExtra;
   const provCount = providers.filter((p) => p.compatible && !p.isDeleted && (p.isNew || isEnabled(p, draft))).length;
   const tabs: [Tab, string, number | null][] = [
     ["prov", t("common.providers"), st.mode === "single" ? providers.filter((p) => p.compatible && !p.isDeleted).length : provCount],
     ["models", t("agentPage.tabModels"), visibleCount(st, draft)],
     ...(st.id === "codex" ? ([["sessions", t("agentPage.tabSessions"), null], ["maint", t("agentPage.tabMaint"), null]] as [Tab, string, null][]) : []),
     ...(props.projectsTab ? ([["projects", t("agentPage.tabProjects"), props.projectsTab.count || null]] as [Tab, string, number | null][]) : []),
-    ["set", t("agentPage.tabSettings"), null],
+    ...(hasSettings ? ([["set", t("agentPage.tabSettings"), null]] as [Tab, string, null][]) : []),
   ];
+  // Coming from another agent's settings tab: this one has none.
+  useEffect(() => { if (tab === "set" && !hasSettings) setTab("prov"); }, [tab, hasSettings]);
   const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
@@ -227,7 +231,7 @@ export function AgentPage(props: Props) {
         {tab === "maint" && <MaintenanceTab flash={props.flash} />}
         {tab === "projects" && props.projectsTab?.body}
 
-        {tab === "set" && (() => {
+        {tab === "set" && hasSettings && (() => {
           // Fixed id is pre-enabled: shown as on, written together with the next provider switch.
           const fixedPre = st.fixedPrompt && !draft[keys.setting("fixed_id")];
           const shown = fixedPre ? st.settings.map((s) => (s.key === "fixed_id" ? { ...s, value: true } : s)) : st.settings;
