@@ -2,6 +2,22 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.7
+
+没有模型目录的 Codex（从旧版本升级、还没生成过 models.json）可以一键使用 Codex 内置的模型列表，并修复 0.2.6 里这一步在部分电脑上失败的问题。
+
+- Codex 的「模型列表」页和编辑供应商对话框里的「使用 Codex 内置模型列表」：用已安装 Codex 自带的模型列表生成模型目录，不需要登录 ChatGPT 账号，也不联网
+- 修复部分电脑上提示「Codex 没有列出模型（codex debug models 执行失败）」：现在会依次尝试每个 Codex 程序，都运行不了时直接从程序文件里读取列表，再不行就用 AgentPlus 自带的一份
+- 失败原因会写进诊断日志，方便排查
+- 生成前会备份 config.toml 和原来的模型目录，可以在「历史与回滚」里还原；AgentPlus 添加的自定义模型会保留
+
+Codex setups without a model catalog (upgraded from an old version, models.json never created) can use the model list built into Codex in one step, and the failure some computers hit with it in 0.2.6 is fixed.
+
+- "Use Codex's built-in model list" on Codex's model list page and in the provider dialog creates the catalog from the list that ships with the installed Codex; no ChatGPT sign-in and no network needed
+- Fixes "Codex didn't list its models (codex debug models failed)" on some computers: every Codex program is tried in turn, the list is read straight from the program file when none will run, and AgentPlus's own copy is used as a last resort
+- The reason for a failure goes to the diagnostic log
+- config.toml and the old catalog are backed up first (restore them from History); custom models added by AgentPlus are kept
+
 ## 0.2.6
 
 没有模型目录的 Codex（从旧版本升级、还没生成过 models.json）也能直接用 Codex 内置的模型列表了。
