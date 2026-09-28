@@ -465,6 +465,11 @@ pub fn chips_setting(key: &str, group: &str, label: &str, desc: &str, value: Vec
     }
 }
 
+/// One of `options`; label each with `with_hints`.
+pub fn select_setting(key: &str, group: &str, label: &str, desc: &str, value: &str, options: &[&str]) -> Setting {
+    Setting { kind: "select".into(), value: Value::from(value), ..chips_setting(key, group, label, desc, vec![], options) }
+}
+
 impl Setting {
     pub fn with_hints(mut self, hints: &[&str]) -> Self {
         self.hints = hints.iter().map(|s| s.to_string()).collect();

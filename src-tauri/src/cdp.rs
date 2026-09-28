@@ -18,6 +18,11 @@
 //! - Short model names: the opposite of full names, for the official sign-in mix. Signed
 //!   in with ChatGPT, the Statsig gate above is on and names keep "GPT-"; we make every
 //!   read of that gate false, so names are shortened just as with custom providers.
+//! - Smoother scrolling: every button's ::before/::after has `will-change: transform`,
+//!   which makes each one its own compositor layer (400+ in a long thread), and
+//!   updating them all made every scrolled frame slow. We add a style sheet that drops
+//!   it (the press effect still animates) and stops the always-on `animate-pulse`
+//!   loading bar when Codex's own "Reduce motion" setting is on.
 //!
 //! The patches live in different bundles (app-initial, app-primary); every bundle is
 //! tried with every patch, and a patch is missing only when no bundle has it.
@@ -47,6 +52,7 @@ const NAMES_MARK: &str = "/*agentplus-names*/";
 const QUOTA_MARK: &str = "/*agentplus-quota*/";
 const BANNER_MARK: &str = "/*agentplus-banner*/";
 const SHORT_MARK: &str = "/*agentplus-short*/";
+const SMOOTH_MARK: &str = "/*agentplus-smooth*/";
 const BUNDLE_HINTS: [&str; 2] = ["app-initial-", "app-primary-"];
 /// How long after a reload the first bundle request may take, and on the second try.
 const FIRST_BUNDLE: Duration = Duration::from_secs(10);
@@ -60,6 +66,7 @@ pub struct Patches {
     pub quota: bool,
     pub usage_banner: bool,
     pub short_names: bool,
+    pub smooth_scroll: bool,
 }
 
 impl Patches {
@@ -67,18 +74,19 @@ impl Patches {
         self.flags().contains(&true)
     }
 
-    fn flags(self) -> [bool; 5] {
-        [self.fast, self.full_names, self.quota, self.usage_banner, self.short_names]
+    fn flags(self) -> [bool; 6] {
+        [self.fast, self.full_names, self.quota, self.usage_banner, self.short_names, self.smooth_scroll]
     }
 
     /// Display names, in the order `patch_source` applies them.
-    fn names() -> [&'static str; 5] {
+    fn names() -> [&'static str; 6] {
         [
             "Fast",
             crate::i18n::l("Full model names", "完整模型名"),
             crate::i18n::l("Send after quota runs out", "额度用完仍可发送"),
             crate::i18n::l("Hide usage banners", "隐藏用量提示横幅"),
             crate::i18n::l("Drop the GPT- prefix", "省略 GPT- 前缀"),
+            crate::i18n::l("Smoother scrolling", "滚动优化"),
         ]
     }
 
@@ -154,16 +162,28 @@ fn patch_short(src: &str) -> Option<String> {
     }
 }
 
+/// Appends a style sheet to the bundle. Every bundle gets it, so the element id keeps it
+/// to one per window.
+fn patch_smooth(src: &str) -> Option<String> {
+    const CSS: &str = "button::before,button::after{will-change:auto!important}\
+                       :root[data-reduced-motion=true] .animate-pulse{animation:none!important}";
+    // On a new line: the bundle may end with a `//# sourceMappingURL` comment.
+    Some(format!(
+        "{src}\n;(()=>{{if(document.getElementById(`agentplus-smooth`))return;let s=document.createElement(`style`);s.id=`agentplus-smooth`;s.textContent=`{CSS}`;document.head.append(s)}})();{SMOOTH_MARK}\n"
+    ))
+}
+
 /// Applies the wanted patches that aren't in `src` yet. Returns the patched source
 /// (`None` when nothing changed) and the patches whose code couldn't be found.
 pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static str>) {
     type Patch = (&'static str, fn(&str) -> Option<String>);
-    let patches: [Patch; 5] = [
+    let patches: [Patch; 6] = [
         (FAST_MARK, patch_fast),
         (NAMES_MARK, patch_names),
         (QUOTA_MARK, patch_quota),
         (BANNER_MARK, patch_banner),
         (SHORT_MARK, patch_short),
+        (SMOOTH_MARK, patch_smooth),
     ];
     let mut out: Option<String> = None;
     let mut missing = vec![];
@@ -494,13 +514,14 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
 mod tests {
     use super::*;
 
-    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false };
-    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false, short_names: false };
-    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false, short_names: false };
-    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true, short_names: false };
-    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false, short_names: false };
-    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false, short_names: false };
-    const SHORT: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: true };
+    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
+    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
+    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false, short_names: false, smooth_scroll: false };
+    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true, short_names: false, smooth_scroll: false };
+    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
+    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false, short_names: false, smooth_scroll: false };
+    const SHORT: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: true, smooth_scroll: false };
+    const SMOOTH: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: true };
     const GATE: &str = "let x=1;d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;";
     const STRIP: &str = "join(``);return t?r.replace(/^GPT-/iu,``):r}function Cpa(){";
     // Codex 26.917 app-primary bundle.
@@ -554,6 +575,25 @@ mod tests {
     }
 
     #[test]
+    fn appends_the_smooth_scrolling_style_once() {
+        let src = "import{a}from\"./x.js\";a();\n//# sourceMappingURL=app-initial.js.map";
+        let (out, missing) = patch_source(src, SMOOTH);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
+        // After the source map comment, on a line of its own.
+        assert!(out.starts_with(src));
+        let tail = &out[src.len()..];
+        assert!(tail.starts_with("\n;(()=>{if(document.getElementById(`agentplus-smooth`))return;"));
+        assert!(tail.contains("s.textContent=`button::before,button::after{will-change:auto!important}:root[data-reduced-motion=true] .animate-pulse{animation:none!important}`"));
+        assert!(tail.ends_with("})();/*agentplus-smooth*/\n"));
+        assert_eq!(patch_source(&out, SMOOTH), (None, vec![]));
+        // Combined with a patch that isn't found, only that one is missing.
+        let (out, missing) = patch_source(src, Patches { fast: true, ..SMOOTH });
+        assert!(out.unwrap().contains(SMOOTH_MARK));
+        assert_eq!(missing, vec!["Fast"]);
+    }
+
+    #[test]
     fn unblocks_send_on_rate_limit() {
         let (out, missing) = patch_source(BLOCK, QUOTA);
         let out = out.unwrap();
@@ -591,25 +631,40 @@ mod tests {
     }
 
     /// Checks a new Codex release: point `CODEX_ASSETS` at `webview/assets` of an extracted
-    /// app.asar and run `cargo test real_bundles -- --ignored`.
+    /// app.asar and run `cargo test real_bundles -- --ignored`. With Node on the PATH, every
+    /// patched bundle must also still parse: a syntax error leaves Codex a blank window.
     #[test]
     #[ignore]
     fn real_bundles() {
         let dir = std::env::var("CODEX_ASSETS").expect("CODEX_ASSETS");
+        let out = std::env::temp_dir().join(format!("agentplus-real-bundles-{}", std::process::id()));
+        std::fs::create_dir_all(&out).unwrap();
+        let node = std::process::Command::new("node").arg("--version").output().is_ok_and(|o| o.status.success());
+        if !node {
+            eprintln!("node not found: patched bundles aren't syntax-checked");
+        }
         // Full and short names are exclusive: check each set on its own.
-        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true, short_names: false };
+        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true, short_names: false, smooth_scroll: true };
         let short = Patches { short_names: true, ..Patches::default() };
-        for want in [all, short] {
+        for (set, want) in [all, short].into_iter().enumerate() {
             let mut missing = None;
             for e in std::fs::read_dir(&dir).unwrap() {
                 let path = e.unwrap().path();
                 if bundle_of(&path.to_string_lossy().replace('\\', "/")).is_some() {
-                    let (_, miss) = patch_source(&std::fs::read_to_string(&path).unwrap(), want);
+                    let (patched, miss) = patch_source(&std::fs::read_to_string(&path).unwrap(), want);
                     missing = Some(still_missing(missing, miss));
+                    if let (true, Some(src)) = (node, patched) {
+                        // .mjs: the bundles are ES modules.
+                        let file = out.join(format!("{set}-{}.mjs", path.file_stem().unwrap().to_string_lossy()));
+                        std::fs::write(&file, src).unwrap();
+                        let check = std::process::Command::new("node").arg("--check").arg(&file).output().unwrap();
+                        assert!(check.status.success(), "{} doesn't parse after patching:\n{}", file.display(), String::from_utf8_lossy(&check.stderr));
+                    }
                 }
             }
             assert_eq!(missing, Some(vec![]));
         }
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]

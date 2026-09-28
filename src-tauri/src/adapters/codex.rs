@@ -11,7 +11,7 @@ use crate::model::*;
 use crate::process::Install;
 use crate::store;
 use crate::util::*;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table, TableLike};
@@ -36,8 +36,8 @@ pub struct Injection {
 }
 
 /// Fast display, full model names, send after the quota runs out, hidden usage banners,
-/// and dropping the "GPT-" prefix under the official sign-in mix.
-pub const INJECTIONS: [Injection; 5] = [
+/// dropping the "GPT-" prefix under the official sign-in mix, and smoother scrolling.
+pub const INJECTIONS: [Injection; 6] = [
     Injection {
         key: "fast_inject",
         flag: "fastInject",
@@ -73,10 +73,17 @@ pub const INJECTIONS: [Injection; 5] = [
         off: ("- Disable GPT- prefix dropping injection", "- 停用省略 GPT- 前缀注入"),
         excludes: Some("full_names"),
     },
+    Injection {
+        key: "smooth_scroll",
+        flag: "smoothScroll",
+        on: ("+ Enable smoother scrolling injection (takes effect after restarting Codex via AgentPlus)", "+ 启用滚动优化注入（通过 AgentPlus 重启 Codex 后生效）"),
+        off: ("- Disable smoother scrolling injection", "- 停用滚动优化注入"),
+        excludes: None,
+    },
 ];
 
 /// Which injections are on, in `INJECTIONS` order.
-fn injections_on(store: &Value) -> [bool; 5] {
+fn injections_on(store: &Value) -> [bool; 6] {
     INJECTIONS.map(|i| store::get_flag(store, ID, i.flag))
 }
 /// Codex writes the catalog's Fast tier id ("priority") when Fast is picked in its menu.
@@ -127,6 +134,16 @@ fn str_list(item: Option<&Item>) -> Option<Vec<String>> {
 
 fn desktop_bool(doc: &DocumentMut, key: &str, default: bool) -> bool {
     doc.get("desktop").and_then(|t| t.get(key)).and_then(|v| v.as_bool()).unwrap_or(default)
+}
+
+/// Codex's Reduce motion setting (Settings › General › Appearance).
+const REDUCED_MOTION: &str = "reduced-motion-preference";
+const MOTION_PREFS: [&str; 3] = ["system", "on", "off"];
+
+/// An unknown value counts as the default, as in Codex.
+fn reduced_motion(doc: &DocumentMut) -> &str {
+    let v = doc.get("desktop").and_then(|t| t.get(REDUCED_MOTION)).and_then(|v| v.as_str()).unwrap_or_default();
+    MOTION_PREFS.into_iter().find(|p| *p == v).unwrap_or(MOTION_PREFS[0])
 }
 
 fn efforts(doc: &DocumentMut) -> Vec<String> {
@@ -652,7 +669,7 @@ pub fn state(inst: &Install) -> AgentState {
         st.notes.push(l("config.toml has no model_catalog_json, so Codex fetches the model list online and it can't be edited here.", "config.toml 没有设置 model_catalog_json，模型列表由 Codex 在线获取，暂不能编辑。").into());
     }
 
-    let [inject, full_names, quota, hide_banner, short_names] = injections_on(&store);
+    let [inject, full_names, quota, hide_banner, short_names, smooth] = injections_on(&store);
     let tier = service_tier(&doc);
     let sl = status_line(&doc);
     let effs = efforts(&doc);
@@ -694,6 +711,14 @@ pub fn state(inst: &Install) -> AgentState {
             l("Signed in with a ChatGPT account, Codex shows full model names (GPT-6 Sol), while with custom providers it drops the \"GPT-\" prefix (6 Sol). When on, restarting Codex through AgentPlus launches it with a debug port and shortens names the same way under the official sign-in mix.",
               "用 ChatGPT 账号登录时 Codex 显示完整模型名（GPT-6 Sol），用自定义供应商则会去掉「GPT-」前缀（6 Sol）。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，在官方登录混用下也像自定义供应商那样省略前缀。"), short_names)
             .excluding(&["full_names"]),
+        bool_setting("smooth_scroll", l("Interface", "界面"), l("Smoother scrolling", "滚动优化"),
+            l("Every button in Codex asks for its own compositor layer (hundreds in a long thread), which makes scrolling stutter. When on, restarting Codex through AgentPlus launches it with a debug port and drops these layers when the UI loads. For fewer animations, also turn on Reduce motion below; this option then stops the loading bar's pulse too.",
+              "Codex 给每个按钮都单独申请了一个合成层（长对话里有几百个），滚动会卡顿。开启后，通过 AgentPlus 重启 Codex 时会带调试端口启动，并在界面加载时去掉这些图层。想再少一些动画，再打开下面的「减少动态效果」，此项还会一并停掉加载条的闪烁。"), smooth),
+        select_setting("reduced_motion", l("Interface", "界面"), l("Reduce motion", "减少动态效果"),
+            l("[desktop] reduced-motion-preference, the same as Reduce motion in Codex's Settings › General › Appearance. On stops the spinners and loading shimmers, which otherwise make Codex redraw every frame while tasks run; System follows the Windows animation effects setting.",
+              "[desktop] reduced-motion-preference，与 Codex「设置 → 常规 → 外观」里的「减少动态效果」相同。开启后停掉转圈图标和加载闪光，否则任务运行时 Codex 每一帧都要重绘；跟随系统则按 Windows 的动画效果设置。"),
+            reduced_motion(&doc), &MOTION_PREFS)
+            .with_hints(&[l("System", "跟随系统"), l("On", "开启"), l("Off", "关闭")]),
         bool_setting("ctx_usage", l("Interface", "界面"), l("Show context usage", "显示上下文用量"), "[desktop] show-context-window-usage", desktop_bool(&doc, "show-context-window-usage", true)),
         bool_setting("plain", l("Interface", "界面"), l("Plain text composer", "纯文本输入框"), "[desktop] composerPlainTextMode", desktop_bool(&doc, "composerPlainTextMode", false)),
     ];
@@ -1048,6 +1073,18 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         cfg_dirty = true;
                     }
                 }
+                "reduced_motion" => {
+                    let want = v.as_str().unwrap_or_default();
+                    if !MOTION_PREFS.contains(&want) {
+                        bail!("{}", tr!("Unknown Reduce motion value: {want}", "未知的「减少动态效果」取值：{want}"));
+                    }
+                    let old = reduced_motion(&doc);
+                    if old != want {
+                        diff.push(&cfg_file, format!("[desktop] {REDUCED_MOTION} = \"{old}\" → \"{want}\""), want != "off");
+                        set_key(section_mut(&mut doc, "desktop")?, REDUCED_MOTION, value(want));
+                        cfg_dirty = true;
+                    }
+                }
                 "ctx_usage" | "plain" => {
                     let k = if key == "ctx_usage" { "show-context-window-usage" } else { "composerPlainTextMode" };
                     let on = v.as_bool().unwrap_or(false);
@@ -1160,8 +1197,8 @@ pub fn dismiss_fixed_prompt() -> Result<()> {
 
 /// UI patches to apply when AgentPlus restarts Codex.
 pub fn ui_patches() -> crate::cdp::Patches {
-    let [fast, full_names, quota, usage_banner, short_names] = injections_on(&store::load());
-    crate::cdp::Patches { fast, full_names, quota, usage_banner, short_names }
+    let [fast, full_names, quota, usage_banner, short_names, smooth_scroll] = injections_on(&store::load());
+    crate::cdp::Patches { fast, full_names, quota, usage_banner, short_names, smooth_scroll }
 }
 
 #[cfg(test)]
@@ -1493,28 +1530,49 @@ http_headers = { X = \"1\" }
     }
 
     #[test]
+    fn reduced_motion_writes_codex_preference() {
+        let _h = codex_home_with("codex-motion", "[desktop]\n# motion\nreduced-motion-preference = \"off\"\n", None);
+        let pick = |v: &str| Op::SetSetting { key: "reduced_motion".into(), value: json!(v) };
+        let (diff, _, _) = plan(&[pick("on")], false).unwrap();
+        assert_eq!(diff_lines(&diff)[0].1, "[desktop] reduced-motion-preference = \"off\" → \"on\"");
+        assert_eq!(std::fs::read_to_string(config_path()).unwrap(), "[desktop]\n# motion\nreduced-motion-preference = \"on\"\n");
+        // Unchanged: no diff.
+        assert!(plan(&[pick("on")], false).unwrap().0.groups.is_empty());
+        assert!(plan(&[pick("sometimes")], false).is_err());
+        // Missing or unknown reads as the default.
+        for src in ["", "[desktop]\nreduced-motion-preference = \"maybe\"\n", "[desktop]\nreduced-motion-preference = 1\n"] {
+            assert_eq!(reduced_motion(&src.parse().unwrap()), "system");
+        }
+    }
+
+    #[test]
     fn injection_settings_toggle_their_store_flags() {
         let _h = codex_home_with("codex-inject", "", None);
-        // Every injection but the last (short names, exclusive with full names).
+        // The first four (short names is exclusive with full names; smooth scrolling follows).
         for (i, inj) in INJECTIONS[..4].iter().enumerate() {
             let (diff, _, _) = plan(&[setting(inj.key, true)], false).unwrap();
             assert_eq!(diff_lines(&diff), [("AgentPlus · Codex 界面注入".to_string(), inj.on.1.to_string())]);
-            let mut want = [false; 5];
+            let mut want = [false; 6];
             want[..=i].fill(true);
             assert_eq!(injections_on(&store::load()), want);
             // Already on: no change.
             assert!(plan(&[setting(inj.key, true)], false).unwrap().0.groups.is_empty());
         }
         let p = ui_patches();
-        assert!(p.fast && p.full_names && p.quota && p.usage_banner && !p.short_names);
+        assert!(p.fast && p.full_names && p.quota && p.usage_banner && !p.short_names && !p.smooth_scroll);
         // Short names turn full names off, and the other way round.
         let file = "AgentPlus · Codex 界面注入".to_string();
         let (diff, _, _) = plan(&[setting("short_names", true)], false).unwrap();
         assert_eq!(diff_lines(&diff), [(file.clone(), "- 停用完整模型名注入".to_string()), (file.clone(), INJECTIONS[4].on.1.to_string())]);
-        assert_eq!(injections_on(&store::load()), [true, false, true, true, true]);
+        assert_eq!(injections_on(&store::load()), [true, false, true, true, true, false]);
         let (diff, _, _) = plan(&[setting("full_names", true)], false).unwrap();
         assert_eq!(diff_lines(&diff), [(file.clone(), "- 停用省略 GPT- 前缀注入".to_string()), (file, INJECTIONS[1].on.1.to_string())]);
-        assert_eq!(injections_on(&store::load()), [true, true, true, true, false]);
+        assert_eq!(injections_on(&store::load()), [true, true, true, true, false, false]);
+        // Smoother scrolling goes with either name patch.
+        let (diff, _, _) = plan(&[setting("smooth_scroll", true)], false).unwrap();
+        assert_eq!(diff_lines(&diff), [("AgentPlus · Codex 界面注入".to_string(), INJECTIONS[5].on.1.to_string())]);
+        assert_eq!(injections_on(&store::load()), [true, true, true, true, false, true]);
+        assert!(ui_patches().smooth_scroll);
         // Turning one off leaves the other alone.
         assert!(plan(&[setting("short_names", false)], false).unwrap().0.groups.is_empty());
         assert!(ui_patches().full_names);
