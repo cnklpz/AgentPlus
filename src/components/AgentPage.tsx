@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
-  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, deleteModel, guessedModel, isEnabled, isVisible, keys, mergeExtra, opCount,
+  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, guessedModel, hasDefaultModel, isEnabled, isVisible, keys, mergeExtra, opCount,
   providerModelCount, setModelVisible, setSetting, setSettingIn, settingValue, excludedOn, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
@@ -378,6 +378,10 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
 
   const editingModel = editing && editing !== "__new" ? models.find((m) => m.id === editing) : undefined;
 
+  // Hermes: the default model's tag follows pending changes (set from the right-click menu).
+  const hasDefault = hasDefaultModel(st.id);
+  const dflt = defaultModel(draft, pid, base);
+
   const shown = models.filter((m) => !filter || m.id.toLowerCase().includes(filter.toLowerCase()) || (m.name ?? "").toLowerCase().includes(filter.toLowerCase()));
 
   return (
@@ -426,7 +430,8 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
         const dirty = m.isNew || m.isEdited || m.isDeleted || on !== m.visible;
         const editable = !readonly && !m.readonly && !m.isDeleted;
         const caps = capTags(fields, m.extra);
-        const tags = fields.length ? m.tags.filter((g) => !isCapTag(g)) : m.tags;
+        const tags = (fields.length ? m.tags.filter((g) => !isCapTag(g)) : m.tags).filter((g) => !hasDefault || g.id !== "role:default");
+        const isDefault = hasDefault && m.id === dflt.id;
         return (
           <div key={m.id} className={`mrow${m.isDeleted ? " deleted" : ""}`} data-ctx="model" data-pid={pid} data-mid={m.id}
             title={editable ? t("agentPage.dblClickEdit") : undefined}
@@ -437,6 +442,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                 <span className={`mono ellipsis${on ? "" : " faint"}${dirty ? " dirty" : ""}`}>{m.id}</span>
                 {m.isNew && <span className="mtag new">{t("common.tagNew")}</span>}
                 {m.isDeleted && <span className="mtag">{t("common.tagDeleting")}</span>}
+                {isDefault && <span className={`mtag${dflt.pending ? " new" : ""}`}>{t("agentPage.tagDefault")}</span>}
                 {tags.map((g) => <span key={g.id} className={`mtag${g.id === "fast" ? " fast" : ""}`}>{g.label}</span>)}
               </span>
               {((hasNames && m.name && m.name !== m.id) || caps.length > 0) && (

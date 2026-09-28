@@ -4,8 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportRequest, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
 import {
-  CATALOG, type Draft, type ViewProvider, currentProvider, deleteModel, deleteProvider, draftAfterWrite, guessedModel, importProvider, isEnabled, isVisible, keys, opCount,
-  opsToWrite, pendingTotal, removeProvider, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount,
+  opsToWrite, pendingTotal, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
 import { AgentPage, type Tab } from "./components/AgentPage";
@@ -1284,6 +1284,11 @@ export default function App() {
         };
         return [
           { label: t("app.copyModelId"), icon: <Icon.copy size={13} />, action: () => copy(mid) },
+          // Hermes: the provider's default model (a model added in this draft can't be one yet).
+          ...(hasDefaultModel(st.id) && !m.isDeleted && !m.readonly && !m.isNew && vis ? [{
+            label: t("app.setDefaultModel"), icon: <Icon.check size={13} />, disabled: st.readonly || defaultModel(draft, pid, base).id === mid,
+            action: () => setDraft(setDefaultModel(draft, pid, base, mid)),
+          }] : []),
           ...(!m.isDeleted && !m.readonly ? [{ label: t(vis ? "app.hideInPicker" : "app.showInPicker"), disabled: st.readonly, action: () => setDraft(setModelVisible(draft, pid, m, !vis)) }] : []),
           ...attrItems(),
           ...((m.deletable && !m.isDeleted) ? ["sep" as const, { label: t("app.deleteModelMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly, action: async () => {

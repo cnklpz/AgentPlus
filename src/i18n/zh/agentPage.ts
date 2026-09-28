@@ -37,6 +37,7 @@ const zh: typeof en = {
   alreadyListed: "{id} 已经在列表里",
   noFetchUrl: "这个供应商没有可拉取的地址",
   fetchModels: "拉取模型",
+  tagDefault: "默认",
   addModel: "添加模型",
   fetchedHead: "供应商还有 {n} 个模型不在列表里",
   collapse: "收起",

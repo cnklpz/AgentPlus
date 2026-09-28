@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AgentState, Model, Op, Provider, Setting } from "./api";
 import {
-  type Draft, type ViewProvider, agentsWithOps, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
-  parseCtx, pendingTotal, providerModelCount, removeProvider, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
+  type Draft, type ViewProvider, agentsWithOps, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
+  parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp,
 } from "./draft";
 
@@ -68,6 +68,29 @@ describe("withOp", () => {
 
   it("removing a missing key is a no-op", () => {
     expect(withOp({}, "nope", null)).toEqual({});
+  });
+});
+
+describe("defaultModel / setDefaultModel", () => {
+  const models = [model("a"), model("b", { tags: [{ id: "role:default", label: "Default" }] }), model("c")];
+
+  it("reads the saved default from the tag, or none", () => {
+    expect(defaultModel({}, "p", models)).toEqual({ id: "b", pending: false });
+    expect(defaultModel({}, "p", [model("a")])).toEqual({ id: null, pending: false });
+  });
+
+  it("queues a new default and drops it when the saved one is picked again", () => {
+    const d1 = setDefaultModel({}, "p", models, "c");
+    expect(d1[keys.roles("p")]).toEqual({ op: "set_model_roles", provider: "p", roles: { default: "c" } });
+    expect(defaultModel(d1, "p", models)).toEqual({ id: "c", pending: true });
+    const d2 = setDefaultModel(d1, "p", models, "a");
+    expect(defaultModel(d2, "p", models)).toEqual({ id: "a", pending: true });
+    expect(setDefaultModel(d2, "p", models, "b")).toEqual({});
+  });
+
+  it("keeps other providers' changes", () => {
+    const other = setDefaultModel({}, "q", models, "a");
+    expect(Object.keys(setDefaultModel(other, "p", models, "c")).sort()).toEqual([keys.roles("p"), keys.roles("q")].sort());
   });
 });
 

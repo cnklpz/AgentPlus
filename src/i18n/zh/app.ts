@@ -110,6 +110,7 @@ const zh: typeof en = {
   attributionBankError: "指纹库不可用",
   hideInPicker: "在选择器里隐藏",
   showInPicker: "在选择器里显示",
+  setDefaultModel: "设为默认模型",
   deleteModelMenu: "删除模型…",
   addGroupMenu: "添加分组…",
   deleteForwardMenu: "删除转发…",

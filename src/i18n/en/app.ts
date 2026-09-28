@@ -108,6 +108,7 @@ export default {
   attributionBankError: "Fingerprint bank unavailable",
   hideInPicker: "Hide in picker",
   showInPicker: "Show in picker",
+  setDefaultModel: "Set as default model",
   deleteModelMenu: "Delete model…",
   addGroupMenu: "Add group…",
   deleteForwardMenu: "Delete route…",

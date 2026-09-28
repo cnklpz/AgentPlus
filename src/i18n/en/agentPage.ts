@@ -35,6 +35,7 @@ export default {
   alreadyListed: "{id} is already in the list",
   noFetchUrl: "This provider has no URL to fetch from",
   fetchModels: "Fetch models",
+  tagDefault: "Default",
   addModel: "Add model",
   fetchedHead: "The provider has {n} more model not in the list|The provider has {n} more models not in the list",
   collapse: "Hide",

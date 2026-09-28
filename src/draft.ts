@@ -289,6 +289,23 @@ export function setModelVisible(d: Draft, pid: string, m: Model, visible: boolea
   return withOp(d, keys.visible(pid, m.id), visible === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible });
 }
 
+/** Agents whose providers each have a default model (the backend tags it `role:default`). */
+export const hasDefaultModel = (agent: string) => agent === "hermes";
+
+/** A provider's default model, pending changes included (`pending`: a change is queued). */
+export function defaultModel(d: Draft, pid: string, models: Model[]): { id: string | null; pending: boolean } {
+  const op = d[keys.roles(pid)];
+  const queued = op && op.op === "set_model_roles" ? op.roles.default : undefined;
+  if (queued) return { id: queued, pending: true };
+  return { id: models.find((m) => m.tags.some((g) => g.id === "role:default"))?.id ?? null, pending: false };
+}
+
+/** Makes `mid` the provider's default model; picking the saved one again drops the change. */
+export function setDefaultModel(d: Draft, pid: string, models: Model[], mid: string): Draft {
+  const saved = defaultModel(withOp(d, keys.roles(pid), null), pid, models).id;
+  return withOp(d, keys.roles(pid), mid === saved ? null : { op: "set_model_roles", provider: pid, roles: { default: mid } });
+}
+
 /** 131072 -> "131K", 1048576 -> "1M" */
 export function fmtCtx(n: number): string {
   // From 999.5K up, "K" would round to "1000K".
