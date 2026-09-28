@@ -1,4 +1,4 @@
-import type { KeyboardEventHandler, ReactNode } from "react";
+import { type KeyboardEventHandler, type ReactNode, useState } from "react";
 import { useEscape } from "../hooks";
 import { t } from "../i18n";
 import { Icon } from "./icons";
@@ -17,8 +17,13 @@ interface ModalProps {
   className?: string;
   bgClassName?: string;
   role?: "dialog" | "alertdialog";
-  /** A press on the backdrop closes the dialog (default). */
+  /**
+   * A press on the backdrop closes the dialog (default) — until something has been typed or
+   * changed in it, so a stray click can't throw the input away.
+   */
   backdropClose?: boolean;
+  /** Treat the dialog as holding input from the start (e.g. filled in from an import link). */
+  dirty?: boolean;
   /** Content of `.modal-foot`. */
   foot?: ReactNode;
   /** Children go straight into `.modal` instead of a `.modal-body`. */
@@ -29,14 +34,20 @@ interface ModalProps {
 
 /**
  * A dialog over a dimmed backdrop (`.modal-bg` > `.modal`, the classes the styles and the
- * exit animation in motion.ts expect). Esc closes it — the topmost dialog only.
+ * exit animation in motion.ts expect). Esc closes it — the topmost dialog only; a press on the
+ * backdrop only while nothing has been entered.
  */
-export function Modal({ label, title, onClose, busy, wide, className, bgClassName, role = "dialog", backdropClose = true, foot, bare, onKeyDown, children }: ModalProps) {
+export function Modal({ label, title, onClose, busy, wide, className, bgClassName, role = "dialog", backdropClose = true, dirty, foot, bare, onKeyDown, children }: ModalProps) {
   const close = () => { if (!busy) onClose(); };
   useEscape(close);
+  // Any `input` event inside (typing, pasting, a checkbox or select) — React bubbles it through
+  // portals too, so menus rendered elsewhere count.
+  const [edited, setEdited] = useState(false);
+  const keep = dirty || edited;
   return (
-    <div className={`modal-bg${bgClassName ? ` ${bgClassName}` : ""}`} onMouseDown={(e) => { if (backdropClose && e.target === e.currentTarget) close(); }}>
-      <div className={`modal${wide ? " wide" : ""}${className ? ` ${className}` : ""}`} role={role} aria-modal="true" aria-label={label} onKeyDown={onKeyDown}>
+    <div className={`modal-bg${bgClassName ? ` ${bgClassName}` : ""}`} onMouseDown={(e) => { if (backdropClose && !keep && e.target === e.currentTarget) close(); }}>
+      <div className={`modal${wide ? " wide" : ""}${className ? ` ${className}` : ""}`} role={role} aria-modal="true" aria-label={label} onKeyDown={onKeyDown}
+        onInput={edited ? undefined : () => setEdited(true)}>
         {title !== undefined && (
           <div className="modal-head">
             <h2>{title}</h2>

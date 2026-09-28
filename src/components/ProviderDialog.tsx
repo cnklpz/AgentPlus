@@ -338,7 +338,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     </>
   );
   return (
-    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
+    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide dirty={!!imported} onClose={onClose}
       title={isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })} foot={foot}>
       {imported && <ImportNote req={imported} />}
       {isNew && gatewayCapable(st.id) && !unifiedNew && !imported && <TemplatePicker value={tpl} onPick={pickTpl} />}

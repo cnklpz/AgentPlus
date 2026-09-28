@@ -162,7 +162,7 @@ export function ServiceDialog({ agents, group, prefill, imported, onSave, onClos
     </>
   );
   return (
-    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide onClose={onClose}
+    <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide dirty={!!imported} onClose={onClose}
       title={isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("common.addProvider")) : t("serviceDialog.editGroup", { name: group!.name })} foot={foot}>
       {imported && <ImportNote req={imported} />}
       {isNew && !prefill && !imported && <TemplatePicker value={tpl} onPick={pickTpl} />}
