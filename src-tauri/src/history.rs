@@ -61,6 +61,7 @@ fn root() -> PathBuf {
 /// shown in the current one (`reason_text`), so both sides use these same pairs.
 pub const REASON_APPLY: (&str, &str) = ("Apply config", "应用配置");
 pub const REASON_OFFICIAL: (&str, &str) = ("Before fetching official model list", "获取官方模型列表前");
+pub const REASON_BUILTIN: (&str, &str) = ("Before using Codex's built-in model list", "使用 Codex 内置模型列表前");
 const REASON_CLEANUP: (&str, &str) = ("Codex cleanup", "Codex 清理");
 const REASON_REPAIR: (&str, &str) = ("Session repair", "会话修复");
 
@@ -148,7 +149,7 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
 /// Backup reasons are stored in the language of the moment; show the known fixed ones
 /// in the current language.
 fn reason_text(r: &str) -> String {
-    const KNOWN: &[(&str, &str)] = &[REASON_APPLY, REASON_OFFICIAL, REASON_CLEANUP, REASON_REPAIR];
+    const KNOWN: &[(&str, &str)] = &[REASON_APPLY, REASON_OFFICIAL, REASON_BUILTIN, REASON_CLEANUP, REASON_REPAIR];
     const PREFIX: &[(&str, &str, &str, &str)] = &[
         ("Before rolling back to ", "", "回滚到 ", " 之前"),
         ("Project config · ", "", "项目配置 · ", ""),

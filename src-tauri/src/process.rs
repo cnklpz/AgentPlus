@@ -697,6 +697,26 @@ pub(crate) fn detect_codex() -> Install {
     inst
 }
 
+/// The Codex command-line program of the installed Codex: the one the desktop app ships
+/// (`app\resources\codex.exe` in the Windows package, `Contents/Resources/codex` in the
+/// macOS bundle), or the CLI itself when only that is installed.
+pub(crate) fn codex_cli() -> Option<PathBuf> {
+    let inst = detect_codex();
+    let mut found = vec![];
+    if let Some(dir) = &inst.dir {
+        found.push(dir.join("app").join("resources").join("codex.exe"));
+    }
+    if let Some(exe) = &inst.exe {
+        if let Some(app) = exe.ancestors().find(|d| d.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))) {
+            found.push(app.join("Contents").join("Resources").join("codex"));
+        }
+        if exe.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("codex")) {
+            found.push(exe.clone());
+        }
+    }
+    found.into_iter().find(|p| p.is_file())
+}
+
 /// ZCode desktop: ZCode.app on macOS; on Windows its uninstall entry names the install folder.
 pub(crate) fn detect_zcode() -> Install {
     let mut inst = Install::default();

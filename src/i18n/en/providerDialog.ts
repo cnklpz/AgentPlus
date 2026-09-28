@@ -54,6 +54,8 @@ export default {
   codexOtherNote: "Codex has only one model catalog at a time; when you switch to this provider, the picker changes to the models checked here.",
   codexBuiltin: "Use Codex's built-in model list",
   codexBuiltinOn: "Pick from the models Codex ships with; untick the ones this provider doesn't serve.",
+  codexNoCatalog: "Codex has no model catalog yet. Turn this on to create ~/.codex/models.json from the model list built into Codex.",
+  codexCreatingCatalog: "Creating the catalog from Codex's built-in list…",
   codexBuiltinOff: "This provider's own models: fetch them from its address or add them by hand.",
   claudeUnmanagedNote: "This config was written by hand in settings.json. Save it once to let AgentPlus manage it, then set up its models.",
   claudeNote: "Models available from this provider; choose which one each Claude Code role uses below.",

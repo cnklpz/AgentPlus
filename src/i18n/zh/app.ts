@@ -111,6 +111,7 @@ const zh: typeof en = {
   hideInPicker: "在选择器里隐藏",
   showInPicker: "在选择器里显示",
   setDefaultModel: "设为默认模型",
+  builtinCatalogDone: "已使用 Codex 内置的 {n} 个模型，重启 Codex 后生效",
   deleteModelMenu: "删除模型…",
   addGroupMenu: "添加分组…",
   deleteForwardMenu: "删除转发…",

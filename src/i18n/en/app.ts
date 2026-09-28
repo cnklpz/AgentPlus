@@ -109,6 +109,7 @@ export default {
   hideInPicker: "Hide in picker",
   showInPicker: "Show in picker",
   setDefaultModel: "Set as default model",
+  builtinCatalogDone: "Using Codex's {n} built-in model; restart Codex to see it|Using Codex's {n} built-in models; restart Codex to see them",
   deleteModelMenu: "Delete model…",
   addGroupMenu: "Add group…",
   deleteForwardMenu: "Delete route…",

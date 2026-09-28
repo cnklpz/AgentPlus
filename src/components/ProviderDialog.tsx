@@ -54,6 +54,8 @@ interface Props {
   gateway: GatewayStatus | null;
   /** Turns the gateway on if needed and returns its status. */
   ensureGateway: () => Promise<GatewayStatus>;
+  /** Codex without a catalog: create one from the model list built into Codex. */
+  onCreateCatalog: () => Promise<void>;
   /** New provider from an import link: the fields it fills in. */
   imported?: ImportRequest | null;
 }
@@ -81,7 +83,7 @@ const ROLES: { role: string; label: TKey; hint: TKey }[] = [
 ];
 const HERMES_ROLES: typeof ROLES = [{ role: "default", label: "providerDialog.roleDefault", hint: "providerDialog.hermesDefaultHint" }];
 
-export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, imported }: Props) {
+export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, onCreateCatalog, imported }: Props) {
   const isNew = !editing || !!editing.isNew;
   const codex = st.id === "codex";
   const claude = st.id === "claude";
@@ -196,6 +198,26 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       setErr(t("common.fetchFailed", { err: errText(e) }));
     } finally {
       setFetching(false);
+    }
+  };
+
+  // Codex had no catalog and one was just created from its built-in list: start from it.
+  const hadBuiltin = useRef(builtinIds.length > 0);
+  useEffect(() => {
+    if (hadBuiltin.current || builtinIds.length === 0) return;
+    hadBuiltin.current = true;
+    pickBuiltin(true);
+  }, [builtinIds.length]);
+  const [creating, setCreating] = useState(false);
+  const createCatalog = async () => {
+    setErr(null);
+    setCreating(true);
+    try {
+      await onCreateCatalog();
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -487,9 +509,12 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                 : t("providerDialog.claudeNote")}
           </em>
         )}
-        {builtinIds.length > 0 && (
+        {builtinIds.length > 0 ? (
           <ToggleRow on={builtin} onChange={pickBuiltin} icon={<Icon.layers size={16} />} title={t("providerDialog.codexBuiltin")}
             hint={builtin ? t("providerDialog.codexBuiltinOn") : t("providerDialog.codexBuiltinOff")} />
+        ) : codex && !st.catalog && !st.readonly && (
+          <ToggleRow on={false} onChange={createCatalog} disabled={creating} icon={<Icon.layers size={16} />} title={t("providerDialog.codexBuiltin")}
+            hint={creating ? t("providerDialog.codexCreatingCatalog") : t("providerDialog.codexNoCatalog")} keepHint />
         )}
         {!(codex && isNew && !st.catalog) && !unmanaged && (
           <ModelPicker bar pool={modelPool} checked={checked} onChange={setChecked} onAdd={addManual}

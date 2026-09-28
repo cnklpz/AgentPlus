@@ -509,6 +509,12 @@ async fn codex_official_cancel() -> Result<(), String> {
     blocking_tx(official::cancel).await
 }
 
+/// Codex's model catalog from the list built into the installed Codex (no sign-in needed).
+#[tauri::command]
+async fn codex_builtin_catalog() -> Result<Vec<official::FetchModel>, String> {
+    blocking_tx(official::from_codex).await
+}
+
 #[tauri::command]
 fn library_list() -> Vec<library::LibEntry> {
     library::list()
@@ -836,6 +842,7 @@ pub fn run() {
             codex_official_start,
             codex_official_finish,
             codex_official_cancel,
+            codex_builtin_catalog,
             gateway_status,
             gateway_set,
             gateway_save_route,

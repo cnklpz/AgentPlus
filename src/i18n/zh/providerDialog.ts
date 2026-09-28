@@ -56,6 +56,8 @@ const zh: typeof en = {
   codexOtherNote: "Codex 同一时间只有一份模型目录；切换到这个供应商时，选择器会换成这里勾选的模型。",
   codexBuiltin: "使用 Codex 内置模型列表",
   codexBuiltinOn: "从 Codex 自带的模型里选，取消勾选这个供应商不提供的。",
+  codexNoCatalog: "Codex 还没有模型目录。打开后会用 Codex 自带的模型列表生成 ~/.codex/models.json。",
+  codexCreatingCatalog: "正在用 Codex 内置列表生成模型目录…",
   codexBuiltinOff: "使用这个供应商自己的模型：从地址拉取，或手动添加。",
   claudeUnmanagedNote: "这是 settings.json 里手动写的配置，先保存一次交给 AgentPlus 管理，再来设置模型。",
   claudeNote: "这个供应商可用的模型；下面给 Claude Code 的各个角色选用哪个。",

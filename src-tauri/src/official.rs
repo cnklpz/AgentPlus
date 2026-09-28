@@ -11,15 +11,21 @@
 //! 4. `cancel`: put config.toml back without touching the catalog.
 //!
 //! The in-progress state lives in store.json, so a restart of AgentPlus can resume or undo.
+//!
+//! Without a ChatGPT login (relays), `from_codex` uses the list built into the installed
+//! Codex instead: `codex debug models` run with an empty CODEX_HOME prints it, with no
+//! sign-in and no network.
 
 use crate::adapters::codex::{catalog_path, chatgpt_signed_in, codex_home, config_path, load_doc, ID};
 use crate::store;
 use crate::util::{backup_tagged, display_path, read_json, str_field, str_list, write_bytes_atomic, write_json, write_text_atomic, TextMeta};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 use toml_edit::{value, DocumentMut};
 
 const CACHE: &str = "models_cache.json";
@@ -161,13 +167,25 @@ pub fn finish() -> Result<Vec<FetchModel>> {
     let catalog = PathBuf::from(st.get("catalogFile").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("Backup info is incomplete", "备份信息不完整")))?);
 
     // New catalog = the cache file as-is, plus AgentPlus's custom models from the old one.
-    let (mut cache, _) = read_json(&cache_path())?;
-    let custom: Vec<String> = str_list(store::agent_get(&root, ID, "customModels")).unwrap_or_default();
-    let (old, meta) = match read_json(&catalog) {
+    let (cache, _) = read_json(&cache_path())?;
+    let models = write_catalog(&catalog, cache, &root)?;
+
+    // Put the user's config back, making sure it reads the catalog we just wrote.
+    restore_config(&st)?;
+    point_at(&catalog)?;
+    clear(&mut root)?;
+    Ok(models)
+}
+
+/// Writes `new` (`{"models": [...]}`) to `catalog`, keeping AgentPlus's custom models from
+/// the catalog there now. Returns the models it lists.
+fn write_catalog(catalog: &Path, mut new: Value, root: &Value) -> Result<Vec<FetchModel>> {
+    let custom: Vec<String> = str_list(store::agent_get(root, ID, "customModels")).unwrap_or_default();
+    let (old, meta) = match read_json(catalog) {
         Ok((v, m)) => (Some(v), m),
         Err(_) => (None, TextMeta::NEW),
     };
-    if let (Some(old), Some(list)) = (old, cache.get_mut("models").and_then(|m| m.as_array_mut())) {
+    if let (Some(old), Some(list)) = (old, new.get_mut("models").and_then(|m| m.as_array_mut())) {
         for m in old.get("models").and_then(|m| m.as_array()).into_iter().flatten() {
             let slug = m.get("slug").and_then(|s| s.as_str()).unwrap_or_default();
             if custom.iter().any(|c| c == slug) && !list.iter().any(|x| x.get("slug").and_then(|s| s.as_str()) == Some(slug)) {
@@ -178,18 +196,8 @@ pub fn finish() -> Result<Vec<FetchModel>> {
     if let Some(dir) = catalog.parent() {
         fs::create_dir_all(dir)?;
     }
-    write_json(&catalog, &cache, meta)?;
-
-    // Put the user's config back, making sure it reads the catalog we just wrote.
-    restore_config(&st)?;
-    let (mut doc, cmeta) = load_doc()?;
-    if doc.get("model_catalog_json").is_none() {
-        doc["model_catalog_json"] = value(display_path(&catalog));
-        write_text_atomic(&config_path(), &doc.to_string(), cmeta)?;
-    }
-    clear(&mut root)?;
-
-    Ok(cache
+    write_json(catalog, &new, meta)?;
+    Ok(new
         .get("models")
         .and_then(|m| m.as_array())
         .into_iter()
@@ -202,6 +210,69 @@ pub fn finish() -> Result<Vec<FetchModel>> {
             })
         })
         .collect())
+}
+
+/// Makes config.toml read `catalog` when it names no catalog yet.
+fn point_at(catalog: &Path) -> Result<()> {
+    let (mut doc, meta) = load_doc()?;
+    if doc.get("model_catalog_json").is_none() {
+        doc["model_catalog_json"] = value(display_path(catalog));
+        write_text_atomic(&config_path(), &doc.to_string(), meta)?;
+    }
+    Ok(())
+}
+
+/// Replaces the catalog with the model list built into the installed Codex (backing up
+/// config.toml and the old catalog first) and points config.toml at it.
+pub fn from_codex() -> Result<Vec<FetchModel>> {
+    let exe = crate::process::codex_cli().ok_or_else(|| {
+        anyhow!(crate::i18n::l("Codex's command-line program wasn't found; install or update Codex first", "找不到 Codex 自带的命令行程序，请先安装或更新 Codex"))
+    })?;
+    install(builtin_models(&exe)?)
+}
+
+/// `codex debug models` with an empty CODEX_HOME: the list compiled into Codex, untouched by
+/// the user's config, catalog or cache.
+fn builtin_models(exe: &Path) -> Result<Value> {
+    let home = std::env::temp_dir().join(format!("agentplus-codex-models-{}", std::process::id()));
+    fs::create_dir_all(&home)?;
+    let out = crate::process::output_within(Command::new(exe).args(["debug", "models"]).env("CODEX_HOME", &home), Duration::from_secs(60));
+    let _ = fs::remove_dir_all(&home);
+    let out = out.filter(|o| o.status.success()).ok_or_else(|| {
+        anyhow!(crate::i18n::l("Codex didn't list its models (codex debug models failed)", "Codex 没有列出模型（codex debug models 执行失败）"))
+    })?;
+    parse_models(&out.stdout)
+}
+
+/// The catalog in `codex debug models` output: a non-empty `models` list whose entries have slugs.
+fn parse_models(stdout: &[u8]) -> Result<Value> {
+    let v: Value = serde_json::from_slice(stdout).unwrap_or(Value::Null);
+    let models = v
+        .get("models")
+        .and_then(|m| m.as_array())
+        .filter(|a| !a.is_empty() && a.iter().all(|m| m.get("slug").and_then(|s| s.as_str()).is_some()))
+        .ok_or_else(|| anyhow!(crate::i18n::l("Codex's model list has an unexpected format", "Codex 的模型列表格式不对")))?;
+    Ok(json!({ "models": models }))
+}
+
+/// Writes `new` as the catalog (after backing up config.toml and the old catalog) and points
+/// config.toml at it.
+fn install(new: Value) -> Result<Vec<FetchModel>> {
+    let root = store::load();
+    if state(&root).is_some() {
+        bail!("{}", crate::i18n::l("A fetch of the official list is in progress. Finish or cancel it first", "正在获取官方模型列表，先完成或取消它"));
+    }
+    let (doc, _) = load_doc()?;
+    let catalog = catalog_of(&doc);
+    let mut files = vec![config_path()];
+    if catalog.exists() {
+        files.push(catalog.clone());
+    }
+    let (en, zh) = crate::history::REASON_BUILTIN;
+    backup_tagged(ID, &files, crate::i18n::l(en, zh))?;
+    let models = write_catalog(&catalog, new, &root)?;
+    point_at(&catalog)?;
+    Ok(models)
 }
 
 /// Gives up: config.toml goes back to the backup, the catalog is untouched.
@@ -316,5 +387,55 @@ mod tests {
         assert!(!status().active);
         println!("ok: {} models, temp dir {}", models.len(), tmp.display());
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn debug_models_output_must_be_a_catalog() {
+        let v = parse_models(br#"{"models":[{"slug":"gpt-a","display_name":"A"},{"slug":"gpt-b"}],"extra":1}"#).unwrap();
+        assert_eq!(v, json!({ "models": [{ "slug": "gpt-a", "display_name": "A" }, { "slug": "gpt-b" }] }), "only the models are kept");
+        for bad in [&b"not json"[..], br#"{"models":[]}"#, br#"{"models":[{"display_name":"no slug"}]}"#, br#"{"other":[]}"#, b""] {
+            assert!(parse_models(bad).is_err(), "{}", String::from_utf8_lossy(bad));
+        }
+    }
+
+    /// No catalog yet (an older setup): the built-in list becomes ~/.codex/models.json and
+    /// config.toml reads it. Over an existing catalog, AgentPlus's custom models stay.
+    #[test]
+    fn builtin_list_installs_a_catalog() {
+        let h = crate::util::TestHome::new("official-builtin");
+        let codex = h.0.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let original = "model_provider = \"relay\"\n\n[model_providers.relay]\nbase_url = \"https://r.example.com/v1\"\n";
+        fs::write(codex.join("config.toml"), original).unwrap();
+        let built_in = json!({ "models": [{ "slug": "gpt-a", "display_name": "A", "visibility": "list" }, { "slug": "gpt-old", "visibility": "hide" }] });
+
+        let models = install(built_in.clone()).unwrap();
+        assert_eq!(models.iter().map(|m| (m.slug.as_str(), m.visible)).collect::<Vec<_>>(), [("gpt-a", true), ("gpt-old", false)]);
+        let cfg = fs::read_to_string(codex.join("config.toml")).unwrap();
+        assert_eq!(cfg, original.replace("\n\n", "\nmodel_catalog_json = \"~/.codex/models.json\"\n\n"), "a top-level key, the rest as it was");
+        assert_eq!(read_json(&codex.join("models.json")).unwrap().0, built_in);
+        assert!(crate::history::list().unwrap().iter().any(|b| b.agent == ID), "config.toml was backed up first");
+
+        // Again, with a custom model AgentPlus added in the meantime: it survives the refresh.
+        let mut cat = built_in.clone();
+        cat["models"].as_array_mut().unwrap().push(json!({ "slug": "mine", "display_name": "Mine" }));
+        fs::write(codex.join("models.json"), cat.to_string()).unwrap();
+        let mut root = store::load();
+        store::set_value(&mut root, ID, "customModels", json!(["mine"]));
+        store::save(&root).unwrap();
+        let models = install(json!({ "models": [{ "slug": "gpt-b" }] })).unwrap();
+        assert_eq!(models.iter().map(|m| m.slug.as_str()).collect::<Vec<_>>(), ["gpt-b", "mine"]);
+        assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), cfg, "already pointing at the catalog: untouched");
+    }
+
+    /// The installed Codex really lists its models: `cargo test real_codex_lists_models -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_codex_lists_models() {
+        let exe = crate::process::codex_cli().expect("Codex not installed");
+        let v = builtin_models(&exe).unwrap();
+        let slugs: Vec<_> = v["models"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap().to_string()).collect();
+        println!("{} → {slugs:?}", exe.display());
+        assert!(!slugs.is_empty());
     }
 }

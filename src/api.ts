@@ -783,6 +783,8 @@ const real = {
   officialStatus: () => invoke<OfficialFetch>("codex_official_status"),
   officialStart: () => invoke<OfficialFetch>("codex_official_start"),
   officialFinish: () => invoke<FetchedModel[]>("codex_official_finish"),
+  /** Codex's catalog from the model list built into the installed Codex. */
+  codexBuiltinCatalog: () => invoke<FetchedModel[]>("codex_builtin_catalog"),
   officialCancel: () => invoke<void>("codex_official_cancel"),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
@@ -1152,6 +1154,7 @@ const demo: typeof real = {
   officialStart: async () => { demoOfficial.active = true; demoOfficialAt = Date.now(); return { ...demoOfficial }; },
   officialFinish: async () => { demoOfficial.active = false; return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "codex-auto-review"].map((slug, i) => ({ slug, name: slug.toUpperCase(), visible: i !== 5 })); },
   officialCancel: async () => { demoOfficial.active = false; },
+  codexBuiltinCatalog: async () => { await sleep(400); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
   gatewayStatus: async () => demoGw(),
   gatewaySet: async (enabled, port) => { demoGateway.enabled = enabled; if (port) demoGateway.port = port; return demoGw(); },
   gatewaySaveRoute: async (route, oldId) => { demoGateway.routes = [...demoGateway.routes.filter((r) => r.id !== (oldId ?? route.id)), route]; return demoGw(); },

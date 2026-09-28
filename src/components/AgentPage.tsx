@@ -45,6 +45,8 @@ interface Props {
   onDeclineFixed: () => void;
   /** Re-read this agent from disk. */
   onReload: () => void;
+  /** Codex without a catalog: create one from the model list built into Codex. */
+  onCreateCatalog: () => Promise<void>;
   /** Replaces the icon / name / buttons row (project pages). */
   head?: ReactNode;
   /** Shows a "copy a provider from elsewhere" card next to "add". */
@@ -182,7 +184,10 @@ export function AgentPage(props: Props) {
             </div>
           ) : st.id === "codex" ? (
             <div className="stack12">
-              <div className="empty">{t("agentPage.noCatalog")}</div>
+              <div className="empty stack12">
+                <span>{t("agentPage.noCatalog")}</span>
+                {!st.readonly && <CreateCatalog onCreate={props.onCreateCatalog} flash={props.flash} />}
+              </div>
               {official}
             </div>
           ) : (
@@ -256,6 +261,28 @@ export function AgentPage(props: Props) {
         })()}
       </div>
     </main>
+  );
+}
+
+/** Creates Codex's catalog from the model list built into Codex. */
+function CreateCatalog({ onCreate, flash }: { onCreate: () => Promise<void>; flash: Flash }) {
+  const [busy, setBusy] = useState(false);
+  const create = async () => {
+    setBusy(true);
+    try {
+      await onCreate();
+    } catch (e) {
+      flash(errText(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div>
+      <button className="btn primary" disabled={busy} onClick={create}>
+        <Icon.layers size={13} />{busy ? t("agentPage.creatingCatalog") : t("agentPage.useBuiltinCatalog")}
+      </button>
+    </div>
   );
 }
 

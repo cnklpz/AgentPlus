@@ -464,6 +464,12 @@ export default function App() {
     setDraft(deleteProvider(draft, p.id));
   };
 
+  /** Codex without a catalog: create one from the model list built into Codex. */
+  const createCodexCatalog = async () => {
+    const list = await api.codexBuiltinCatalog();
+    replaceAgent(await api.getAgent("codex"));
+    flash(tn("app.builtinCatalogDone", list.length));
+  };
   const replaceAgent = (next: AgentState) => (isProjectId(next.id)
     ? setProjStates((m) => ({ ...m, [next.id]: next }))
     : setAgents((list) => list.map((a) => (a.id === next.id ? next : a))));
@@ -1527,6 +1533,7 @@ export default function App() {
             sessionQuery={sessionQuery}
             onDeclineFixed={declineFixed}
             onReload={() => { api.getAgent(st.id).then(replaceAgent).catch(() => undefined); }}
+            onCreateCatalog={createCodexCatalog}
             head={projSt ? (
               <ProjectHead st={projSt} project={projEntry} projects={projects} onBack={() => setProjPath(null)} onSwitch={openProject}
                 onOpenDir={() => attempt(api.openPath(projSt.configDir))} />
@@ -1591,7 +1598,7 @@ export default function App() {
         )}
       </div>
 
-      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onSave={saveProvider} onClose={() => setDialog(null)} />}
+      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onSave={saveProvider} onClose={() => setDialog(null)} />}
       {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} onSave={hubSave} onClose={() => setHubDialog(undefined)} />}
