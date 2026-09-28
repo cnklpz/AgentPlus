@@ -2,6 +2,20 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.6
+
+没有模型目录的 Codex（从旧版本升级、还没生成过 models.json）也能直接用 Codex 内置的模型列表了。
+
+- Codex 的「模型列表」页和编辑供应商对话框里新增「使用 Codex 内置模型列表」：用已安装 Codex 自带的模型列表生成模型目录，不需要登录 ChatGPT 账号，也不联网
+- 生成前会备份 config.toml 和原来的模型目录，可以在「历史与回滚」里还原；AgentPlus 添加的自定义模型会保留
+- 修复这种情况下编辑供应商时模型列表是空的、也没有内置模型开关的问题
+
+Codex setups without a model catalog (upgraded from an old version, models.json never created) can now use the model list built into Codex.
+
+- "Use Codex's built-in model list" on Codex's model list page and in the provider dialog creates the catalog from the list that ships with the installed Codex; no ChatGPT sign-in and no network needed
+- config.toml and the old catalog are backed up first (restore them from History); custom models added by AgentPlus are kept
+- Fixes the empty model list, with no built-in list switch, when editing a provider in that case
+
 ## 0.2.5
 
 新增模型归因测试，Codex 新建供应商时能直接选好模型列表。
