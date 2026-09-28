@@ -21,21 +21,22 @@ function ripple(e: PointerEvent) {
   if (e.button !== 0) return;
   const el = (e.target as Element).closest<HTMLElement>(RIPPLE);
   if (!el || el.matches(":disabled")) return;
-  const r = el.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  const size = 2 * Math.hypot(Math.max(x, r.width - x), Math.max(y, r.height - y));
   const host = document.createElement("span");
   host.className = "ap-ripple-host";
   host.setAttribute("aria-hidden", "true");
-  const dot = document.createElement("span");
-  dot.className = "ap-ripple";
-  Object.assign(dot.style, { width: `${size}px`, height: `${size}px`, left: `${x - size / 2}px`, top: `${y - size / 2}px` });
-  host.appendChild(dot);
   // Positioned only while the ripple runs, so layouts that rely on static children stay intact.
   const restore = getComputedStyle(el).position === "static" ? el.style.position : null;
   if (restore !== null) el.style.position = "relative";
   // First child, so `:last-child` rules (like the env button's chevron) keep matching.
   el.insertBefore(host, el.firstChild);
+  // Measured on the host, not the element: some hosts reach past their element (see .tab).
+  const r = host.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const size = 2 * Math.hypot(Math.max(x, r.width - x), Math.max(y, r.height - y));
+  const dot = document.createElement("span");
+  dot.className = "ap-ripple";
+  Object.assign(dot.style, { width: `${size}px`, height: `${size}px`, left: `${x - size / 2}px`, top: `${y - size / 2}px` });
+  host.appendChild(dot);
   window.setTimeout(() => {
     host.remove();
     if (restore !== null && !el.querySelector(":scope > .ap-ripple-host")) el.style.position = restore;

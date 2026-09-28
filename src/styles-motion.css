@@ -136,6 +136,8 @@
 /* ---- Classes used by motion.ts ---- */
 /* Click ripple */
 .ap-ripple-host { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none; z-index: 0; animation: none !important; }
+/* Tabs have no side padding: let the ripple reach past the label instead of hugging it. */
+.tab > .ap-ripple-host { inset: -4px -10px 0; border-radius: 8px 8px 0 0; }
 .ap-ripple { position: absolute; border-radius: 50%; background: currentColor; pointer-events: none; transform: scale(0); animation: ap-ripple .65s var(--ease-smooth) forwards !important; }
 
 /* Rubber stretch at the scroll edge (motion.ts): the host sets the scale and the fixed line
