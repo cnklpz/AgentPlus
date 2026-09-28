@@ -668,4 +668,4 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 /* Add-provider dialog filled in from an import link (ImportLink.tsx) */
 .import-note { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); color: var(--ink); }
 .import-note > svg { color: var(--accent); flex: none; }
-.import-link-input { resize: vertical; min-height: 84px; word-break: break-all; line-height: 1.5; }
+.import-link-input { resize: vertical; height: auto; min-height: 96px; padding: 9px 11px; word-break: break-all; line-height: 1.55; }
