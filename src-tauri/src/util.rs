@@ -55,9 +55,17 @@ pub struct TestHome(pub PathBuf);
 impl TestHome {
     pub fn new(tag: &str) -> TestHome {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let d = std::env::temp_dir().join(format!("agentplus-test-{tag}-{}-{nanos}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
+        Self::new_at(tag, nanos)
+    }
+
+    fn new_at(tag: &str, nanos: u128) -> TestHome {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // Parallel tests can observe the same clock tick, even with a nanosecond timestamp.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("agentplus-test-{tag}-{}-{nanos}-{seq}", std::process::id()));
+        // Refuse an existing directory instead of deleting another test's files.
+        fs::create_dir(&d).unwrap();
         TEST_HOME.with(|t| *t.borrow_mut() = Some(d.clone()));
         crate::env::set_test_vars(&[]);
         TestHome(d)
@@ -561,6 +569,24 @@ pub fn write_json(path: &Path, v: &serde_json::Value, meta: TextMeta) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_homes_with_the_same_tag_and_timestamp_are_isolated() {
+        let h = TestHome::new_at("same-tick", 0);
+        let marker = h.0.join("marker");
+        fs::write(&marker, "keep").unwrap();
+        let first = h.0.clone();
+        let second = std::thread::spawn(move || {
+            let other = TestHome::new_at("same-tick", 0);
+            assert_ne!(other.0, first);
+            assert_eq!(test_home(), Some(other.0.clone()));
+            assert!(fs::read_dir(&other.0).unwrap().next().is_none());
+            other.0.clone()
+        }).join().unwrap();
+        assert!(!second.exists(), "dropping a test home removes its directory");
+        assert_eq!(test_home(), Some(h.0.clone()));
+        assert_eq!(fs::read_to_string(marker).unwrap(), "keep", "another test must not remove this home's files");
+    }
 
     fn tmp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("agentplus-util-{name}-{}", std::process::id()));
