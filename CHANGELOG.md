@@ -2,6 +2,18 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.2.8
+
+使用 Codex 内置模型列表时，不再默认勾选 Codex 自己隐藏的模型。
+
+- Codex 内置列表里有官方内部实验模型（如 gpt-daybreak）和旧模型，Codex 默认不显示它们；以前切到内置列表会全部勾选，让它们出现在选择器里。现在这些模型标为「Codex 默认隐藏」、默认不勾选，需要时可以自己勾上
+- 已经勾选了的，在编辑供应商里取消勾选即可
+
+Using Codex's built-in model list no longer ticks the models Codex itself hides.
+
+- Codex's built-in list includes internal experimental models (such as gpt-daybreak) and older ones that Codex doesn't show; switching to the built-in list used to tick them all, putting them in the picker. They're now tagged "Hidden by Codex" and left unticked; tick them if you want them
+- If they're already ticked, untick them when editing the provider
+
 ## 0.2.7
 
 没有模型目录的 Codex（从旧版本升级、还没生成过 models.json）可以一键使用 Codex 内置的模型列表，并修复 0.2.6 里这一步在部分电脑上失败的问题。
