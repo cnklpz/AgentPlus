@@ -132,9 +132,17 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const codexOriginal = editing && !isNew ? editing.models.filter((m) => m.visible).map((m) => m.id) : [];
   const codexStart = pmOp && pmOp.op === "set_provider_models" ? pmOp.models : codexOriginal;
   const perModels = editing && !isNew && !listMode ? viewModels(editing.id, editing.models, draft).filter((m) => !m.isDeleted) : [];
-  const [checked, setChecked] = useState<string[]>(() =>
-    isNew ? editing?.models.map((m) => m.id) ?? imported?.models ?? [] : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id),
+  /** Codex: the models Codex itself ships (its catalog, minus the ones AgentPlus added). */
+  const catalogIds = (custom: boolean) => (codex ? (st.catalog ?? []) : []).filter((m) => m.tags.some((g) => g.id === "custom") === custom).map((m) => m.id);
+  const builtinIds = catalogIds(false);
+  /** Codex, with the built-in list off: the models AgentPlus added (an existing provider lists the whole catalog). */
+  const ownPool = () => (isNew ? catalogIds(true) : [...catalogIds(true), ...builtinIds]);
+  const startChecked = isNew ? editing?.models.map((m) => m.id) ?? imported?.models ?? null : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id);
+  /** Codex: pick from the built-in models (a fresh provider starts here) instead of fetching the provider's own. */
+  const [builtin, setBuiltin] = useState(() =>
+    builtinIds.length > 0 && (startChecked === null || ((startChecked.length > 0 || !isNew) && startChecked.every((m) => builtinIds.includes(m)))),
   );
+  const [checked, setChecked] = useState<string[]>(() => startChecked ?? (builtin ? builtinIds : []));
   const [fetched, setFetched] = useState<string[]>([]);
   const [fetching, setFetching] = useState(false);
   const rolesOp = editing ? draft[keys.roles(editing.id)] : undefined;
@@ -143,9 +151,18 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const [roles, setRoles] = useState<Record<string, string>>(rolesOp && rolesOp.op === "set_model_roles" ? rolesOp.roles : rolesOriginal);
 
   const [modelPool, addToPool, resetPool] = useModelPool(() => [
-    ...(isNew ? [] : codex ? [...(st.catalog ?? []).map((m) => m.id), ...codexStart] : claude ? [...(editing?.models ?? []).map((m) => m.id), ...codexStart] : perModels.map((m) => m.id)),
+    ...(codex && builtin ? builtinIds : codex ? [...ownPool(), ...codexStart] : isNew ? [] : claude ? [...(editing?.models ?? []).map((m) => m.id), ...codexStart] : perModels.map((m) => m.id)),
     ...checked,
   ]);
+  /** Codex: switch between the built-in models and the provider's own (fetched or typed in). */
+  const pickBuiltin = (on: boolean) => {
+    setBuiltin(on);
+    setFetched([]);
+    const kept = checked.filter((m) => builtinIds.includes(m) === on);
+    const next = on && kept.length === 0 ? builtinIds : kept;
+    resetPool([...(on ? builtinIds : ownPool()), ...next]);
+    setChecked(next);
+  };
 
   // Focus the first field once, when the dialog opens (not on every parent re-render).
   useEffect(() => { first.current?.focus(); }, []);
@@ -198,8 +215,9 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
 
   /** The template's models on protocol `k`, in the picker and ticked. */
   const applyTplModels = (tp: Template, k: ApiKind) => {
-    // A new Codex provider has no picker: it keeps the models ticked now.
-    if (codex && isNew) return resetPool(checked);
+    // Codex: a template that names no models keeps to Codex's built-in ones.
+    if (codex && builtinIds.length > 0 && modelsFor(tp, k).length === 0) return pickBuiltin(true);
+    setBuiltin(false);
     resetPool(modelsFor(tp, k));
     setChecked(modelsFor(tp, k));
   };
@@ -208,6 +226,8 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     setForwardOn(false);
     setFetched([]);
     setErr(null);
+    // Back to a custom provider: Codex starts from its built-in models again.
+    if (!tp && codex && builtinIds.length > 0) return pickBuiltin(true);
     // Another template: the list starts over from the models ticked now (templates only show for a new provider).
     if (!tp) return resetPool(checked);
     setUnifiedNew(false);
@@ -232,7 +252,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     if (tpl) {
       // A template's other protocols live at their own address, and may serve other models.
       if (tpl.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind]) setBaseUrl(tpl.endpoints[k]!);
-      if (!(codex && isNew)) {
+      if (!(codex && builtin)) {
         const m = modelsAfter(tpl, apis, next, checked);
         resetPool([...new Set([...next.flatMap((x) => modelsFor(tpl, x)), ...m])]);
         setChecked(m);
@@ -272,8 +292,8 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         models: modelsOn(tpl, k, checked),
       }));
       if (viaFwd) {
-        // A new Codex provider has no picker: its forwards get the template's models.
-        const parts = codex ? each.map((p) => ({ ...p, models: tpl ? modelsFor(tpl, p.api) : [] })) : each;
+        // Codex's built-in models aren't the upstream's: its forwards get the template's models.
+        const parts = codex && builtin ? each.map((p) => ({ ...p, models: tpl ? modelsFor(tpl, p.api) : [] })) : each;
         void submit({ input: null, viaForward: { name: name.trim(), apiKey: key.trim(), parts, models: checked, officialAuth: codex ? officialAuth : undefined } });
         return;
       }
@@ -460,26 +480,30 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       <div className="field">
         <div className="row between">
           <span className="field-label">{t("providerDialog.modelList")} <em className="muted tiny hint">{t("providerDialog.modelListScope", { agent: st.name })}</em></span>
-          <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
-            <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
-          </button>
+          {!(codex && builtin) && (
+            <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
+              <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
+            </button>
+          )}
         </div>
-        <em className={`muted tiny${!codex && claude && unmanaged ? "" : " hint"}`}>
-          {codex
-            ? isNew
-              ? t("providerDialog.codexNewNote")
-              : isCurrent
+        {(codex || claude) && (
+          <em className={`muted tiny${!codex && unmanaged ? "" : " hint"}`}>
+            {codex
+              ? isCurrent
                 ? t("providerDialog.codexCurrentNote")
                 : t("providerDialog.codexOtherNote")
-            : claude
-              ? unmanaged
+              : unmanaged
                 ? t("providerDialog.claudeUnmanagedNote")
-                : t("providerDialog.claudeNote")
-              : t("providerDialog.pickNote", { agent: st.name })}
-        </em>
-        {!(codex && isNew) && !unmanaged && (
+                : t("providerDialog.claudeNote")}
+          </em>
+        )}
+        {builtinIds.length > 0 && (
+          <ToggleRow on={builtin} onChange={pickBuiltin} icon={<Icon.layers size={16} />} title={t("providerDialog.codexBuiltin")}
+            hint={builtin ? t("providerDialog.codexBuiltinOn") : t("providerDialog.codexBuiltinOff")} />
+        )}
+        {!(codex && isNew && !st.catalog) && !unmanaged && (
           <ModelPicker bar pool={modelPool} checked={checked} onChange={setChecked} onAdd={addManual}
-            empty={codex && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}
+            empty={codex && !isNew && !isCurrent ? t("providerDialog.codexEmpty") : t("providerDialog.empty")}
             isNew={(m) => !isNew && fetched.includes(m) && !codexStart.includes(m) && !perModels.some((p) => p.id === m)} />
         )}
       </div>

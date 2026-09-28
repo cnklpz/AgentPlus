@@ -524,6 +524,17 @@ fn set_stored_list(store: &mut Value, provider: &str, list: &[String]) -> bool {
     true
 }
 
+/// Drops a provider's stored list (one left behind by a deleted provider of the same id).
+/// Returns true when there was one.
+fn clear_stored_list(store: &mut Value, provider: &str) -> bool {
+    let mut all = provider_models(store);
+    if all.remove(provider).is_none() {
+        return false;
+    }
+    store::set_value(store, ID, "providerModels", Value::Object(all));
+    true
+}
+
 fn visible_slugs(v: &Value) -> Vec<String> {
     v.get("models")
         .and_then(|m| m.as_array())
@@ -880,6 +891,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     put_provider(&mut doc, &id, Item::Table(t))?;
                     diff.push(&cfg_file, format!("+ [model_providers.{id}] name = \"{}\", base_url = \"{}\"", p.name.trim(), p.base_url.trim()), true);
                     cfg_dirty = true;
+                    // Its own model list, swapped into the catalog when Codex switches to it.
+                    let list = clean_ids(&p.models);
+                    if list.is_empty() || catalog.is_none() {
+                        store_dirty |= clear_stored_list(&mut store, &id);
+                    } else if set_stored_list(&mut store, &id, &list) {
+                        diff.push(l("AgentPlus · per-provider model lists", "AgentPlus · 各供应商的模型列表"), tr!("\"{id}\" model list: {} (takes effect when you switch to it)", "「{id}」的模型列表：{} 个（切换到它时生效）", list.len()), true);
+                        store_dirty = true;
+                    }
                 } else {
                     for (k, v) in [("name", p.name.trim()), ("base_url", p.base_url.trim())] {
                         let old = provider_str(&doc, &id, k).unwrap_or_default();
@@ -1446,6 +1465,36 @@ http_headers = { X = \"1\" }
         plan(&[Op::UpsertProvider { provider: input }], false).unwrap();
         assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "RELAY_API_KEY=sk-new\nA=1\n");
         assert_eq!(env_value("RELAY_API_KEY").as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn a_new_provider_keeps_its_model_list() {
+        let cfg = "model_catalog_json = \"~/.codex/models.json\"\n";
+        let h = codex_home_with("codex-newlist", cfg, None);
+        let catalog = json!({ "models": [{ "slug": "gpt-x", "display_name": "GPT X", "visibility": "list", "priority": 1 }] });
+        std::fs::write(h.0.join(".codex").join("models.json"), catalog.to_string()).unwrap();
+        let input = |name: &str, models: &[&str]| ProviderInput {
+            id: None,
+            name: name.into(),
+            base_url: "https://r/v1".into(),
+            api: "responses".into(),
+            api_key: None,
+            models: models.iter().map(|m| m.to_string()).collect(),
+            key_from_library: None, key_from_sync: None,
+            official_auth: None,
+        };
+        plan(&[Op::UpsertProvider { provider: input("relay", &[" gpt-x ", "", "acme-9", "gpt-x"]) }], false).unwrap();
+        assert_eq!(stored_list(&store::load(), "relay").unwrap(), ["gpt-x", "acme-9"]);
+        let st = state(&Install::default());
+        let relay = st.providers.iter().find(|p| p.id == "relay").unwrap();
+        assert_eq!(relay.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["gpt-x", "acme-9"]);
+
+        // A list left behind by a deleted provider of the same id doesn't carry over.
+        let mut root = store::load();
+        set_stored_list(&mut root, "other", &["stale".into()]);
+        store::save(&root).unwrap();
+        plan(&[Op::UpsertProvider { provider: input("other", &[]) }], false).unwrap();
+        assert_eq!(stored_list(&store::load(), "other"), None);
     }
 
     #[test]
