@@ -515,6 +515,13 @@ export interface McpInput {
 /** How an agent comes to read a skills folder. */
 export type SkillKind = "own" | "shared" | "compat" | "extra" | "builtin" | "off" | "library";
 
+/** A skill brought into the library by an import. */
+export interface SkillImported {
+  name: string;
+  description: string;
+  result: SkillCopied;
+}
+
 /** What copying a skill did ("exists": another version is there, nothing was written). */
 export type SkillCopied = "added" | "replaced" | "same" | "exists";
 
@@ -883,6 +890,8 @@ const real = {
   skillsList: (agents: AgentId[]) => invoke<SkillsOverview>("skills_list", { agents }),
   /** Copies a skill folder into a skills folder (`replace`: overwrite another version, backed up). */
   skillsCopy: (from: string, to: string, replace: boolean) => invoke<SkillCopied>("skills_copy", { from, to, replace }),
+  /** Imports skills (a folder, a .zip or a Git address) into the skill library. */
+  skillsImport: (source: string, replace: string[]) => invoke<SkillImported[]>("skills_import", { source, replace }),
   /** Deletes a skill folder (backed up first). */
   skillsDelete: (dir: string) => invoke<void>("skills_delete", { dir }),
   skillsSetEnabled: (agent: AgentId, name: string, dir: string, on: boolean) => invoke<void>("skills_set_enabled", { agent, name, dir, on }),
@@ -965,7 +974,7 @@ const real = {
   projectOpen: (path: string) => invoke<ProjectEntry>("project_open", { path }),
   projectForget: (path: string) => invoke<void>("project_forget", { path }),
   /** Native folder dialog; `purpose` sets its title. null when cancelled. */
-  pickFolder: (start: string | null, purpose?: "sync") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
+  pickFolder: (start: string | null, purpose?: "sync" | "skill") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
   /** Import links that came in since the last call (the backend keeps them until then). */
   takeImports: () => invoke<ImportItem[]>("take_imports"),
   parseImportLink: (link: string) => invoke<ImportItem>("parse_import_link", { link }),
@@ -1204,6 +1213,14 @@ const demo: typeof real = {
   },
   skillsCopy: async () => "added",
   skillsDelete: async () => undefined,
+  skillsImport: async (_source, replace) => {
+    await new Promise((r) => setTimeout(r, 700));
+    return [
+      { name: "pdf", description: "Read, fill and merge PDF files", result: "same" },
+      { name: "xlsx", description: "Work with spreadsheets", result: "added" },
+      { name: "docx", description: "Create and edit Word documents", result: replace.includes("docx") ? "replaced" : "exists" },
+    ];
+  },
   skillsSetEnabled: async () => undefined,
   mcpLibrarySave: async () => undefined,
   mcpLibraryDelete: async () => undefined,

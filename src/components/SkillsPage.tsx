@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { type AgentId, type AgentState, type SkillCopy, type SkillKind, type SkillRoot, type SkillsOverview, api } from "../api";
+import { type AgentId, type AgentState, type SkillCopy, type SkillImported, type SkillKind, type SkillRoot, type SkillsOverview, api } from "../api";
 import { type TKey, t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
 import { ErrorBox, Seg, Switch } from "./controls";
@@ -94,6 +94,7 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
   const [filter, setFilter] = useState<Filter>("mine");
   const [q, setQ] = useState("");
   const [copying, setCopying] = useState<Copy | null>(null);
+  const [importing, setImporting] = useState(false);
   const all = useMemo(() => (data ? groups(data) : []), [data]);
   const query = q.trim().toLowerCase();
   const list = all.filter((g) => (filter === "all" || (filter === "builtin") === g.builtin)
@@ -130,7 +131,10 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
               <h1>{t("skillsPage.title")}</h1>
               <span className="muted small hint">{t("skillsPage.subtitle")}</span>
             </div>
-            <button className="btn" onClick={() => void reload()}>{t("common.refresh")}</button>
+            <div className="row gap6">
+              <button className="btn" onClick={() => void reload()}>{t("common.refresh")}</button>
+              <button className="btn primary" onClick={() => setImporting(true)}><Icon.download size={12} />{t("skillsPage.import")}</button>
+            </div>
           </div>
           <div className="row gap6 skills-tools">
             <Seg value={filter} onChange={setFilter} label={t("skillsPage.filter")}
@@ -179,6 +183,7 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
           : <Overview o={data} count={all.filter((g) => !g.builtin).length} />}
       </aside>
       {copying && data && <CopyDialog c={copying} o={data} flash={flash} onClose={() => setCopying(null)} onDone={() => void reload()} />}
+      {importing && <ImportDialog flash={flash} onClose={() => setImporting(false)} onDone={() => void reload()} />}
     </>
   );
 }
@@ -364,3 +369,88 @@ function CopyDialog({ c, o, flash, onClose, onDone }: { c: Copy; o: SkillsOvervi
     </Modal>
   );
 }
+
+/** Brings skills into the library from a folder, a .zip or a Git address. */
+function ImportDialog({ flash, onClose, onDone }: { flash: Flash; onClose: () => void; onDone: () => void }) {
+  const [source, setSource] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [got, setGot] = useState<SkillImported[] | null>(null);
+  const [replace, setReplace] = useState<Set<string>>(new Set());
+
+  const go = async (again: string[] = []) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const list = await api.skillsImport(source, again);
+      // A second round only brings the replacements: keep what the first one found.
+      setGot((prev) => (again.length && prev ? prev.map((p) => list.find((x) => x.name === p.name) ?? p) : list));
+      setReplace(new Set());
+      onDone();
+      const added = list.filter((x) => x.result === "added" || x.result === "replaced").length;
+      if (added) flash(tn("skillsPage.imported", added));
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const browse = async () => {
+    const p = await api.pickFolder(null, "skill").catch(() => null);
+    if (p) setSource(p);
+  };
+  const waiting = got?.filter((x) => x.result === "exists") ?? [];
+
+  const foot = got ? (
+    <>
+      <button className="btn" onClick={onClose}>{t("common.close")}</button>
+      {waiting.length > 0 && <button className="btn primary" disabled={busy || replace.size === 0} onClick={() => void go([...replace])}>{t("skillsPage.replaceChosen", { n: replace.size })}</button>}
+    </>
+  ) : (
+    <>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={busy || !source.trim()} onClick={() => void go()}>{busy ? t("skillsPage.importing") : t("skillsPage.import")}</button>
+    </>
+  );
+  return (
+    <Modal label={t("skillsPage.importTitle")} title={t("skillsPage.importTitle")} onClose={onClose} busy={busy} foot={foot}>
+      {!got && (
+        <div className="field">
+          <span>{t("skillsPage.importFrom")}</span>
+          <div className="row gap6">
+            <input className="input mono grow" value={source} autoFocus onChange={(e) => setSource(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && source.trim() && !busy) void go(); }}
+              placeholder="https://github.com/owner/repo  ·  D:\\skills  ·  skill.zip" />
+            <button className="btn" onClick={() => void browse()}><Icon.folder size={13} />{t("skillsPage.browse")}</button>
+          </div>
+          <em className="muted tiny hint">{t("skillsPage.importHint")}</em>
+        </div>
+      )}
+      {got && (
+        <div className="stack6">
+          <span className="tiny muted">{t("skillsPage.importedInto")}</span>
+          <div className="mcp-holders">
+            {got.map((x) => (
+              <label key={x.name} className="mcp-holder">
+                {x.result === "exists"
+                  ? <input type="checkbox" checked={replace.has(x.name)} onChange={() => setReplace((p) => { const n = new Set(p); if (n.has(x.name)) n.delete(x.name); else n.add(x.name); return n; })} />
+                  : <Icon.check size={13} />}
+                <span className="tiny grow minw0 ellipsis"><span className="strong">{x.name}</span> <span className="muted">· {x.description}</span></span>
+                <span className={`tiny${x.result === "exists" ? " warn-text" : " muted"}`}>{t(RESULT[x.result])}</span>
+              </label>
+            ))}
+          </div>
+          {waiting.length > 0 && <em className="muted tiny">{t("skillsPage.existsHint")}</em>}
+        </div>
+      )}
+      {err && <ErrorBox text={err} />}
+    </Modal>
+  );
+}
+
+const RESULT: Record<SkillImported["result"], TKey> = {
+  added: "skillsPage.resultAdded",
+  replaced: "skillsPage.resultReplaced",
+  same: "skillsPage.resultSame",
+  exists: "skillsPage.resultExists",
+};

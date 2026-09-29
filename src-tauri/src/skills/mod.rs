@@ -17,6 +17,7 @@
 //!   `extra_skill_dirs`). OpenClaw: `~/.agents/skills`, then `~/.openclaw/skills`.
 //! - Hermes: `HERMES_HOME/skills` (in category folders), then `skills.external_dirs`.
 
+pub mod import;
 mod scan;
 pub mod write;
 

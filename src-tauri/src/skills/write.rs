@@ -92,7 +92,7 @@ fn put_copy(from: &Path, to: &Path) -> Result<()> {
 }
 
 /// What `copy` did.
-#[derive(serde::Serialize, Debug, PartialEq)]
+#[derive(serde::Serialize, Debug, PartialEq, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum Copied {
     /// A new folder.

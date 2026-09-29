@@ -311,6 +311,13 @@ async fn skills_copy(from: String, to: String, replace: bool) -> Result<skills::
     blocking(move || skills::write::copy(&from, &to, replace)).await
 }
 
+/// Imports skills (a folder, a .zip or a Git address) into the skill library; names in
+/// `replace` overwrite another version there.
+#[tauri::command]
+async fn skills_import(source: String, replace: Vec<String>) -> Result<Vec<skills::import::Imported>, String> {
+    blocking(move || skills::import::import(&source, &replace)).await
+}
+
 /// Deletes a skill folder (backed up first).
 #[tauri::command]
 async fn skills_delete(dir: String) -> Result<(), String> {
@@ -730,6 +737,7 @@ async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>, purpos
     // `purpose` only picks the dialog title: "sync" for the sync folder, else a project folder.
     let title = match purpose.as_deref() {
         Some("sync") => i18n::l("Choose sync folder", "选择同步文件夹"),
+        Some("skill") => i18n::l("Choose a skill folder", "选择技能文件夹"),
         _ => i18n::l("Choose project folder", "选择项目文件夹"),
     };
     blocking(move || projects::pick_folder(owner, start.as_deref(), title)).await
@@ -882,6 +890,7 @@ pub fn run() {
             skills_list,
             skills_copy,
             skills_delete,
+            skills_import,
             skills_set_enabled,
             mcp_list,
             mcp_library_save,
