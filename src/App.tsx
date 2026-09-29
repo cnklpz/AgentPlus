@@ -1175,19 +1175,23 @@ export default function App() {
     flash(t(sv.connect === "gateway" || sv.viaForward ? "app.queuedViaGateway" : sv.connect === "direct" ? "app.queuedDirect" : "app.queuedApply"));
   };
 
-  /** Library changes are written right away; agent changes go to the drafts. False when writing failed. */
+  /** Library changes (providers and MCP) are written right away; agent changes go to the drafts. False when writing failed. */
   const adoptSync = async (list: SyncSuggestion[]): Promise<boolean> => {
     const libChanges = list.flatMap((s) => (s.lib ? [s.lib] : []));
-    const agentSugs = list.filter((s): s is SyncSuggestion & { agent: AgentId } => !s.lib && s.agent !== "library");
+    const mcpChanges = list.flatMap((s) => (s.mcp ? [s.mcp] : []));
+    const agentSugs = list.filter((s): s is SyncSuggestion & { agent: AgentId } => !s.lib && !s.mcp && s.agent !== "library");
     let libDone: string | null = null;
-    if (libChanges.length > 0) {
-      try {
-        libDone = await api.syncAdoptLibrary(libChanges);
+    try {
+      const done: string[] = [];
+      if (libChanges.length > 0) {
+        done.push(await api.syncAdoptLibrary(libChanges));
         reloadLib();
-      } catch (e) {
-        flash(errText(e), true);
-        return false;
       }
+      if (mcpChanges.length > 0) done.push(await api.syncAdoptMcp(mcpChanges));
+      libDone = done.length ? done.join(" · ") : null;
+    } catch (e) {
+      flash(errText(e), true);
+      return false;
     }
     if (agentSugs.length === 0) {
       if (libDone) flash(libDone);

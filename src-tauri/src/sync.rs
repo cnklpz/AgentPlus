@@ -1,6 +1,7 @@
 //! Multi-device sync through a shared folder (cloud drive, network share, USB).
-//! Exports the provider library and every agent's providers and model lists, and turns an
-//! imported file into ordinary draft ops (or library entries) the user reviews first.
+//! Exports the provider library, the MCP library and every agent's providers and model lists,
+//! and turns an imported file into ordinary draft ops (or library entries) the user reviews
+//! first. MCP secrets (env values, headers…) travel like API keys: by fingerprint.
 //!
 //! With a sync password the whole content is encrypted (see `seal`); without one the file is
 //! plain JSON. Either way it carries the API keys only when "Sync API keys" is on — in a plain
@@ -165,6 +166,7 @@ fn seal_doc(payload: &Value, password: Option<&str>, exported_at: &str, machine:
         None => {
             doc["agents"] = payload["agents"].clone();
             doc["library"] = payload["library"].clone();
+            doc["mcp"] = payload["mcp"].clone();
             if payload["keys"].as_object().is_some_and(|k| !k.is_empty()) {
                 doc["keys"] = payload["keys"].clone();
             }
@@ -180,7 +182,7 @@ fn open_doc(doc: &Value, password: Option<&str>) -> Result<Value> {
     }
     let Some(enc) = doc.get("encryption") else {
         let keys = if doc["keys"].is_object() { doc["keys"].clone() } else { json!({}) };
-        return Ok(json!({ "agents": doc["agents"], "library": doc["library"], "keys": keys }));
+        return Ok(json!({ "agents": doc["agents"], "library": doc["library"], "mcp": doc["mcp"], "keys": keys }));
     };
     let pw = password.ok_or_else(|| anyhow!(crate::i18n::l("The sync file is encrypted. Enter its sync password first", "同步文件已加密，请先填写同步密码")))?;
     let h = seal::Header::from_json(enc)?;
@@ -299,6 +301,7 @@ struct Built {
     hash: String,
     providers: usize,
     library: usize,
+    mcp: usize,
     keys: usize,
 }
 
@@ -315,10 +318,17 @@ fn build(root: &Value) -> Built {
         }
     }
     let lib = export_library(root, with_keys.then_some(&mut keys));
-    let (library, n_keys) = (lib.len(), keys.len());
-    let payload = json!({ "agents": agents, "library": lib, "keys": keys });
+    let mcp = crate::mcp::library::export(root, &mut |v| {
+        let fp = key_fingerprint(v);
+        if with_keys {
+            keys.insert(fp.clone(), json!(v));
+        }
+        fp
+    });
+    let (library, n_mcp, n_keys) = (lib.len(), mcp.len(), keys.len());
+    let payload = json!({ "agents": agents, "library": lib, "mcp": mcp, "keys": keys });
     let hash = hex(ring::digest::digest(&ring::digest::SHA256, &serde_json::to_vec(&payload).unwrap_or_default()).as_ref());
-    Built { payload, hash, providers, library, keys: n_keys }
+    Built { payload, hash, providers, library, mcp: n_mcp, keys: n_keys }
 }
 
 fn hex(b: &[u8]) -> String {
@@ -361,7 +371,12 @@ fn export_built(root: &Value, b: Built) -> Result<String> {
         Ok(())
     })?;
     let (agents_n, lib_n) = (trn!(b.providers, "{n} agent provider", "{n} agent providers", "{n} 个 Agent 供应商"), trn!(b.library, "{n} library entry", "{n} library entries", "{n} 个供应商库条目"));
-    let what = tr!("{agents_n} and {lib_n}", "{agents_n}、{lib_n}");
+    let what = if b.mcp == 0 {
+        tr!("{agents_n} and {lib_n}", "{agents_n}、{lib_n}")
+    } else {
+        let mcp_n = trn!(b.mcp, "{n} MCP server", "{n} MCP servers", "{n} 个 MCP 服务器");
+        tr!("{agents_n}, {lib_n} and {mcp_n}", "{agents_n}、{lib_n}、{mcp_n}")
+    };
     let at = display_path(&path);
     Ok(match (pw.is_some(), with_keys) {
         (false, false) => tr!("Exported {what} to {at} (not encrypted, API keys not included)", "已导出{what}到 {at}（未加密，不含 API Key）"),
@@ -697,6 +712,18 @@ pub struct Suggestion {
     /// Draft ops in the frontend's JSON shape, keyed like the frontend draft.
     pub ops: Vec<(String, Value)>,
     pub lib: Option<LibChange>,
+    pub mcp: Option<McpChange>,
+}
+
+/// An MCP library entry the sync file adds or replaces (written directly, like `LibChange`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpChange {
+    /// Stable id of the change (not shown).
+    pub key: String,
+    pub name: String,
+    /// The entry as exported (secrets by fingerprint; the backend looks them up).
+    pub server: Value,
 }
 
 /// The fingerprint of a remote entry's key when the file holds that key.
@@ -728,6 +755,7 @@ fn library_suggestions(remote: &[Value], local: &[LibEntry], keys: &Value) -> Ve
                 title: tr!("Add \"{name}\" to the provider library", "供应商库添加「{name}」"),
                 detail: trn!(models.len(), "{base} · {n} model · {}", "{base} · {n} models · {}", "{base} · {n} 个模型 · {}", key_note(fp.is_some())),
                 ops: vec![],
+                mcp: None,
                 lib: Some(LibChange { key, id: None, name, base_url: base, api, models, key_fp: fp }),
             }),
             Some(e) => {
@@ -748,7 +776,8 @@ fn library_suggestions(remote: &[Value], local: &[LibEntry], keys: &Value) -> Ve
                     title: tr!("Update \"{}\" in the provider library", "更新供应商库里的「{}」", e.name),
                     detail: parts.join(" · "),
                     ops: vec![],
-                    lib: Some(LibChange { key, id: Some(e.id.clone()), name: e.name.clone(), base_url: e.base_url.clone(), api: e.api.clone(), models: missing, key_fp: fp }),
+                    mcp: None,
+                lib: Some(LibChange { key, id: Some(e.id.clone()), name: e.name.clone(), base_url: e.base_url.clone(), api: e.api.clone(), models: missing, key_fp: fp }),
                 });
             }
         }
@@ -776,6 +805,7 @@ fn agent_suggestions(a: &str, remote: &Value, local: &AgentState, keys: &Value) 
                     detail: trn!(ids.len(), "{base} · {n} model · {}", "{base} · {n} models · {}", "{base} · {n} 个模型 · {}", key_note(fp.is_some())),
                     ops: vec![(key, json!({ "op": "upsert_provider", "provider": { "id": null, "name": name, "baseUrl": base, "api": api, "apiKey": null, "models": ids, "keyFromSync": fp } }))],
                     lib: None,
+                    mcp: None,
                 });
             }
             Some(lp) => {
@@ -797,6 +827,7 @@ fn agent_suggestions(a: &str, remote: &Value, local: &AgentState, keys: &Value) 
                         detail: crate::i18n::join(&missing.iter().filter_map(|m| m["id"].as_str()).take(6).collect::<Vec<_>>()),
                         ops,
                         lib: None,
+                        mcp: None,
                     });
                 }
             }
@@ -818,6 +849,7 @@ fn agent_suggestions(a: &str, remote: &Value, local: &AgentState, keys: &Value) 
                 detail: crate::i18n::join(&missing.iter().filter_map(|m| m["id"].as_str()).collect::<Vec<_>>()),
                 ops,
                 lib: None,
+                mcp: None,
             });
         }
     }
@@ -835,12 +867,81 @@ pub fn preview_import(snapshot: Option<&str>) -> Result<Vec<Suggestion>> {
     }
     let keys = &payload["keys"];
     let mut out = library_suggestions(payload["library"].as_array().map(Vec::as_slice).unwrap_or_default(), &library::list(), keys);
+    out.extend(mcp_suggestions(payload["mcp"].as_array().map(Vec::as_slice).unwrap_or_default(), &crate::mcp::library::all(), &|fp| key_in(&payload, fp).ok()));
     for a in adapters::ALL {
         let Some(remote) = payload["agents"].get(a) else { continue };
         let Ok(local) = adapters::state(a) else { continue };
         out.extend(agent_suggestions(a, remote, &local, keys));
     }
     Ok(out)
+}
+
+/// A value the sync file doesn't hold is taken from this machine's entry of the same name
+/// (same env / header name, same argument position), so an update without keys keeps them.
+fn fill_missing(i: &mut crate::mcp::McpInput, local: Option<&crate::mcp::McpInput>) {
+    let Some(l) = local else { return };
+    for (mine, theirs) in [(&mut i.env, &l.env), (&mut i.headers, &l.headers)] {
+        for p in mine.iter_mut().filter(|p| p.value.is_empty()) {
+            if let Some(x) = theirs.iter().find(|x| x.key == p.key) {
+                p.value = x.value.clone();
+            }
+        }
+    }
+    for (n, a) in i.args.iter_mut().enumerate().filter(|(_, a)| a.is_empty()) {
+        if let Some(x) = l.args.get(n) {
+            *a = x.clone();
+        }
+    }
+    if i.url.as_deref() == Some("") {
+        i.url = l.url.clone();
+    }
+}
+
+fn mcp_suggestions(remote: &[Value], local: &[crate::mcp::McpInput], key: &dyn Fn(&str) -> Option<String>) -> Vec<Suggestion> {
+    use crate::mcp::library::{import, sig_of, summary};
+    let mut out = vec![];
+    for r in remote {
+        let (mut i, missing) = import(r, key);
+        if i.name.is_empty() {
+            continue;
+        }
+        let mine = local.iter().find(|l| l.name == i.name);
+        fill_missing(&mut i, mine);
+        if mine.is_some_and(|l| sig_of(l) == sig_of(&i)) {
+            continue;
+        }
+        let note = if missing == 0 {
+            String::new()
+        } else {
+            format!(" · {}", trn!(missing, "{n} secret value must be entered on this device", "{n} secret values must be entered on this device", "{n} 个隐私值需要在本机填写"))
+        };
+        let name = i.name.clone();
+        out.push(Suggestion {
+            agent: library::FROM.into(),
+            title: if mine.is_some() { tr!("Update \"{name}\" in the MCP library", "更新 MCP 库里的「{name}」") } else { tr!("Add \"{name}\" to the MCP library", "MCP 库添加「{name}」") },
+            detail: format!("{}{note}", summary(&i)),
+            ops: vec![],
+            lib: None,
+            mcp: Some(McpChange { key: format!("mcp:{name}"), name, server: r.clone() }),
+        });
+    }
+    out
+}
+
+/// Writes the chosen MCP library changes; values come from the sync file (or its records).
+pub fn adopt_mcp(changes: Vec<McpChange>) -> Result<String> {
+    let local = crate::mcp::library::all();
+    let list: Vec<crate::mcp::McpInput> = changes
+        .iter()
+        .map(|c| {
+            let (mut i, _) = crate::mcp::library::import(&c.server, &|fp| key(fp).ok());
+            let mine = local.iter().find(|l| l.name == i.name);
+            fill_missing(&mut i, mine);
+            i
+        })
+        .collect();
+    crate::mcp::library::put(list)?;
+    Ok(trn!(changes.len(), "Updated {n} MCP library entry", "Updated {n} MCP library entries", "已更新 MCP 库里的 {n} 项"))
 }
 
 /// Writes the chosen library changes (they don't go through a draft: the library is AgentPlus's own).
@@ -1067,7 +1168,7 @@ mod tests {
     }
 
     fn built(payload: Value, hash: &str) -> Built {
-        Built { payload, hash: hash.into(), providers: 0, library: 1, keys: 1 }
+        Built { payload, hash: hash.into(), providers: 0, library: 1, mcp: 0, keys: 1 }
     }
 
     /// A temp home with a sync folder set; returns the folder.
@@ -1174,6 +1275,42 @@ mod tests {
         assert!(status().remote_pending);
         other("2026-09-27T09:00:00+08:00");
         assert!(!status().remote_pending, "older than what was seen");
+    }
+
+    #[test]
+    fn the_mcp_library_travels_with_its_secrets_by_fingerprint() {
+        let h = TestHome::new("sync-mcp");
+        let dir = share(&h);
+        set_password(Some("pass-1234"), false).unwrap();
+        let entry = |cmd: &str| -> crate::mcp::McpInput {
+            serde_json::from_value(json!({ "name": "gh", "transport": "stdio", "command": cmd, "env": [{ "key": "GITHUB_TOKEN", "value": "ghp_0123456789abcdefghijklmnop" }] })).unwrap()
+        };
+        crate::mcp::library::save(entry("npx")).unwrap();
+        assert!(export().unwrap().contains("1 个 MCP 服务器"));
+        let file = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(!file.contains("ghp_0123"));
+        // Another device: an empty library gets the entry, secret included.
+        crate::mcp::library::delete("gh").unwrap();
+        let s: Vec<Suggestion> = preview_import(None).unwrap().into_iter().filter(|s| s.mcp.is_some()).collect();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].title, "MCP 库添加「gh」");
+        assert_eq!(s[0].detail, "npx");
+        adopt_mcp(s.into_iter().map(|s| s.mcp.unwrap()).collect()).unwrap();
+        assert_eq!(crate::mcp::library::all(), vec![entry("npx")]);
+        // Same entry: nothing to do. A different one: an update.
+        assert!(preview_import(None).unwrap().iter().all(|s| s.mcp.is_none()));
+        crate::mcp::library::put(vec![entry("uvx")]).unwrap();
+        let s: Vec<Suggestion> = preview_import(None).unwrap().into_iter().filter(|s| s.mcp.is_some()).collect();
+        assert_eq!(s[0].title, "更新 MCP 库里的「gh」");
+        // Without keys in the file, the value has to be entered; an update keeps this device's.
+        set_include_keys(false).unwrap();
+        crate::mcp::library::put(vec![entry("npx")]).unwrap();
+        export().unwrap();
+        crate::mcp::library::put(vec![entry("uvx")]).unwrap();
+        let s: Vec<Suggestion> = preview_import(None).unwrap().into_iter().filter(|s| s.mcp.is_some()).collect();
+        assert!(s[0].detail.ends_with("1 个隐私值需要在本机填写"), "{}", s[0].detail);
+        adopt_mcp(s.into_iter().map(|s| s.mcp.unwrap()).collect()).unwrap();
+        assert_eq!(crate::mcp::library::all(), vec![entry("npx")]);
     }
 
     #[test]

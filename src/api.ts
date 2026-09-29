@@ -634,13 +634,23 @@ export interface SyncLibChange {
   keyFp: string | null;
 }
 
+/** An MCP library entry the sync file adds or replaces (written directly). */
+export interface SyncMcpChange {
+  /** Stable id of the change. */
+  key: string;
+  name: string;
+  /** The entry as exported; opaque here (secrets by fingerprint, read in the backend). */
+  server: unknown;
+}
+
 export interface SyncSuggestion {
-  /** The agent whose draft gets `ops`, or "library" for a `lib` change. */
+  /** The agent whose draft gets `ops`, or "library" for a `lib` or `mcp` change. */
   agent: AgentId | "library";
   title: string;
   detail: string;
   ops: [string, Op][];
   lib: SyncLibChange | null;
+  mcp: SyncMcpChange | null;
 }
 
 export interface DiffGroup {
@@ -829,6 +839,7 @@ const real = {
   syncSaveKey: (key: string) => invoke<string | null>("sync_save_key", { key }),
   syncSetIncludeKeys: (on: boolean) => invoke<void>("sync_set_include_keys", { on }),
   syncAdoptLibrary: (changes: SyncLibChange[]) => invoke<string>("sync_adopt_library", { changes }),
+  syncAdoptMcp: (changes: SyncMcpChange[]) => invoke<string>("sync_adopt_mcp", { changes }),
   openPath: (path: string) => invoke<void>("open_path", { path }),
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   dismissFixedPrompt: () => invoke<void>("codex_dismiss_fixed_prompt"),
@@ -1156,7 +1167,8 @@ const demo: typeof real = {
   syncPreview: async () => {
     if (demoSync.fileEncrypted && !demoSync.hasPassword) throw new Error("（演示）同步文件已加密，请先填写同步密码");
     return [
-      { agent: "library", title: "（演示）供应商库添加「Relay」", detail: "https://relay.example.com/v1 · 3 个模型 · 含密钥", ops: [], lib: { key: "lib:relay", id: null, name: "Relay", baseUrl: "https://relay.example.com/v1", api: "chat", models: ["glm-5.3"], keyFp: "0123456789" } },
+      { agent: "library", title: "（演示）供应商库添加「Relay」", detail: "https://relay.example.com/v1 · 3 个模型 · 含密钥", ops: [], lib: { key: "lib:relay", id: null, name: "Relay", baseUrl: "https://relay.example.com/v1", api: "chat", models: ["glm-5.3"], keyFp: "0123456789" }, mcp: null },
+      { agent: "library", title: "（演示）MCP 库添加「github」", detail: "HTTP https://api.githubcopilot.com/mcp/", ops: [], lib: null, mcp: { key: "mcp:github", name: "github", server: {} } },
     ];
   },
   syncSetPassword: async (password) => { Object.assign(demoSync, { hasPassword: password != null }); return "（演示）已保存"; },
@@ -1164,6 +1176,7 @@ const demo: typeof real = {
   syncGeneratePassword: async () => "7K3M-QX9A-2PDV-H8WN-5TGE-R4CB-M1ZF-Y6JS",
   syncSetIncludeKeys: async (on) => { demoSync.includeKeys = on; },
   syncAdoptLibrary: async (changes) => `（演示）已更新 ${changes.length} 项`,
+  syncAdoptMcp: async (changes) => `（演示）已更新 MCP 库里的 ${changes.length} 项`,
   openPath: async () => undefined,
   openUrl: async (url) => { window.open(url, "_blank"); },
   dismissFixedPrompt: async () => undefined,

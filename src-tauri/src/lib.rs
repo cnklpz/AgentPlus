@@ -418,6 +418,11 @@ async fn sync_adopt_library(changes: Vec<sync::LibChange>) -> Result<String, Str
 }
 
 #[tauri::command]
+async fn sync_adopt_mcp(changes: Vec<sync::McpChange>) -> Result<String, String> {
+    blocking(move || sync::adopt_mcp(changes)).await
+}
+
+#[tauri::command]
 fn codex_dismiss_fixed_prompt() -> Result<(), String> {
     store::transaction(adapters::codex::dismiss_fixed_prompt).map_err(err)
 }
@@ -859,6 +864,7 @@ pub fn run() {
             sync_save_key,
             sync_set_include_keys,
             sync_adopt_library,
+            sync_adopt_mcp,
             sync_history,
             sync_delete_records,
             sync_set_options,
