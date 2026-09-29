@@ -185,6 +185,8 @@ fn write_atomic(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
         file.write_all(bytes)?;
         #[cfg(unix)]
         file.set_permissions(permissions)?;
+        // Without this a crash or power cut after the rename can leave an empty file behind.
+        file.sync_all()?;
         Ok(())
     })();
     drop(file);
