@@ -24,7 +24,8 @@ export type Tab = "prov" | "models" | "mcp" | "skills" | "plugins" | "sessions" 
 interface Props {
   st: AgentState;
   draft: Draft;
-  setDraft: (d: Draft) => void;
+  /** A function of the current draft after an `await` (see App's `setDraftFor`). */
+  setDraft: (d: Draft | ((cur: Draft) => Draft)) => void;
   latency: Record<string, Latency>;
   onTestAll: () => void;
   onTestOne: (url: string) => void;
@@ -310,7 +311,7 @@ export function AgentPage(props: Props) {
                     if (!ok) return;
                   }
                 }
-                setDraft(setSettingIn(draft, st.settings, s, v));
+                setDraft((d) => setSettingIn(d, st.settings, s, v));
               }}
               notes={fixedPre ? {
                 fixed_id: <div className="set-note">{t("agentPage.fixedPreNote")}</div>,
@@ -425,7 +426,7 @@ interface ModelTableProps {
   /** The same models as read from disk (to tell a real change from an undo). */
   base: Model[];
   draft: Draft;
-  setDraft: (d: Draft) => void;
+  setDraft: (d: Draft | ((cur: Draft) => Draft)) => void;
   readonly: boolean;
   onToggle: (pid: string, m: Model) => void;
   flash: Flash;
@@ -625,7 +626,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                       onClick={async () => {
                         if (m.isNew) return setDraft(withOp(draft, keys.upsertModel(pid, m.id), null));
                         if (!(await ask({ title: t("agentPage.deleteConfirm", { id: m.id }), message: t("agentPage.deleteConfirmMsg"), danger: true }))) return;
-                        setDraft(deleteModel(draft, pid, m.id));
+                        setDraft((d) => deleteModel(d, pid, m.id));
                       }}>
                       <Icon.trash size={12} />
                     </button>

@@ -422,18 +422,26 @@ export default function App() {
 
   /** Drafts being written right now, per agent. */
   const inFlight = useRef<Record<string, Draft>>({});
-  const setDraftFor = (agent: string, d: Draft) => {
+  /** The drafts as they are now: a handler that awaited (a confirm dialog) holds an older `drafts`. */
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  /** Sets an agent's draft. After an `await`, pass a function of the current draft: a value
+   *  computed from the handler's `draft` would bring back ops written meanwhile. */
+  const setDraftFor = (agent: string, next: Draft | ((cur: Draft) => Draft)) => {
     // Undoing a change that is being written would be lost: the file gets it anyway, and
     // afterwards no pending op would be left to show or revert it.
     const sending = inFlight.current[agent];
-    const cur = drafts[agent] ?? {};
+    const cur = draftsRef.current[agent] ?? {};
+    const d = typeof next === "function" ? next(cur) : next;
     if (sending && Object.keys(sending).some((k) => k in cur && cur[k] === sending[k] && !(k in d))) {
       flash(t("app.undoWhileWriting"), true);
       return;
     }
+    // Seen by a second call before the next render, too.
+    draftsRef.current = { ...draftsRef.current, [agent]: d };
     setDrafts((all) => ({ ...all, [agent]: d }));
   };
-  const setDraft = (d: Draft) => setDraftFor(sid, d);
+  const setDraft = (d: Draft | ((cur: Draft) => Draft)) => setDraftFor(sid, d);
 
   // Codex's fixed id is on by default but never a pending change of its own
   // (see opsToWrite). Declining it is remembered by the backend.
@@ -468,7 +476,7 @@ export default function App() {
   const askDeleteProvider = async (p: ViewProvider) => {
     if (!st) return;
     if (!(await ask({ title: t("app.deleteProviderTitle", { name: p.name }), message: t("app.deleteProviderMsg", { agent: st.name }), danger: true }))) return;
-    setDraft(deleteProvider(draft, p.id));
+    setDraftFor(st.id, (d) => deleteProvider(d, p.id));
   };
 
   /** Codex without a catalog: create one from the model list built into Codex. */
@@ -741,7 +749,8 @@ export default function App() {
   const hubRemove = async (u: Use) => {
     if (!u.p) return;
     if (!(await ask({ title: t("app.hubRemoveTitle", { agent: u.agent.name, name: u.p.name }), message: t("app.hubRemoveMsg"), danger: true, confirmText: t("common.remove") }))) return;
-    setDraftFor(u.agent.id, removeProvider(drafts[u.agent.id] ?? {}, u.p));
+    const p = u.p;
+    setDraftFor(u.agent.id, (d) => removeProvider(d, p));
   };
   const hubUndo = (u: Use) => {
     const k = u.importKey ?? (u.state === "new" ? u.p?.draftKey : u.p ? keys.deleteProvider(u.p.id) : undefined);
@@ -1344,7 +1353,7 @@ export default function App() {
           ...attrItems(),
           ...((m.deletable && !m.isDeleted) ? ["sep" as const, { label: t("app.deleteModelMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly, action: async () => {
             if (!(await ask({ title: t("app.deleteModelTitle", { id: mid }), message: t("app.deleteModelMsg"), danger: true }))) return;
-            setDraft(deleteModel(draft, pid, mid));
+            setDraftFor(st.id, (d) => deleteModel(d, pid, mid));
           } }] : []),
           "sep",
         ];
