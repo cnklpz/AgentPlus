@@ -240,8 +240,21 @@ struct Session {
 }
 
 impl Session {
-    fn open(url: &str) -> Result<Self> {
-        let (ws, _) = tungstenite::connect(url)?;
+    /// Connects to a page's WebSocket, which must be on the debug port on this machine (the
+    /// port's answer names it: whatever took the port could name any address). The connect and
+    /// the handshake are bounded too, so a renderer that accepts but never answers can't hang
+    /// a restart.
+    fn open(url: &str, port: u16) -> Result<Self> {
+        let u = url::Url::parse(url)?;
+        let local = matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
+        if u.scheme() != "ws" || !local || u.port() != Some(port) {
+            return Err(anyhow!(tr!("Unexpected debug target address: {url}", "调试目标地址不对：{url}")));
+        }
+        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+        let (ws, _) = tungstenite::client(url, MaybeTlsStream::Plain(stream)).map_err(|e| anyhow!("{e}"))?;
         if let MaybeTlsStream::Plain(s) = ws.get_ref() {
             s.set_read_timeout(Some(Duration::from_millis(400)))?;
         }
@@ -297,7 +310,8 @@ impl Session {
 }
 
 fn page_targets(port: u16) -> Result<Vec<Value>> {
-    let resp = reqwest::blocking::Client::new().get(format!("http://127.0.0.1:{port}/json/list")).timeout(Duration::from_secs(2)).send()?;
+    // Never through a proxy (HTTP_PROXY, the system setting): it would ask the proxy for its own loopback.
+    let resp = reqwest::blocking::Client::builder().no_proxy().build()?.get(format!("http://127.0.0.1:{port}/json/list")).timeout(Duration::from_secs(2)).send()?;
     let v: Value = serde_json::from_str(&resp.text()?)?;
     Ok(v.as_array()
         .cloned()
@@ -508,7 +522,7 @@ pub fn inject(port: u16, port_wait: Duration, want: Patches, on: &dyn Fn(Progres
         on(Progress::step("patch", "active", Some(tr!("Window {}/{}", "窗口 {}/{}", i + 1, total))));
         let url = page["url"].as_str().unwrap_or_default();
         let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("Debug target has no WebSocket URL", "调试目标缺少 WebSocket 地址")))?;
-        let mut s = Session::open(ws)?;
+        let mut s = Session::open(ws, port)?;
         // A secondary window (overlay, detached) only ever loads what it has already: reload it
         // just for those, and not at all without any. Waiting for the rest took 5-10 s each.
         // The main window may not have imported app-primary yet, so it waits for both.
