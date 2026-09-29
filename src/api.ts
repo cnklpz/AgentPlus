@@ -513,7 +513,10 @@ export interface McpInput {
 }
 
 /** How an agent comes to read a skills folder. */
-export type SkillKind = "own" | "shared" | "compat" | "extra" | "builtin";
+export type SkillKind = "own" | "shared" | "compat" | "extra" | "builtin" | "off" | "library";
+
+/** What copying a skill did ("exists": another version is there, nothing was written). */
+export type SkillCopied = "added" | "replaced" | "same" | "exists";
 
 /** One skill folder (with a SKILL.md). */
 export interface SkillCopy {
@@ -583,7 +586,8 @@ export interface BackupEntry {
   stamp: string;
   agent: string;
   reason: string;
-  files: { name: string; path: string | null }[];
+  /** `dir`: a whole folder (a skill). */
+  files: { name: string; path: string | null; dir: boolean }[];
   bytes: number;
   restorable: boolean;
   /** Why it can't be rolled back automatically (original file gone, database backup…). */
@@ -603,6 +607,8 @@ export interface BackupDiffRow {
 export interface BackupFileDetail {
   name: string;
   path: string | null;
+  /** A whole folder: compared as a whole, no diff. */
+  dir: boolean;
   backupBytes: number;
   currentBytes: number | null;
   currentModified: string | null;
@@ -875,6 +881,11 @@ const real = {
   guessModels: (agent: string, ids: string[]) => invoke<Record<string, ModelGuess>>("guess_models", { agent, ids }),
   /** The skills folders these agents read, with their skills. */
   skillsList: (agents: AgentId[]) => invoke<SkillsOverview>("skills_list", { agents }),
+  /** Copies a skill folder into a skills folder (`replace`: overwrite another version, backed up). */
+  skillsCopy: (from: string, to: string, replace: boolean) => invoke<SkillCopied>("skills_copy", { from, to, replace }),
+  /** Deletes a skill folder (backed up first). */
+  skillsDelete: (dir: string) => invoke<void>("skills_delete", { dir }),
+  skillsSetEnabled: (agent: AgentId, name: string, dir: string, on: boolean) => invoke<void>("skills_set_enabled", { agent, name, dir, on }),
   /** Global MCP servers of these agents, and the MCP library (secrets masked). */
   mcpList: (agents: AgentId[]) => invoke<McpOverview>("mcp_list", { agents }),
   mcpLibrarySave: (server: McpInput) => invoke<void>("mcp_library_save", { server }),
@@ -1191,6 +1202,9 @@ const demo: typeof real = {
     ];
     return { roots, agents: agents.map((agent) => ({ agent, supported: agent !== "pi", roots: roots.filter((r) => r.readers.includes(agent)).map((r) => r.path), disabled: agent === "zcode" ? ["frontend-design"] : [], switchable: true })) };
   },
+  skillsCopy: async () => "added",
+  skillsDelete: async () => undefined,
+  skillsSetEnabled: async () => undefined,
   mcpLibrarySave: async () => undefined,
   mcpLibraryDelete: async () => undefined,
   mcpProbe: async (_source, name) => {
@@ -1203,15 +1217,15 @@ const demo: typeof real = {
     return Object.entries(v.mcpServers ?? {}).map(([name, d]): McpInput => ({ name, transport: d.url ? "http" : "stdio", command: d.command ?? null, args: d.args ?? [], cwd: null, url: d.url ?? null, env: [], headers: [], enabled: true }));
   },
   listBackups: async () => [
-    { id: "20260923-140512/codex", stamp: "20260923-140512", agent: "codex", reason: "应用配置", files: [{ name: "config.toml", path: "C:\\Users\\me\\.codex\\config.toml" }], bytes: 10240, restorable: true, blocked: null, blockedMissing: false },
-    { id: "20260923-131201/zcode", stamp: "20260923-131201", agent: "zcode", reason: "应用配置", files: [{ name: "provider_config.json", path: "C:\\Users\\me\\.zcode\\v2\\provider_config.json" }], bytes: 19329, restorable: true, blocked: null, blockedMissing: false },
+    { id: "20260923-140512/codex", stamp: "20260923-140512", agent: "codex", reason: "应用配置", files: [{ name: "config.toml", path: "C:\\Users\\me\\.codex\\config.toml", dir: false }], bytes: 10240, restorable: true, blocked: null, blockedMissing: false },
+    { id: "20260923-131201/zcode", stamp: "20260923-131201", agent: "zcode", reason: "应用配置", files: [{ name: "provider_config.json", path: "C:\\Users\\me\\.zcode\\v2\\provider_config.json", dir: false }], bytes: 19329, restorable: true, blocked: null, blockedMissing: false },
   ],
   backupDetail: async (id) => ({
     id, dir: `~/.agentplus/backups/${id}`, time: "2026-09-23T14:05:12+08:00",
     files: [{
       name: id.endsWith("zcode") ? "provider_config.json" : "config.toml",
       path: id.endsWith("zcode") ? "C:\\Users\\me\\.zcode\\v2\\provider_config.json" : "C:\\Users\\me\\.codex\\config.toml",
-      backupBytes: 10240, currentBytes: 10388, currentModified: "2026-09-23 14:05:12", same: false, binary: false, added: 3, removed: 1, truncated: false,
+      dir: false, backupBytes: 10240, currentBytes: 10388, currentModified: "2026-09-23 14:05:12", same: false, binary: false, added: 3, removed: 1, truncated: false,
       diff: [
         { kind: "…", text: "12 行未变", old: null, new: null },
         { kind: " ", text: "[model_providers.work]", old: 13, new: 13 },

@@ -305,6 +305,24 @@ async fn skills_list(agents: Vec<String>) -> Result<skills::Overview, String> {
     blocking(move || Ok(skills::overview(&agents))).await
 }
 
+/// Copies a skill folder into a skills folder; `replace` overwrites one with other files.
+#[tauri::command]
+async fn skills_copy(from: String, to: String, replace: bool) -> Result<skills::write::Copied, String> {
+    blocking(move || skills::write::copy(&from, &to, replace)).await
+}
+
+/// Deletes a skill folder (backed up first).
+#[tauri::command]
+async fn skills_delete(dir: String) -> Result<(), String> {
+    blocking(move || skills::write::delete(&dir)).await
+}
+
+/// Switches a skill off or on for one agent.
+#[tauri::command]
+async fn skills_set_enabled(agent: String, name: String, dir: String, on: bool) -> Result<(), String> {
+    blocking(move || store::transaction(|| skills::write::set_enabled(&agent, &name, &dir, on))).await
+}
+
 /// Global MCP servers of these agents and the MCP library, secrets masked.
 #[tauri::command]
 async fn mcp_list(agents: Vec<String>) -> Result<mcp::Overview, String> {
@@ -862,6 +880,9 @@ pub fn run() {
             fetch_models_lib,
             guess_models,
             skills_list,
+            skills_copy,
+            skills_delete,
+            skills_set_enabled,
             mcp_list,
             mcp_library_save,
             mcp_library_delete,

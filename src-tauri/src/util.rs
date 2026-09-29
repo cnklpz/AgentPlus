@@ -300,7 +300,33 @@ pub fn backup(agent: &str, files: &[PathBuf]) -> Result<PathBuf> {
 }
 
 pub fn backup_tagged(agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
-    backup_in(&agentplus_dir().join("backups"), agent, files, reason)
+    backup_in(&agentplus_dir().join("backups"), agent, files, &[], reason)
+}
+
+/// `backup_tagged` that also keeps whole folders (a skill): each is copied into the backup
+/// and recorded with `"dir": true`, so a rollback puts the folder back even after it's gone.
+pub fn backup_with_dirs(agent: &str, files: &[PathBuf], dirs: &[PathBuf], reason: &str) -> Result<PathBuf> {
+    backup_in(&agentplus_dir().join("backups"), agent, files, dirs, reason)
+}
+
+/// Copies a folder and everything in it (the target is created).
+pub fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to).with_context(|| tr!("Failed to create {}", "创建 {} 失败", to.display()))?;
+    for e in fs::read_dir(from).with_context(|| tr!("Failed to read {}", "读取 {} 失败", from.display()))? {
+        let e = e?;
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if src.is_dir() {
+            copy_dir(&src, &dst)?;
+        } else {
+            fs::copy(&src, &dst).with_context(|| tr!("Failed to copy {}", "复制 {} 失败", src.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Bytes in a folder, all levels down.
+pub fn dir_size(p: &Path) -> u64 {
+    fs::read_dir(p).map(|rd| rd.flatten().map(|e| if e.path().is_dir() { dir_size(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) }).sum()).unwrap_or(0)
 }
 
 /// A new, empty `~/.agentplus/backups/<stamp>/<agent>/` folder.
@@ -324,10 +350,17 @@ fn new_dir_in(root: &Path, agent: &str) -> Result<PathBuf> {
     Err(anyhow::anyhow!(tr!("Failed to create a backup folder: too many backups in one second under {}", "创建备份目录失败：{} 下同一秒的备份太多", root.display())))
 }
 
-fn backup_in(root: &Path, agent: &str, files: &[PathBuf], reason: &str) -> Result<PathBuf> {
+fn backup_in(root: &Path, agent: &str, files: &[PathBuf], dirs: &[PathBuf], reason: &str) -> Result<PathBuf> {
     let dir = new_dir_in(root, agent)?;
     let mut entries = vec![];
     let mut used: Vec<String> = vec!["manifest.json".into()];
+    for d in dirs.iter().filter(|d| d.is_dir()) {
+        let base = d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "folder".into());
+        let name = (1..).map(|n| if n == 1 { base.clone() } else { format!("{n}-{base}") }).find(|n| !used.contains(n)).unwrap();
+        copy_dir(d, &dir.join(&name)).with_context(|| tr!("Failed to back up {}", "备份 {} 失败", d.display()))?;
+        entries.push(serde_json::json!({ "name": name, "path": d.to_string_lossy(), "dir": true }));
+        used.push(name);
+    }
     for f in files {
         if f.exists() {
             let base = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "file".into());
@@ -837,7 +870,7 @@ mod tests {
         }
         let root = d.join("backups");
         let gone = d.join("gone.json");
-        let first = backup_in(&root, "openclaw", &[a.clone(), b.clone(), gone], "t").unwrap();
+        let first = backup_in(&root, "openclaw", &[a.clone(), b.clone(), gone], &[], "t").unwrap();
         let m: serde_json::Value = serde_json::from_str(&fs::read_to_string(first.join("manifest.json")).unwrap()).unwrap();
         let files = m["files"].as_array().unwrap();
         assert_eq!(files.len(), 2, "missing files are skipped");
@@ -847,7 +880,7 @@ mod tests {
         }
         assert_ne!(files[0]["name"], files[1]["name"]);
         // A second backup in the same second gets its own folder.
-        let second = backup_in(&root, "openclaw", &[a], "t").unwrap();
+        let second = backup_in(&root, "openclaw", &[a], &[], "t").unwrap();
         assert_ne!(first, second);
         assert!(first.join("manifest.json").exists() && second.join("manifest.json").exists());
         let _ = fs::remove_dir_all(&d);

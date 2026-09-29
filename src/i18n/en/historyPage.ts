@@ -2,6 +2,9 @@
 export default {
   agentCodexCleanup: "Codex cleanup",
   agentCodexRepair: "Codex session repair",
+  agentSkills: "Skills",
+  folderGone: "Folder deleted; rolling back puts it back",
+  folderChanged: "Folder changed since",
   fileGone: "Original file no longer exists",
   noAutoRollback: "Automatic rollback not supported",
   rollingBack: "Rolling back…",

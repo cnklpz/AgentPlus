@@ -4,6 +4,9 @@ import type en from "../en/historyPage";
 const zh: typeof en = {
   agentCodexCleanup: "Codex 清理",
   agentCodexRepair: "Codex 会话修复",
+  agentSkills: "技能",
+  folderGone: "文件夹已删除，回滚会放回原处",
+  folderChanged: "文件夹之后有改动",
   fileGone: "原文件已不存在",
   noAutoRollback: "不支持自动回滚",
   rollingBack: "回滚中…",

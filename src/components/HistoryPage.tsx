@@ -13,6 +13,7 @@ import { agentLabel } from "../services";
 const JOBS: Record<string, TKey> = {
   "codex-cleanup": "historyPage.agentCodexCleanup",
   "codex-repair": "historyPage.agentCodexRepair",
+  skills: "historyPage.agentSkills",
 };
 
 function agentName(id: string): string {
@@ -170,6 +171,7 @@ function HistoryDetail({ b, onClose, actions }: { b: BackupEntry; onClose: () =>
 
 function FileDiff({ f }: { f: BackupFileDetail }) {
   const status = f.same ? t("historyPage.sameAsNow")
+    : f.dir ? (f.currentBytes == null ? t("historyPage.folderGone") : t("historyPage.folderChanged"))
     : f.currentBytes == null ? t("historyPage.fileGone")
     : f.binary ? t("historyPage.binary")
     : `+${f.added} −${f.removed}`;

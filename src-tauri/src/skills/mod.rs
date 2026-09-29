@@ -18,8 +18,9 @@
 //! - Hermes: `HERMES_HOME/skills` (in category folders), then `skills.external_dirs`.
 
 mod scan;
+pub mod write;
 
-pub use scan::SkillCopy;
+pub use scan::{content, SkillCopy};
 
 use crate::adapters::{self, claude, codebuddy, codex, droid, dsh, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
 use crate::util::{display_path, home, read_text, strip_jsonc};
@@ -41,6 +42,10 @@ pub enum Kind {
     Extra,
     /// Skills the agent ships (read-only).
     Builtin,
+    /// Skills AgentPlus moved out of an agent's own folder to switch them off.
+    Off,
+    /// The AgentPlus skill library.
+    Library,
 }
 
 /// A skills folder and the agents that read it.
@@ -75,6 +80,11 @@ pub struct AgentSkills {
 pub struct Overview {
     pub roots: Vec<SkillRoot>,
     pub agents: Vec<AgentSkills>,
+}
+
+/// The AgentPlus skill library: skill folders kept by AgentPlus, to copy into agents.
+pub fn library_dir() -> PathBuf {
+    crate::util::agentplus_dir().join("skills-library")
 }
 
 fn shared() -> PathBuf {
@@ -283,9 +293,18 @@ pub fn overview(agents: &[String]) -> Overview {
             .filter(|r| keys.contains(&r.path))
             .flat_map(|r| r.skills.iter().map(|s| (format!("{}/SKILL.md", crate::env::resolve_path(&s.dir).to_string_lossy()), s.name.clone())))
             .collect();
-        let (switchable, off) = disabled(a, &copies);
+        let (switchable, mut off) = disabled(a, &copies);
+        // Without a switch of its own: what AgentPlus moved out of its folder.
+        let parked = write::off_dir(a);
+        if !switchable && parked.is_dir() {
+            let skills = scan::scan(&parked, depth(a));
+            off.extend(skills.iter().map(|s| s.name.clone()));
+            found.push(SkillRoot { path: display_path(&parked), kind: Kind::Off, exists: true, owner: Some(a.clone()), readers: vec![], skills });
+        }
         out.push(AgentSkills { agent: a.clone(), supported: true, roots: keys, disabled: off, switchable });
     }
+    let lib = library_dir();
+    found.push(SkillRoot { path: display_path(&lib), kind: Kind::Library, exists: lib.is_dir(), owner: None, readers: vec![], skills: scan::scan(&lib, 1) });
     Overview { roots: found, agents: out }
 }
 

@@ -2,12 +2,14 @@ import { useMemo, useState } from "react";
 import { type AgentId, type AgentState, type SkillCopy, type SkillKind, type SkillRoot, type SkillsOverview, api } from "../api";
 import { type TKey, t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
-import { ErrorBox, Seg } from "./controls";
+import { ErrorBox, Seg, Switch } from "./controls";
+import { ask } from "./Confirm";
+import { Modal } from "./Modal";
 import { useLoad } from "../hooks";
 import { fmtSize } from "../format";
 import { scrub } from "../privacy";
 import { agentLabel } from "../services";
-import { onActivateKey } from "../util";
+import { errText, type Flash, onActivateKey } from "../util";
 
 /** One copy of a skill: the folder it sits in, and the skill. */
 interface Copy {
@@ -34,7 +36,12 @@ const KIND: Record<SkillKind, TKey> = {
   compat: "skillsPage.kindCompat",
   extra: "skillsPage.kindExtra",
   builtin: "skillsPage.kindBuiltin",
+  off: "skillsPage.kindOff",
+  library: "skillsPage.kindLibrary",
 };
+
+/** Folders AgentPlus can write to (and delete from). */
+const writable = (r: SkillRoot) => r.kind === "own" || r.kind === "shared" || r.kind === "extra" || r.kind === "library";
 
 /** The copy of `name` an agent loads: the first of its folders that has one. */
 function loaded(o: SkillsOverview, agent: AgentId, name: string): SkillRoot | undefined {
@@ -46,9 +53,11 @@ function loaded(o: SkillsOverview, agent: AgentId, name: string): SkillRoot | un
   return undefined;
 }
 
+const isOff = (o: SkillsOverview, agent: AgentId, c: Copy) => !!o.agents.find((x) => x.agent === agent)?.disabled.some((d) => d === c.s.name || d === c.s.id);
+
 function seenBy(o: SkillsOverview, agent: AgentId, c: Copy): Seen {
   if (loaded(o, agent, c.s.name) !== c.root) return "shadowed";
-  return o.agents.find((x) => x.agent === agent)?.disabled.some((d) => d === c.s.name || d === c.s.id) ? "disabled" : "active";
+  return isOff(o, agent, c) ? "disabled" : "active";
 }
 
 function groups(o: SkillsOverview): Group[] {
@@ -60,6 +69,8 @@ function groups(o: SkillsOverview): Group[] {
       agent,
       off: !!o.agents.find((x) => x.agent === agent)?.disabled.some((d) => d === name || copies.some((c) => c.s.id === d)),
     }));
+    // Moved out by AgentPlus: the agent that owns the stash, switched off.
+    for (const c of copies) if (c.root.kind === "off" && c.root.owner && !agents.some((x) => x.agent === c.root.owner)) agents.push({ agent: c.root.owner, off: true });
     return {
       name,
       copies,
@@ -74,7 +85,7 @@ function groups(o: SkillsOverview): Group[] {
 type Filter = "mine" | "builtin" | "all";
 const FILTERS: [Filter, TKey][] = [["mine", "skillsPage.filterMine"], ["builtin", "skillsPage.filterBuiltin"], ["all", "skillsPage.filterAll"]];
 
-export function SkillsPage({ agents }: { agents: AgentState[] }) {
+export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Flash }) {
   const lang = useLang();
   const ids = useMemo(() => agents.map((a) => a.id).filter((id) => !id.includes("@")), [agents]);
   // Problems come from the backend in the UI language; `agents` changes after every apply.
@@ -82,11 +93,33 @@ export function SkillsPage({ agents }: { agents: AgentState[] }) {
   const [sel, setSel] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("mine");
   const [q, setQ] = useState("");
+  const [copying, setCopying] = useState<Copy | null>(null);
   const all = useMemo(() => (data ? groups(data) : []), [data]);
   const query = q.trim().toLowerCase();
   const list = all.filter((g) => (filter === "all" || (filter === "builtin") === g.builtin)
     && (!query || g.name.toLowerCase().includes(query) || g.copies.some((c) => c.s.description.toLowerCase().includes(query))));
   const picked = all.find((g) => g.name === sel) ?? null;
+
+  const run = async (p: Promise<unknown>, done?: string) => {
+    try {
+      await p;
+      if (done) flash(done);
+    } catch (e) {
+      flash(errText(e), true);
+    }
+    await reload();
+  };
+  const remove = async (c: Copy) => {
+    const users = c.root.readers.filter((a) => data && loaded(data, a, c.s.name) === c.root).map(agentLabel);
+    const ok = await ask({
+      title: t("skillsPage.deleteTitle", { name: c.s.name }),
+      message: `${t("skillsPage.deleteMessage", { dir: scrub(c.s.dir) })}${users.length ? ` ${t("skillsPage.deleteUsers", { agents: users.join("、") })}` : ""}`,
+      confirmText: t("common.delete"),
+      danger: true,
+    });
+    if (ok) await run(api.skillsDelete(c.s.dir), t("skillsPage.deleted", { name: c.s.name }));
+  };
+  const toggle = (agent: AgentId, c: Copy, on: boolean) => run(api.skillsSetEnabled(agent, c.s.name, c.s.dir, on));
 
   return (
     <>
@@ -113,13 +146,14 @@ export function SkillsPage({ agents }: { agents: AgentState[] }) {
             <div className="stable">
               {list.map((g) => {
                 const on = sel === g.name;
-                const toggle = () => setSel(on ? null : g.name);
+                const pick = () => setSel(on ? null : g.name);
                 return (
-                  <div key={g.name} className={`hrow pick${on ? " on" : ""}`} role="button" tabIndex={0} aria-pressed={on} onClick={toggle} onKeyDown={onActivateKey(toggle)}>
+                  <div key={g.name} className={`hrow pick${on ? " on" : ""}`} role="button" tabIndex={0} aria-pressed={on} onClick={pick} onKeyDown={onActivateKey(pick)}>
                     <div className="minw0">
                       <div className="row gap6">
                         <span className="strong small">{g.name}</span>
                         {g.builtin && <span className="ptag tag-soft">{t("skillsPage.kindBuiltin")}</span>}
+                        {g.copies.some((c) => c.root.kind === "library") && <span className="ptag tag-soft">{t("skillsPage.kindLibrary")}</span>}
                         {g.differs && <span className="ptag tag-warn" title={t("skillsPage.differsTitle")}>{t("skillsPage.differs")}</span>}
                         {g.problem && <span className="ptag tag-warn" title={t("skillsPage.problemTitle")}>{t("skillsPage.problem")}</span>}
                       </div>
@@ -140,8 +174,11 @@ export function SkillsPage({ agents }: { agents: AgentState[] }) {
         </div>
       </main>
       <aside className="aside" aria-label={t("skillsPage.detailTitle")}>
-        {picked && data ? <SkillDetail key={picked.name} g={picked} o={data} onClose={() => setSel(null)} /> : <Overview o={data} count={all.filter((g) => !g.builtin).length} />}
+        {picked && data
+          ? <SkillDetail key={picked.name} g={picked} o={data} onClose={() => setSel(null)} onCopy={setCopying} onDelete={(c) => void remove(c)} onToggle={(a, c, on) => void toggle(a, c, on)} />
+          : <Overview o={data} count={all.filter((g) => !g.builtin).length} />}
       </aside>
+      {copying && data && <CopyDialog c={copying} o={data} flash={flash} onClose={() => setCopying(null)} onDone={() => void reload()} />}
     </>
   );
 }
@@ -178,45 +215,152 @@ function Overview({ o, count }: { o: SkillsOverview | null; count: number }) {
   );
 }
 
-function SkillDetail({ g, o, onClose }: { g: Group; o: SkillsOverview; onClose: () => void }) {
+/** Why an agent's switch for this copy can't be used (null = it can). */
+function lockedReason(o: SkillsOverview, agent: AgentId, c: Copy): string | null {
+  const a = o.agents.find((x) => x.agent === agent);
+  if (!a || a.switchable || c.root.kind === "off") return null;
+  return c.root.kind === "own" && c.root.owner === agent ? null : t("skillsPage.noSwitch", { agent: agentLabel(agent) });
+}
+
+function SkillDetail({ g, o, onClose, onCopy, onDelete, onToggle }: {
+  g: Group;
+  o: SkillsOverview;
+  onClose: () => void;
+  onCopy: (c: Copy) => void;
+  onDelete: (c: Copy) => void;
+  onToggle: (agent: AgentId, c: Copy, on: boolean) => void;
+}) {
   return (
     <section className="aside-cur mcp-scroll">
       <div className="row between">
         <div className="minw0">
           <h2 className="ellipsis">{g.name}</h2>
-          <span className="tiny muted">{tn("skillsPage.inAgents", g.agents.length)}</span>
+          <span className="tiny muted">{tn("skillsPage.inAgents", g.agents.filter((a) => !a.off).length)}</span>
         </div>
         <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={onClose}><Icon.close /></button>
       </div>
       {g.differs && <span className="tiny warn-text">{t("skillsPage.differsHint")}</span>}
-      {g.copies.map((c) => (
-        <div key={c.s.dir} className="mcp-variant">
-          <div className="row gap6">
-            <span className="ptag tag-soft">{t(KIND[c.root.kind])}</span>
-            {c.root.owner && c.root.kind === "own" && <span className="tiny muted">{agentLabel(c.root.owner)}</span>}
+      {g.copies.map((c) => {
+        // The copy's agents: the ones reading its folder, or the owner of a stash.
+        const agents = c.root.kind === "off" && c.root.owner ? [c.root.owner] : c.root.readers;
+        return (
+          <div key={c.s.dir} className="mcp-variant">
+            <div className="row between">
+              <div className="row gap6">
+                <span className="ptag tag-soft">{t(KIND[c.root.kind])}</span>
+                {c.root.owner && c.root.kind === "own" && <span className="tiny muted">{agentLabel(c.root.owner)}</span>}
+              </div>
+              <div className="row gap6">
+                {c.root.kind !== "off" && <button className="btn small" onClick={() => onCopy(c)}><Icon.copy size={12} />{t("skillsPage.copyTo")}</button>}
+                {writable(c.root) && (
+                  <button className="icon-btn sm" aria-label={t("skillsPage.delete")} title={t("skillsPage.delete")} onClick={() => onDelete(c)}><Icon.trash size={12} /></button>
+                )}
+              </div>
+            </div>
+            {c.s.description && <span className="small skills-desc">{c.s.description}</span>}
+            {c.s.problem && <span className="tiny warn-text">{c.s.problem}</span>}
+            <div className="kv">
+              <div className="kv-row"><span className="tiny muted">{t("skillsPage.folder")}</span><span className="mono tiny mcp-wrap">{scrub(c.s.dir)}</span></div>
+              <div className="kv-row"><span className="tiny muted">{t("skillsPage.content")}</span><span className="tiny">{tn("skillsPage.fileCount", c.s.files, { size: fmtSize(c.s.bytes) })}</span></div>
+            </div>
+            {agents.length > 0 && (
+              <div className="mcp-holders">
+                {agents.map((a) => {
+                  const seen: Seen = c.root.kind === "off" ? "disabled" : seenBy(o, a, c);
+                  const winner = seen === "shadowed" ? loaded(o, a, c.s.name) : undefined;
+                  const why = seen === "shadowed" ? null : lockedReason(o, a, c);
+                  return (
+                    <div key={a} className={`mcp-holder${seen === "active" ? "" : " off"}`}>
+                      <AgentIcon id={a} size={16} />
+                      <span className="tiny grow minw0 ellipsis">
+                        {agentLabel(a)} <span className="muted">· {seen === "shadowed" ? t("skillsPage.shadowed", { path: scrub(winner?.path ?? "") }) : c.root.kind === "off" ? t("skillsPage.parked") : t(seen === "disabled" ? "skillsPage.off" : "skillsPage.on")}</span>
+                      </span>
+                      {seen !== "shadowed" && (
+                        <span title={why ?? undefined}>
+                          <Switch on={seen === "active"} disabled={!!why} onChange={(on) => onToggle(a, c, on)} label={t("skillsPage.toggleIn", { agent: agentLabel(a) })} />
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          {c.s.description && <span className="small skills-desc">{c.s.description}</span>}
-          {c.s.problem && <span className="tiny warn-text">{c.s.problem}</span>}
-          <div className="kv">
-            <div className="kv-row"><span className="tiny muted">{t("skillsPage.folder")}</span><span className="mono tiny mcp-wrap">{scrub(c.s.dir)}</span></div>
-            <div className="kv-row"><span className="tiny muted">{t("skillsPage.content")}</span><span className="tiny">{tn("skillsPage.fileCount", c.s.files, { size: fmtSize(c.s.bytes) })}</span></div>
-          </div>
-          <div className="mcp-holders">
-            {c.root.readers.map((a) => {
-              const seen = seenBy(o, a, c);
-              const winner = seen === "shadowed" ? loaded(o, a, c.s.name) : undefined;
-              return (
-                <div key={a} className={`mcp-holder${seen === "active" ? "" : " off"}`}>
-                  <AgentIcon id={a} size={16} />
-                  <span className="tiny grow minw0 ellipsis">
-                    {agentLabel(a)} <span className="muted">· {seen === "shadowed" ? t("skillsPage.shadowed", { path: scrub(winner?.path ?? "") }) : t(seen === "disabled" ? "skillsPage.off" : "skillsPage.on")}</span>
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </section>
+  );
+}
+
+/** Where a copy can go: the shared folder first (most agents read it), the library, then
+ *  each agent's own folder. */
+function targetsFor(o: SkillsOverview): SkillRoot[] {
+  const shared = o.roots.filter((r) => r.kind === "shared" && r.readers.length > 1);
+  const lib = o.roots.filter((r) => r.kind === "library");
+  const own = o.agents.flatMap((a) => {
+    const r = a.roots.map((p) => o.roots.find((x) => x.path === p)).find((x) => x?.kind === "own" && x.owner === a.agent);
+    return r ? [r] : [];
+  });
+  return [...shared, ...lib, ...own.filter((r, i) => own.indexOf(r) === i)];
+}
+
+function CopyDialog({ c, o, flash, onClose, onDone }: { c: Copy; o: SkillsOverview; flash: Flash; onClose: () => void; onDone: () => void }) {
+  const folder = c.s.dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? c.s.name;
+  const targets = targetsFor(o).filter((r) => r.path !== c.root.path);
+  const there = (r: SkillRoot) => r.skills.find((s) => s.id === folder || s.name === c.s.name);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const go = async () => {
+    setBusy(true);
+    setErr(null);
+    let added = 0;
+    try {
+      for (const r of targets.filter((x) => picked.has(x.path))) {
+        const got = await api.skillsCopy(c.s.dir, r.path, true);
+        if (got !== "same") added++;
+      }
+      flash(tn("skillsPage.copied", added, { name: c.s.name }));
+      onDone();
+      onClose();
+    } catch (e) {
+      setErr(errText(e));
+      setBusy(false);
+      onDone();
+    }
+  };
+
+  const foot = (
+    <>
+      <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+      <button className="btn primary" disabled={busy || picked.size === 0} onClick={() => void go()}>{busy ? t("common.writing") : t("skillsPage.copy")}</button>
+    </>
+  );
+  return (
+    <Modal label={t("skillsPage.copyTitle", { name: c.s.name })} title={t("skillsPage.copyTitle", { name: c.s.name })} onClose={onClose} busy={busy} foot={foot}>
+      <span className="tiny muted">{t("skillsPage.copyFrom", { dir: scrub(c.s.dir) })}</span>
+      <div className="agent-picks skills-targets">
+        {targets.map((r) => {
+          const ex = there(r);
+          const same = ex?.sig === c.s.sig;
+          return (
+            <label key={r.path} className={`apick${picked.has(r.path) && !same ? " on" : ""}${same ? " dim" : ""}`}>
+              <input type="checkbox" disabled={same} checked={picked.has(r.path) && !same}
+                onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(r.path)) n.delete(r.path); else n.add(r.path); return n; })} />
+              {r.kind === "library" ? <Icon.layers size={16} /> : r.kind === "shared" ? <Icon.folder size={16} /> : <AgentIcon id={r.owner!} size={18} />}
+              <span className="minw0">
+                <span className="small block">{r.kind === "shared" ? t("skillsPage.sharedTarget", { n: r.readers.length }) : r.kind === "library" ? t("skillsPage.kindLibrary") : agentLabel(r.owner!)}</span>
+                <span className="mono tiny muted block ellipsis">{scrub(r.path)}</span>
+              </span>
+              {same && <span className="tiny muted">{t("skillsPage.alreadyThere")}</span>}
+              {ex && !same && <span className="tiny warn-text">{t("skillsPage.willReplace")}</span>}
+            </label>
+          );
+        })}
+      </div>
+      <em className="muted tiny hint">{t("skillsPage.copyHint")}</em>
+      {err && <ErrorBox text={err} />}
+    </Modal>
   );
 }

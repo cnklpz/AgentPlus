@@ -688,6 +688,8 @@ button, input, textarea, select { font-family: inherit; }
 .skills-readers { display: inline-flex; gap: 3px; flex-wrap: wrap; }
 .skills-overview .kv-row.dim { opacity: .55; }
 .skills-desc { color: var(--ink2); line-height: 1.5; }
+.skills-targets { flex-direction: column; }
+.skills-targets .apick { width: 100%; }
 .mcp-variant { display: flex; flex-direction: column; gap: 8px; }
 .mcp-variant + .mcp-variant { padding-top: 12px; border-top: 1px dashed var(--line2); }
 .mcp-wrap, .mcp-pair { overflow-wrap: anywhere; }

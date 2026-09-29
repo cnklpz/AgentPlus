@@ -1517,7 +1517,7 @@ export default function App() {
           <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash} link={mcpLink}
             onApplyAll={applyAll} onDiscard={(a) => (a ? setDraftFor(a, {}) : setDrafts({}))} />
         )}
-        {page === "skills" && <SkillsPage agents={listed} />}
+        {page === "skills" && <SkillsPage agents={listed} flash={flash} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "settings" && (

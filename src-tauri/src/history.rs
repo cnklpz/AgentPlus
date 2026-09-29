@@ -31,6 +31,8 @@ pub struct BackupEntry {
 pub struct BackupFile {
     pub name: String,
     pub path: Option<String>,
+    /// A whole folder (a skill), not a file.
+    pub dir: bool,
     /// A snapshot of one environment's profiles, never the entire shared store.
     #[serde(skip)]
     profile_scope: Option<String>,
@@ -62,6 +64,9 @@ fn root() -> PathBuf {
 pub const REASON_APPLY: (&str, &str) = ("Apply config", "应用配置");
 pub const REASON_OFFICIAL: (&str, &str) = ("Before fetching official model list", "获取官方模型列表前");
 pub const REASON_BUILTIN: (&str, &str) = ("Before using Codex's built-in model list", "使用 Codex 内置模型列表前");
+pub const REASON_SKILL_DELETE: (&str, &str) = ("Before deleting a skill", "删除技能前");
+pub const REASON_SKILL_REPLACE: (&str, &str) = ("Before replacing a skill", "替换技能前");
+pub const REASON_SKILL_SWITCH: (&str, &str) = ("Before switching a skill", "开关技能前");
 const REASON_CLEANUP: (&str, &str) = ("Codex cleanup", "Codex 清理");
 const REASON_REPAIR: (&str, &str) = ("Session repair", "会话修复");
 
@@ -96,14 +101,16 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
     let mut bytes = 0;
     for e in fs::read_dir(agent_dir).ok()?.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        if name == "manifest.json" || e.path().is_dir() {
-            continue;
-        }
-        bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
         let record = manifest
             .as_ref()
             .and_then(|m| m["files"].as_array())
             .and_then(|a| a.iter().find(|f| f["name"].as_str() == Some(&name)));
+        // Folders count only when the manifest says they are a backed-up folder.
+        let is_dir = e.path().is_dir();
+        if name == "manifest.json" || (is_dir && !record.is_some_and(|f| f["dir"] == true)) {
+            continue;
+        }
+        bytes += if is_dir { dir_size(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) };
         let profile_scope = record.and_then(|f| f["profileScope"].as_str())
             .filter(|scope| *scope == agent || scope.strip_prefix(&format!("{agent}@wsl:")).is_some_and(|d| !d.is_empty()))
             .map(String::from);
@@ -114,7 +121,7 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
             record.and_then(|f| f["path"].as_str().map(String::from))
                 .or_else(|| legacy_path(&agent, &name).map(|p| p.to_string_lossy().to_string()))
         };
-        files.push(BackupFile { name, path, profile_scope });
+        files.push(BackupFile { name, path, dir: is_dir, profile_scope });
     }
     let reason = manifest
         .as_ref()
@@ -127,7 +134,8 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
             };
             l(en, zh).into()
         });
-    let missing: Vec<&str> = files.iter().filter(|f| f.profile_scope.is_none() && f.path.as_ref().is_some_and(|p| !Path::new(p).is_file())).map(|f| f.name.as_str()).collect();
+    // A folder that's gone is what its rollback brings back (a deleted skill).
+    let missing: Vec<&str> = files.iter().filter(|f| f.profile_scope.is_none() && !f.dir && f.path.as_ref().is_some_and(|p| !Path::new(p).is_file())).map(|f| f.name.as_str()).collect();
     let mut blocked_missing = false;
     let blocked = if agent.starts_with("codex-") {
         Some(l("Database backup: undo it on the Sessions page or handle it manually", "数据库类备份，请在「会话」页撤销或手动处理").to_string())
@@ -149,7 +157,7 @@ fn read_entry(stamp: &str, agent_dir: &Path) -> Option<BackupEntry> {
 /// Backup reasons are stored in the language of the moment; show the known fixed ones
 /// in the current language.
 fn reason_text(r: &str) -> String {
-    const KNOWN: &[(&str, &str)] = &[REASON_APPLY, REASON_OFFICIAL, REASON_BUILTIN, REASON_CLEANUP, REASON_REPAIR];
+    const KNOWN: &[(&str, &str)] = &[REASON_APPLY, REASON_OFFICIAL, REASON_BUILTIN, REASON_CLEANUP, REASON_REPAIR, REASON_SKILL_DELETE, REASON_SKILL_REPLACE, REASON_SKILL_SWITCH];
     const PREFIX: &[(&str, &str, &str, &str)] = &[
         ("Before rolling back to ", "", "回滚到 ", " 之前"),
         ("Project config · ", "", "项目配置 · ", ""),
@@ -218,12 +226,25 @@ fn restore_in(id: &str) -> Result<String> {
             profiles.push((scope.clone(), value));
         }
     }
-    let targets: Vec<PathBuf> = entry.files.iter().filter(|f| f.profile_scope.is_none()).filter_map(|f| f.path.as_ref().map(PathBuf::from)).collect();
-    let safety = backup_tagged(agent, &targets, &tr!("Before rolling back to {stamp}", "回滚到 {stamp} 之前"))?;
+    let targets: Vec<PathBuf> = entry.files.iter().filter(|f| f.profile_scope.is_none() && !f.dir).filter_map(|f| f.path.as_ref().map(PathBuf::from)).collect();
+    let folders: Vec<PathBuf> = entry.files.iter().filter(|f| f.dir).filter_map(|f| f.path.as_ref().map(PathBuf::from)).collect();
+    let safety = backup_with_dirs(agent, &targets, &folders, &tr!("Before rolling back to {stamp}", "回滚到 {stamp} 之前"))?;
     for (scope, _) in &profiles {
         backup_profiles(&safety, scope, &crate::store::load())?;
     }
-    for f in entry.files.iter().filter(|f| f.profile_scope.is_none()) {
+    for f in entry.files.iter().filter(|f| f.dir) {
+        let to = PathBuf::from(f.path.as_ref().unwrap());
+        let put_back = || -> Result<()> {
+            if to.exists() {
+                fs::remove_dir_all(&to)?;
+            }
+            copy_dir(&dir.join(&f.name), &to)
+        };
+        if let Err(e) = put_back() {
+            return Err(anyhow!(tr!("Failed to restore {}: {e} (the pre-rollback files are backed up in {})", "恢复 {} 失败：{e}（回滚前的文件备份在 {}）", to.display(), display_path(&safety))));
+        }
+    }
+    for f in entry.files.iter().filter(|f| f.profile_scope.is_none() && !f.dir) {
         let to = PathBuf::from(f.path.as_ref().unwrap());
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent)?;
@@ -288,6 +309,8 @@ pub struct BackupDetail {
 pub struct FileDetail {
     pub name: String,
     pub path: Option<String>,
+    /// A whole folder: compared as a whole, no diff.
+    pub dir: bool,
     pub backup_bytes: u64,
     /// None when the original file no longer exists.
     pub current_bytes: Option<u64>,
@@ -357,6 +380,23 @@ pub fn detail(id: &str) -> Result<BackupDetail> {
 
 fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
     let old_path = dir.join(&f.name);
+    if f.dir {
+        let cur = f.path.as_ref().map(PathBuf::from).filter(|p| p.is_dir());
+        return FileDetail {
+            name: f.name,
+            dir: true,
+            backup_bytes: dir_size(&old_path),
+            current_bytes: cur.as_ref().map(|p| dir_size(p)),
+            current_modified: cur.as_ref().and_then(|p| fs::metadata(p).ok()).as_ref().and_then(fmt_mtime),
+            same: cur.as_ref().is_some_and(|p| crate::skills::content(p).2 == crate::skills::content(&old_path).2),
+            binary: true,
+            path: f.path,
+            diff: vec![],
+            added: 0,
+            removed: 0,
+            truncated: false,
+        };
+    }
     let old_len = file_len(&old_path);
     let cur_path = f.path.as_ref().map(PathBuf::from);
     let meta = cur_path.as_ref().and_then(|p| fs::metadata(p).ok()).filter(|m| m.is_file());
@@ -366,6 +406,7 @@ fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
     });
     let mut d = FileDetail {
         name: f.name,
+        dir: false,
         path: f.path,
         backup_bytes: old_len,
         current_bytes: profile.as_ref().map(|p| p.len() as u64).or_else(|| meta.as_ref().map(|m| m.len())),
@@ -498,6 +539,29 @@ fn mask_secrets(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleted_folders_come_back_on_rollback() {
+        let h = TestHome::new("dir-backup");
+        let skill = h.0.join(".agents/skills/pdf");
+        fs::create_dir_all(skill.join("scripts")).unwrap();
+        fs::write(skill.join("SKILL.md"), "---
+name: pdf
+description: d
+---
+").unwrap();
+        fs::write(skill.join("scripts/run.py"), "print(1)").unwrap();
+        let (en, zh) = REASON_SKILL_DELETE;
+        backup_with_dirs("skills", &[], std::slice::from_ref(&skill), l(en, zh)).unwrap();
+        fs::remove_dir_all(&skill).unwrap();
+        let e = list().unwrap().into_iter().find(|e| e.agent == "skills").unwrap();
+        assert!(e.restorable, "{:?}", e.blocked);
+        assert_eq!((e.reason.as_str(), e.files[0].dir, e.files[0].name.as_str()), ("删除技能前", true, "pdf"));
+        assert!(!detail(&e.id).unwrap().files[0].same);
+        restore(&e.id).unwrap();
+        assert_eq!(fs::read_to_string(skill.join("scripts/run.py")).unwrap(), "print(1)");
+        assert!(detail(&e.id).unwrap().files[0].same);
+    }
 
     #[test]
     fn profile_snapshots_are_scoped_reviewable_and_reversible() {
