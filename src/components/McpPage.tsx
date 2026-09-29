@@ -258,6 +258,7 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
       <main className="page">
         <div className="page-top">
           <div className="page-head">
+              <span className="page-icon"><Icon.plug size={20} /></span>
             <div className="page-title">
               <h1>{t("mcpPage.title")}</h1>
               <span className="muted small hint">{t("mcpPage.subtitle")}</span>

@@ -51,6 +51,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
     <main className="page">
       <div className="page-top">
         <div className="page-head">
+            <span className="page-icon"><Icon.layers size={20} /></span>
           <div className="page-title">
             <h1>{t("common.providers")}</h1>
             <span className="muted small hint">

@@ -61,7 +61,7 @@ export function ModelPicker({ pool, checked, onChange, onAdd, empty, isNew, bar 
       <div className="pick-list wide">
         {all.length === 0 && <div className="muted small">{empty}</div>}
         {shown.map((m) => (
-          <label key={m} className="pick">
+          <label key={m} className="pick" title={m}>
             <input type="checkbox" checked={checked.includes(m)} onChange={() => onChange(toggledIn(checked, m))} />
             <span className="mono small">{m}</span>
             {isNew?.(m) && <span className="mtag new">{t("common.tagNew")}</span>}

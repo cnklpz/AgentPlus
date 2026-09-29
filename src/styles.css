@@ -623,7 +623,7 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .seg button.on { background: var(--seg-on); color: var(--accent); font-weight: 600; box-shadow: 0 1px 2px rgba(18, 23, 34, .1), 0 0 0 1px rgba(18, 23, 34, .04); }
 .seg button:disabled { opacity: .45; }
 .pick-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 12px; max-height: 190px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--line2); border-radius: 8px; background: var(--surface-2); }
-.pick-list.wide { grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--surface); }
+.pick-list.wide { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); background: var(--surface); }
 .pick { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; min-width: 0; }
 .pick input { accent-color: var(--accent); flex-shrink: 0; }
 .pick span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
