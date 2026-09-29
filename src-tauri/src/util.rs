@@ -311,12 +311,17 @@ pub fn backup_with_dirs(agent: &str, files: &[PathBuf], dirs: &[PathBuf], reason
     backup_in(&agentplus_dir().join("backups"), agent, files, dirs, reason)
 }
 
-/// Copies a folder and everything in it (the target is created).
+/// Copies a folder and everything in it (the target is created); links to folders are left out.
 pub fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to).with_context(|| tr!("Failed to create {}", "创建 {} 失败", to.display()))?;
     for e in fs::read_dir(from).with_context(|| tr!("Failed to read {}", "读取 {} 失败", from.display()))? {
         let e = e?;
         let (src, dst) = (e.path(), to.join(e.file_name()));
+        // A link (or junction) to a folder isn't followed: it can point anywhere, however
+        // large, or loop. A link to a file is copied as the file.
+        if e.file_type()?.is_symlink() && src.is_dir() {
+            continue;
+        }
         if src.is_dir() {
             copy_dir(&src, &dst)?;
         } else {

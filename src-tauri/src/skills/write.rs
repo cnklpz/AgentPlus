@@ -14,7 +14,7 @@ use crate::history::{REASON_SKILL_DELETE, REASON_SKILL_REPLACE, REASON_SKILL_SWI
 use crate::i18n::l;
 use crate::store;
 use crate::util::*;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -414,15 +414,24 @@ fn stash(agent: &str, dir: &Path) -> Result<()> {
         fs::remove_dir_all(&to)?;
     }
     fs::create_dir_all(to.parent().unwrap())?;
-    if fs::rename(dir, &to).is_err() {
-        // Another drive: copy, then remove.
-        copy_dir(dir, &to)?;
-        fs::remove_dir_all(dir)?;
+    let record = || {
+        store::update(|s| {
+            store::section(s, agent, OFF_KEY).insert(rel.to_string_lossy().replace('\\', "/"), json!(dir.to_string_lossy()));
+            Ok(())
+        })
+    };
+    if fs::rename(dir, &to).is_ok() {
+        return record();
     }
-    store::update(|s| {
-        store::section(s, agent, OFF_KEY).insert(rel.to_string_lossy().replace('\\', "/"), json!(dir.to_string_lossy()));
-        Ok(())
-    })
+    // Another drive, or a file held open: copy the skill's own files (no link followed out
+    // of it), note where it came from, and only then remove it. Should removing stop halfway,
+    // the whole copy and its record are there to switch it back on.
+    if let Err(e) = crate::skills::scan::copy_skill(dir, &to) {
+        let _ = fs::remove_dir_all(&to);
+        return Err(e);
+    }
+    record()?;
+    fs::remove_dir_all(dir).with_context(|| tr!("The skill was copied to {} but {} couldn't be removed completely", "技能已复制到 {}，但 {} 没能完全删除", display_path(&to), display_path(dir)))
 }
 
 fn unstash(agent: &str, dir: &Path) -> Result<()> {
@@ -450,14 +459,22 @@ fn unstash(agent: &str, dir: &Path) -> Result<()> {
         bail!("{}", tr!("{} is back in place already; delete one of the two first", "{} 已经有同名技能，请先删掉其中一个", display_path(&back)));
     }
     fs::create_dir_all(back.parent().unwrap())?;
-    if fs::rename(dir, &back).is_err() {
-        copy_dir(dir, &back)?;
-        fs::remove_dir_all(dir)?;
+    let forget = || {
+        store::update(|s| {
+            store::section(s, agent, OFF_KEY).shift_remove(&rel);
+            Ok(())
+        })
+    };
+    if fs::rename(dir, &back).is_ok() {
+        return forget();
     }
-    store::update(|s| {
-        store::section(s, agent, OFF_KEY).shift_remove(&rel);
-        Ok(())
-    })
+    // As in `stash`: the skill's own files back in place first, then the parked copy goes.
+    if let Err(e) = crate::skills::scan::copy_skill(dir, &back) {
+        let _ = fs::remove_dir_all(&back);
+        return Err(e);
+    }
+    forget()?;
+    fs::remove_dir_all(dir).with_context(|| tr!("The skill is back in {} but {} couldn't be removed completely", "技能已恢复到 {}，但 {} 没能完全删除", display_path(&back), display_path(dir)))
 }
 
 /// Switches skill `name` (the copy at `dir`, the one the agent loads) off or on for `agent`.

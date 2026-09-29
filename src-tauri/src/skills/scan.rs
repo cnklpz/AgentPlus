@@ -299,6 +299,25 @@ mod tests {
             || std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(win(at)).arg(win(target)).stdout(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
     }
 
+    /// Backups and moves (`util::copy_dir`) don't follow a linked folder either.
+    #[test]
+    fn backups_leave_linked_folders_out() {
+        let h = TestHome::new("copy-dir-links");
+        let big = h.0.join("big");
+        fs::create_dir_all(&big).unwrap();
+        fs::write(big.join("data.bin"), "x").unwrap();
+        let d = h.0.join("skill");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("SKILL.md"), "s").unwrap();
+        if !link(&big, &d.join("cache"), true) {
+            return;
+        }
+        let out = h.0.join("copy");
+        crate::util::copy_dir(&d, &out).unwrap();
+        assert!(out.join("SKILL.md").is_file());
+        assert!(!out.join("cache").exists(), "the linked folder isn't copied");
+    }
+
     #[test]
     fn linked_folders_out_of_a_skill_are_not_followed() {
         let h = TestHome::new("skills-dir-links");
