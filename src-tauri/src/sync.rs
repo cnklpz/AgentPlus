@@ -88,6 +88,9 @@ pub fn set_password(password: Option<&str>, verify: bool) -> Result<String> {
     let Some(pw) = password else {
         store::update(|s| {
             store::set_value(s, SECTION, "password", Value::Null);
+            // "Sync API keys" set while the file was encrypted must not turn into clear-text keys
+            // now: it follows the password again (off), and can be turned on for a plain file.
+            store::set_value(s, SECTION, "includeKeys", Value::Null);
             Ok(())
         })?;
         return Ok(crate::i18n::l("Sync password removed. Later exports are not encrypted", "已移除同步密码，之后导出的文件不加密").to_string());
@@ -206,12 +209,19 @@ fn open_doc(doc: &Value, password: Option<&str>) -> Result<Value> {
 }
 
 fn read_payload() -> Result<Value> {
+    read_payload_at().map(|(v, _)| v)
+}
+
+/// The sync file's content and its `exportedAt`, from one read: the folder may get a newer
+/// export at any moment, so what was seen has to be named by what was read.
+fn read_payload_at() -> Result<(Value, Option<String>)> {
     let path = sync_path()?;
     if !path.exists() {
         bail!("{}", tr!("No {FILE} in the sync folder yet. Export from another device first", "同步文件夹里还没有 {FILE}，先在另一台设备导出"));
     }
     let (doc, _) = read_json(&path)?;
-    open_doc(&doc, password()?.as_deref())
+    let at = doc["exportedAt"].as_str().map(String::from);
+    Ok((open_doc(&doc, password()?.as_deref())?, at))
 }
 
 /// The content of one sync record.
@@ -679,14 +689,20 @@ fn remote_pending(root: &Value, doc: &Value) -> bool {
 }
 
 /// Marks the current sync file as seen (after comparing it).
+#[cfg(test)]
 fn ack_current() {
     let Ok(path) = sync_path() else { return };
     if let Some(at) = read_json(&path).ok().and_then(|(v, _)| v["exportedAt"].as_str().map(String::from)) {
-        let _ = store::update(|s| {
-            store::set_str(s, SECTION, "lastAck", &at);
-            Ok(())
-        });
+        ack(&at);
     }
+}
+
+/// Marks the export made at `at` as seen.
+fn ack(at: &str) {
+    let _ = store::update(|s| {
+        store::set_str(s, SECTION, "lastAck", at);
+        Ok(())
+    });
 }
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq)]
@@ -1056,12 +1072,14 @@ fn agent_suggestions(a: &str, remote: &Value, local: &AgentState, keys: &Value) 
 
 /// Compares the sync file (or a sync record) with this machine and proposes additions.
 pub fn preview_import(snapshot: Option<&str>) -> Result<Vec<Suggestion>> {
-    let payload = match snapshot {
-        Some(id) => read_snapshot(id)?,
-        None => read_payload()?,
+    let (payload, seen) = match snapshot {
+        Some(id) => (read_snapshot(id)?, None),
+        None => read_payload_at()?,
     };
-    if snapshot.is_none() {
-        ack_current();
+    // What was read, not what the file holds by now: a newer export that landed in between
+    // stays pending instead of being marked as seen.
+    if let Some(at) = seen {
+        ack(&at);
     }
     let keys = &payload["keys"];
     let content = options_in(&store::load()).content;
@@ -1260,6 +1278,31 @@ mod tests {
         let doc = seal_doc(&payload(), None, "t", "PC").unwrap();
         assert!(doc.to_string().contains("sk-relay"));
         assert_eq!(key_in(&open_doc(&doc, None).unwrap(), &key_fingerprint("sk-relay")).unwrap(), "sk-relay");
+    }
+
+    #[test]
+    fn a_preview_names_what_it_read() {
+        let h = TestHome::new("sync-read-at");
+        let dir = h.0.join("share");
+        std::fs::create_dir_all(&dir).unwrap();
+        set_folder(&dir.to_string_lossy()).unwrap();
+        std::fs::write(dir.join(FILE), seal_doc(&payload(), None, "2026-09-27T10:00:00+08:00", "PC").unwrap().to_string()).unwrap();
+        let (v, at) = read_payload_at().unwrap();
+        assert_eq!(at.as_deref(), Some("2026-09-27T10:00:00+08:00"));
+        assert_eq!(v["library"][0]["name"], "Relay");
+        ack("2026-09-27T10:00:00+08:00");
+        assert_eq!(store::get_str(&store::load(), SECTION, "lastAck").as_deref(), Some("2026-09-27T10:00:00+08:00"));
+    }
+
+    #[test]
+    fn removing_the_password_does_not_leave_keys_going_out_in_clear_text() {
+        let _h = TestHome::new("sync-remove-password");
+        set_password(Some("pass-1234"), false).unwrap();
+        set_include_keys(false).unwrap();
+        set_include_keys(true).unwrap();
+        assert!(status().include_keys);
+        set_password(None, false).unwrap();
+        assert!(!status().has_password && !status().include_keys);
     }
 
     #[test]
