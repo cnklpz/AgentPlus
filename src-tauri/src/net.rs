@@ -126,16 +126,30 @@ fn gemini_url(base_url: &str, model: Option<&str>) -> Result<url::Url, String> {
     Ok(url)
 }
 
+/// `base_url` with a `localhost` host written as 127.0.0.1, where the gateway listens.
+fn gateway_loopback(base_url: &str) -> String {
+    match url::Url::parse(base_url) {
+        Ok(mut u) if u.host_str() == Some("localhost") => {
+            let _ = u.set_host(Some("127.0.0.1"));
+            u.to_string().trim_end_matches('/').to_string() + if base_url.ends_with('/') { "/" } else { "" }
+        }
+        _ => base_url.to_string(),
+    }
+}
+
 /// Time to first response header of `GET <base>/models`. Any HTTP status counts
 /// (an unauthenticated 401 still measures the round trip).
 pub fn latency(base_url: &str) -> Result<u64, String> {
-    let mut req = client()?.get(models_url(base_url)).timeout(Duration::from_secs(8));
     // The local gateway refuses requests without a key; its test key lets the probe through
     // to the upstream, so the time still covers the upstream. Only sent to the gateway's own
     // port on this machine, never to whatever else listens on localhost.
     let gateway = url::Url::parse(base_url).ok().is_some_and(|u| {
         matches!(u.host_str(), Some("127.0.0.1" | "localhost")) && u.port().is_some() && u.port() == crate::gateway::server::running_port()
     });
+    // The gateway listens on 127.0.0.1 only: "localhost" can resolve to [::1] first, where
+    // another program may listen on the same port and would get the key.
+    let target = if gateway { gateway_loopback(base_url) } else { base_url.to_string() };
+    let mut req = client()?.get(models_url(&target)).timeout(Duration::from_secs(8));
     if gateway {
         req = req.bearer_auth(crate::gateway::server::test_key());
     }
@@ -485,6 +499,14 @@ mod tests {
         assert!(!r.ok && r.status == Some(401) && r.error.as_deref().unwrap().contains("密钥无效") && r.error.as_deref().unwrap().contains("invalid api key"));
         let r = test_call("http://127.0.0.1:9", None, "chat", "m");
         assert!(!r.ok && r.status.is_none());
+    }
+
+    #[test]
+    fn the_gateway_is_reached_on_ipv4_loopback() {
+        assert_eq!(gateway_loopback("http://localhost:18650/relay/v1"), "http://127.0.0.1:18650/relay/v1");
+        assert_eq!(gateway_loopback("http://localhost:18650/v1/"), "http://127.0.0.1:18650/v1/");
+        assert_eq!(gateway_loopback("http://127.0.0.1:18650/v1"), "http://127.0.0.1:18650/v1");
+        assert_eq!(gateway_loopback("https://api.example.com/v1"), "https://api.example.com/v1");
     }
 
     #[test]
