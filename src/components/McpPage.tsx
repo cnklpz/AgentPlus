@@ -89,7 +89,7 @@ function stateText(e: Entry): string {
 
 /** What the MCP page and an agent's MCP tab share: the servers with their pending changes,
  *  the edits, and the add / edit dialog. */
-function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor: (agent: string, d: Draft) => void, flash: Flash, onRenamed?: (from: string, to: string) => void) {
+function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor: (agent: string, d: Draft | ((cur: Draft) => Draft)) => void, flash: Flash, onRenamed?: (from: string, to: string) => void) {
   const lang = useLang();
   const ids = useMemo(() => agents.map((a) => a.id).filter((id) => !id.includes("@")), [agents]);
   // Errors come from the backend in the UI language; `agents` changes after every apply.
@@ -112,7 +112,8 @@ function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor
   const list = useMemo(() => groups([...views].flatMap(([at, vs]) => vs.map((v) => ({ at, v })))), [views]);
   const targets: McpTarget[] = [...views].map(([id, vs]) => ({ id, name: sourceName(id), names: new Set(vs.map((v) => v.s.name)) }));
 
-  const edit = (agent: McpSource, f: (d: Draft) => Draft) => { if (agent !== LIBRARY) setDraftFor(agent, f(drafts[agent] ?? {})); };
+  // A function of the draft as it is when applied: `edit` often runs after a confirm dialog.
+  const edit = (agent: McpSource, f: (d: Draft) => Draft) => { if (agent !== LIBRARY) setDraftFor(agent, f); };
   const attempt = async (p: Promise<unknown>) => {
     try {
       await p;
@@ -235,7 +236,7 @@ interface Props {
   /** Everything "Apply" writes (agents and open project configs). */
   pending: AgentState[];
   drafts: Record<string, Draft>;
-  setDraftFor: (agent: string, d: Draft) => void;
+  setDraftFor: (agent: string, d: Draft | ((cur: Draft) => Draft)) => void;
   busy: boolean;
   onApplyAll: () => void;
   onDiscard: (agent: AgentId | null) => void;
@@ -362,7 +363,7 @@ export function AgentMcpTab({ agent, agents, drafts, setDraftFor, flash, onOpenP
   /** Every agent in the sidebar (edits can copy a server to them). */
   agents: AgentState[];
   drafts: Record<string, Draft>;
-  setDraftFor: (agent: string, d: Draft) => void;
+  setDraftFor: (agent: string, d: Draft | ((cur: Draft) => Draft)) => void;
   flash: Flash;
   onOpenPage: () => void;
 }) {
