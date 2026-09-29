@@ -639,6 +639,14 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
 
 // ---------------------------------------------------------------- sources of masked values
 
+/// A server as an agent or the library has it, with its real values.
+pub(super) fn raw_from(source: &str, name: &str) -> Result<Raw> {
+    if source == LIBRARY {
+        return super::library::raw(name).map(|(r, _)| r);
+    }
+    raw_in(source, name).map(|(r, _)| r)
+}
+
 /// A server as `agent` has it (the config or the stash), read into the common shape.
 fn raw_in(agent: &str, name: &str) -> Result<(Raw, Family)> {
     if agent == dsh::ID {

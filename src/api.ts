@@ -512,6 +512,14 @@ export interface McpInput {
   extraFamily?: string;
 }
 
+/** What a connection test found: the server's name, its protocol and its tools. */
+export interface McpProbe {
+  server: string | null;
+  protocol: string | null;
+  tools: { name: string; description: string }[];
+  ms: number;
+}
+
 /** Every agent's MCP servers, and the MCP library. */
 export interface McpOverview {
   agents: AgentMcp[];
@@ -829,6 +837,8 @@ const real = {
   mcpLibraryDelete: (name: string) => invoke<void>("mcp_library_delete", { name }),
   /** MCP servers in pasted text (a README snippet or any agent's config). */
   mcpParse: (text: string) => invoke<McpInput[]>("mcp_parse", { text }),
+  /** Starts (stdio) or calls (HTTP / SSE) a server as `source` has it, and lists its tools. */
+  mcpProbe: (source: McpSource, name: string) => invoke<McpProbe>("mcp_probe", { source, name }),
   listBackups: () => invoke<BackupEntry[]>("list_backups"),
   backupDetail: (id: string) => invoke<BackupDetail>("backup_detail", { id }),
   restoreBackup: (id: string) => invoke<string>("restore_backup", { id }),
@@ -1129,6 +1139,11 @@ const demo: typeof real = {
   }), library: [{ name: "memory", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"], cwd: null, url: null, env: [], headers: [], enabled: true, stashed: false, extra: {}, sig: "s-memory" }] }),
   mcpLibrarySave: async () => undefined,
   mcpLibraryDelete: async () => undefined,
+  mcpProbe: async (_source, name) => {
+    await new Promise((r) => setTimeout(r, 600));
+    if (name === "github") throw new Error("（演示）服务器要求授权（401 Unauthorized）。请检查请求头；需要 OAuth 登录的服务器无法在这里测试");
+    return { server: `${name} 1.0.0`, protocol: "2025-06-18", tools: [{ name: "read_file", description: "Read a file" }, { name: "write_file", description: "Write a file" }, { name: "list_directory", description: "" }], ms: 842 };
+  },
   mcpParse: async (text) => {
     const v = JSON.parse(text) as { mcpServers?: Record<string, { command?: string; args?: string[]; url?: string }> };
     return Object.entries(v.mcpServers ?? {}).map(([name, d]): McpInput => ({ name, transport: d.url ? "http" : "stdio", command: d.command ?? null, args: d.args ?? [], cwd: null, url: d.url ?? null, env: [], headers: [], enabled: true }));

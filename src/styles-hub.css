@@ -679,6 +679,9 @@ button, input, textarea, select { font-family: inherit; }
 .mcp-paste-btn { align-self: flex-start; }
 .mcp-parsed { flex-wrap: wrap; }
 .mcp-row.off > .minw0 { opacity: .55; }
+.mcp-probe { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.mcp-tools { display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
+.mcp-probe .ok-text { color: var(--ok); }
 .mcp-variant { display: flex; flex-direction: column; gap: 8px; }
 .mcp-variant + .mcp-variant { padding-top: 12px; border-top: 1px dashed var(--line2); }
 .mcp-wrap, .mcp-pair { overflow-wrap: anywhere; }

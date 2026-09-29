@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { type AgentId, type AgentState, type McpInput, type McpKv, type McpLink, type McpServer, type McpSource, api } from "../api";
+import { type AgentId, type AgentState, type McpInput, type McpKv, type McpLink, type McpProbe, type McpServer, type McpSource, api } from "../api";
 import { type Draft, type McpView, deleteMcp, keys, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp } from "../draft";
 import { t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
@@ -18,6 +18,32 @@ const LIBRARY = "library" as const;
 interface Entry {
   at: McpSource;
   v: McpView;
+}
+
+/** A finished connection test. */
+type Probed = { ok: McpProbe } | { err: string };
+
+const probeKey = (e: Entry) => `${e.at}|${e.v.s.name}`;
+
+/** A connection test's outcome: running, the server and its tools, or why it failed. */
+function ProbeResult({ r }: { r: Probed | null | undefined }) {
+  if (r === undefined) return null;
+  if (r === null) return <span className="tiny muted mcp-probe">{t("mcpPage.testing")}</span>;
+  if ("err" in r) return <ErrorBox className="mcp-probe" text={t("mcpPage.testFailed", { error: r.err })} />;
+  const p = r.ok;
+  return (
+    <div className="mcp-probe">
+      <span className="tiny ok-text">
+        {t("mcpPage.testOk", { tools: tn("mcpPage.toolCount", p.tools.length), ms: p.ms })}
+        {p.server && <span className="muted"> · {p.server}</span>}
+      </span>
+      {p.tools.length > 0 && (
+        <div className="mcp-tools">
+          {p.tools.map((x) => <span key={x.name} className="ptag tag-soft mono" title={x.description || undefined}>{x.name}</span>)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** A server name across agents; `variants` groups the copies by what they run. */
@@ -71,6 +97,8 @@ function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor
   const [dialog, setDialog] = useState<McpEdit | null | undefined>(undefined);
   const [fromLink, setFromLink] = useState<{ link: McpLink; n: number } | null>(null);
   const [defaultTo, setDefaultTo] = useState<McpSource[]>([]);
+  /** Connection tests, by `<where>|<name>`: running (null), or what came back. */
+  const [probes, setProbes] = useState<Record<string, Probed | null>>({});
 
   const source = (from: [McpSource, string]) => from[0] === LIBRARY
     ? data?.library.find((s) => s.name === from[1])
@@ -150,6 +178,19 @@ function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor
     else edit(e.at, (d) => deleteMcp(d, name, e.v.exists));
   };
 
+  /** Tests the copy a server's entry reads from (a pending copy: the one it was copied from). */
+  const test = async (e: Entry) => {
+    const from = fromOf(e);
+    if (!from) return;
+    const key = probeKey(e);
+    setProbes((p) => ({ ...p, [key]: null }));
+    const done = await api.mcpProbe(from[0], from[1]).then((ok): Probed => ({ ok }), (err): Probed => ({ err: errText(err) }));
+    setProbes((p) => ({ ...p, [key]: done }));
+  };
+  // A pending edit runs something the configs don't have yet; a pending copy is testable
+  // through its source while it runs the same thing.
+  const canTest = (e: Entry) => !!fromOf(e) && e.v.pending !== "edited" && !e.v.s.sig.startsWith("draft:");
+
   const toggle = (e: Entry, on: boolean) => {
     const actual = e.v.exists ? data?.agents.find((a) => a.agent === e.at)?.servers.find((s) => s.name === e.v.s.name)?.enabled ?? null : null;
     edit(e.at, (d) => setMcpEnabled(d, e.v.s.name, on, actual));
@@ -185,7 +226,7 @@ function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor
       onClose={() => { setDialog(undefined); setFromLink(null); }} />
   );
 
-  return { data, error, reload, views, list, openEdit, openAdd, remove, toggle, undo, dialogEl };
+  return { data, error, reload, views, list, openEdit, openAdd, remove, toggle, undo, test, canTest, probes, dialogEl };
 }
 
 interface Props {
@@ -205,7 +246,7 @@ interface Props {
 
 export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash, link }: Props) {
   const [sel, setSel] = useState<string | null>(null);
-  const { data, error, reload, list, openEdit, openAdd, remove, toggle, undo, dialogEl } = useMcp(agents, drafts, setDraftFor, flash, (from, to) => setSel((s) => (s === from ? to : s)));
+  const { data, error, reload, list, openEdit, openAdd, remove, toggle, undo, test, canTest, probes, dialogEl } = useMcp(agents, drafts, setDraftFor, flash, (from, to) => setSel((s) => (s === from ? to : s)));
   useEffect(() => {
     if (link) openAdd(link.link.agents, link);
   }, [link?.n]);
@@ -265,7 +306,8 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
       </main>
       <aside className="aside" aria-label={t("mcpPage.detailTitle")}>
         {picked ? (
-          <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} onEdit={openEdit} onToggle={toggle} onRemove={(e) => void remove(e)} onUndo={undo} />
+          <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} onEdit={openEdit} onToggle={toggle} onRemove={(e) => void remove(e)} onUndo={undo}
+            onTest={(e) => void test(e)} canTest={canTest} probes={probes} />
         ) : (
           <section className="aside-cur mcp-scroll">
             <h2>{t("mcpPage.overview")}</h2>
@@ -319,7 +361,7 @@ export function AgentMcpTab({ agent, agents, drafts, setDraftFor, flash, onOpenP
   flash: Flash;
   onOpenPage: () => void;
 }) {
-  const { data, error, list, openEdit, openAdd, remove, toggle, undo, dialogEl } = useMcp(agents, drafts, setDraftFor, flash);
+  const { data, error, list, openEdit, openAdd, remove, toggle, undo, test, canTest, probes, dialogEl } = useMcp(agents, drafts, setDraftFor, flash);
   const mine = data?.agents.find((a) => a.agent === agent);
   const rows = list.flatMap((g) => g.entries.filter((e) => e.at === agent).map((e) => ({ g, e })));
   const name = agentLabel(agent);
@@ -352,9 +394,11 @@ export function AgentMcpTab({ agent, agents, drafts, setDraftFor, flash, onOpenP
                     {g.entries.length > 1 && <span className="tiny muted">{tn("mcpPage.alsoIn", g.entries.length - 1)}</span>}
                   </div>
                   <div className="mono tiny muted ellipsis">{scrub(summary(s))}</div>
+                  <ProbeResult r={probes[probeKey(e)]} />
                 </div>
                 <div className="row gap6">
                   {e.v.pending && <button className="link tiny" onClick={() => undo(e)}>{t("common.undo")}</button>}
+                  <button className="icon-btn sm" disabled={!canTest(e) || probes[probeKey(e)] === null} aria-label={t("mcpPage.test")} title={canTest(e) ? t("mcpPage.testHint") : t("mcpPage.testPending")} onClick={() => void test(e)}><Icon.pulse size={12} /></button>
                   {!gone && <Switch on={s.enabled} onChange={(on) => toggle(e, on)} label={t("mcpPage.toggleIn", { agent: name })} />}
                   {!gone && <button className="icon-btn sm" aria-label={t("mcpPage.editOrCopy")} title={t("mcpPage.editOrCopy")} onClick={() => openEdit(g.variants.find((v) => v.includes(e)) ?? [e])}><Icon.edit size={12} /></button>}
                   {!gone && <button className="icon-btn sm" aria-label={t("mcpPage.removeFrom", { agent: name })} title={t("mcpPage.removeFrom", { agent: name })} onClick={() => void remove(e)}><Icon.trash size={12} /></button>}
@@ -382,13 +426,16 @@ function Pairs({ items }: { items: McpKv[] }) {
   );
 }
 
-function McpDetail({ g, onClose, onEdit, onToggle, onRemove, onUndo }: {
+function McpDetail({ g, onClose, onEdit, onToggle, onRemove, onUndo, onTest, canTest, probes }: {
   g: Group;
   onClose: () => void;
   onEdit: (variant: Entry[]) => void;
   onToggle: (e: Entry, on: boolean) => void;
   onRemove: (e: Entry) => void;
   onUndo: (e: Entry) => void;
+  onTest: (e: Entry) => void;
+  canTest: (e: Entry) => boolean;
+  probes: Record<string, Probed | null>;
 }) {
   return (
     <section className="aside-cur mcp-scroll">
@@ -403,12 +450,19 @@ function McpDetail({ g, onClose, onEdit, onToggle, onRemove, onUndo }: {
       {g.variants.map((v, i) => {
         const s = (v.find((e) => e.v.pending !== "deleted") ?? v[0]).v.s;
         const extras = v.filter((e) => Object.keys(e.v.s.extra).length > 0);
+        // One test per definition: through the first copy that is in a config already.
+        const tested = v.find((e) => e.v.exists && canTest(e)) ?? v.find(canTest);
         return (
           <div key={s.sig} className="mcp-variant">
             <div className="row between">
               <span className="tiny strong">{g.variants.length > 1 ? t("mcpPage.variant", { i: i + 1, n: g.variants.length }) : t("mcpPage.definition")}</span>
-              <button className="btn small" onClick={() => onEdit(v)}><Icon.edit size={12} />{t("mcpPage.editOrCopy")}</button>
+              <div className="row gap6">
+                <button className="btn small" disabled={!tested || probes[probeKey(tested)] === null} title={tested ? t("mcpPage.testHint") : t("mcpPage.testPending")}
+                  onClick={() => tested && onTest(tested)}><Icon.pulse size={12} />{t("mcpPage.test")}</button>
+                <button className="btn small" onClick={() => onEdit(v)}><Icon.edit size={12} />{t("mcpPage.editOrCopy")}</button>
+              </div>
             </div>
+            {tested && <ProbeResult r={probes[probeKey(tested)]} />}
             <div className="mcp-holders">
               {v.map((e) => (
                 <div key={e.at} className={`mcp-holder${e.v.s.enabled && e.v.pending !== "deleted" ? "" : " off"}`}>

@@ -314,6 +314,12 @@ async fn mcp_library_delete(name: String) -> Result<(), String> {
     blocking(move || mcp::library::delete(&name)).await
 }
 
+/// Starts or calls an MCP server as `source` (an agent, or "library") has it, and lists its tools.
+#[tauri::command]
+async fn mcp_probe(source: String, name: String) -> Result<mcp::probe::Probe, String> {
+    blocking(move || mcp::probe(&source, &name)).await
+}
+
 /// MCP servers in pasted text (a README snippet or a piece of any agent's config).
 #[tauri::command]
 async fn mcp_parse(text: String) -> Result<Vec<mcp::McpInput>, String> {
@@ -852,6 +858,7 @@ pub fn run() {
             mcp_library_save,
             mcp_library_delete,
             mcp_parse,
+            mcp_probe,
             list_backups,
             backup_detail,
             restore_backup,

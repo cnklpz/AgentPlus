@@ -20,6 +20,7 @@ mod dsh;
 pub mod library;
 mod mask;
 pub mod parse;
+pub mod probe;
 pub mod write;
 
 use crate::adapters::{self, claude, codebuddy, codex, droid, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, qwen, zcode};
@@ -364,6 +365,11 @@ pub fn read(agent: &str) -> AgentMcp {
 /// `read` for each of `agents` (ids the UI lists; OpenCode project configs are left out).
 pub fn list(agents: &[String]) -> Vec<AgentMcp> {
     agents.iter().filter(|a| adapters::ext(a).is_some()).map(|a| read(a)).collect()
+}
+
+/// Tests a server as `source` (an agent, or the library) has it, with its real values.
+pub fn probe(source: &str, name: &str) -> anyhow::Result<probe::Probe> {
+    probe::probe(&write::raw_from(source, name)?)
 }
 
 #[derive(Serialize)]
