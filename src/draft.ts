@@ -437,7 +437,7 @@ export interface McpView {
 }
 
 /** What runs, compared on the values the page shows (masked the same way on both sides). */
-function sameCore(i: McpInput, s: McpServer): boolean {
+export function sameCore(i: McpInput, s: McpServer): boolean {
   const kv = (a: { key: string; value: string }[]) => JSON.stringify(a.map((p) => [p.key, p.value]));
   return i.transport === s.transport && (i.command ?? null) === s.command && JSON.stringify(i.args) === JSON.stringify(s.args)
     && (i.cwd ?? null) === s.cwd && (i.url ?? null) === s.url && kv(i.env) === kv(s.env) && kv(i.headers) === kv(s.headers);

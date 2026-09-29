@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { type AgentId, type AgentState, type McpInput, type McpKv, type McpServer, type McpSource, api } from "../api";
-import { type Draft, type McpView, deleteMcp, keys, mcpView, setMcpEnabled, undoMcp, upsertMcp } from "../draft";
+import { type Draft, type McpView, deleteMcp, keys, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp } from "../draft";
 import { t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
 import { ErrorBox, Switch } from "./controls";
@@ -124,6 +124,8 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
       if (at === LIBRARY) continue;
       const v = viewIn(at);
       const renames = !!v && input.replaces !== undefined;
+      // An agent that already runs exactly this gets no change (only the newly ticked ones do).
+      if (v && !renames && sameCore(input, v.s)) continue;
       edit(at, (d) => upsertMcp(d, { ...input, enabled: v ? v.s.enabled : true, replaces: renames ? input.replaces : undefined }));
     }
     for (const at of removeFrom) if (at !== LIBRARY) edit(at, (d) => deleteMcp(d, old, !!viewIn(at)?.exists));

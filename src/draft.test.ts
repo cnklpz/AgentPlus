@@ -3,7 +3,7 @@ import type { AgentState, McpInput, McpServer, Model, Op, Provider, Setting } fr
 import {
   type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
-  visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, setMcpEnabled, undoMcp, upsertMcp, writeOrder,
+  visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp, writeOrder,
 } from "./draft";
 
 const model = (id: string, over: Partial<Model> = {}): Model =>
@@ -480,5 +480,14 @@ describe("writeOrder", () => {
       zcode: upsertMcp({}, { name: "fs", transport: "stdio", command: "x", args: [], cwd: null, url: null, env: [], headers: [], enabled: true, from: ["codex", "fs"] }),
     };
     expect(writeOrder(a, drafts).map((x) => x.id)).toEqual(["claude", "zcode", "codex"]);
+  });
+});
+
+describe("sameCore", () => {
+  it("compares what runs on the values the page shows", () => {
+    const s: McpServer = { name: "g", transport: "stdio", command: "npx", args: ["-y", "vk"], cwd: null, url: null, env: [{ key: "T", value: "••••1234", secret: true }], headers: [], enabled: true, stashed: false, extra: { timeout: 1 }, sig: "x" };
+    const i: McpInput = { name: "g", transport: "stdio", command: "npx", args: ["-y", "vk"], cwd: null, url: null, env: [{ key: "T", value: "••••1234" }], headers: [], enabled: true };
+    expect(sameCore(i, s)).toBe(true);
+    expect(sameCore({ ...i, args: ["vk"] }, s)).toBe(false);
   });
 });
