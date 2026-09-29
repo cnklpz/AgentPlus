@@ -600,8 +600,14 @@ mod tests {
         let held4 = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let taken4 = held4.local_addr().unwrap().port();
         // Taken on [::1] only: still not free (a client on "localhost" could reach it).
+        // Only where [::1] can be reached at all: a VPN's TUN mode (sing-box) may refuse it, and
+        // then no client could reach the port there either.
         let held6 = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0));
-        let taken6 = held6.as_ref().ok().map(|l| l.local_addr().unwrap().port());
+        let taken6 = held6
+            .as_ref()
+            .ok()
+            .map(|l| l.local_addr().unwrap().port())
+            .filter(|p| std::net::TcpStream::connect((std::net::Ipv6Addr::LOCALHOST, *p)).is_ok());
         let (failed, free) = (free_port(), free_port());
         assert!(!port_free(taken4));
         if let Some(p) = taken6 {
