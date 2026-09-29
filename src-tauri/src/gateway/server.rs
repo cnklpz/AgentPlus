@@ -1573,7 +1573,9 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
 
     if !resp.status().is_success() {
         let text = resp.text().unwrap_or_default();
-        if can_retry && (status >= 500 || status == 429) {
+        // Whatever the breaker counts as the forward's fault (a bad key, no credit, a timeout)
+        // goes on to the next one too, rather than waiting for the breaker to open.
+        if can_retry && breaker::is_fault_status(status) {
             return Ok(Attempt::Retry(breaker::describe(status, &text)));
         }
         // The message, not the raw body: the breaker's reason is made from it (`tracked`
@@ -2098,13 +2100,18 @@ mod tests {
         let bad = fixed_upstream(503, r#"{"error":{"message":"overloaded"}}"#, bad_hits.clone());
         let good = fixed_upstream(200, r#"{"id":"c","object":"chat.completion","model":"glm-5","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}"#, good_hits.clone());
         let other = fixed_upstream(200, r#"{"data":[{"id":"kimi-k3"}]}"#, other_hits.clone());
+        // Out of credit: the forward's own fault, so the next one is tried as for a 5xx.
+        let broke_hits = Arc::new(AtomicU64::new(0));
+        let broke = fixed_upstream(402, r#"{"error":{"message":"out of credit"}}"#, broke_hits.clone());
         // Both "bad" and "good" serve glm-5 (via their model maps); "other" only kimi-k3.
         *lock(&TEST_ROUTES) = vec![
+            (Route { weight: 2000, ..test_route("broke", "chat", &[("glm-5", "glm-5")]) }, broke, None),
             (Route { weight: 1000, ..test_route("bad", "chat", &[("glm-5", "glm-5")]) }, bad, None),
             (Route { weight: 1, ..test_route("good", "chat", &[("glm-5", "glm-5")]) }, good, None),
             (test_route("other", "chat", &[("kimi-k3", "kimi-k3")]), other, None),
         ];
         lock(&MODEL_CACHE).clear();
+        breaker::reset(Some("broke"));
         breaker::reset(Some("bad"));
         let port = gateway_once();
         let client = reqwest::blocking::Client::new();
@@ -2119,6 +2126,7 @@ mod tests {
         let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
         assert_eq!(v["choices"][0]["message"]["content"], "pong");
         assert!(good_hits.load(Ordering::SeqCst) == 1, "served by the healthy forward");
+        assert_eq!(broke_hits.load(Ordering::SeqCst), 1, "a 402 moves on to the next forward");
         assert_eq!(other_hits.load(Ordering::SeqCst), 0, "a forward without the model is never called");
 
         // A model nobody serves: 404 in the client's protocol, no upstream hit.
