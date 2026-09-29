@@ -98,6 +98,27 @@ fn fill(p: &mut Probe, init: &Value, tools: &Value) {
 }
 
 pub fn probe(raw: &Raw) -> Result<Probe> {
+    probe_raw(raw).map_err(|e| anyhow!(scrub_error(&format!("{e:#}"), raw)))
+}
+
+/// An error for the UI without the server's secrets: reqwest names the whole URL (`?api_key=…`),
+/// and a stdio server's stderr can echo its env or arguments.
+fn scrub_error(text: &str, raw: &Raw) -> String {
+    let secrets = raw.env.iter().chain(&raw.headers).map(|(k, v)| (k, v.trim())).chain(raw.args.iter().map(|a| (a, a.trim())));
+    let mut out = text.to_string();
+    for (name, v) in secrets {
+        let (shown, masked) = super::mask::value(name, v);
+        if masked && v.len() >= 4 {
+            out = out.replace(v, &shown);
+        }
+    }
+    // Secret query parameters and passwords in any URL it names.
+    static URL: OnceLock<Regex> = OnceLock::new();
+    let re = URL.get_or_init(|| Regex::new(r#"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"'<>)]+"#).unwrap());
+    re.replace_all(&out, |c: &regex::Captures| super::mask::url(&c[0])).into_owned()
+}
+
+fn probe_raw(raw: &Raw) -> Result<Probe> {
     let t0 = Instant::now();
     let mut p = match raw.transport {
         "stdio" => stdio(raw)?,
@@ -484,5 +505,23 @@ mod tests {
         assert_eq!(probe(&missing).unwrap_err().to_string(), "在 PATH 里找不到命令「agentplus-no-such-command」");
         let ws = Raw { transport: "ws", url: Some("wss://h".into()), ..Default::default() };
         assert!(probe(&ws).is_err());
+    }
+
+    #[test]
+    fn errors_keep_the_servers_secrets_out() {
+        let raw = Raw {
+            transport: "stdio",
+            env: vec![("GITHUB_TOKEN".into(), "ghp_abcdefghijklmnopqrstuv".into()), ("LOG_LEVEL".into(), "debug".into())],
+            headers: vec![("X-Api-Key".into(), "zzzzyyyyxxxx9999".into())],
+            args: vec!["--api-key".into(), "sk-abcdefgh12345678".into()],
+            ..Default::default()
+        };
+        let text = "error sending request for url (https://mcp.example.com/sse?api_key=abcdef123456&region=eu): refused\n\
+                    token ghp_abcdefghijklmnopqrstuv rejected, header zzzzyyyyxxxx9999, arg sk-abcdefgh12345678, level debug";
+        let out = scrub_error(text, &raw);
+        for secret in ["abcdef123456", "ghp_abcdefghijklmnopqrstuv", "zzzzyyyyxxxx9999", "sk-abcdefgh12345678"] {
+            assert!(!out.contains(secret), "{secret} in {out}");
+        }
+        assert!(out.contains("region=eu") && out.contains("level debug"), "{out}");
     }
 }

@@ -106,6 +106,15 @@ pub fn url(u: &str) -> String {
         .into_owned()
 }
 
+/// `NAME=value` (docker's `-e NAME=value`, `--env NAME=value`) or `Name: value` (a `--header`
+/// of curl or mcp-remote) where the name holds a secret: the same argument with the value masked.
+fn assignment(a: &str) -> Option<String> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    let c = re(&R, r"^([A-Za-z_][A-Za-z0-9_.-]*)(=|:\s*)(.+)$").captures(a)?;
+    let (name, sep, v) = (&c[1], &c[2], &c[3]);
+    (secret_name(name) && !is_ref(v)).then(|| format!("{name}{sep}{}", mask(v)))
+}
+
 /// Command-line arguments: the value after a secret flag (`--api-key X`, `--token=X`), and
 /// anything that looks like a credential or carries one in a URL.
 pub fn args(args: &[String]) -> Vec<String> {
@@ -118,9 +127,15 @@ pub fn args(args: &[String]) -> Vec<String> {
         } else if let (true, Some((f, v))) = (flag, a.split_once('=')) {
             if secret_name(f) && !is_ref(v) && !v.is_empty() {
                 format!("{f}={}", mask(v))
+            } else if let Some(m) = assignment(v) {
+                // `--env=NAME=value`, `--header=Name: value`
+                format!("{f}={m}")
             } else {
                 a.clone()
             }
+        } else if let Some(m) = Some(a).filter(|a| !a.starts_with('-')).and_then(|a| assignment(a)) {
+            // The value of `-e NAME=value` / `--header "Name: value"`.
+            m
         } else if !is_ref(a) && looks_secret(a) {
             mask(a)
         } else {
@@ -183,6 +198,23 @@ mod tests {
     fn arguments_after_secret_flags_are_masked() {
         let a: Vec<String> = ["-y", "@x/server", "--api-key", "abcd1234efgh", "--token=zzzz9999yyyy", "--port", "8080", "--key", "${K}"].map(String::from).to_vec();
         assert_eq!(args(&a), ["-y", "@x/server", "--api-key", "••••efgh", "--token=••••yyyy", "--port", "8080", "--key", "${K}"]);
+    }
+
+    #[test]
+    fn env_and_header_arguments_are_masked_by_their_names() {
+        let a: Vec<String> = [
+            "run", "-i", "-e", "GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuv", "-e", "LOG_LEVEL=debug", "-e", "API_KEY=${API_KEY}", "-e", "EMPTY_TOKEN=",
+            "--env=SERVICE_KEY=abcdefgh12345678", "--header", "Authorization: Bearer abcdefgh12345678", "--header=X-Api-Key: zzzzyyyyxxxx9999", "-H", "Accept: application/json",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            args(&a),
+            [
+                "run", "-i", "-e", "GITHUB_TOKEN=••••stuv", "-e", "LOG_LEVEL=debug", "-e", "API_KEY=${API_KEY}", "-e", "EMPTY_TOKEN=",
+                "--env=SERVICE_KEY=••••5678", "--header", "Authorization: Bearer ••••5678", "--header=X-Api-Key: ••••9999", "-H", "Accept: application/json",
+            ]
+        );
     }
 
     #[test]
