@@ -172,6 +172,8 @@ export interface AgentState {
   modelFields?: ModelField[];
   /** How the running desktop app was started; null unless restartable and running. */
   launch?: Launch | null;
+  /** Installed plugins; null (or missing, in old snapshots) for agents without plugins. */
+  plugins?: PluginInfo[] | null;
 }
 
 /** Whether the running desktop app is the one AgentPlus started. */
@@ -205,7 +207,8 @@ export type Op =
   | { op: "import_provider"; fromAgent: string; provider: string; api?: ApiKind; name?: string; label?: string }
   | { op: "upsert_mcp"; server: McpInput }
   | { op: "delete_mcp"; name: string }
-  | { op: "set_mcp_enabled"; name: string; enabled: boolean };
+  | { op: "set_mcp_enabled"; name: string; enabled: boolean }
+  | { op: "set_plugin_enabled"; plugin: string; enabled: boolean };
 
 /** Where AgentPlus reads and writes configs. */
 export interface EnvInfo {
@@ -510,6 +513,20 @@ export interface McpInput {
   /** Fields the page doesn't edit (from pasted text); opaque here. */
   extra?: Record<string, unknown>;
   extraFamily?: string;
+}
+
+/** An installed plugin (extension, bundle) of an agent. */
+export interface PluginInfo {
+  /** What the agent's config calls it (`name@marketplace`, an npm spec, a folder name). */
+  id: string;
+  name: string;
+  description: string | null;
+  version: string | null;
+  /** Marketplace, registry or folder it came from. */
+  source: string | null;
+  enabled: boolean;
+  /** Why it can't be switched here, if it can't. */
+  locked: string | null;
 }
 
 /** How an agent comes to read a skills folder. */
@@ -1021,6 +1038,18 @@ const FIXTURE = import.meta.glob<{ default: unknown }>("./dev-fixture.json");
 const tagOf = (g: unknown): ModelTag => (typeof g === "string" ? { id: `tag:${g}`, label: g } : (g as ModelTag));
 const withTags = (m: Model): Model => ({ ...m, tags: (m.tags ?? []).map(tagOf) });
 
+/** Plugins for the demo agents (the snapshot has none). */
+const DEMO_PLUGINS: Partial<Record<AgentId, PluginInfo[]>> = {
+  codex: [
+    { id: "browser@openai-bundled", name: "Browser", description: "Browse and test web pages in an in-app browser", version: "26.924.22138", source: "openai-bundled", enabled: true, locked: null },
+    { id: "documents@openai-primary-runtime", name: "Documents", description: "Create and edit Word documents", version: "1.4.0", source: "openai-primary-runtime", enabled: true, locked: null },
+    { id: "latex@openai-bundled", name: "LaTeX", description: "Compile LaTeX to PDF", version: "26.924.22138", source: "openai-bundled", enabled: false, locked: null },
+  ],
+  opencode: [
+    { id: "opencode-mystatus", name: "opencode-mystatus", description: null, version: null, source: "npm", enabled: true, locked: null },
+  ],
+};
+
 async function fixture(): Promise<AgentState[]> {
   const load = FIXTURE["./dev-fixture.json"];
   const raw = load ? ((await load()).default as AgentState[]) : [];
@@ -1028,7 +1057,7 @@ async function fixture(): Promise<AgentState[]> {
   // model fields' `caps` and built-ins' `probeUrl` (demo latencies are made up anyway).
   const list = raw.map((a) => ({
     ...a, restartable: a.restartable ?? true, running: demoRunning[a.id] ?? a.running,
-    currentModel: a.currentModel ?? null, modelFields: a.modelFields?.map((f) => ({ ...f, caps: f.caps ?? [] })),
+    currentModel: a.currentModel ?? null, plugins: a.plugins ?? DEMO_PLUGINS[a.id] ?? null, modelFields: a.modelFields?.map((f) => ({ ...f, caps: f.caps ?? [] })),
     catalog: a.catalog?.map(withTags) ?? null, providers: a.providers.map((p) => ({ ...p, probeUrl: p.probeUrl ?? (p.builtin && !p.baseUrl ? "https://official.example" : null), models: p.models.map(withTags) })),
   }));
   // No OpenCode in the snapshot: MiMo runs the same config format, so it stands in.

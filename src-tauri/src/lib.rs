@@ -13,6 +13,7 @@ mod history;
 mod library;
 mod mcp;
 mod model;
+mod plugins;
 mod mfields;
 mod modelinfo;
 mod net;

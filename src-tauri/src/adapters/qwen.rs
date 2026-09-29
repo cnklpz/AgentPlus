@@ -1107,7 +1107,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Qwen Code can have several providers configured at once; pick models with /model in Qwen Code.", "Qwen Code 可以同时配置多个供应商，在 Qwen Code 里用 /model 选择模型"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
-            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } | Op::SetPluginEnabled { .. } => unreachable!("planned in mcp::write or plugins"),
         }
     }
     cx.carry_names();

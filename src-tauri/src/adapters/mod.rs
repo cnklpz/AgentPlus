@@ -99,6 +99,8 @@ pub(crate) fn new_state(id: &str, name: &str, inst: &process::Install, mode: &st
 
 /// What a plan produces: (diff, files written, backup folder).
 pub type Plan = (Diff, Vec<PathBuf>, Option<PathBuf>);
+/// A planner of one kind of op (MCP servers, plugin switches) for one agent.
+type PlanFn = fn(&str, &[Op], bool) -> Result<Plan>;
 /// (base_url, key, api) of a provider.
 pub type Endpoint = (String, Option<String>, String);
 
@@ -457,6 +459,9 @@ pub fn state(agent: &str) -> Result<AgentState> {
         ((e.state)(&inst), Some((e, inst)))
     };
     st.model_fields = crate::mfields::fields(crate::mfields::for_agent(agent));
+    if !ocproject::is_project(agent) {
+        st.plugins = crate::plugins::list(agent);
+    }
     // Key fingerprints let the UI group a relay's entries by key without seeing it.
     for p in st.providers.iter_mut().filter(|p| p.has_key && p.base_url.is_some()) {
         if let Ok((_, Some(k), _)) = provider_endpoint(agent, &p.id) {
@@ -606,6 +611,13 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART_SETTING || key == DESKTOP_EXE_SETTING));
     // MCP servers live in their own part of the config (sometimes their own file).
     let (mcp, rest): (Vec<&Op>, Vec<&Op>) = rest.into_iter().partition(|o| o.is_mcp());
+    // So do plugin switches, except DeepSeek Harness's: its adapter writes them (a setting).
+    let (plugin_ops, rest): (Vec<&Op>, Vec<&Op>) = rest.into_iter().partition(|o| o.is_plugin() && agent != dsh::ID);
+    let dsh_plugins: Vec<Op> = rest.iter().filter_map(|o| match o {
+        Op::SetPluginEnabled { plugin, enabled } => Some(Op::SetSetting { key: dsh::plugin_key(plugin), value: serde_json::Value::Bool(*enabled) }),
+        _ => None,
+    }).collect();
+    let rest: Vec<&Op> = rest.into_iter().filter(|o| !o.is_plugin()).chain(dsh_plugins.iter()).collect();
     // Entries pointing at the local gateway carry the placeholder (or, copied, another
     // agent's key): every agent gets its own, so the gateway can check and count its calls.
     let rest: Vec<Op> = rest
@@ -619,17 +631,21 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
             other => Ok(other),
         })
         .collect::<Result<_>>()?;
-    let (mut diff, mut written, mut backup) = if rest.is_empty() && !mcp.is_empty() {
+    let (mut diff, mut written, mut backup) = if rest.is_empty() && (!mcp.is_empty() || !plugin_ops.is_empty()) {
         (Diff::default(), vec![], None)
     } else if ocproject::is_project(agent) {
         ocproject::plan(agent, &rest, dry_run)?
     } else {
         (adapter(agent)?.plan)(&rest, dry_run)?
     };
-    if !mcp.is_empty() {
-        // After the adapter: when both edit one file, this reads what the adapter wrote.
-        let mcp: Vec<Op> = mcp.into_iter().cloned().collect();
-        let (d, files, b) = crate::mcp::write::plan(agent, &mcp, dry_run)?;
+    // After the adapter: when both edit one file, these read what the adapter wrote.
+    let extra: [(Vec<&Op>, PlanFn); 2] = [(mcp, crate::mcp::write::plan), (plugin_ops, crate::plugins::plan)];
+    for (ops, plan) in extra {
+        if ops.is_empty() {
+            continue;
+        }
+        let ops: Vec<Op> = ops.into_iter().cloned().collect();
+        let (d, files, b) = plan(agent, &ops, dry_run)?;
         for g in d.groups {
             for line in g.lines {
                 diff.push(&g.file, line.text, line.add);

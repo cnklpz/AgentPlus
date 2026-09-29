@@ -586,12 +586,20 @@ fn profile_setting(all: &[String], current: &str) -> Setting {
     }
 }
 
-fn plugin_setting(p: &Plugin) -> Setting {
-    let desc = match &p.desc {
-        Some(d) => format!("{d} · {}", p.name),
-        None => p.name.clone(),
-    };
-    bool_setting(&format!("{PLUGIN_SETTING}{}", p.name), l("Plugins", "插件"), p.title.as_deref().unwrap_or(&p.name), &desc, p.enabled)
+/// The plugins of the profile AgentPlus edits, for the Plugins tab. Switching one is an
+/// `Op::SetSetting` on `plugin_key(name)` (see `plan`).
+pub(crate) fn plugin_list() -> Vec<PluginInfo> {
+    let profile = profile_in(&store::load(), &profiles());
+    let install = install_dir();
+    plugins(&profile, install.as_deref())
+        .into_iter()
+        .map(|p| PluginInfo { name: p.title.clone().unwrap_or_else(|| p.name.clone()), description: p.desc, source: Some(tr!("profile {profile}", "profile {profile}")), enabled: p.enabled, id: p.name, ..Default::default() })
+        .collect()
+}
+
+/// The setting key that switches plugin `name`.
+pub(crate) fn plugin_key(name: &str) -> String {
+    format!("{PLUGIN_SETTING}{name}")
 }
 
 pub fn state(inst: &Install) -> AgentState {
@@ -635,8 +643,6 @@ pub fn state(inst: &Install) -> AgentState {
     if all.len() > 1 {
         st.settings.push(profile_setting(&all, &profile));
     }
-    let install = install_dir();
-    st.settings.extend(plugins(&profile, install.as_deref()).iter().map(plugin_setting));
     st
 }
 

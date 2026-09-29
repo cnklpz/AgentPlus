@@ -1,6 +1,11 @@
 // src/components/AgentPage.tsx
 export default {
   tabSkills: "Skills",
+  tabPlugins: "Plugins",
+  pluginsHint: "Plugins installed in {name}. Switch them here; install and remove them in {name} itself.",
+  pluginsEmpty: "No plugins installed in {name}.",
+  pluginPending: "Pending",
+  pluginToggle: "{name} on",
   tabModels: "Model list",
   tabSessions: "Sessions",
   tabMaint: "Maintenance",

@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
   CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, guessedModel, hasDefaultModel, isEnabled, isVisible, keys, mergeExtra, opCount,
-  providerModelCount, setModelVisible, setSetting, setSettingIn, settingValue, excludedOn, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
+  pluginOn, providerModelCount, setModelVisible, setPluginEnabled, setSetting, setSettingIn, settingValue, excludedOn, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
@@ -19,7 +19,7 @@ import { t, tn } from "../i18n";
 import { scrub } from "../privacy";
 import { errText, type Flash, toggled, toggledIn } from "../util";
 
-export type Tab = "prov" | "models" | "mcp" | "skills" | "sessions" | "maint" | "projects" | "set";
+export type Tab = "prov" | "models" | "mcp" | "skills" | "plugins" | "sessions" | "maint" | "projects" | "set";
 
 interface Props {
   st: AgentState;
@@ -74,12 +74,13 @@ export function AgentPage(props: Props) {
     ["models", t("agentPage.tabModels"), visibleCount(st, draft)],
     ...(props.mcpTab ? ([["mcp", "MCP", null]] as [Tab, string, null][]) : []),
     ...(props.skillsTab ? ([["skills", t("agentPage.tabSkills"), null]] as [Tab, string, null][]) : []),
+    ...(st.plugins ? ([["plugins", t("agentPage.tabPlugins"), st.plugins.filter((p) => pluginOn(p, draft)).length || null]] as [Tab, string, number | null][]) : []),
     ...(st.id === "codex" ? ([["sessions", t("agentPage.tabSessions"), null], ["maint", t("agentPage.tabMaint"), null]] as [Tab, string, null][]) : []),
     ...(props.projectsTab ? ([["projects", t("agentPage.tabProjects"), props.projectsTab.count || null]] as [Tab, string, number | null][]) : []),
     ...(hasSettings ? ([["set", t("agentPage.tabSettings"), null]] as [Tab, string, null][]) : []),
   ];
   // Coming from another agent's settings tab: this one has none.
-  useEffect(() => { if ((tab === "set" && !hasSettings) || (tab === "mcp" && !props.mcpTab) || (tab === "skills" && !props.skillsTab)) setTab("prov"); }, [tab, hasSettings, !!props.mcpTab, !!props.skillsTab]);
+  useEffect(() => { if ((tab === "set" && !hasSettings) || (tab === "mcp" && !props.mcpTab) || (tab === "skills" && !props.skillsTab) || (tab === "plugins" && !st.plugins)) setTab("prov"); }, [tab, hasSettings, !!props.mcpTab, !!props.skillsTab, !!st.plugins]);
   const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
@@ -243,6 +244,36 @@ export function AgentPage(props: Props) {
         {tab === "projects" && props.projectsTab?.body}
         {tab === "mcp" && props.mcpTab}
         {tab === "skills" && props.skillsTab}
+        {tab === "plugins" && st.plugins && (
+          <div className="stack12">
+            <span className="muted small hint">{t("agentPage.pluginsHint", { name: st.name })}</span>
+            {st.plugins.length === 0 && <div className="empty">{t("agentPage.pluginsEmpty", { name: st.name })}</div>}
+            {st.plugins.length > 0 && (
+              <div className="stable">
+                {st.plugins.map((p) => {
+                  const on = pluginOn(p, draft);
+                  const pending = on !== p.enabled;
+                  return (
+                    <div key={p.id} className={`hrow mcp-row${on ? "" : " off"}`}>
+                      <div className="minw0">
+                        <div className="row gap6">
+                          <span className="strong small">{p.name}</span>
+                          {p.version && <span className="tiny muted mono">{p.version}</span>}
+                          {p.source && <span className="ptag tag-soft">{p.source}</span>}
+                          {pending && <span className="ptag tag-new">{t("agentPage.pluginPending")}</span>}
+                        </div>
+                        <div className="tiny muted ellipsis" title={p.description ?? undefined}>{p.description || (p.name === p.id ? "" : p.id)}</div>
+                      </div>
+                      <span title={p.locked ?? undefined}>
+                        <Switch on={on} disabled={st.readonly || !!p.locked} onChange={(v) => setDraft(setPluginEnabled(draft, p, v))} label={t("agentPage.pluginToggle", { name: p.name })} />
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {tab === "set" && hasSettings && (() => {
           // Fixed id is pre-enabled: shown as on, written together with the next provider switch.

@@ -1,5 +1,5 @@
 // Pending edits per agent, keyed so a toggle back to the original drops the op.
-import type { AgentState, ApiKind, McpInput, McpServer, McpSource, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
+import type { AgentState, ApiKind, McpInput, PluginInfo, McpServer, McpSource, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
 import { t } from "./i18n";
 
 export type Draft = Record<string, Op>;
@@ -19,6 +19,7 @@ export const keys = {
   importProvider: (from: string, pid: string) => `pi:${from}:${pid}`,
   /** A new entry pointing at gateway forward `routeId`. */
   gatewayProvider: (routeId: string) => `pu:gw-${routeId}`,
+  plugin: (id: string) => `pl:${id}`,
   mcpUpsert: (name: string) => `mcpu:${name}`,
   mcpDelete: (name: string) => `mcpd:${name}`,
   mcpEnabled: (name: string) => `mcpe:${name}`,
@@ -371,6 +372,19 @@ export function opsToWrite(st: AgentState | undefined, d: Draft): Op[] {
   const switching = cur?.op === "set_current_provider" && cur.provider !== "openai";
   if (!st || st.id !== "codex" || !st.fixedPrompt || !switching || d[keys.setting("fixed_id")]) return ops;
   return [...ops, { op: "set_setting", key: "fixed_id", value: true }];
+}
+
+// ---------------------------------------------------------------- plugins
+
+/** A plugin's switch with the pending change applied. */
+export function pluginOn(p: PluginInfo, d: Draft): boolean {
+  const op = d[keys.plugin(p.id)];
+  return op?.op === "set_plugin_enabled" ? op.enabled : p.enabled;
+}
+
+/** Switches a plugin; back to how it is in the config drops the change. */
+export function setPluginEnabled(d: Draft, p: PluginInfo, enabled: boolean): Draft {
+  return withOp(d, keys.plugin(p.id), enabled === p.enabled ? null : { op: "set_plugin_enabled", plugin: p.id, enabled });
 }
 
 // ---------------------------------------------------------------- MCP servers

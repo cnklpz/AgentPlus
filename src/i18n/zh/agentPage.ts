@@ -3,6 +3,11 @@ import type en from "../en/agentPage";
 
 const zh: typeof en = {
   tabSkills: "技能",
+  tabPlugins: "插件",
+  pluginsHint: "{name} 里已安装的插件。可以在这里开关；安装和卸载请在 {name} 里操作。",
+  pluginsEmpty: "{name} 还没有安装插件。",
+  pluginPending: "待写入",
+  pluginToggle: "启用 {name}",
   tabModels: "模型列表",
   tabSessions: "会话",
   tabMaint: "维护",

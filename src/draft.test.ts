@@ -3,7 +3,7 @@ import type { AgentState, McpInput, McpServer, Model, Op, Provider, Setting } fr
 import {
   type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
-  visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp, writeOrder,
+  visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp, writeOrder, pluginOn, setPluginEnabled,
 } from "./draft";
 
 const model = (id: string, over: Partial<Model> = {}): Model =>
@@ -489,5 +489,15 @@ describe("sameCore", () => {
     const i: McpInput = { name: "g", transport: "stdio", command: "npx", args: ["-y", "vk"], cwd: null, url: null, env: [{ key: "T", value: "••••1234" }], headers: [], enabled: true };
     expect(sameCore(i, s)).toBe(true);
     expect(sameCore({ ...i, args: ["vk"] }, s)).toBe(false);
+  });
+});
+
+describe("plugin switches", () => {
+  const p = { id: "latex@openai-bundled", name: "LaTeX", description: null, version: null, source: null, enabled: false, locked: null };
+  it("a switch back to the config's state drops the change", () => {
+    const d = setPluginEnabled({}, p, true);
+    expect(d[keys.plugin(p.id)]).toEqual({ op: "set_plugin_enabled", plugin: p.id, enabled: true });
+    expect(pluginOn(p, d)).toBe(true);
+    expect(setPluginEnabled(d, p, false)).toEqual({});
   });
 });

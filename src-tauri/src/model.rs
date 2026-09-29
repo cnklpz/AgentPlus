@@ -38,6 +38,26 @@ pub struct AgentState {
     pub model_fields: Vec<ModelField>,
     /// How the running desktop app was started; None unless restartable and running.
     pub launch: Option<Launch>,
+    /// Installed plugins (extensions, bundles); None for agents without plugins. Filled in
+    /// adapters::state.
+    pub plugins: Option<Vec<PluginInfo>>,
+}
+
+/// An installed plugin of an agent. Installing and removing happen in the agent itself;
+/// AgentPlus switches them on and off.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginInfo {
+    /// What the agent's config calls it (`name@marketplace`, an npm spec, a folder name).
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    /// Marketplace, registry or folder it came from.
+    pub source: Option<String>,
+    pub enabled: bool,
+    /// Can't be switched here (why, in the agent's language).
+    pub locked: Option<String>,
 }
 
 /// Whether the running desktop app is the one AgentPlus started.
@@ -279,12 +299,19 @@ pub enum Op {
     UpsertMcp { server: crate::mcp::McpInput },
     DeleteMcp { name: String },
     SetMcpEnabled { name: String, enabled: bool },
+    /// Switch an installed plugin on or off (see `plugins`).
+    SetPluginEnabled { plugin: String, enabled: bool },
 }
 
 impl Op {
     /// MCP server ops: planned by `mcp::write`, never by the agent's adapter.
     pub fn is_mcp(&self) -> bool {
         matches!(self, Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. })
+    }
+
+    /// Plugin switches: planned by `plugins`, except DeepSeek Harness's (its adapter's own).
+    pub fn is_plugin(&self) -> bool {
+        matches!(self, Op::SetPluginEnabled { .. })
     }
 }
 

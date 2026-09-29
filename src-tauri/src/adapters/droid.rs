@@ -611,7 +611,7 @@ impl Work {
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
-            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } | Op::SetPluginEnabled { .. } => unreachable!("planned in mcp::write or plugins"),
         }
         Ok(())
     }
