@@ -1194,7 +1194,8 @@ export default function App() {
   const adoptSync = async (list: SyncSuggestion[]): Promise<boolean> => {
     const libChanges = list.flatMap((s) => (s.lib ? [s.lib] : []));
     const mcpChanges = list.flatMap((s) => (s.mcp ? [s.mcp] : []));
-    const agentSugs = list.filter((s): s is SyncSuggestion & { agent: AgentId } => !s.lib && !s.mcp && s.agent !== "library");
+    const skillChanges = list.flatMap((s) => (s.skill ? [s.skill] : []));
+    const agentSugs = list.filter((s): s is SyncSuggestion & { agent: AgentId } => !s.lib && !s.mcp && !s.skill && s.agent !== "library");
     let libDone: string | null = null;
     try {
       const done: string[] = [];
@@ -1203,6 +1204,7 @@ export default function App() {
         reloadLib();
       }
       if (mcpChanges.length > 0) done.push(await api.syncAdoptMcp(mcpChanges));
+      if (skillChanges.length > 0) done.push(await api.syncAdoptSkills(skillChanges));
       libDone = done.length ? done.join(" · ") : null;
     } catch (e) {
       flash(errText(e), true);

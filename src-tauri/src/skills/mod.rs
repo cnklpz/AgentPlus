@@ -19,6 +19,7 @@
 
 pub mod import;
 mod scan;
+pub mod sync;
 pub mod write;
 
 pub use scan::{content, SkillCopy};

@@ -196,9 +196,9 @@ describe("plainRoute", () => {
 
 describe("syncSuggestionId", () => {
   const sug = (agent: SyncSuggestion["agent"], keys: string[], title = "t"): SyncSuggestion =>
-    ({ agent, title, detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]), lib: null, mcp: null });
+    ({ agent, title, detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]), lib: null, mcp: null, skill: null });
   const lib = (key: string): SyncSuggestion =>
-    ({ agent: "library", title: "t", detail: "", ops: [], lib: { key, id: null, name: "n", baseUrl: "https://x/v1", api: "chat", models: [], keyFp: null }, mcp: null });
+    ({ agent: "library", title: "t", detail: "", ops: [], lib: { key, id: null, name: "n", baseUrl: "https://x/v1", api: "chat", models: [], keyFp: null }, mcp: null, skill: null });
   it("tells library changes apart by their key", () => {
     expect(syncSuggestionId(lib("lib:a|chat"))).not.toBe(syncSuggestionId(lib("lib:b|chat")));
     expect(syncSuggestionId(lib("lib:a|chat"))).toBe(syncSuggestionId(lib("lib:a|chat")));
@@ -214,7 +214,7 @@ describe("syncSuggestionId", () => {
 });
 
 describe("syncSuggestionIds", () => {
-  const sug = (keys: string[]): SyncSuggestion => ({ agent: "codex", title: "t", detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]), lib: null, mcp: null });
+  const sug = (keys: string[]): SyncSuggestion => ({ agent: "codex", title: "t", detail: "", ops: keys.map((k) => [k, { op: "delete_provider", provider: k }]), lib: null, mcp: null, skill: null });
   it("keeps ids unique when two suggestions touch the same keys", () => {
     const ids = syncSuggestionIds([sug(["a"]), sug(["b"]), sug(["a"]), sug(["a"])]);
     expect(new Set(ids).size).toBe(4);
@@ -230,7 +230,7 @@ describe("syncSuggestionIds", () => {
 
 describe("syncSuggestionId for MCP", () => {
   it("uses the MCP change's key", () => {
-    const s: SyncSuggestion = { agent: "library", title: "t", detail: "", ops: [], lib: null, mcp: { key: "mcp:gh", name: "gh", server: {} } };
+    const s: SyncSuggestion = { agent: "library", title: "t", detail: "", ops: [], lib: null, mcp: { key: "mcp:gh", name: "gh", server: {} }, skill: null };
     expect(syncSuggestionId(s)).toBe("library\nmcp:gh");
   });
 });

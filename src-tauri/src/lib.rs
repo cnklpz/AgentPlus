@@ -456,6 +456,11 @@ async fn sync_adopt_library(changes: Vec<sync::LibChange>) -> Result<String, Str
 }
 
 #[tauri::command]
+async fn sync_adopt_skills(changes: Vec<sync::SkillChange>) -> Result<String, String> {
+    blocking(move || sync::adopt_skills(changes)).await
+}
+
+#[tauri::command]
 async fn sync_adopt_mcp(changes: Vec<sync::McpChange>) -> Result<String, String> {
     blocking(move || sync::adopt_mcp(changes)).await
 }
@@ -910,6 +915,7 @@ pub fn run() {
             sync_set_include_keys,
             sync_adopt_library,
             sync_adopt_mcp,
+            sync_adopt_skills,
             sync_history,
             sync_delete_records,
             sync_set_options,

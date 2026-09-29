@@ -26,10 +26,10 @@ const MAX_SKILLS: usize = 200;
 const CLONE_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// A scratch folder under `~/.agentplus/tmp`, removed when dropped.
-struct Scratch(PathBuf);
+pub(super) struct Scratch(pub(super) PathBuf);
 
 impl Scratch {
-    fn new() -> Result<Scratch> {
+    pub(super) fn new() -> Result<Scratch> {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let p = agentplus_dir().join("tmp").join(format!("skill-import-{nanos}"));
         std::fs::create_dir_all(&p)?;
