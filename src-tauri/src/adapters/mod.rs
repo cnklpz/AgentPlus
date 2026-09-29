@@ -643,7 +643,9 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
             other => Ok(other),
         })
         .collect::<Result<_>>()?;
-    let (mut diff, mut written, mut backup) = if rest.is_empty() && (!mcp.is_empty() || !plugin_ops.is_empty()) {
+    // Nothing for the adapter: it isn't asked (reading a broken config, or Codex while signed in
+    // officially, would fail a change that doesn't touch its files).
+    let (mut diff, mut written, mut backup) = if rest.is_empty() && (!own.is_empty() || !mcp.is_empty() || !plugin_ops.is_empty()) {
         (Diff::default(), vec![], None)
     } else if ocproject::is_project(agent) {
         ocproject::plan(agent, &rest, dry_run)?
@@ -762,6 +764,17 @@ mod tests {
         let key = key.unwrap();
         assert!(key.starts_with("agp-") && key.len() == 44);
         assert_eq!(store::load()["gatewayKeys"]["claude"], key);
+    }
+
+    /// A switch AgentPlus keeps itself doesn't need the agent's config to be readable.
+    #[test]
+    fn own_settings_apply_with_a_broken_config() {
+        let h = TestHome::new("own-settings-broken-config");
+        let dir = h.0.join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), "{ not json").unwrap();
+        let op = Op::SetSetting { key: AUTO_RESTART_SETTING.into(), value: serde_json::Value::Bool(!auto_restart(claude::ID)) };
+        store::transaction(|| plan_resolved(claude::ID, &[op], false)).unwrap();
     }
 
     #[test]
