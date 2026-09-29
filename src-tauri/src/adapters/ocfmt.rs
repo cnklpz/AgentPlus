@@ -147,21 +147,15 @@ pub(crate) fn auth_cards(auth: Option<&Value>, known: &[Provider], login: &str, 
         .collect()
 }
 
-/// Writes a credentials file in place (not tmp + rename) so it keeps its owner-only permissions;
-/// one AgentPlus creates is owner-only from the start (Unix), not world-readable by the umask.
+/// Writes a credentials file through a temp file and a rename, so a crash or a reader (pi,
+/// OpenCode) never sees half of it; the file keeps its permissions, and one AgentPlus creates
+/// is owner-only from the start (Unix), not world-readable by the umask.
 pub(crate) fn write_auth(path: &Path, auth: &Value) -> Result<()> {
-    use std::io::Write;
     let failed = || tr!("Failed to write {}", "写入 {} 失败", display_path(path));
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).with_context(failed)?;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut f = options.open(path).with_context(failed)?;
-    f.write_all((serde_json::to_string_pretty(auth)? + "\n").as_bytes()).with_context(failed)?;
-    Ok(())
+    crate::util::write_bytes_atomic(path, (serde_json::to_string_pretty(auth)? + "\n").as_bytes())
 }
 
 impl Fmt {
