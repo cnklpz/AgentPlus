@@ -561,7 +561,7 @@ impl Ctx {
         let snap = store_obj(&self.root, "names");
         let mut names = snap.clone();
         for (old, _) in &moves {
-            names.remove(old);
+            names.shift_remove(old);
         }
         let named = |new: &str| moves.iter().any(|(o, n)| n == new && snap.contains_key(o));
         for (old, new) in &moves {
@@ -571,7 +571,7 @@ impl Ctx {
                 }
                 // An unnamed provider must not pick up a stale name left at its new id.
                 None if !named(new) => {
-                    names.remove(new);
+                    names.shift_remove(new);
                 }
                 None => {}
             }
@@ -628,7 +628,7 @@ impl Ctx {
     fn prune(&mut self, key: &str) {
         if self.live_arr(key).map(|a| a.is_empty()).unwrap_or(false) {
             if let Some(mp) = self.cfg.get_mut("modelProviders").and_then(|m| m.as_object_mut()) {
-                mp.remove(key);
+                mp.shift_remove(key);
             }
         }
     }
@@ -818,7 +818,7 @@ impl Ctx {
                 let Some(o) = e.as_object_mut() else { return };
                 o.insert("baseUrl".into(), json!(base));
                 if !openai {
-                    o.remove("wireApi");
+                    o.shift_remove("wireApi");
                 } else if api == "responses" {
                     o.insert("wireApi".into(), json!("responses"));
                 } else if o.contains_key("wireApi") {
@@ -870,13 +870,13 @@ impl Ctx {
             }
         } else {
             let mut d = store_obj(&self.root, "disabledProviders");
-            d.remove(id);
+            d.shift_remove(id);
             self.set_store("disabledProviders", d);
             self.diff.push(store_label(), tr!("- \"{name}\" (disabled; stashed entries deleted too)", "- 「{name}」（已停用，暂存的条目一并删除）"), false);
         }
         self.pins.retain(|p| p.id != id);
         let mut names = store_obj(&self.root, "names");
-        if names.remove(id).is_some() {
+        if names.shift_remove(id).is_some() {
             self.set_store("names", names);
         }
         // Drop the key variable once nothing uses it any more.
@@ -884,7 +884,7 @@ impl Ctx {
             let used = self.groups().iter().any(|o| o.env_key.as_deref() == Some(var));
             let has = self.cfg.get("env").and_then(|e| e.get(var)).is_some();
             if !used && has {
-                self.cfg["env"].as_object_mut().unwrap().remove(var);
+                self.cfg["env"].as_object_mut().unwrap().shift_remove(var);
                 self.diff.push(&self.file, tr!("env.{var} (deleted)", "env.{var}（删除）"), false);
                 self.cfg_dirty = true;
             }
@@ -913,7 +913,7 @@ impl Ctx {
             d.insert(g.id.clone(), json!({ "key": g.key, "entries": entries, "hidden": hidden, "template": g.template() }));
             self.repin(id, &g.key, g.base.clone(), g.env_key.clone(), false);
         } else {
-            let rec = d.remove(id).unwrap_or_default();
+            let rec = d.shift_remove(id).unwrap_or_default();
             let key = s(&rec, "key").unwrap_or(&g.key).to_string();
             let arr = |k: &str| rec.get(k).and_then(|x| x.as_array()).cloned().unwrap_or_default();
             let (entries, hidden) = (arr("entries"), arr("hidden"));

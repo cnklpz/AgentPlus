@@ -124,7 +124,7 @@ fn clean_base(u: &str) -> String {
 
 fn drop_default_model(p: &mut Value) {
     if let Some(o) = p.as_object_mut() {
-        o.remove("defaultModel");
+        o.shift_remove("defaultModel");
     }
 }
 
@@ -576,7 +576,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 // The older string form goes as a whole; `model.name` goes with the object it leaves empty.
                 if cfg.get("model").is_some_and(Value::is_string) {
                     if let Some(o) = cfg.as_object_mut() {
-                        o.remove("model");
+                        o.shift_remove("model");
                     }
                 } else {
                     crate::mfields::remove(&mut cfg, "/model/name");

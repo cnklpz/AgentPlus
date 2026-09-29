@@ -141,7 +141,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if !existed {
         // ocfmt seeds OpenCode's schema URL; a new Kilo file goes without one.
         if let Some(o) = cfg.as_object_mut() {
-            o.remove("$schema");
+            o.shift_remove("$schema");
         }
     }
     let mut auth = f.load_auth();

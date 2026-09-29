@@ -247,7 +247,7 @@ mod tests {
         tampered["files"][1]["data"] = json!(B64.encode("changed"));
         assert!(write(&tampered).is_err());
         let mut unversioned = out[0].clone();
-        unversioned.as_object_mut().unwrap().remove("sigVersion");
+        unversioned.as_object_mut().unwrap().shift_remove("sigVersion");
         assert_eq!(write(&unversioned).unwrap(), Copied::Same);
         let mut unsupported = out[0].clone();
         unsupported["sigVersion"] = json!(3);

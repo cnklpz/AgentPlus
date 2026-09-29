@@ -565,7 +565,7 @@ impl Fmt {
             return;
         }
         if let Some(r) = creds.get_mut("refs").and_then(|r| r.as_object_mut()) {
-            r.remove(name);
+            r.shift_remove(name);
             diff.push(&file, format!("- refs.{name}"), false);
             dirty.auth = true;
         }
@@ -679,7 +679,7 @@ impl Fmt {
                         let cur_name = self.display_name(id, self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id)).unwrap_or(&Value::Null), root);
                         if flavor == Flavor::OpenClaw && cur_name != name {
                             let names = store::section(root, agent, "names");
-                            if name == id { names.remove(id) } else { names.insert(id.clone(), json!(name)) };
+                            if name == id { names.shift_remove(id) } else { names.insert(id.clone(), json!(name)) };
                             diff.push(l("AgentPlus · display names", "AgentPlus · 显示名称"), tr!("{id} → \"{name}\"", "{id} → 「{name}」"), true);
                             dirty.store = true;
                         }
@@ -764,15 +764,15 @@ impl Fmt {
                 }
             }
             Op::DeleteProvider { provider } => {
-                let from_cfg = self.providers_mut(cfg)?.remove(provider);
-                let from_stash = store::section(root, agent, "disabledProviders").remove(provider);
+                let from_cfg = self.providers_mut(cfg)?.shift_remove(provider);
+                let from_stash = store::section(root, agent, "disabledProviders").shift_remove(provider);
                 let removed_cfg = from_cfg.is_some();
                 let Some(def) = from_cfg.or(from_stash) else {
                     return Err(msg::no_provider(provider));
                 };
                 let prefix = format!("{provider}|");
                 store::section(root, agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
-                store::section(root, agent, "names").remove(provider);
+                store::section(root, agent, "names").shift_remove(provider);
                 if self.flavor == Flavor::Dsh {
                     self.drop_ref_key(cfg, root, provider, &def, auth, diff, dirty);
                     diff.push(&ef, tr!("- {pre}.{provider} (with its models)", "- {pre}.{provider}（含它的模型）"), false);
@@ -785,7 +785,7 @@ impl Fmt {
                 // auth.json entry would come back as a built-in provider that can't be removed.
                 if kept_key && !BUILTIN_PROVIDERS.contains(&provider.as_str()) {
                     if let Some(o) = auth.as_mut().and_then(|a| a.0.as_object_mut()) {
-                        o.remove(provider);
+                        o.shift_remove(provider);
                         dirty.auth = true;
                         kept_key = false;
                     }
@@ -803,13 +803,13 @@ impl Fmt {
                 let providers = self.providers_mut(cfg)?;
                 let parked = store::section(root, agent, "disabledProviders");
                 if *enabled {
-                    if let Some(def) = parked.remove(provider) {
+                    if let Some(def) = parked.shift_remove(provider) {
                         providers.insert(provider.clone(), def);
                         diff.push(&ef, tr!("+ {pre}.{provider} (enabled)", "+ {pre}.{provider}（启用）"), true);
                         dirty.cfg = true;
                         dirty.store = true;
                     }
-                } else if let Some(def) = providers.remove(provider) {
+                } else if let Some(def) = providers.shift_remove(provider) {
                     parked.insert(provider.clone(), def);
                     diff.push(&ef, tr!("- {pre}.{provider} (disabled: definition kept in AgentPlus, can be restored)", "- {pre}.{provider}（停用：定义暂存在 AgentPlus，可恢复）"), false);
                     dirty.cfg = true;
@@ -824,7 +824,7 @@ impl Fmt {
                 let idx = models.iter().position(|m| s(m, "id") == Some(model.as_str()));
                 match (visible, idx) {
                     (true, None) => {
-                        models.push(hidden.remove(&key).unwrap_or(fresh));
+                        models.push(hidden.shift_remove(&key).unwrap_or(fresh));
                         diff.push(&ef, format!("{pre}.{provider}.models + \"{model}\""), true);
                         dirty.cfg = true;
                         dirty.store = true;
@@ -888,7 +888,7 @@ impl Fmt {
                     models.retain(|d| s(d, "id") != Some(model.as_str()));
                     removed = models.len() != n;
                 }
-                let stashed = store::section(root, agent, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
+                let stashed = store::section(root, agent, "hiddenModels").shift_remove(&format!("{provider}|{model}")).is_some();
                 if removed || stashed {
                     diff.push(&ef, tr!("{pre}.{provider}.models - \"{model}\" (deleted)", "{pre}.{provider}.models - \"{model}\"（删除）"), false);
                     dirty.cfg |= removed;
@@ -918,7 +918,7 @@ impl Fmt {
                     dirty.cfg = true;
                     let sec = store::section(root, agent, "hiddenModels");
                     for id in &want {
-                        if sec.remove(&format!("{provider}|{id}")).is_some() {
+                        if sec.shift_remove(&format!("{provider}|{id}")).is_some() {
                             dirty.store = true;
                         }
                     }

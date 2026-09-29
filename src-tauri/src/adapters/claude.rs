@@ -412,7 +412,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     "quiet" => {
                         if env_str(&env_of(&cfg), QUIET).is_some() != on {
                             let env = obj_at(&mut cfg, &["env"])?;
-                            if on { env.insert(QUIET.into(), json!("1")); } else { env.remove(QUIET); }
+                            if on { env.insert(QUIET.into(), json!("1")); } else { env.shift_remove(QUIET); }
                             diff.push(&file, format!("env.{QUIET} {}", if on { "= 1" } else { l("(removed)", "（删除）") }), on);
                             cfg_dirty = true;
                         }
@@ -447,7 +447,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     diff.push(&file, format!("env.{k} = {}", shown(val)), true);
                 }
                 None => {
-                    env.remove(k);
+                    env.shift_remove(k);
                     diff.push(&file, tr!("env.{k} (removed)", "env.{k}（删除）"), false);
                 }
             }
@@ -455,7 +455,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         if env.is_empty() {
             if let Some(o) = cfg.as_object_mut() {
-                o.remove("env");
+                o.shift_remove("env");
             }
         }
     }

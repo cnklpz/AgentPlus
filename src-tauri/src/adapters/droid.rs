@@ -469,7 +469,7 @@ impl Work {
                                 self.diff.push(&file, tr!("\"{}\" all entries {line}", "「{}」所有条目 {line}", g.name), true);
                             }
                         }
-                        self.names.remove(&fp(&g.key));
+                        self.names.shift_remove(&fp(&g.key));
                         self.names.insert(fp(&key), json!(p.name.trim()));
                         if p.name.trim() != g.name {
                             self.diff.push(STORE_LABEL, tr!("Provider name \"{}\" → \"{}\"", "供应商名称「{}」→「{}」", g.name, p.name.trim()), true);
@@ -487,7 +487,7 @@ impl Work {
                 self.entries.retain(|e| key_of(e) != g.key);
                 let removed = n - self.entries.len();
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
-                self.names.remove(&fp(&g.key));
+                self.names.shift_remove(&fp(&g.key));
                 self.groups.retain(|x| x.id != g.id);
                 self.diff.push(&file, trn!(removed, "- \"{}\" ({n} model entry, with base URL and API key)", "- \"{}\" ({n} model entries, with base URL and API key)", "- 「{}」（{n} 个模型条目，含地址和密钥）", g.name), false);
             }
@@ -698,7 +698,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     o.insert("model".into(), json!(m));
                 }
                 None => {
-                    o.remove("model");
+                    o.shift_remove("model");
                 }
             }
             std::fs::create_dir_all(dir())?;

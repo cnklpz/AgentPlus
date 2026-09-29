@@ -103,17 +103,17 @@ fn codex_refs(extra: &mut Map<String, Value>, env: &mut Vec<(String, String)>, h
     if let Some(Value::Array(a)) = extra.get("env_vars") {
         if a.iter().all(Value::is_string) {
             env.extend(a.iter().filter_map(Value::as_str).map(|k| (k.to_string(), format!("${{{k}}}"))));
-            extra.remove("env_vars");
+            extra.shift_remove("env_vars");
         }
     }
     if let Some(Value::String(t)) = extra.get("bearer_token_env_var") {
         headers.push(("Authorization".into(), format!("Bearer ${{{t}}}")));
-        extra.remove("bearer_token_env_var");
+        extra.shift_remove("bearer_token_env_var");
     }
     if let Some(Value::Object(m)) = extra.get("env_http_headers") {
         if m.values().all(Value::is_string) {
             headers.extend(m.iter().filter_map(|(h, v)| v.as_str().map(|v| (h.clone(), format!("${{{v}}}")))));
-            extra.remove("env_http_headers");
+            extra.shift_remove("env_http_headers");
         }
     }
 }

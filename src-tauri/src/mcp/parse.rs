@@ -69,7 +69,7 @@ pub fn parse(text: &str) -> Result<Vec<McpInput>> {
                 Some(u) if def.get("url").is_none() => {
                     let mut d = def.clone();
                     d["url"] = u.clone();
-                    d.as_object_mut().unwrap().remove("serverUrl");
+                    d.as_object_mut().unwrap().shift_remove("serverUrl");
                     d
                 }
                 _ => def.clone(),

@@ -52,7 +52,7 @@ fn complete_model(def: &mut Value) -> Vec<String> {
                 out.push("modalities.output = [\"text\"]".into());
             }
             (false, true) if m.len() == 1 && m["output"] == json!(["text"]) => {
-                def.as_object_mut().unwrap().remove("modalities");
+                def.as_object_mut().unwrap().shift_remove("modalities");
             }
             _ => {}
         }
@@ -554,8 +554,8 @@ impl Fmt {
                 }
             }
             Op::DeleteProvider { provider } => {
-                let removed_cfg = self.providers_obj(cfg)?.remove(provider).is_some();
-                let removed_stash = store::section(root, &self.agent, "disabledProviders").remove(provider).is_some();
+                let removed_cfg = self.providers_obj(cfg)?.shift_remove(provider).is_some();
+                let removed_stash = store::section(root, &self.agent, "disabledProviders").shift_remove(provider).is_some();
                 let prefix = format!("{provider}|");
                 store::section(root, &self.agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
                 if !removed_cfg && !removed_stash {
@@ -593,13 +593,13 @@ impl Fmt {
                     let providers = self.providers_obj(cfg)?;
                     let parked = store::section(root, &self.agent, "disabledProviders");
                     if *enabled {
-                        if let Some(def) = parked.remove(provider) {
+                        if let Some(def) = parked.shift_remove(provider) {
                             providers.insert(provider.clone(), def);
                             diff.push(&ef, format!("+ provider.{provider}"), true);
                             dirty.cfg = true;
                             dirty.store = true;
                         }
-                    } else if let Some(def) = providers.remove(provider) {
+                    } else if let Some(def) = providers.shift_remove(provider) {
                         parked.insert(provider.clone(), def);
                         diff.push(&ef, tr!("- provider.{provider} (definition kept in AgentPlus; can be restored)", "- provider.{provider}（定义暂存在 AgentPlus，可恢复）"), false);
                         dirty.cfg = true;
@@ -619,12 +619,12 @@ impl Fmt {
                 let hidden = store::section(root, &self.agent, "hiddenModels");
                 if *visible {
                     if !models.contains_key(model) {
-                        models.insert(model.clone(), hidden.remove(&key).unwrap_or_else(|| json!({})));
+                        models.insert(model.clone(), hidden.shift_remove(&key).unwrap_or_else(|| json!({})));
                         diff.push(&ef, format!("provider.{provider}.models + \"{model}\""), true);
                         dirty.cfg = true;
                         dirty.store = true;
                     }
-                } else if let Some(def) = models.remove(model) {
+                } else if let Some(def) = models.shift_remove(model) {
                     hidden.insert(key, def);
                     diff.push(&ef, format!("provider.{provider}.models - \"{model}\""), false);
                     dirty.cfg = true;
@@ -679,9 +679,9 @@ impl Fmt {
                 let removed = cfg
                     .pointer_mut(&jptr(&["provider", provider, "models"]))
                     .and_then(|m| m.as_object_mut())
-                    .and_then(|m| m.remove(model))
+                    .and_then(|m| m.shift_remove(model))
                     .is_some();
-                let stashed = store::section(root, &self.agent, "hiddenModels").remove(&format!("{provider}|{model}")).is_some();
+                let stashed = store::section(root, &self.agent, "hiddenModels").shift_remove(&format!("{provider}|{model}")).is_some();
                 if removed || stashed {
                     diff.push(&ef, tr!("provider.{provider}.models - \"{model}\" (deleted)", "provider.{provider}.models - \"{model}\"（删除）"), false);
                     dirty.cfg |= removed;
@@ -827,6 +827,19 @@ mod tests {
         }
         let lines: Vec<&str> = diff.groups.iter().flat_map(|g| g.lines.iter().map(|l| l.text.as_str())).collect();
         assert_eq!(lines, ["- provider.a（含它的模型；auth.json 里的密钥保留）", "- provider.b（含它的模型和密钥）", "- provider.c（含它的模型；auth.json 里的登录保留）"]);
+    }
+
+    /// Deleting an entry leaves the others where they were (`Map::remove` would move the last one into its place).
+    #[test]
+    fn deleting_a_provider_keeps_the_order_of_the_others() {
+        let h = TestHome::new("ocfmt-order");
+        let prov = |u: &str| json!({ "options": { "baseURL": u } });
+        let f = write_cfg(&h, json!({ "provider": { "a": prov("https://a/v1"), "b": prov("https://b/v1"), "c": prov("https://c/v1"), "d": prov("https://d/v1") } }));
+        let (mut cfg, _, _) = f.load(true).unwrap();
+        let mut auth = f.load_auth();
+        f.apply(&Op::DeleteProvider { provider: "a".into() }, &mut cfg, &mut json!({}), &mut auth, &mut Diff::default(), &mut Dirty::default()).unwrap();
+        let ids: Vec<&String> = cfg["provider"].as_object().unwrap().keys().collect();
+        assert_eq!(ids, ["b", "c", "d"]);
     }
 
     #[test]

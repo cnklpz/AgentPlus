@@ -345,12 +345,12 @@ pub fn remove(def: &mut Value, path: &str) -> bool {
     fn go(cur: &mut Value, segs: &[&str]) -> bool {
         let Some(o) = cur.as_object_mut() else { return false };
         if segs.len() == 1 {
-            return o.remove(segs[0]).is_some();
+            return o.shift_remove(segs[0]).is_some();
         }
         let Some(child) = o.get_mut(segs[0]) else { return false };
         let removed = go(child, &segs[1..]);
         if removed && child.as_object().map(|c| c.is_empty()).unwrap_or(false) {
-            o.remove(segs[0]);
+            o.shift_remove(segs[0]);
         }
         removed
     }

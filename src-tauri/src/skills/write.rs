@@ -296,12 +296,12 @@ fn keyed(v: &mut Value, ptr: &[&str], key: &str, value: Option<Value>) -> Result
             obj.insert(key.into(), x);
         }
         None => {
-            obj.remove(key);
+            obj.shift_remove(key);
         }
     }
     if obj.is_empty() {
         if let Some((last, parent)) = ptr.split_last() {
-            obj_at(v, parent)?.remove(*last);
+            obj_at(v, parent)?.shift_remove(*last);
         }
     }
     Ok(())
@@ -381,7 +381,7 @@ fn hermes_switch(name: &str, off: bool) -> Result<bool> {
     let before = skills.clone();
     listed(&mut skills, &["disabled"], name, off)?;
     if skills["disabled"].as_array().is_some_and(|a| a.is_empty()) {
-        skills.as_object_mut().unwrap().remove("disabled");
+        skills.as_object_mut().unwrap().shift_remove("disabled");
     }
     if skills == before {
         return Ok(false);
@@ -455,7 +455,7 @@ fn unstash(agent: &str, dir: &Path) -> Result<()> {
         fs::remove_dir_all(dir)?;
     }
     store::update(|s| {
-        store::section(s, agent, OFF_KEY).remove(&rel);
+        store::section(s, agent, OFF_KEY).shift_remove(&rel);
         Ok(())
     })
 }
@@ -483,7 +483,7 @@ pub fn set_enabled(agent: &str, name: &str, dir: &str, on: bool) -> Result<()> {
             edit_json(&droid::settings_path(), |v| {
                 listed(v, &["disabledSkills"], name, off)?;
                 if v["disabledSkills"].as_array().is_some_and(|a| a.is_empty()) {
-                    v.as_object_mut().unwrap().remove("disabledSkills");
+                    v.as_object_mut().unwrap().shift_remove("disabledSkills");
                 }
                 Ok(())
             })?;

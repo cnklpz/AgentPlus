@@ -130,7 +130,7 @@ impl Row {
     fn raw(&self) -> Raw {
         let mut c = to_page(&self.config);
         if let Some(o) = c.as_object_mut() {
-            o.remove("serverName");
+            o.shift_remove("serverName");
         }
         decode::decode(Family::Dsh, &c)
     }
@@ -227,7 +227,7 @@ impl Layers {
                 if off {
                     m.insert(Y::from("disabled"), Y::Bool(true));
                 } else {
-                    m.remove("disabled");
+                    m.shift_remove("disabled");
                 }
             }),
         }
@@ -295,7 +295,7 @@ fn config_for(name: &str, i: &McpInput, base: Option<&Row>) -> Result<J> {
     let base = base.map(|r| {
         let mut c = to_page(&r.config);
         if let Some(o) = c.as_object_mut() {
-            o.remove("serverName");
+            o.shift_remove("serverName");
         }
         c
     });

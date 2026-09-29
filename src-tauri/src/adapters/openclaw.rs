@@ -219,9 +219,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if let Some(p) = primary_gone {
             let model = cfg.pointer_mut("/agents/defaults").and_then(|d| d.as_object_mut()).unwrap();
             if model.get("model").map(|m| m.is_string()).unwrap_or(false) {
-                model.remove("model");
+                model.shift_remove("model");
             } else if let Some(o) = model.get_mut("model").and_then(|m| m.as_object_mut()) {
-                o.remove("primary");
+                o.shift_remove("primary");
             }
             diff.push(&ef, tr!("- agents.defaults.model.primary ({p} was removed; OpenClaw will use its built-in default model)", "- agents.defaults.model.primary（{p} 已移除，OpenClaw 会改用内置默认模型）"), false);
         }

@@ -485,9 +485,9 @@ impl Doc {
                     if *enabled {
                         // `enabled: true` written out stays written out; `disabled: true` goes away.
                         if o.get(k) == Some(&json!(off)) {
-                            if k == "enabled" { o.insert(k.into(), json!(true)); } else { o.remove(k); }
+                            if k == "enabled" { o.insert(k.into(), json!(true)); } else { o.shift_remove(k); }
                         }
-                        o.remove("enable");
+                        o.shift_remove("enable");
                     } else {
                         o.insert(k.into(), json!(off));
                     }

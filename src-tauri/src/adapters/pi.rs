@@ -156,8 +156,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             if f.has_model(&cfg0, &dp, dm.as_deref()) && !f.has_model(&cfg, &dp, dm.as_deref()) {
                 let (mut s, m) = read_json(&settings_path())?;
                 if let Some(o) = s.as_object_mut() {
-                    o.remove("defaultProvider");
-                    o.remove("defaultModel");
+                    o.shift_remove("defaultProvider");
+                    o.shift_remove("defaultModel");
                 }
                 diff.push(&display_path(&settings_path()), tr!("- defaultProvider / defaultModel ({dp}/{} was removed; pi will pick another available model)", "- defaultProvider / defaultModel（{dp}/{} 已移除，pi 会另选可用模型）", dm.unwrap_or_default()), false);
                 settings = Some((s, m));
