@@ -5,6 +5,9 @@ import { AgentIcon, Icon } from "./icons";
 import { type TKey, t, tn } from "../i18n";
 import { scrub } from "../privacy";
 import { SYNC_ENABLED } from "../features";
+import { flushSync } from "react-dom";
+import { dragSort, markReordered } from "../dragSort";
+import { moveItem } from "../order";
 
 export type Page = "providers" | "mcp" | "skills" | "gateway" | "history" | "sync" | "settings";
 
@@ -17,6 +20,8 @@ interface Props {
   onSelect: (id: AgentId) => void;
   onPage: (p: Page) => void;
   gateway: GatewayStatus | null;
+  /** The agents' new order, after one is dragged (or moved with Alt+↑/↓). */
+  onReorder: (ids: AgentId[]) => void;
 }
 
 function subline(a: AgentState, d: Draft): string {
@@ -27,8 +32,17 @@ function subline(a: AgentState, d: Draft): string {
   return `${tn("common.providerCount", on)} · ${tn("common.modelCount", n)}`;
 }
 
-export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway }: Props) {
+export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway, onReorder }: Props) {
   const detected = agents.filter((a) => a.installed).length;
+  const ids = agents.map((a) => a.id);
+  const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, i: number) => {
+    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    const to = i + (e.key === "ArrowUp" ? -1 : 1);
+    if (to < 0 || to >= ids.length) return;
+    e.preventDefault();
+    markReordered(e.currentTarget.parentElement!.querySelectorAll<HTMLElement>(":scope > .agent-row"));
+    onReorder(moveItem(ids, i, to));
+  };
   const pending = pendingTotal(drafts);
   const links: [Page, TKey, JSX.Element][] = [
     ["providers", "common.providers", <Icon.layers key="l" />],
@@ -41,12 +55,14 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
   return (
     <nav className="sidebar" aria-label={t("sidebar.nav")}>
       <div className="side-label">{t("sidebar.agents")}</div>
-      {agents.map((a) => {
+      {agents.map((a, i) => {
         const d = drafts[a.id] ?? {};
         const fast = a.id === "codex" && settingOn(a, "fast_inject");
         const dirty = opCount(d) > 0;
         return (
-          <button key={a.id} className={`agent-row${a.id === selected ? " active" : ""}`} data-ctx="agent" data-agent={a.id} onClick={() => onSelect(a.id)}>
+          <button key={a.id} className={`agent-row${a.id === selected ? " active" : ""}`} data-ctx="agent" data-agent={a.id} onClick={() => onSelect(a.id)}
+            onPointerDown={(e) => dragSort(e.nativeEvent, e.currentTarget, ".agent-row", (from, to) => flushSync(() => onReorder(moveItem(ids, from, to))))}
+            onKeyDown={(e) => onKeyDown(e, i)}>
             <AgentIcon id={a.id} size={32} />
             <span className="agent-row-text">
               <span className="agent-row-name">

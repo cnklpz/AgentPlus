@@ -18,6 +18,8 @@ export interface Prefs {
   autoLatency: boolean;
   /** Detected agents the user chose not to show in the sidebar and search. */
   hiddenAgents: string[];
+  /** The sidebar's agent order, dragged by the user; empty until they do. */
+  agentOrder: string[];
   /** UI language; "auto" follows the system. */
   lang: LangPref;
   /** Light or dark UI; "auto" follows the system. */
@@ -33,7 +35,7 @@ export interface Prefs {
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full" };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full" };
 
 export function loadPrefs(): Prefs {
   try {

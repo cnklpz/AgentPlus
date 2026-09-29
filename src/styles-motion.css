@@ -80,6 +80,29 @@
 :root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(10) { --i: 9; }
 :root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(11) { --i: 10; }
 :root[data-motion="rich"] :is(.pgrid, .hgrid, .acct-row, .settings, .agent-wall, .sgroup, .uses, .row-cards, .hub-stats, .sidebar, .dd-menu, .ctx-menu, .palette-list) > :nth-child(n+12) { --i: 11; }
+/* Rows moved by a reorder are re-inserted in the DOM: don't replay their entrance (dragSort.ts) */
+:root[data-motion] .sidebar > [data-reordered] { animation: none; }
+
+/* A dragged agent row turns into a slab of clear glass, its shape unchanged (glass.ts builds
+   the #ap-glass displacement map, after shuding/liquid-glass). Only light tints and a thin
+   specular rim: anything opaque would hide what it refracts. The original's contrast(1.2)
+   brightness(1.05) turns the light sidebar pure white, so the slab read as a card. */
+:root[data-motion="rich"] .sidebar > .agent-row[data-glass] {
+  background: rgba(255, 255, 255, .06);
+  border-color: rgba(255, 255, 255, .7);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, .18), 0 10px 24px -12px rgba(18, 23, 34, .3),
+    inset 0 1px 1px rgba(255, 255, 255, .8), inset 0 -4px 10px rgba(0, 0, 0, .06);
+  backdrop-filter: url(#ap-glass) blur(.25px) contrast(1.05) brightness(1.01) saturate(1.4);
+}
+:root[data-motion="rich"][data-theme="dark"] .sidebar > .agent-row[data-glass] {
+  background: rgba(255, 255, 255, .03);
+  border-color: rgba(255, 255, 255, .18);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .45), inset 0 1px 1px rgba(255, 255, 255, .22), inset 0 -4px 10px rgba(0, 0, 0, .2);
+}
+/* WebKit can't refract through an SVG filter: frosted instead */
+:root[data-motion="rich"][data-os="mac"] .sidebar > .agent-row[data-glass] {
+  -webkit-backdrop-filter: blur(3px) saturate(1.6); backdrop-filter: blur(3px) saturate(1.6);
+}
 
 /* Long lists: items fade in as they scroll into view */
 @supports (animation-timeline: view()) {

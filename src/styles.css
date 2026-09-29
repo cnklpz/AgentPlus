@@ -211,13 +211,18 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 .agent-row-text { display: flex; flex-direction: column; min-width: 0; flex-grow: 1; }
 .agent-row-name { display: flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; }
 .agent-row-sub { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Dragging an agent to reorder (dragSort.ts): the held row lifts, the others slide out of its way */
+.sidebar[data-sorting] { user-select: none; }
+:root .sidebar > .agent-row[data-sort="lift"] { cursor: grabbing; background: var(--surface); border-color: var(--line-active); box-shadow: 0 10px 24px -10px rgba(18, 23, 34, .35); }
+.sidebar > .agent-row[data-sort="lift"]::before { opacity: 0; }
+:root[data-theme="dark"] .sidebar > .agent-row[data-sort="lift"] { box-shadow: 0 12px 28px -10px rgba(0, 0, 0, .7); }
 .agent-icon { display: grid; place-items: center; overflow: hidden; flex-shrink: 0; box-sizing: border-box; }
 .agent-icon img { object-fit: contain; display: block; max-width: none; }
 .badge-fast { font-size: 9.5px; font-weight: 700; letter-spacing: .06em; color: var(--fast-ink); background: var(--fast-soft); border-radius: 4px; padding: 1px 5px; }
 .dot-dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .side-link { display: flex; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 8px; border: 0; background: none; font-size: 13.5px; color: var(--ink2); text-align: left; }
 .side-link:disabled { color: var(--faint); }
-.side-foot { margin-top: auto; border: 1px solid var(--line-active); background: var(--row-hover); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--muted); }
+.side-foot { flex-shrink: 0; margin-top: auto; border: 1px solid var(--line-active); background: var(--row-hover); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--muted); }
 .side-foot strong { font-size: 12px; color: var(--ink2); }
 
 /* Settings page */

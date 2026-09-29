@@ -27,6 +27,7 @@ import { type SettingsTab, SettingsPage } from "./components/SettingsPage";
 import { PendingDialog } from "./components/PendingDialog";
 import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
 import { type Prefs, applyPrefs, loadPrefs, savePrefs } from "./prefs";
+import { mergeOrder, sortByOrder } from "./order";
 import { t, tn, useLang } from "./i18n";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
@@ -177,8 +178,12 @@ export default function App() {
 
   // Agents that were not found in this environment are not shown anywhere.
   const shown = useMemo(() => agents.filter((a) => a.installed), [agents]);
-  /** Detected agents minus the ones hidden in Settings › Agent detection (sidebar, search, agent pages). */
-  const listed = useMemo(() => shown.filter((a) => !prefs.hiddenAgents.includes(a.id)), [shown, prefs.hiddenAgents]);
+  /** Detected agents minus the ones hidden in Settings › Agent detection (sidebar, search, agent pages),
+   *  in the order dragged in the sidebar. */
+  const listed = useMemo(
+    () => sortByOrder(shown.filter((a) => !prefs.hiddenAgents.includes(a.id)), prefs.agentOrder),
+    [shown, prefs.hiddenAgents, prefs.agentOrder],
+  );
   const agentSt = listed.find((a) => a.id === selected) ?? listed[0];
   useEffect(() => { if (agentSt && agentSt.id !== selected) setSelected(agentSt.id); }, [agentSt?.id]);
   const projEntry = projects.find((p) => p.path === projPath);
@@ -1465,7 +1470,8 @@ export default function App() {
       </header>
 
       <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
-        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} />}
+        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage}
+          onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
         {page === "providers" && (
           <ProvidersHub
