@@ -67,3 +67,14 @@ describe("scrub", () => {
     expect(scrubVar("machine", "KLPZ-PC")).toBe("KLPZ-PC");
   });
 });
+
+describe("tSaved", () => {
+  it("never masks what is saved, while t masks what is shown", async () => {
+    const { t, tSaved } = await import("./i18n");
+    setPrivacy(true);
+    const name = "Relay 64.83.33.80";
+    expect(t("app.gatewayName", { name })).not.toContain("64.83.33.80");
+    expect(tSaved("app.gatewayName", { name })).toContain("64.83.33.80");
+    setPrivacy(false);
+  });
+});

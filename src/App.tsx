@@ -28,7 +28,7 @@ import { PendingDialog } from "./components/PendingDialog";
 import { type CloseChoice, CloseDialog } from "./components/CloseDialog";
 import { type Prefs, applyPrefs, loadPrefs, savePrefs } from "./prefs";
 import { mergeOrder, sortByOrder } from "./order";
-import { t, tn, useLang } from "./i18n";
+import { t, tn, tSaved, useLang } from "./i18n";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
   hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
@@ -798,7 +798,7 @@ export default function App() {
     // Template: agents that need another protocol get the same key at that protocol's address.
     const alts: { e: LibEntry; addTo: AgentId[] }[] = [];
     for (const a of v.alt) {
-      const e = await api.librarySave({ id: saved.alt[a.api] ?? null, name: t("app.libAltName", { name: v.name, api: API_LABEL[a.api] }), baseUrl: a.baseUrl, api: a.api, apiKey: v.apiKey, models: v.models, adoptFrom: null });
+      const e = await api.librarySave({ id: saved.alt[a.api] ?? null, name: tSaved("app.libAltName", { name: v.name, api: API_LABEL[a.api] }), baseUrl: a.baseUrl, api: a.api, apiKey: v.apiKey, models: v.models, adoptFrom: null });
       saved.alt[a.api] = e.id;
       alts.push({ e, addTo: a.addTo });
     }
@@ -823,7 +823,7 @@ export default function App() {
       }
       for (const a of v.addTo) {
         next[a] = route
-          ? upsertProvider(next[a] ?? {}, gatewayEntry(route.localBase, a, apiFor(a, v.api), t("app.gatewayName", { name: v.name }), v.models), keys.gatewayProvider(route.id))
+          ? upsertProvider(next[a] ?? {}, gatewayEntry(route.localBase, a, apiFor(a, v.api), tSaved("app.gatewayName", { name: v.name }), v.models), keys.gatewayProvider(route.id))
           : importProvider(next[a] ?? {}, { fromAgent: "library", provider: entry.id, api: v.api, name: v.name });
       }
       for (const { e, addTo } of alts) {
@@ -968,7 +968,7 @@ export default function App() {
   /** Gateway route → a provider in an agent that points at the local address. */
   const gatewayToAgent = (r: GatewayRouteView, agent: AgentId, apiKind: ApiKind) => {
     const models = lib.find((e) => e.id === r.library)?.models ?? [];
-    setDraftFor(agent, upsertProvider(drafts[agent] ?? {}, gatewayEntry(r.localBase, agent, apiKind, t("app.gatewayName", { name: r.name }), models), keys.gatewayProvider(r.id)));
+    setDraftFor(agent, upsertProvider(drafts[agent] ?? {}, gatewayEntry(r.localBase, agent, apiKind, tSaved("app.gatewayName", { name: r.name }), models), keys.gatewayProvider(r.id)));
     flash(t("app.queuedForAgent", { agent: shown.find((a) => a.id === agent)?.name ?? agent, url: r.localBase }));
   };
 

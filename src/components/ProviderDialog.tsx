@@ -11,7 +11,7 @@ import { ErrorBox, Seg, SegMulti, ToggleRow } from "./controls";
 import { ModelPicker, useModelPool } from "./ModelPicker";
 import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import { type Template, modelsAfter, modelsFor, modelsOn } from "../templates";
-import { type TKey, t, tn, tx } from "../i18n";
+import { type TKey, t, tn, tSaved, tx } from "../i18n";
 import { scrub } from "../privacy";
 import { errText, isHttpUrl, toggledIn } from "../util";
 
@@ -311,7 +311,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     if (multi) {
       const each = apis.map((k) => ({
         api: k,
-        name: apis.length > 1 ? t("providerDialog.nameWithApi", { name: name.trim(), api: API_LABEL[k] }) : name.trim(),
+        name: apis.length > 1 ? tSaved("providerDialog.nameWithApi", { name: name.trim(), api: API_LABEL[k] }) : name.trim(),
         // A template's other protocols live at their own address (unless the address was edited).
         baseUrl: tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind] ? tpl.endpoints[k]! : baseUrl.trim(),
         models: modelsOn(tpl, k, checked),

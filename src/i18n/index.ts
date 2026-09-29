@@ -80,6 +80,13 @@ export function t(key: TKey, vars?: Vars): string {
   return fill(lookup(key), vars);
 }
 
+/** Translated text that is saved (a provider name made from another): placeholders are never
+ *  masked by privacy mode, which only hides what is on screen. */
+export function tSaved(key: TKey, vars?: Vars): string {
+  const s = lookup(key);
+  return vars ? s.replace(/\{(\w+)\}/g, (m, n: string) => (n in vars ? String(vars[n]) : m)) : s;
+}
+
 /** Count-dependent text: the entry is "one|other" ("{n} model|{n} models"); a single form
  * (all Chinese entries) is used for every count. `{n}` is filled with `n`. */
 export function tn(key: TKey, n: number, vars?: Vars): string {
