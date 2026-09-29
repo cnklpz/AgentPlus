@@ -1540,7 +1540,7 @@ export default function App() {
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
         {page === "mcp" && (
-          <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash} link={mcpLink}
+          <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash} link={mcpLink} onLinkUsed={() => setMcpLink(null)}
             onApplyAll={applyAll} onDiscard={(a) => (a ? setDraftFor(a, {}) : setDrafts({}))} />
         )}
         {page === "skills" && <SkillsPage agents={listed} flash={flash} />}

@@ -242,13 +242,17 @@ interface Props {
   flash: Flash;
   /** An MCP import link to fill in the add dialog with; `n` tells one link from the next. */
   link: { link: McpLink; n: number } | null;
+  /** The link has filled in the dialog: it shouldn't open again when the page comes back. */
+  onLinkUsed: () => void;
 }
 
-export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash, link }: Props) {
+export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash, link, onLinkUsed }: Props) {
   const [sel, setSel] = useState<string | null>(null);
   const { data, error, reload, list, openEdit, openAdd, remove, toggle, undo, test, canTest, probes, dialogEl } = useMcp(agents, drafts, setDraftFor, flash, (from, to) => setSel((s) => (s === from ? to : s)));
   useEffect(() => {
-    if (link) openAdd(link.link.agents, link);
+    if (!link) return;
+    openAdd(link.link.agents, link);
+    onLinkUsed();
   }, [link?.n]);
   const picked = list.find((g) => g.name === sel) ?? null;
   const differ = list.filter((g) => g.variants.length > 1).length;
