@@ -245,12 +245,20 @@ const SNAPSHOT: &str = include_str!("codex_models.json");
 /// is asked in turn; when none can be run, the list is read out of the program file, and
 /// failing that AgentPlus's own copy of it is used.
 pub fn from_codex() -> Result<Vec<FetchModel>> {
+    // Only the install holds the store's write lock: finding and running Codex can take a
+    // minute, and every other change to the store (and the window with it) would wait.
+    let v = builtin_list()?;
+    crate::store::transaction(|| install(v))
+}
+
+/// The model list built into the installed Codex, found as `from_codex` describes.
+fn builtin_list() -> Result<Value> {
     let exes = crate::process::codex_clis();
     for exe in &exes {
         match builtin_models(exe) {
             Ok(v) => {
                 crate::applog::info("catalog", format!("model list from codex debug models ({})", exe.display()));
-                return install(v);
+                return Ok(v);
             }
             Err(e) => crate::applog::warn("catalog", format!("codex debug models failed with {}: {e}", exe.display())),
         }
@@ -259,13 +267,13 @@ pub fn from_codex() -> Result<Vec<FetchModel>> {
         match fs::read(exe).ok().and_then(|b| embedded_catalog(&b)) {
             Some(v) => {
                 crate::applog::info("catalog", format!("model list read from {}", exe.display()));
-                return install(v);
+                return Ok(v);
             }
             None => crate::applog::warn("catalog", format!("no model list found in {}", exe.display())),
         }
     }
     crate::applog::info("catalog", format!("using AgentPlus's copy of the model list ({} Codex programs found)", exes.len()));
-    install(parse_models(SNAPSHOT.as_bytes()).ok_or_else(|| anyhow!("codex_models.json"))?)
+    parse_models(SNAPSHOT.as_bytes()).ok_or_else(|| anyhow!("codex_models.json"))
 }
 
 /// `codex debug models --bundled` with an empty CODEX_HOME: the list compiled into Codex,

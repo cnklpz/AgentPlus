@@ -626,7 +626,7 @@ async fn codex_official_cancel() -> Result<(), String> {
 /// Codex's model catalog from the list built into the installed Codex (no sign-in needed).
 #[tauri::command]
 async fn codex_builtin_catalog() -> Result<Vec<official::FetchModel>, String> {
-    blocking_tx(official::from_codex).await
+    blocking(official::from_codex).await
 }
 
 #[tauri::command]
