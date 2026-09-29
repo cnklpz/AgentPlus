@@ -2,6 +2,7 @@ pub mod claude;
 pub mod codebuddy;
 pub mod codex;
 pub mod droid;
+pub mod dsh;
 pub mod gemini;
 pub mod hermes;
 mod keyref;
@@ -143,7 +144,7 @@ macro_rules! ext {
 /// Every agent, in sidebar order.
 pub const EXT: &[Ext] = &[
     ext!(codex), ext!(claude), ext!(opencode), ext!(zcode), ext!(mimo),
-    ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(qwen), ext!(kimi),
+    ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(qwen), ext!(kimi), ext!(dsh),
 ];
 
 /// The ids of [`EXT`], in the same order.
@@ -278,6 +279,8 @@ fn markers(e: &'static Ext) -> &'static [&'static str] {
         zcode::ID => &[zcode::MARKER, "v2/provider_config.json"],
         pi::ID => &[pi::MARKER, "models.json"],
         codebuddy::ID => &[codebuddy::MARKER, "models.json"],
+        // The desktop app runs its own profile.
+        dsh::ID => &[dsh::MARKER, dsh::DESKTOP_MARKER],
         _ => std::slice::from_ref(&e.marker),
     }
 }
@@ -420,6 +423,7 @@ fn official_probe(agent: &str, id: &str) -> Option<&'static str> {
         (qwen::ID, "qwen-oauth") => Some("https://portal.qwen.ai/v1"),
         (mimo::ID, "account") => Some("https://api.xiaomimimo.com/v1"),
         (zcode::ID, "builtin:zai-coding-plan") => Some("https://api.z.ai/api/coding/paas/v4"),
+        (dsh::ID, "deepseek-official") => Some("https://api.deepseek.com"),
         _ => None,
     };
     signed_in.or(match id.strip_prefix("builtin:").unwrap_or(id) {
@@ -764,7 +768,7 @@ mod tests {
             .iter()
             .map(|f| (opencode::ID, *f))
             .chain(kilo::CONFIG_FILES.iter().map(|f| (kilo::ID, *f)))
-            .chain([(zcode::ID, "provider_config.json"), (zcode::ID, "v2/provider_config.json"), (pi::ID, "models.json"), (codebuddy::ID, "models.json")])
+            .chain([(zcode::ID, "provider_config.json"), (zcode::ID, "v2/provider_config.json"), (pi::ID, "models.json"), (codebuddy::ID, "models.json"), (dsh::ID, dsh::DESKTOP_MARKER)])
             .chain(EXT.iter().map(|e| (e.id, e.marker)))
             .collect();
         for (i, (agent, file)) in cases.into_iter().enumerate() {

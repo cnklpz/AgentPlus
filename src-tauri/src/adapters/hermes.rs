@@ -235,7 +235,7 @@ fn blocks(lines: &[&str]) -> Vec<Block> {
 }
 
 /// Comments, anchors / aliases or tags inside a block (re-emitting it would lose them).
-fn has_extras(lines: &[&str]) -> bool {
+pub(crate) fn has_extras(lines: &[&str]) -> bool {
     static ANCHOR: OnceLock<Regex> = OnceLock::new();
     let anchor = ANCHOR.get_or_init(|| Regex::new(r"(^\s*|:\s+|-\s+)[&*!][^\s]").unwrap());
     lines.iter().any(|l| l.trim_start().starts_with('#') || anchor.is_match(l) || has_comment(l))
@@ -412,7 +412,7 @@ fn emit_map(out: &mut Vec<String>, indent: usize, m: &Mapping) -> Result<()> {
     Ok(())
 }
 
-fn emit_seq(out: &mut Vec<String>, indent: usize, s: &[Y]) -> Result<()> {
+pub(crate) fn emit_seq(out: &mut Vec<String>, indent: usize, s: &[Y]) -> Result<()> {
     let pad = " ".repeat(indent);
     for item in s {
         let mut sub = vec![];

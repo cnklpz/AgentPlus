@@ -71,6 +71,13 @@ pub const OPENCLAW: &[Spec] = &[
     Spec { path: "/maxTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxTokens: the maximum tokens in one reply.", "maxTokens：单次回复最多多少 token。"), kind: Kind::Number, caps: &[] },
 ];
 
+/// DeepSeek Harness `llm-pi-ai` providers: `providers.<id>.models[]` (pi-ai's shape, but its
+/// schema has no `reasoning` flag per model).
+pub const DSH: &[Spec] = &[
+    Spec { path: "/input", group: IO, label: ("Can read", "可以读取"), desc: ("input: the input types the model accepts; when unset, the model's catalog entry or text-only.", "input：模型接受的输入类型；不设置时按内置目录，没有就只当作文本。"), kind: Kind::Chips(&[("text", "Text", "文本"), ("image", "Images", "图片")]), caps: &[] },
+    Spec { path: "/maxTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxTokens: the maximum tokens in one reply; the provider's defaultMaxTokens (32768) when unset.", "maxTokens：单次回复最多多少 token；不设置时用供应商的 defaultMaxTokens（32768）。"), kind: Kind::Number, caps: &[] },
+];
+
 /// CodeBuddy Code `models.json`: `models[]`.
 pub const CODEBUDDY: &[Spec] = &[
     Spec { path: "/supportsImages", group: IO, label: ("Read images", "读取图片"), desc: ("supportsImages: images can be sent to this model.", "supportsImages：可以把图片发给这个模型。"), kind: Kind::Bool, caps: &[("Images", "图片")] },
@@ -131,10 +138,11 @@ pub const KIMI: &[Spec] = &[Spec {
 
 /// Field declarations shown for an agent's models (OpenCode's for its project configs).
 pub fn for_agent(agent: &str) -> &'static [Spec] {
-    use crate::adapters::{base_agent, codebuddy, codex, droid, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
+    use crate::adapters::{base_agent, codebuddy, codex, droid, dsh, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
     match base_agent(agent) {
         opencode::ID | kilo::ID | mimo::ID => OPENCODE,
         pi::ID => PI,
+        dsh::ID => DSH,
         openclaw::ID => OPENCLAW,
         codebuddy::ID => CODEBUDDY,
         droid::ID => DROID,

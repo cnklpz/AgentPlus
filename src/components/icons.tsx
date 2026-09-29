@@ -2,7 +2,7 @@ import codexPng from "../assets/codex.png";
 import zcodePng from "../assets/zcode.png";
 import mimoPng from "../assets/mimo.png";
 // Marks from lobehub/lobe-icons (MIT), except pi (pi.dev), OpenCode (opencode.ai's
-// app icon) and Droid (factory.ai's favicon).
+// app icon), Droid (factory.ai's favicon) and DeepSeek Harness (its web UI favicon, MIT).
 import claudeSvg from "../assets/claude.svg";
 import geminiSvg from "../assets/gemini.svg";
 import geminiMarkSvg from "../assets/gemini-mark.svg";
@@ -16,6 +16,7 @@ import openclawSvg from "../assets/openclaw.svg";
 import piSvg from "../assets/pi.svg";
 import opencodeSvg from "../assets/opencode.svg";
 import droidSvg from "../assets/droid.svg";
+import dshSvg from "../assets/dsh.svg";
 import type { AgentId } from "../api";
 
 /** A letter tile, for vendors without an icon of their own. */
@@ -51,6 +52,7 @@ const AGENT_ICONS: Record<AgentId, Tile> = {
   kilo: { src: kiloSvg, bg: "#F8F675", scale: 66 },
   trae: { src: traeSvg, bg: "#0B0B0C", scale: 72 },
   opencode: { src: opencodeSvg, bg: "#131010", scale: 78, ring: DARK_RING },
+  dsh: { src: dshSvg, bg: "#4D6BFE", scale: 72 },
 };
 
 export function AgentIcon({ id, size }: { id: AgentId; size: number }) {

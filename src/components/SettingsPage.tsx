@@ -432,6 +432,7 @@ const SUPPORTED: { id: AgentId; kind: TKey }[] = [
   { id: "droid", kind: "settingsPage.kindCli" },
   { id: "pi", kind: "settingsPage.kindCli" },
   { id: "openclaw", kind: "settingsPage.kindCli" },
+  { id: "dsh", kind: "settingsPage.kindDesktopCli" },
   { id: "trae", kind: "settingsPage.kindIdeDetectOnly" },
 ];
 

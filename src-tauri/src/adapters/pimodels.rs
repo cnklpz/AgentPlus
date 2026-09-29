@@ -1,8 +1,10 @@
 //! Providers in the pi-ai `models.json` shape, shared by pi (`~/.pi/agent/models.json`,
 //! `providers.<id>`) and OpenClaw (`openclaw.json`, `models.providers.<id>`):
 //! `{ baseUrl, api, apiKey, headers, …, models: [{ id, name, contextWindow, … }] }`.
+//! DeepSeek Harness routes through pi-ai too, with its own spelling (`displayName`,
+//! `baseURL`, `apiKeyEnv`; see [`Flavor::Dsh`]).
 //!
-//! Neither agent can switch a provider or a model off, so a hidden model / disabled provider
+//! None of them can switch a provider or a model off, so a hidden model / disabled provider
 //! is removed from the file and its definition stashed in the AgentPlus store
 //! (`hiddenModels["<provider>|<model>"]`, `disabledProviders["<provider>"]`), to come back
 //! untouched. Unknown fields are always kept; only documented fields are ever added.
@@ -24,6 +26,10 @@ pub enum Flavor {
     Pi,
     /// OpenClaw: no provider `name` (strict schema), model `name` required, `${VAR}` / SecretRef keys.
     OpenClaw,
+    /// DeepSeek Harness (`llm-pi-ai` config): `displayName`, `baseURL`, and the key only by
+    /// reference (`apiKeyEnv`), resolved from the environment, then the `refs` of
+    /// `.credentials.yaml` (`auth`), then `.env` (`env_file`). No Gemini protocol.
+    Dsh,
 }
 
 pub struct Fmt {
@@ -33,10 +39,27 @@ pub struct Fmt {
     pub path: PathBuf,
     /// JSON pointer of the providers object in that file ("/providers" or "/models/providers").
     pub ptr: &'static str,
-    /// pi's credential store (`~/.pi/agent/auth.json`).
+    /// The credential store: pi's `~/.pi/agent/auth.json`, DeepSeek Harness's `.credentials.yaml`.
     pub auth: Option<PathBuf>,
     /// Extra `KEY=VALUE` file consulted for `${VAR}` keys (OpenClaw's `~/.openclaw/.env`).
     pub env_file: Option<PathBuf>,
+}
+
+/// Provider ids DeepSeek Harness itself serves (its native DeepSeek adapter, the account sign-in).
+pub const DSH_RESERVED: [&str; 2] = ["deepseek-official", "deepseek-account"];
+
+/// The credential reference DeepSeek Harness's Models page names for a route (and so the one
+/// AgentPlus uses too): `minimax-cn` → `MINIMAX_CN_API_KEY`.
+pub fn dsh_key_ref(id: &str) -> String {
+    let mut out = String::new();
+    for c in id.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_uppercase());
+        } else if !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    format!("{out}_API_KEY")
 }
 
 #[derive(Default)]
@@ -127,13 +150,48 @@ impl Fmt {
 
     fn cfg_prefix(&self) -> &'static str {
         match self.flavor {
-            Flavor::Pi => "providers",
+            Flavor::Pi | Flavor::Dsh => "providers",
             Flavor::OpenClaw => "models.providers",
         }
     }
 
+    /// Field of the provider's display name (None: OpenClaw keeps it in the store).
+    fn f_name(&self) -> Option<&'static str> {
+        match self.flavor {
+            Flavor::Pi => Some("name"),
+            Flavor::Dsh => Some("displayName"),
+            Flavor::OpenClaw => None,
+        }
+    }
+
+    fn f_url(&self) -> &'static str {
+        if self.flavor == Flavor::Dsh { "baseURL" } else { "baseUrl" }
+    }
+
+    /// The pi-ai `api` value to write for an AgentPlus api this flavor accepts.
+    fn raw_for(&self, api: &str) -> Result<&'static str> {
+        match raw_for(api) {
+            Some("google-generative-ai") if self.flavor == Flavor::Dsh => Err(anyhow!(l("DeepSeek Harness doesn't support the Gemini protocol", "DeepSeek Harness 不支持 Gemini 协议"))),
+            Some(raw) => Ok(raw),
+            None => Err(anyhow!(tr!("Unsupported protocol: {}", "不支持的协议 {}", api))),
+        }
+    }
+
+    /// Field holding the key (or, for DeepSeek Harness, the name of its reference).
+    fn f_key(&self) -> &'static str {
+        if self.flavor == Flavor::Dsh { "apiKeyEnv" } else { "apiKey" }
+    }
+
     fn lookup(&self, name: &str) -> Option<String> {
-        crate::env::agent_var(name).or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
+        crate::env::agent_var(name)
+            .or_else(|| if self.flavor == Flavor::Dsh { self.cred_ref(name) } else { None })
+            .or_else(|| self.env_file.as_deref().and_then(|p| crate::dotenv::get(&crate::dotenv::load(p).0, name)))
+    }
+
+    /// DeepSeek Harness: a key stored in `.credentials.yaml` under `refs.<name>`.
+    fn cred_ref(&self, name: &str) -> Option<String> {
+        let (c, _) = self.load_auth()?;
+        c.get("refs")?.get(name)?.as_str().map(str::trim).filter(|k| !k.is_empty()).map(String::from)
     }
 
     /// How a (trimmed, non-empty) `apiKey` string is read. `resolve` and `key_desc` both go
@@ -157,6 +215,22 @@ impl Fmt {
                 Some(_) => KeySrc::Template,
                 None => KeySrc::Literal,
             },
+            // `apiKeyEnv` is always a reference.
+            Flavor::Dsh => KeySrc::Env(raw),
+        }
+    }
+
+    /// DeepSeek Harness: where the key behind reference `n` is found, in dsh's order.
+    pub fn key_ref_desc(&self, n: &str) -> String {
+        let file = |p: &Option<PathBuf>| p.as_deref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        if crate::env::agent_var(n).is_some() {
+            tr!("Environment variable {n}", "环境变量 {n}")
+        } else if self.cred_ref(n).is_some() {
+            tr!("{} · {n}", "{} · {n}", file(&self.auth))
+        } else if self.lookup(n).is_some() {
+            tr!("{} · {n}", "{} · {n}", file(&self.env_file))
+        } else {
+            tr!("{n} (not set now)", "{n}（当前未设置）")
         }
     }
 
@@ -183,6 +257,12 @@ impl Fmt {
 
     /// Where the key comes from, for the detail panel (never the key itself).
     fn key_desc(&self, v: Option<&Value>, in_auth: bool) -> String {
+        if self.flavor == Flavor::Dsh {
+            return match v.and_then(|x| x.as_str()).map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => self.key_ref_desc(n),
+                None => l("Not set", "未填写").into(),
+            };
+        }
         let fname = self.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let cfg = match v {
             Some(Value::Object(o)) => Some(tr!("SecretRef ({})", "SecretRef（{}）", o.get("source").and_then(|x| x.as_str()).unwrap_or("?"))),
@@ -204,6 +284,9 @@ impl Fmt {
 
     pub fn load_auth(&self) -> Option<(Value, TextMeta)> {
         let p = self.auth.as_ref()?;
+        if self.flavor == Flavor::Dsh {
+            return super::dsh::load_credentials(p).ok();
+        }
         if !p.exists() {
             return Some((json!({}), TextMeta::NEW));
         }
@@ -231,9 +314,9 @@ impl Fmt {
 
     /// Display name: pi keeps it in the config, OpenClaw's schema has no room so it lives in the store.
     fn display_name(&self, id: &str, def: &Value, root: &Value) -> String {
-        match self.flavor {
-            Flavor::Pi => s(def, "name").filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
-            Flavor::OpenClaw => self.stash(root, "names").and_then(|n| n.get(id)).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
+        match self.f_name() {
+            Some(f) => s(def, f).filter(|n| !n.is_empty()).unwrap_or(id).to_string(),
+            None => self.stash(root, "names").and_then(|n| n.get(id)).and_then(|x| x.as_str()).unwrap_or(id).to_string(),
         }
     }
 
@@ -258,6 +341,7 @@ impl Fmt {
         match self.flavor {
             Flavor::Pi => crate::mfields::PI,
             Flavor::OpenClaw => crate::mfields::OPENCLAW,
+            Flavor::Dsh => crate::mfields::DSH,
         }
     }
 
@@ -265,7 +349,9 @@ impl Fmt {
         let id = s(def, "id")?.to_string();
         let context = def.get("contextWindow").and_then(|x| x.as_u64());
         let mut tags = vec![];
-        if def.get("reasoning").and_then(|x| x.as_bool()) == Some(true) {
+        // DeepSeek Harness lists a model's thinking levels instead (`false`: none).
+        let efforts = def.get("reasoningEfforts").and_then(|x| x.as_object()).is_some_and(|o| !o.is_empty());
+        if def.get("reasoning").and_then(|x| x.as_bool()) == Some(true) || efforts {
             tags.push(Tag::new("cap:reasoning", l("Reasoning", "推理")));
         }
         if def.get("input").and_then(|x| x.as_array()).map(|a| a.iter().any(|i| i.as_str() == Some("image"))).unwrap_or(false) {
@@ -285,7 +371,7 @@ impl Fmt {
     }
 
     fn provider_from(&self, id: &str, def: &Value, enabled: bool, root: &Value, hidden: Option<&Map<String, Value>>, auth: Option<&Value>) -> Provider {
-        let base = s(def, "baseUrl").map(String::from).filter(|b| !b.is_empty());
+        let base = s(def, self.f_url()).map(String::from).filter(|b| !b.is_empty());
         let raw = raw_api(id, def);
         let known = api_of(&raw);
         let mut models: Vec<Model> = def.get("models").and_then(|m| m.as_array()).map(|a| a.iter().filter_map(|m| self.model_from(m, true)).collect()).unwrap_or_default();
@@ -297,13 +383,15 @@ impl Fmt {
                 }
             }
         }
-        let key_v = def.get("apiKey");
+        let key_v = def.get(self.f_key());
         let in_cfg = match key_v {
+            // A DeepSeek Harness reference only counts once it leads to a key.
+            Some(v @ Value::String(_)) if self.flavor == Flavor::Dsh => self.resolve(v).is_some(),
             Some(Value::String(k)) => !k.trim().is_empty(),
             Some(Value::Object(_)) => true,
             _ => false,
         };
-        let in_auth = Self::auth_key(auth, id).is_some();
+        let in_auth = self.flavor != Flavor::Dsh && Self::auth_key(auth, id).is_some();
         let mut details = vec![
             Kv::mono(lbl::config_id(), format!("{}.{id}", self.cfg_prefix())),
             Kv::mono("api", raw.clone()),
@@ -372,9 +460,10 @@ impl Fmt {
     /// Base URL, key and api of a provider (auth.json wins over the config, as in pi).
     pub fn endpoint(&self, id: &str, cfg: &Value, root: &Value) -> Result<Endpoint> {
         let def = self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id)).cloned().ok_or_else(|| msg::no_provider(id))?;
-        let base = s(&def, "baseUrl").filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("Provider {id} has no baseUrl (uses the built-in URL)", "供应商 {id} 没有 baseUrl（沿用内置地址）")))?.to_string();
-        let auth = self.load_auth().map(|a| a.0);
-        let key = Self::auth_key(auth.as_ref(), id).and_then(|k| self.resolve(k)).or_else(|| def.get("apiKey").and_then(|k| self.resolve(k)));
+        let url = self.f_url();
+        let base = s(&def, url).filter(|b| !b.is_empty()).ok_or_else(|| anyhow!(tr!("Provider {id} has no {url} (uses the built-in URL)", "供应商 {id} 没有 {url}（沿用内置地址）")))?.to_string();
+        let auth = if self.flavor == Flavor::Dsh { None } else { self.load_auth().map(|a| a.0) };
+        let key = Self::auth_key(auth.as_ref(), id).and_then(|k| self.resolve(k)).or_else(|| def.get(self.f_key()).and_then(|k| self.resolve(k)));
         let raw = raw_api(id, &def);
         Ok((base, key, family(&raw)))
     }
@@ -405,7 +494,57 @@ impl Fmt {
         true
     }
 
+    /// DeepSeek Harness: stores the key under the provider's reference in `.credentials.yaml`,
+    /// naming the reference first when it has none. True when `def` changed.
+    fn set_ref_key(&self, def: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<bool> {
+        let (Some((creds, _)), Some(path)) = (auth.as_mut(), self.auth.as_ref()) else {
+            return Err(anyhow!(l("The credentials file can't be read, so the key can't be saved", "凭据文件读取失败，无法保存密钥")));
+        };
+        let named = s(def, "apiKeyEnv").map(str::trim).filter(|n| !n.is_empty()).map(String::from);
+        let name = named.clone().unwrap_or_else(|| dsh_key_ref(id));
+        if named.is_none() {
+            def["apiKeyEnv"] = json!(name);
+            diff.push(&self.file(), format!("{}.{id}.apiKeyEnv = {name}", self.cfg_prefix()), true);
+        }
+        obj_at(creds, &["refs"])?.insert(name.clone(), json!(key));
+        let file = display_path(path);
+        diff.push(&file, format!("refs.{name} = {}", mask_key(key)), true);
+        if crate::env::agent_var(&name).is_some() {
+            diff.push(&file, tr!("(environment variable {name} is set and takes precedence over this key)", "（环境变量 {name} 已设置，会优先于这里的密钥）"), false);
+        }
+        dirty.auth = true;
+        Ok(named.is_none())
+    }
+
+    /// DeepSeek Harness, deleting provider `id` (definition `def`): its key goes too when the
+    /// reference is the one named after it (what dsh's Models page and AgentPlus write) and
+    /// nothing else uses it. A reference with another name may be shared, so it stays.
+    #[allow(clippy::too_many_arguments)]
+    fn drop_ref_key(&self, cfg: &Value, root: &Value, id: &str, def: &Value, auth: &mut Option<(Value, TextMeta)>, diff: &mut Diff, dirty: &mut Dirty) {
+        let Some(name) = s(def, "apiKeyEnv").map(str::trim).filter(|n| !n.is_empty()) else { return };
+        let (Some((creds, _)), Some(path)) = (auth.as_mut(), self.auth.as_ref()) else { return };
+        if creds.get("refs").and_then(|r| r.get(name)).is_none() {
+            return;
+        }
+        let file = display_path(path);
+        let uses = |defs: Option<&Map<String, Value>>| defs.into_iter().flatten().any(|(_, d)| s(d, "apiKeyEnv").map(str::trim) == Some(name));
+        if name != dsh_key_ref(id) || BUILTIN_PROVIDERS.contains(&id) || uses(self.providers_of(cfg)) || uses(self.stash(root, "disabledProviders")) {
+            diff.push(&file, tr!("(refs.{name} is kept: it isn't only this provider's key)", "（refs.{name} 保留：它不只是这个供应商的密钥）"), false);
+            return;
+        }
+        if let Some(r) = creds.get_mut("refs").and_then(|r| r.as_object_mut()) {
+            r.remove(name);
+            diff.push(&file, format!("- refs.{name}"), false);
+            dirty.auth = true;
+        }
+    }
+
     fn set_key(&self, cfg: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<()> {
+        if self.flavor == Flavor::Dsh {
+            let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
+            dirty.cfg |= self.set_ref_key(def, auth, id, key, diff, dirty)?;
+            return Ok(());
+        }
         // Keep the key where it already is: pi's auth.json entry, else inline apiKey.
         if !self.set_auth_key(auth, id, key, diff, dirty) {
             let prefix = self.cfg_prefix();
@@ -428,7 +567,7 @@ impl Fmt {
             (Flavor::OpenClaw, None) => {
                 m.insert("name".into(), json!(id));
             }
-            (Flavor::Pi, None) => {}
+            (Flavor::Pi | Flavor::Dsh, None) => {}
         }
         if let Some(c) = context {
             m.insert("contextWindow".into(), json!(c));
@@ -464,16 +603,22 @@ impl Fmt {
                 let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
                 match &p.id {
                     None => {
-                        let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("Unsupported protocol: {}", "不支持的协议 {}", p.api)))?;
+                        let raw = self.raw_for(&p.api)?;
+                        let dsh = self.flavor == Flavor::Dsh;
                         let providers = self.providers_mut(cfg)?;
-                        let id = unique_id(&slug(name), |c| providers.contains_key(c) || self.parked(root, c).is_some() || BUILTIN_PROVIDERS.contains(&c));
+                        let mut base = slug(name);
+                        // A dsh route id becomes a credential name, which can't start with a digit.
+                        if dsh && base.starts_with(|c: char| c.is_ascii_digit()) {
+                            base = format!("p-{base}");
+                        }
+                        let id = unique_id(&base, |c| providers.contains_key(c) || self.parked(root, c).is_some() || BUILTIN_PROVIDERS.contains(&c) || (dsh && DSH_RESERVED.contains(&c)));
                         let ids = clean_ids(&p.models);
                         let models: Vec<Value> = ids.iter().map(|m| self.new_model(m, None, None)).collect();
                         let mut def = Map::new();
-                        if self.flavor == Flavor::Pi {
-                            def.insert("name".into(), json!(name));
+                        if let Some(f) = self.f_name() {
+                            def.insert(f.into(), json!(name));
                         }
-                        def.insert("baseUrl".into(), json!(base_url));
+                        def.insert(self.f_url().into(), json!(base_url));
                         def.insert("api".into(), json!(raw));
                         def.insert("models".into(), Value::Array(models));
                         providers.insert(id.clone(), Value::Object(def));
@@ -486,6 +631,7 @@ impl Fmt {
                         match key {
                             Some(k) => self.set_key(cfg, auth, &id, k, diff, dirty)?,
                             None if self.flavor == Flavor::Pi => diff.push(&ef, tr!("({id} has no API key: its models won't work in pi. You can enter $ENV_VAR_NAME.)", "（{id} 没填密钥：pi 里它的模型用不了，可以填 $环境变量名）"), false),
+                            None if dsh => diff.push(&ef, tr!("({id} has no API key: its models won't work in DeepSeek Harness)", "（{id} 没填密钥：DeepSeek Harness 里它的模型用不了）"), false),
                             None => {}
                         }
                         for op in crate::modelinfo::seed_ops(agent, &id, &ids) {
@@ -511,17 +657,18 @@ impl Fmt {
                             return Err(anyhow!(tr!("{pre}.{id} is not an object", "{pre}.{id} 不是对象")));
                         }
                         let mut changed = vec![];
-                        if flavor == Flavor::Pi && s(def, "name").unwrap_or(id) != name {
-                            def["name"] = json!(name);
-                            changed.push(format!("name = \"{name}\""));
+                        if let Some(f) = self.f_name().filter(|f| s(def, f).unwrap_or(id) != name) {
+                            def[f] = json!(name);
+                            changed.push(format!("{f} = \"{name}\""));
                         }
-                        if s(def, "baseUrl") != Some(base_url) {
-                            def["baseUrl"] = json!(base_url);
-                            changed.push(format!("baseUrl = \"{base_url}\""));
+                        let url = self.f_url();
+                        if s(def, url) != Some(base_url) {
+                            def[url] = json!(base_url);
+                            changed.push(format!("{url} = \"{base_url}\""));
                         }
                         let raw_now = raw_api(id, def);
                         if p.api != family(&raw_now) {
-                            let raw = raw_for(&p.api).ok_or_else(|| anyhow!(tr!("Unsupported protocol: {}", "不支持的协议 {}", p.api)))?;
+                            let raw = self.raw_for(&p.api)?;
                             if api_of(&raw_now).is_none() {
                                 return Err(anyhow!(tr!("{id} uses the {raw_now} protocol; AgentPlus doesn't change its protocol", "{id} 用的是 {raw_now} 协议，AgentPlus 不改它的协议")));
                             }
@@ -535,6 +682,10 @@ impl Fmt {
                         if let Some(k) = key {
                             if in_cfg {
                                 self.set_key(cfg, auth, id, k, diff, dirty)?;
+                            } else if flavor == Flavor::Dsh {
+                                // Disabled: the key goes to the credentials file, its reference into the parked definition.
+                                let def = store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?;
+                                dirty.store |= self.set_ref_key(def, auth, id, k, diff, dirty)?;
                             } else if !self.set_auth_key(auth, id, k, diff, dirty) {
                                 // Disabled, key inline: it goes back into the parked definition.
                                 if let Some(def) = store::section(root, agent, "disabledProviders").get_mut(id) {
@@ -548,14 +699,22 @@ impl Fmt {
                 }
             }
             Op::DeleteProvider { provider } => {
-                let removed_cfg = self.providers_mut(cfg)?.remove(provider).is_some();
-                let removed_stash = store::section(root, agent, "disabledProviders").remove(provider).is_some();
-                if !removed_cfg && !removed_stash {
+                let from_cfg = self.providers_mut(cfg)?.remove(provider);
+                let from_stash = store::section(root, agent, "disabledProviders").remove(provider);
+                let removed_cfg = from_cfg.is_some();
+                let Some(def) = from_cfg.or(from_stash) else {
                     return Err(msg::no_provider(provider));
-                }
+                };
                 let prefix = format!("{provider}|");
                 store::section(root, agent, "hiddenModels").retain(|k, _| !k.starts_with(&prefix));
                 store::section(root, agent, "names").remove(provider);
+                if self.flavor == Flavor::Dsh {
+                    self.drop_ref_key(cfg, root, provider, &def, auth, diff, dirty);
+                    diff.push(&ef, tr!("- {pre}.{provider} (with its models)", "- {pre}.{provider}（含它的模型）"), false);
+                    dirty.cfg |= removed_cfg;
+                    dirty.store = true;
+                    return Ok(true);
+                }
                 let mut kept_key = Self::auth_key(auth.as_ref().map(|a| &a.0), provider).is_some();
                 // The key of a provider pi ships stays in auth.json (pi keeps using it); any other
                 // auth.json entry would come back as a built-in provider that can't be removed.
