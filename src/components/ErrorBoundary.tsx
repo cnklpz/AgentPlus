@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, Fragment, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { logClient } from "../api";
+import { api, logClient } from "../api";
 import { t } from "../i18n";
 import { inTauri } from "../tauri";
 
@@ -23,12 +23,17 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
   render() {
     const { error, n } = this.state;
     if (!error) return <Fragment key={n}>{this.props.children}</Fragment>;
+    // The window has no system title bar (App draws its own): the page can be dragged, and quits
+    // from here.
     return (
-      <div className="crash">
-        <h1>{t("errorBoundary.title")}</h1>
+      <div className="crash" data-tauri-drag-region>
+        <h1 data-tauri-drag-region>{t("errorBoundary.title")}</h1>
         <p className="muted">{t("errorBoundary.message")}</p>
         <pre className="mono small">{String(error.message || error)}</pre>
-        <button className="btn primary" onClick={() => this.setState({ error: null, n: n + 1 })}>{t("errorBoundary.retry")}</button>
+        <div className="row gap10">
+          <button className="btn primary" onClick={() => this.setState({ error: null, n: n + 1 })}>{t("errorBoundary.retry")}</button>
+          <button className="btn" onClick={() => api.quitApp()}>{t("common.quitApp")}</button>
+        </div>
       </div>
     );
   }

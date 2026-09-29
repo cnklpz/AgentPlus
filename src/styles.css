@@ -696,6 +696,6 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .import-others { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .import-others .btn .muted { margin-left: 4px; }
 .import-link-input { resize: vertical; height: auto; min-height: 96px; padding: 9px 11px; word-break: break-all; line-height: 1.55; }
-/* A render error (ErrorBoundary): what happened, and a way back. */
-.crash { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 640px; margin: 64px auto; padding: 0 24px; }
+/* A render error (ErrorBoundary): what happened, and a way back. The whole window drags it (no title bar). */
+.crash { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-height: 100vh; box-sizing: border-box; padding: 64px max(24px, calc((100% - 640px) / 2)); }
 .crash pre { max-width: 100%; overflow: auto; white-space: pre-wrap; word-break: break-word; padding: 10px 12px; border-radius: 8px; background: var(--row-hover); }
