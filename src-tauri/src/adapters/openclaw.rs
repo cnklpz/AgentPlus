@@ -42,7 +42,7 @@ fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     if super::dir_override(ID).is_none() {
         if let Some(p) = crate::env::agent_var("OPENCLAW_CONFIG_PATH") {
             return crate::env::resolve_path(&p);

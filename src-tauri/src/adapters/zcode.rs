@@ -26,7 +26,7 @@ pub fn default_dir() -> PathBuf {
     home().join(".zcode").join("v2")
 }
 
-fn dir() -> PathBuf {
+pub(crate) fn dir() -> PathBuf {
     match super::dir_override(ID) {
         // Accept either ~/.zcode or ~/.zcode/v2.
         Some(d) if d.join("v2").join(MARKER).exists() => d.join("v2"),

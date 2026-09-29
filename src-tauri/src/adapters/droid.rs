@@ -39,7 +39,7 @@ pub fn default_dir() -> PathBuf {
     home().join(".factory")
 }
 
-fn dir() -> PathBuf {
+pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 

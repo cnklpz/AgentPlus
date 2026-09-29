@@ -3,6 +3,7 @@ export default {
   notInstalled: "Not installed",
   singleSub: "Provider {provider} · {n} model|Provider {provider} · {n} models",
   gateway: "Local gateway",
+  mcp: "MCP servers",
   history: "History & rollback",
   sync: "Multi-device sync",
   nav: "Navigation",

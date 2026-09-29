@@ -39,7 +39,7 @@ pub fn detect() -> Install {
     crate::process::detect_mimo()
 }
 
-fn engine_path() -> PathBuf {
+pub(crate) fn engine_path() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir).join(MARKER)
 }
 fn app_dir() -> PathBuf {

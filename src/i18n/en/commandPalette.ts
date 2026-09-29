@@ -9,6 +9,8 @@ export default {
   projectsHint: "OpenCode config for a single project folder: providers, default model, permissions",
   gateway: "Local gateway",
   gatewayHint: "Protocol conversion between Chat, Responses and Anthropic",
+  mcp: "MCP servers",
+  mcpHint: "MCP servers of every agent",
   history: "History & rollback",
   historyHint: "Backups & rollback",
   sync: "Multi-device sync",

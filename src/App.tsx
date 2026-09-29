@@ -33,6 +33,7 @@ import {
   hostKey, importKey, importOp, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
+import { McpPage } from "./components/McpPage";
 import { SyncPage } from "./components/SyncPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
@@ -1395,6 +1396,7 @@ export default function App() {
     items.push(
       "sep",
       { label: t("common.providers"), icon: <Icon.layers size={13} />, disabled: page === "providers", action: () => setPage("providers") },
+      { label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") },
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
@@ -1427,7 +1429,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`body${page === "settings" ? " solo" : page && !["providers", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
+      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
         {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} />}
 
         {page === "providers" && (
@@ -1491,6 +1493,7 @@ export default function App() {
           />
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
+        {page === "mcp" && <McpPage agents={listed} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "settings" && (

@@ -5,6 +5,7 @@ const zh: typeof en = {
   notInstalled: "未检测到安装",
   singleSub: "供应商 {provider} · {n} 个模型",
   gateway: "本地网关",
+  mcp: "MCP 服务器",
   history: "历史与回滚",
   sync: "多设备同步",
   nav: "导航",

@@ -23,6 +23,7 @@ import settingsPage from "./settingsPage";
 import sessionsTab from "./sessionsTab";
 import maintenanceTab from "./maintenanceTab";
 import historyPage from "./historyPage";
+import mcpPage from "./mcpPage";
 import pendingDialog from "./pendingDialog";
 import serviceDialog from "./serviceDialog";
 import serviceDetail from "./serviceDetail";
@@ -66,6 +67,7 @@ export default {
   sessionsTab,
   maintenanceTab,
   historyPage,
+  mcpPage,
   pendingDialog,
   serviceDialog,
   serviceDetail,

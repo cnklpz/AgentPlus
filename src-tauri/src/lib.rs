@@ -11,6 +11,7 @@ mod env;
 mod gateway;
 mod history;
 mod library;
+mod mcp;
 mod model;
 mod mfields;
 mod modelinfo;
@@ -295,6 +296,12 @@ async fn fetch_models_url(base_url: String, api_key: Option<String>, api: String
 #[tauri::command]
 async fn gateway_models(routes: Vec<String>) -> Result<Vec<String>, String> {
     blocking(move || gateway::server::list_models(&routes)).await
+}
+
+/// Global MCP servers of these agents, secrets masked.
+#[tauri::command]
+async fn mcp_list(agents: Vec<String>) -> Result<Vec<mcp::AgentMcp>, String> {
+    blocking(move || Ok(mcp::list(&agents))).await
 }
 
 #[tauri::command]
@@ -820,6 +827,7 @@ pub fn run() {
             gateway_models,
             fetch_models_lib,
             guess_models,
+            mcp_list,
             list_backups,
             backup_detail,
             restore_backup,

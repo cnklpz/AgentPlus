@@ -11,6 +11,8 @@ const zh: typeof en = {
   projectsHint: "单个项目文件夹里的 OpenCode 配置：供应商、默认模型、权限",
   gateway: "本地网关",
   gatewayHint: "协议转换：Chat / Responses / Anthropic 互转",
+  mcp: "MCP 服务器",
+  mcpHint: "各 Agent 的 MCP 服务器",
   history: "历史与回滚",
   historyHint: "备份和回滚",
   sync: "多设备同步",

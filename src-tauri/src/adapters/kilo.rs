@@ -42,7 +42,7 @@ fn env_config() -> Option<PathBuf> {
 
 /// The config file Kilo reads: `KILO_CONFIG`, else the first existing of `CONFIG_FILES`,
 /// else a new kilo.json.
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     if super::dir_override(ID).is_none() {
         if let Some(p) = env_config() {
             return p;

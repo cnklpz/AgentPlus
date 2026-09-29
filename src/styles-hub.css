@@ -659,3 +659,16 @@ button, input, textarea, select { font-family: inherit; }
 .fwd-opt.on { border-color: var(--accent); background: var(--accent-soft); }
 .fwd-opt > .ellipsis { flex: 1; min-width: 0; }
 .gw-item-head .chip-ok, .gw-item-head .chip-muted { white-space: nowrap; }
+
+/* MCP page */
+.mcp-agents { display: flex; gap: 4px; flex-shrink: 0; }
+.mcp-agent { display: inline-flex; }
+.mcp-agent.off { opacity: .35; filter: grayscale(1); }
+.mcp-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+.mcp-variant { display: flex; flex-direction: column; gap: 8px; }
+.mcp-variant + .mcp-variant { padding-top: 12px; border-top: 1px dashed var(--line2); }
+.mcp-states { display: flex; flex-wrap: wrap; gap: 6px; }
+.mcp-state { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 4px; border: 1px solid var(--line2); border-radius: 999px; background: var(--surface-2); }
+.mcp-state.off > :first-child { opacity: .4; filter: grayscale(1); }
+.mcp-wrap, .mcp-pair { overflow-wrap: anywhere; }
+.mcp-pair svg { vertical-align: -1px; margin-left: 4px; color: var(--muted); }

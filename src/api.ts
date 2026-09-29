@@ -455,6 +455,45 @@ export interface LibInput {
   adoptFrom: [string, string] | null;
 }
 
+/** An env var or header of an MCP server; secrets come masked from the backend. */
+export interface McpKv {
+  key: string;
+  value: string;
+  secret: boolean;
+}
+
+/** "remote": HTTP or SSE, negotiated by the agent (OpenCode format). */
+export type McpTransport = "stdio" | "http" | "sse" | "ws" | "remote";
+
+/** One MCP server in one agent's global config. */
+export interface McpServer {
+  name: string;
+  transport: McpTransport;
+  command: string | null;
+  args: string[];
+  cwd: string | null;
+  url: string | null;
+  env: McpKv[];
+  headers: McpKv[];
+  enabled: boolean;
+  /** Turned off by AgentPlus: the definition is kept in its store, not the agent's config. */
+  stashed: boolean;
+  /** The agent's other fields (timeouts, tool filters…), secrets masked. */
+  extra: Record<string, unknown>;
+  /** Equal across agents = the same server (command, URL, env, headers). */
+  sig: string;
+}
+
+/** An agent's global MCP servers. */
+export interface AgentMcp {
+  agent: AgentId;
+  supported: boolean;
+  file: string | null;
+  exists: boolean;
+  servers: McpServer[];
+  error: string | null;
+}
+
 export interface BackupEntry {
   id: string;
   stamp: string;
@@ -731,6 +770,8 @@ const real = {
   gatewayModels: (routes: string[]) => invoke<string[]>("gateway_models", { routes }),
   /** Catalog data for these model ids (unknown ids are left out); `agent` may be an OpenCode project id. */
   guessModels: (agent: string, ids: string[]) => invoke<Record<string, ModelGuess>>("guess_models", { agent, ids }),
+  /** Global MCP servers of these agents (read-only). */
+  mcpList: (agents: AgentId[]) => invoke<AgentMcp[]>("mcp_list", { agents }),
   listBackups: () => invoke<BackupEntry[]>("list_backups"),
   backupDetail: (id: string) => invoke<BackupDetail>("backup_detail", { id }),
   restoreBackup: (id: string) => invoke<string>("restore_backup", { id }),
@@ -1016,6 +1057,18 @@ const demo: typeof real = {
   gatewayModels: async () => ["glm-5", "glm-5.3", "kimi-k3"],
   guessModels: async (_agent, ids) =>
     Object.fromEntries(ids.filter((id) => /^(glm|kimi|deepseek|gpt|qwen)/i.test(id)).map((id) => [id, { context: 200000, extra: {}, matched: id.toLowerCase(), source: "builtin" as const }])),
+  mcpList: async (agents) => agents.map((agent): AgentMcp => {
+    const npx = (name: string, env: McpKv[] = []): McpServer => ({ name, transport: "stdio", command: "npx", args: ["-y", `@modelcontextprotocol/server-${name}`], cwd: null, url: null, env, headers: [], enabled: true, stashed: false, extra: {}, sig: `s-${name}` });
+    const gh: McpServer = { name: "github", transport: "http", command: null, args: [], cwd: null, url: "https://api.githubcopilot.com/mcp/", env: [], headers: [{ key: "Authorization", value: "Bearer ••••9f2c", secret: true }], enabled: true, stashed: false, extra: {}, sig: "s-gh" };
+    const servers: Record<string, McpServer[]> = {
+      codex: [{ ...npx("filesystem"), extra: { startup_timeout_sec: 60 } }, { ...gh, headers: [], extra: { bearer_token_env_var: "GITHUB_TOKEN" }, sig: "s-gh2" }],
+      claude: [npx("filesystem"), gh, { ...npx("memory"), enabled: false, stashed: true }],
+      opencode: [{ ...npx("filesystem"), enabled: false, extra: { timeout: 10000 } }, { ...gh, transport: "remote" }],
+      gemini: [{ ...npx("memory", [{ key: "MEMORY_FILE", value: "~/.gemini/memory.json", secret: false }]), sig: "s-memory2" }],
+    };
+    const supported = agent !== "pi";
+    return { agent, supported, file: supported ? `~/.${agent}/config` : null, exists: agent in servers, servers: servers[agent] ?? [], error: null };
+  }),
   listBackups: async () => [
     { id: "20260923-140512/codex", stamp: "20260923-140512", agent: "codex", reason: "应用配置", files: [{ name: "config.toml", path: "C:\\Users\\me\\.codex\\config.toml" }], bytes: 10240, restorable: true, blocked: null, blockedMissing: false },
     { id: "20260923-131201/zcode", stamp: "20260923-131201", agent: "zcode", reason: "应用配置", files: [{ name: "provider_config.json", path: "C:\\Users\\me\\.zcode\\v2\\provider_config.json" }], bytes: 19329, restorable: true, blocked: null, blockedMissing: false },

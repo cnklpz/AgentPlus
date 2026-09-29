@@ -54,7 +54,7 @@ fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
-fn settings_path() -> PathBuf {
+pub(crate) fn settings_path() -> PathBuf {
     dir().join("settings.json")
 }
 

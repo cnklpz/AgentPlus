@@ -108,6 +108,7 @@ export const Icon = {
   link: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></>, sw),
   external: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M14 4h6v6" /><path d="M20 4 11 13" /><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" /></>, sw),
   play: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M7 4.5v15l12.5-7.5Z" />, sw),
+  plug: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M9 2v5M15 2v5" /><path d="M6 7h12v4a6 6 0 0 1-12 0Z" /><path d="M12 17v5" /></>, sw),
   layers: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>, sw),
   history: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>, sw),
   cloud: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3.5 3.5 0 0 0 6 19Z" />, sw),

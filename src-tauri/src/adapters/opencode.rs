@@ -39,7 +39,7 @@ pub fn detect() -> Install {
 }
 
 /// The config file OpenCode reads: the first existing of `CONFIG_FILES`, else a new opencode.json.
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     let d = dir();
     CONFIG_FILES.iter().map(|n| d.join(n)).find(|p| p.exists()).unwrap_or_else(|| d.join(MARKER))
 }
