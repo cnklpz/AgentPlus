@@ -34,6 +34,11 @@ fn is_def(v: &Value) -> bool {
 
 /// The servers in a pasted text, with their values as pasted.
 pub fn parse(text: &str) -> Result<Vec<McpInput>> {
+    // A CC Switch / AgentPlus import link (`resource=mcp`).
+    if crate::deeplink::is_link(text) {
+        let item = crate::deeplink::parse_link(text)?;
+        return item.mcp.map(|m| m.servers).ok_or_else(|| anyhow::anyhow!(l("This link imports a provider, not MCP servers", "这个链接导入的是供应商，不是 MCP 服务器")));
+    }
     let none = || anyhow::anyhow!(l("No MCP server found in the pasted text", "粘贴的内容里没有找到 MCP 服务器"));
     let (v, toml) = any_value(text).ok_or_else(none)?;
     let map = |p: &str| v.pointer(p).and_then(Value::as_object).filter(|m| !m.is_empty() && m.values().all(is_def)).cloned();
@@ -120,5 +125,8 @@ mod tests {
         assert_eq!(codex[0].extra_family, Some(Family::Codex));
         assert_eq!(parse("hello").unwrap_err().to_string(), "粘贴的内容里没有找到 MCP 服务器");
         assert!(parse("{}").is_err());
+        let link = "ccswitch://v1/import?resource=mcp&apps=claude&config=eyJtY3BTZXJ2ZXJzIjp7Im1jcC1mZXRjaCI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtY3Atc2VydmVyLWZldGNoIl19fX0%3D";
+        assert_eq!(names(link), [pair("mcp-fetch", "stdio")]);
+        assert_eq!(parse("ccswitch://v1/import?resource=provider&endpoint=https://e.example.com").unwrap_err().to_string(), "这个链接导入的是供应商，不是 MCP 服务器");
     }
 }

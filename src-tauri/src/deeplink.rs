@@ -1,10 +1,12 @@
-//! Provider import links: `agentplus://v1/import?…`, and CC Switch's `ccswitch://v1/import?…`
-//! that relay sites (Sub2API, New API…) put behind their "Import to CC Switch" buttons. Both
-//! take the same query parameters (`resource=provider`, `app`, `name`, `endpoint`, `apiKey`,
-//! `model`…), so a site that supports CC Switch only has to swap the scheme.
+//! Import links: `agentplus://v1/import?…`, and CC Switch's `ccswitch://v1/import?…` that relay
+//! sites (Sub2API, New API…) put behind their "Import to CC Switch" buttons. Both take the same
+//! query parameters, so a site that supports CC Switch only has to swap the scheme:
+//! - `resource=provider` (the default): `app`, `name`, `endpoint`, `apiKey`, `model`…
+//! - `resource=mcp`: `apps` (comma-separated) and `config`, base64 of `{"mcpServers": {…}}`.
 //!
 //! A link never changes anything by itself: it is parsed into an `ImportRequest` that fills
-//! in the add-provider dialog, and the user saves it from there.
+//! in the add-provider dialog (or an `McpLink` for the add-MCP dialog), and the user saves it
+//! from there.
 //!
 //! Links arrive while the app starts (its command line), from a second launch (the
 //! single-instance plugin hands over the command line) or, on macOS, as an "open URL" event.
@@ -45,13 +47,40 @@ pub struct ImportRequest {
     pub source: String,
 }
 
-/// A link taken from the inbox: what it asks for, or why it can't be imported.
+/// What an MCP link adds: its servers, for the agents in `apps`. They fill in the add-MCP
+/// dialog, where the user picks the agents and saves.
 #[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct McpLink {
+    pub servers: Vec<crate::mcp::McpInput>,
+    /// The AgentPlus agents the link names (the others are left out).
+    pub agents: Vec<String>,
+    pub source: String,
+}
+
+/// A link: what it asks for (a provider or MCP servers), or why it can't be imported.
+#[derive(Serialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportItem {
     pub request: Option<ImportRequest>,
+    pub mcp: Option<McpLink>,
     pub error: Option<String>,
 }
+
+/// CC Switch's `apps` values for MCP, and the AgentPlus agent each stands for.
+const MCP_APPS: [(&str, Option<&str>); 8] = [
+    ("claude", Some("claude")),
+    ("codex", Some("codex")),
+    ("gemini", Some("gemini")),
+    ("opencode", Some("opencode")),
+    ("openclaw", Some("openclaw")),
+    ("hermes", Some("hermes")),
+    ("grokbuild", None),
+    ("grok", None),
+];
+
+/// At most this many servers per link.
+const MAX_SERVERS: usize = 50;
 
 /// CC Switch's `app` values, and the AgentPlus agent and protocol each stands for.
 /// Grok Build isn't an AgentPlus agent: its OpenAI-compatible address is still importable.
@@ -73,8 +102,8 @@ pub fn is_link(arg: &str) -> bool {
     [SCHEME, CCSWITCH].iter().any(|s| lower.starts_with(&format!("{s}://")))
 }
 
-/// Parses an import link.
-pub fn parse(link: &str) -> Result<ImportRequest> {
+/// Checks that `link` is an import link; returns it parsed, with its scheme.
+fn open(link: &str) -> Result<(url::Url, String)> {
     let link = link.trim();
     if link.len() > MAX_LINK {
         bail!("{}", l("This import link is too long", "导入链接太长"));
@@ -85,11 +114,72 @@ pub fn parse(link: &str) -> Result<ImportRequest> {
     if ![SCHEME, CCSWITCH].contains(&source.as_str()) || url.host_str() != Some("v1") || url.path().trim_end_matches('/') != "/import" {
         bail!("{}", l("This is not an import link", "这不是导入链接"));
     }
-    let q = |k: &str| url.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty());
-    let resource = q("resource").unwrap_or_else(|| "provider".into());
-    if resource != "provider" {
-        bail!("{}", tr!("AgentPlus imports providers only; this link carries a {resource}", "AgentPlus 只导入供应商，这个链接导入的是 {resource}"));
+    Ok((url, source))
+}
+
+/// A query parameter, trimmed; None when missing or blank.
+fn param(url: &url::Url, k: &str) -> Option<String> {
+    url.query_pairs().find(|(n, _)| n == k).map(|(_, v)| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// Parses an import link of either kind.
+pub fn parse_link(link: &str) -> Result<ImportItem> {
+    let (url, source) = open(link)?;
+    match param(&url, "resource").as_deref().unwrap_or("provider") {
+        "provider" => Ok(ImportItem { request: Some(provider(&url, source)?), ..Default::default() }),
+        "mcp" => Ok(ImportItem { mcp: Some(mcp(&url, source)?), ..Default::default() }),
+        other => bail!("{}", tr!("AgentPlus imports providers and MCP servers; this link carries a {other}", "AgentPlus 只导入供应商和 MCP 服务器，这个链接导入的是 {other}")),
     }
+}
+
+/// Parses a provider import link.
+#[cfg(test)]
+pub fn parse(link: &str) -> Result<ImportRequest> {
+    parse_link(link)?.request.ok_or_else(|| anyhow!("not a provider link"))
+}
+
+/// `resource=mcp`: the servers of `config` for the agents in `apps`.
+fn mcp(url: &url::Url, source: String) -> Result<McpLink> {
+    let q = |k: &str| param(url, k);
+    let mut agents: Vec<String> = vec![];
+    for a in q("apps").or_else(|| q("app")).unwrap_or_default().split(',').map(|a| a.trim().to_ascii_lowercase()).filter(|a| !a.is_empty()) {
+        let id = match MCP_APPS.iter().find(|x| x.0 == a) {
+            Some(x) => x.1.map(String::from),
+            // Our own links may name any AgentPlus agent.
+            None => (source == SCHEME && crate::adapters::ALL.contains(&a.as_str())).then_some(a),
+        };
+        if let Some(id) = id.filter(|id| !agents.contains(id)) {
+            agents.push(id);
+        }
+    }
+    let bad = || anyhow!(l("The link's MCP config can't be read", "读不了链接里的 MCP 配置"));
+    let text = decode_base64(&q("config").ok_or_else(|| anyhow!(l("The link has no MCP config", "链接里没有 MCP 配置")))?).ok_or_else(bad)?;
+    let v: Value = serde_json::from_str(&text).map_err(|_| bad())?;
+    if !v.get("mcpServers").and_then(Value::as_object).is_some_and(|m| !m.is_empty()) {
+        return Err(bad());
+    }
+    let servers = crate::mcp::parse::parse(&text)?;
+    if servers.len() > MAX_SERVERS {
+        bail!("{}", tr!("The link carries more than {MAX_SERVERS} MCP servers", "链接里的 MCP 服务器超过 {MAX_SERVERS} 个"));
+    }
+    for s in &servers {
+        let name_ok = !s.name.trim().is_empty() && s.name.len() <= 64 && !s.name.chars().any(char::is_control);
+        let target_ok = if s.transport == "stdio" {
+            s.command.as_deref().is_some_and(|c| !c.trim().is_empty())
+        } else {
+            s.url.as_deref().and_then(|u| url::Url::parse(u).ok()).is_some_and(|u| matches!(u.scheme(), "http" | "https" | "ws" | "wss"))
+        };
+        if !name_ok || !target_ok {
+            let name: String = s.name.chars().filter(|c| !c.is_control()).take(64).collect();
+            bail!("{}", tr!("The link's MCP server \"{name}\" is incomplete", "链接里的 MCP 服务器「{name}」不完整"));
+        }
+    }
+    Ok(McpLink { servers, agents, source })
+}
+
+/// `resource=provider`.
+fn provider(url: &url::Url, source: String) -> Result<ImportRequest> {
+    let q = |k: &str| param(url, k);
 
     let app = q("app").map(|a| a.to_ascii_lowercase());
     let known = app.as_deref().and_then(|a| APPS.iter().find(|x| x.0 == a));
@@ -241,10 +331,7 @@ pub fn take() -> Vec<ImportItem> {
     let links = INBOX.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default();
     links
         .iter()
-        .map(|link| match parse(link) {
-            Ok(r) => ImportItem { request: Some(r), error: None },
-            Err(e) => ImportItem { request: None, error: Some(format!("{e:#}")) },
-        })
+        .map(|link| parse_link(link).unwrap_or_else(|e| ImportItem { error: Some(format!("{e:#}")), ..Default::default() }))
         .collect()
 }
 
@@ -479,12 +566,33 @@ mod tests {
         assert_eq!(r.base_url, "https://t.example.com/v1");
     }
 
+    /// CC Switch's documented example, and a batch with a remote server.
+    #[test]
+    fn mcp_links() {
+        let item = parse_link("ccswitch://v1/import?resource=mcp&apps=claude,codex,gemini&config=eyJtY3BTZXJ2ZXJzIjp7Im1jcC1mZXRjaCI6eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJtY3Atc2VydmVyLWZldGNoIl19fX0%3D").unwrap();
+        let m = item.mcp.unwrap();
+        assert!(item.request.is_none());
+        assert_eq!(m.agents, ["claude", "codex", "gemini"]);
+        assert_eq!((m.servers[0].name.as_str(), m.servers[0].command.as_deref(), m.servers[0].args.as_slice()), ("mcp-fetch", Some("uvx"), &["mcp-server-fetch".to_string()][..]));
+        let cfg = b64(r#"{"mcpServers":{"a":{"command":"npx","args":["-y","a"],"env":{"T":"x"}},"b":{"type":"http","url":"https://h/mcp","headers":{"Authorization":"Bearer k"}}}}"#);
+        // Unknown apps are left out; our own links may name any agent.
+        let m = parse_link(&format!("ccswitch://v1/import?resource=mcp&apps=grok,kimi,hermes&config={cfg}")).unwrap().mcp.unwrap();
+        assert_eq!(m.agents, ["hermes"]);
+        assert_eq!(m.servers.iter().map(|s| s.transport.as_str()).collect::<Vec<_>>(), ["stdio", "http"]);
+        let m = parse_link(&format!("agentplus://v1/import?resource=mcp&apps=kimi&config={cfg}")).unwrap().mcp.unwrap();
+        assert_eq!(m.agents, ["kimi"]);
+        let err = |l: &str| format!("{:#}", parse_link(l).unwrap_err());
+        assert_eq!(err("ccswitch://v1/import?resource=mcp&apps=claude"), "链接里没有 MCP 配置");
+        assert_eq!(err(&format!("ccswitch://v1/import?resource=mcp&apps=claude&config={}", b64(r#"{"command":"x"}"#))), "读不了链接里的 MCP 配置");
+        assert_eq!(err(&format!("ccswitch://v1/import?resource=mcp&apps=claude&config={}", b64(r#"{"mcpServers":{"x":{"type":"http","url":"file:///etc"}}}"#))), "链接里的 MCP 服务器「x」不完整");
+    }
+
     #[test]
     fn rejects_what_it_cant_import() {
         let err = |l: &str| format!("{:#}", parse(l).unwrap_err());
         assert_eq!(err("https://example.com/v1/import"), "这不是导入链接");
         assert_eq!(err("ccswitch://v2/import?name=a"), "这不是导入链接");
-        assert_eq!(err("ccswitch://v1/import?resource=mcp&app=claude&name=a"), "AgentPlus 只导入供应商，这个链接导入的是 mcp");
+        assert_eq!(err("ccswitch://v1/import?resource=prompt&app=claude&name=a"), "AgentPlus 只导入供应商和 MCP 服务器，这个链接导入的是 prompt");
         assert_eq!(err("ccswitch://v1/import?resource=provider&app=claude&name=a&apiKey=k"), "链接里没有接口地址");
         assert_eq!(err("ccswitch://v1/import?resource=provider&app=claude&name=a&configUrl=https://x.example.com/c.json"), "不支持从网址加载配置的链接");
         assert!(err("ccswitch://v1/import?resource=provider&app=claude&name=a&endpoint=file:///etc/passwd").starts_with("链接里的接口地址不是 http(s) 地址"));

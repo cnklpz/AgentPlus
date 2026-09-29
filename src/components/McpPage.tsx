@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { type AgentId, type AgentState, type McpInput, type McpKv, type McpServer, type McpSource, api } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { type AgentId, type AgentState, type McpInput, type McpKv, type McpLink, type McpServer, type McpSource, api } from "../api";
 import { type Draft, type McpView, deleteMcp, keys, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp } from "../draft";
 import { t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
@@ -71,15 +71,23 @@ interface Props {
   onApplyAll: () => void;
   onDiscard: (agent: AgentId | null) => void;
   flash: Flash;
+  /** An MCP import link to fill in the add dialog with; `n` tells one link from the next. */
+  link: { link: McpLink; n: number } | null;
 }
 
-export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash }: Props) {
+export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash, link }: Props) {
   const lang = useLang();
   const ids = useMemo(() => agents.map((a) => a.id).filter((id) => !id.includes("@")), [agents]);
   // Errors come from the backend in the UI language; `agents` changes after every apply.
   const { data, error, reload } = useLoad(() => api.mcpList(ids), [lang, agents]);
   const [sel, setSel] = useState<string | null>(null);
   const [dialog, setDialog] = useState<McpEdit | null | undefined>(undefined);
+  const [fromLink, setFromLink] = useState<{ link: McpLink; n: number } | null>(null);
+  useEffect(() => {
+    if (!link) return;
+    setFromLink(link);
+    setDialog(null);
+  }, [link?.n]);
 
   const source = (from: [McpSource, string]) => from[0] === LIBRARY
     ? data?.library.find((s) => s.name === from[1])
@@ -229,7 +237,10 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
         )}
         <PendingPanel pending={pending} drafts={drafts} busy={busy} onDiscard={onDiscard} onApplyAll={onApplyAll} emptyHint={t("mcpPage.pendingHint")} />
       </aside>
-      {dialog !== undefined && <McpDialog edit={dialog} targets={targets} onSave={save} onClose={() => setDialog(undefined)} />}
+      {dialog !== undefined && data && (
+        <McpDialog key={fromLink?.n ?? 0} edit={dialog} targets={targets} link={dialog === null ? fromLink?.link : undefined} onSave={save}
+          onClose={() => { setDialog(undefined); setFromLink(null); }} />
+      )}
     </>
   );
 }

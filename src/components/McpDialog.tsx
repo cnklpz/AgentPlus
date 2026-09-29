@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
-import { type McpInput, type McpServer, type McpSource, type McpTransport, api } from "../api";
-import { t } from "../i18n";
+import { type McpInput, type McpLink, type McpServer, type McpSource, type McpTransport, api } from "../api";
+import { t, tn } from "../i18n";
 import { errText } from "../util";
 import { ErrorBox, Seg } from "./controls";
 import { Modal } from "./Modal";
@@ -37,6 +37,8 @@ export interface McpEdit {
 interface Props {
   edit: McpEdit | null;
   targets: McpTarget[];
+  /** Adding from an import link: its servers fill the form, its agents are ticked. */
+  link?: McpLink;
   onSave: (input: McpInput, to: McpSource[], removeFrom: McpSource[]) => Promise<void>;
   onClose: () => void;
 }
@@ -53,8 +55,8 @@ function pairs(text: string, sep: string): { key: string; value: string }[] {
 
 const joinPairs = (kv: { key: string; value: string }[], sep: string) => kv.map((p) => `${p.key}${sep}${p.value}`).join("\n");
 
-export function McpDialog({ edit, targets, onSave, onClose }: Props) {
-  const s = edit?.s;
+export function McpDialog({ edit, targets, link, onSave, onClose }: Props) {
+  const s: McpServer | McpInput | undefined = edit?.s ?? link?.servers[0];
   const [name, setName] = useState(s?.name ?? "");
   const [transport, setTransport] = useState<McpTransport>(s?.transport ?? "stdio");
   const [command, setCommand] = useState(s?.command ?? "");
@@ -63,10 +65,10 @@ export function McpDialog({ edit, targets, onSave, onClose }: Props) {
   const [url, setUrl] = useState(s?.url ?? "");
   const [env, setEnv] = useState(s ? joinPairs(s.env, "=") : "");
   const [headers, setHeaders] = useState(s ? joinPairs(s.headers, ": ") : "");
-  const [extra, setExtra] = useState<Pick<McpInput, "extra" | "extraFamily">>({});
-  const [to, setTo] = useState<Set<McpSource>>(new Set(edit?.holders ?? []));
+  const [extra, setExtra] = useState<Pick<McpInput, "extra" | "extraFamily">>(link ? { extra: link.servers[0].extra, extraFamily: link.servers[0].extraFamily } : {});
+  const [to, setTo] = useState<Set<McpSource>>(new Set(edit?.holders ?? link?.agents.filter((a) => targets.some((x) => x.id === a)) ?? []));
   const [paste, setPaste] = useState<string | null>(null);
-  const [parsed, setParsed] = useState<McpInput[]>([]);
+  const [parsed, setParsed] = useState<McpInput[]>(link?.servers ?? []);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const first = useRef<HTMLInputElement>(null);
@@ -136,7 +138,16 @@ export function McpDialog({ edit, targets, onSave, onClose }: Props) {
   return (
     <Modal label={edit ? t("mcpDialog.editTitle", { name: edit.s.name }) : t("mcpDialog.addTitle")} title={edit ? t("mcpDialog.editTitle", { name: edit.s.name }) : t("mcpDialog.addTitle")}
       wide onClose={onClose} busy={saving} foot={foot}>
-      {!edit && (paste === null ? (
+      {link && <span className="tiny muted">{tn("mcpDialog.fromLink", link.servers.length)}</span>}
+      {link && parsed.length > 1 && paste === null && (
+        <div className="row gap6 mcp-parsed">
+          <span className="tiny muted">{t("mcpDialog.pickParsed")}</span>
+          {parsed.map((p) => (
+            <button key={p.name} type="button" className={`btn small${p.name === trimmed ? " primary" : ""}`} onClick={() => fill(p)}>{p.name}</button>
+          ))}
+        </div>
+      )}
+      {!edit && !link && (paste === null ? (
         <button type="button" className="btn small mcp-paste-btn" onClick={() => setPaste("")}><Icon.copy size={12} />{t("mcpDialog.pasteConfig")}</button>
       ) : (
         <div className="field">

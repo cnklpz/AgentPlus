@@ -765,8 +765,8 @@ fn take_imports() -> Vec<deeplink::ImportItem> {
 
 /// A pasted import link.
 #[tauri::command]
-fn parse_import_link(link: String) -> Result<deeplink::ImportRequest, String> {
-    deeplink::parse(&link).map_err(err)
+fn parse_import_link(link: String) -> Result<deeplink::ImportItem, String> {
+    deeplink::parse_link(&link).map_err(err)
 }
 
 #[tauri::command]

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { type ImportRequest, api } from "../api";
+import { type ImportItem, type ImportRequest, api } from "../api";
 import { Icon } from "./icons";
 import { Modal } from "./Modal";
 import { ErrorBox } from "./controls";
@@ -36,7 +36,7 @@ export function ImportNote({ req }: { req: ImportRequest }) {
 }
 
 /** Paste an import link (the "Import to CC Switch" kind) instead of clicking it. */
-export function ImportLinkDialog({ onImport, onClose }: { onImport: (r: ImportRequest) => void; onClose: () => void }) {
+export function ImportLinkDialog({ onImport, onClose }: { onImport: (item: ImportItem) => void; onClose: () => void }) {
   const [link, setLink] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

@@ -766,9 +766,18 @@ export interface ImportRequest {
   source: "agentplus" | "ccswitch";
 }
 
-/** An import link taken from the backend: what it asks for, or why it can't be imported. */
+/** What an MCP import link (`resource=mcp`) adds: servers for the add-MCP dialog. */
+export interface McpLink {
+  servers: McpInput[];
+  /** The agents the link names. */
+  agents: AgentId[];
+  source: "agentplus" | "ccswitch";
+}
+
+/** An import link: a provider or MCP servers, or why it can't be imported. */
 export interface ImportItem {
   request: ImportRequest | null;
+  mcp: McpLink | null;
   error: string | null;
 }
 
@@ -894,7 +903,7 @@ const real = {
   pickFolder: (start: string | null, purpose?: "sync") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
   /** Import links that came in since the last call (the backend keeps them until then). */
   takeImports: () => invoke<ImportItem[]>("take_imports"),
-  parseImportLink: (link: string) => invoke<ImportRequest>("parse_import_link", { link }),
+  parseImportLink: (link: string) => invoke<ImportItem>("parse_import_link", { link }),
   ccswitchLink: () => invoke<LinkHandler>("ccswitch_link_status"),
   setCcswitchLink: (on: boolean) => invoke<LinkHandler>("set_ccswitch_link", { on }),
   /** A newer release, or null when this is the latest. */
@@ -1206,15 +1215,21 @@ const demo: typeof real = {
     const u = new URL(link.trim());
     const q = (k: string) => u.searchParams.get(k)?.trim() || null;
     const app = q("app");
+    if (q("resource") === "mcp") {
+      type Def = { command?: string; args?: string[]; url?: string; type?: McpTransport };
+      const cfg = JSON.parse(atob(q("config") ?? "")) as { mcpServers: Record<string, Def> };
+      const servers = Object.entries(cfg.mcpServers).map(([name, d]): McpInput => ({ name, transport: d.url ? d.type ?? "http" : "stdio", command: d.command ?? null, args: d.args ?? [], cwd: null, url: d.url ?? null, env: [], headers: [], enabled: true }));
+      return { request: null, error: null, mcp: { servers, agents: (q("apps") ?? "").split(",").filter((a) => ["claude", "codex", "gemini", "opencode", "openclaw", "hermes"].includes(a)) as AgentId[], source: "ccswitch" } };
+    }
     const endpoint = q("endpoint")?.split(",")[0].replace(/\/+$/, "");
     if (!/^(agentplus|ccswitch):$/i.test(u.protocol) || !endpoint) throw new Error("（演示）这不是导入链接");
     const agent = (["claude", "codex", "gemini", "opencode", "openclaw", "hermes"].includes(app ?? "") ? app : null) as AgentId | null;
-    return {
+    return { mcp: null, error: null, request: {
       name: q("name") ?? new URL(endpoint).host, baseUrl: endpoint, apiKey: q("apiKey") ?? "",
       api: agent === "claude" ? "anthropic" : agent === "codex" ? "responses" : agent === "gemini" ? "gemini" : "chat",
       models: [...new Set(["model", "sonnetModel", "opusModel", "haikuModel"].map(q).filter((m): m is string => !!m))],
       agent, homepage: q("homepage"), source: u.protocol.toLowerCase().startsWith("ccswitch") ? "ccswitch" : "agentplus",
-    };
+    } };
   },
   ccswitchLink: async () => ({ ...demoLinks }),
   setCcswitchLink: async (on) => { Object.assign(demoLinks, { on, other: on ? null : "CC Switch.exe" }); return { ...demoLinks }; },

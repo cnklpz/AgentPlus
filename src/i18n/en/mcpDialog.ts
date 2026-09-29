@@ -2,8 +2,9 @@
 export default {
   addTitle: "Add MCP server",
   editTitle: "Edit \"{name}\"",
+  fromLink: "Filled in from an import link ({n} server). Check it, pick the agents, then add.|Filled in from an import link ({n} servers). Check each, pick the agents, then add.",
   pasteConfig: "Paste config",
-  pasteHint: "A README snippet or a piece of any agent's config: JSON, TOML or YAML",
+  pasteHint: "A README snippet, a piece of any agent's config (JSON, TOML or YAML), or a ccswitch:// MCP import link",
   readPaste: "Read",
   pickParsed: "Found several; fill in:",
   unnamed: "(no name)",

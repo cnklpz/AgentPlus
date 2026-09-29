@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportRequest, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
+import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportItem, type ImportRequest, type LibEntry, type McpLink, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
 import {
   CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount, writeOrder,
   opsToWrite, pendingTotal, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
@@ -1028,11 +1028,22 @@ export default function App() {
   // started the app waits for the agents to load.
   const [linkOpen, setLinkOpen] = useState(false);
   const importSeq = useRef(0);
-  const importRef = useRef((_r: ImportRequest) => {});
-  importRef.current = (r: ImportRequest) => {
+  // An MCP link fills in the add-MCP dialog on the MCP page.
+  const [mcpLink, setMcpLink] = useState<{ link: McpLink; n: number } | null>(null);
+  const importRef = useRef((_i: ImportItem) => {});
+  importRef.current = (item: ImportItem) => {
     const n = ++importSeq.current;
     setLinkOpen(false);
     setPalette(false);
+    if (item.mcp) {
+      setDialog(null);
+      setHubDialog(undefined);
+      setPage("mcp");
+      setMcpLink({ link: item.mcp, n });
+      return;
+    }
+    const r = item.request;
+    if (!r) return;
     // Gemini CLI speaks only Gemini's protocol, which the provider library doesn't keep: its own dialog.
     if (r.api === "gemini") {
       if (!shown.some((a) => a.id === "gemini" && !a.readonly)) {
@@ -1052,7 +1063,7 @@ export default function App() {
     if (!inTauri || !agentsReady) return;
     const take = () => api.takeImports().then((items) => {
       for (const i of items) if (i.error) flash(t("app.importFailed", { err: i.error }), true);
-      const last = items.filter((i) => i.request).pop()?.request;
+      const last = items.filter((i) => i.request || i.mcp).pop();
       if (last) importRef.current(last);
     }).catch(() => undefined);
     void take();
@@ -1498,7 +1509,7 @@ export default function App() {
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
         {page === "mcp" && (
-          <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash}
+          <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash} link={mcpLink}
             onApplyAll={applyAll} onDiscard={(a) => (a ? setDraftFor(a, {}) : setDrafts({}))} />
         )}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
