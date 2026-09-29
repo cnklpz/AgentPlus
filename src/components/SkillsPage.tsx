@@ -494,7 +494,7 @@ function ImportDialog({ flash, onClose, onDone }: { flash: Flash; onClose: () =>
           <div className="row gap6">
             <input className="input mono grow" value={source} autoFocus onChange={(e) => setSource(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && source.trim() && !busy) void go(); }}
-              placeholder="https://github.com/owner/repo  ·  D:\\skills  ·  skill.zip" />
+              placeholder="https://github.com/owner/repo" />
             <button className="btn" onClick={() => void browse()}><Icon.folder size={13} />{t("skillsPage.browse")}</button>
           </div>
           <em className="muted tiny hint">{t("skillsPage.importHint")}</em>
