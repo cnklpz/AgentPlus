@@ -42,6 +42,8 @@
 .hub-stats b { font: 700 20px var(--mono); line-height: 1.2; }
 .hub-stats span { font-size: 11.5px; color: var(--muted); }
 .hub-agent { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+/* The count and "Discard" share one size and line box, so they sit on one line. */
+.hub-agent > .row > .tiny, .hub-agent > .row > .link { font-size: 11.5px; line-height: 18px; }
 
 /* Provider dialog */
 .modal.wide { width: min(680px, 100%); }
