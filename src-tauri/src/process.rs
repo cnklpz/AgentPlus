@@ -24,6 +24,27 @@ pub struct Install {
     pub running: bool,
     /// Every desktop copy found when there can be several; `exe` is the one in use.
     pub copies: Vec<DesktopCopy>,
+    /// A local server the CLI runs in the background (`dsh web`), started and restarted
+    /// instead of a desktop app; set without `dir` / `exe`.
+    pub server: Option<Server>,
+}
+
+/// A CLI that serves a web UI: it has no folder of its own (it runs under node), so its
+/// processes are told apart by their command line.
+#[derive(Clone, Debug)]
+pub struct Server {
+    /// Started as `program args…` in the home folder (the program's file name also picks
+    /// which processes' command lines are read).
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// What a process's command line serves, if it is such a server; it is this one when
+    /// that equals `name`.
+    pub serves: fn(&[String]) -> Option<String>,
+    pub name: String,
+    /// Where its output goes. It is up once a URL shows up there.
+    pub log: PathBuf,
+    /// Keeps running after AgentPlus quits when AgentPlus started it (see [`set_independent`]).
+    pub independent: bool,
 }
 
 /// One installed copy of a desktop app.
@@ -385,7 +406,7 @@ pub(crate) fn app_dir(exe: &Path) -> Option<PathBuf> {
 }
 
 /// `inst` found as the desktop copy `c`.
-fn use_copy(inst: &mut Install, c: &DesktopCopy) {
+pub(crate) fn use_copy(inst: &mut Install, c: &DesktopCopy) {
     inst.installed = true;
     inst.version = c.version.clone();
     inst.dir = app_dir(&c.exe);
@@ -485,15 +506,70 @@ fn processes() -> System {
     sys
 }
 
-/// The running desktop app of `inst` (empty when it has no folder).
+/// The running server `s`: processes of its program whose command line serves its name.
+fn server_roots(sys: &System, s: &Server) -> Vec<Pid> {
+    use sysinfo::{ProcessRefreshKind, UpdateKind};
+    let Some(name) = s.program.file_name() else { return vec![] };
+    let pids: Vec<Pid> = sys.processes().iter().filter(|(_, p)| p.name().eq_ignore_ascii_case(name)).map(|(pid, _)| *pid).collect();
+    if pids.is_empty() {
+        return vec![];
+    }
+    // Only these few: reading every process's command line is slow on Windows.
+    let mut cmds = System::new();
+    cmds.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), true, ProcessRefreshKind::new().with_cmd(UpdateKind::Always));
+    pids.into_iter()
+        .filter(|pid| {
+            let argv: Vec<String> = cmds.process(*pid).map(|p| p.cmd().iter().map(|a| a.to_string_lossy().to_string()).collect()).unwrap_or_default();
+            (s.serves)(&argv).as_deref() == Some(s.name.as_str())
+        })
+        .collect()
+}
+
+/// `roots` and every process they started (a started process is newer than its parent).
+fn with_descendants(sys: &System, roots: &[Pid]) -> Vec<Pid> {
+    if roots.is_empty() {
+        return vec![];
+    }
+    let under = |pid: Pid| {
+        let mut cur = sys.process(pid);
+        for _ in 0..64 {
+            let Some(p) = cur else { return false };
+            if roots.contains(&p.pid()) {
+                return true;
+            }
+            cur = p.parent().and_then(|pp| sys.process(pp)).filter(|par| par.start_time() <= p.start_time());
+        }
+        false
+    };
+    sys.processes().keys().copied().filter(|pid| under(*pid)).collect()
+}
+
+/// The running desktop app of `inst`, or its server (empty when it has neither).
 fn app_of(sys: &System, inst: &Install) -> Vec<Pid> {
+    if let Some(s) = &inst.server {
+        return with_descendants(sys, &server_roots(sys, s));
+    }
     inst.dir.as_deref().map(|d| app_processes(sys, d, inst.exe.as_deref())).unwrap_or_default()
 }
 
-/// Sets `running` from the desktop app's processes. An install without a folder (a CLI)
-/// keeps what its detector found.
+/// Kills process `pid` and everything it started. Launchers (`npx.cmd`, `uvx`) run the real
+/// program as a grandchild, which would outlive a plain `Child::kill`.
+pub(crate) fn kill_tree(pid: u32) {
+    let sys = processes();
+    for p in with_descendants(&sys, &[Pid::from_u32(pid)]).iter().filter_map(|pid| sys.process(*pid)) {
+        p.kill();
+    }
+}
+
+/// Whether AgentPlus can tell `inst`'s app processes (a desktop app's folder, or a server).
+fn has_app(inst: &Install) -> bool {
+    inst.dir.is_some() || inst.server.is_some()
+}
+
+/// Sets `running` from the desktop app's (or server's) processes. An install without either
+/// (a CLI) keeps what its detector found.
 pub(crate) fn set_app_running(inst: &mut Install) {
-    if inst.dir.is_some() {
+    if has_app(inst) {
         inst.running = !app_of(&processes(), inst).is_empty();
     }
 }
@@ -779,6 +855,21 @@ pub(crate) fn detect_mimo() -> Install {
     }
     set_app_running(&mut inst);
     inst
+}
+
+/// The DeepSeek Harness desktop app (electron-builder, per-user NSIS on Windows): its bundle
+/// on macOS; on Windows its uninstall entry ("DeepSeek Harness <version>"), else the
+/// installer's default folder.
+pub(crate) fn detect_dsh_desktop() -> Option<DesktopCopy> {
+    const MAIN: &str = "DeepSeek Harness.exe";
+    if let Some(c) = app_bundles(&["com.deepseek.harness", "DeepSeek Harness.app"]).into_iter().next() {
+        return Some(c);
+    }
+    if let Some(c) = desktop_copies("DeepSeek Harness", MAIN).into_iter().next() {
+        return Some(c);
+    }
+    let exe = dirs::data_local_dir()?.join("Programs").join("DeepSeek Harness").join(MAIN);
+    (cfg!(windows) && exe.is_file()).then_some(DesktopCopy { exe, version: None, running: false })
 }
 
 /// Newest version folder of the Claude Code that Claude Desktop keeps for itself
@@ -1111,12 +1202,23 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     check_cancel()?;
     on(Progress::step("start", "active", None));
     let t1 = Instant::now();
-    if let Some(aumid) = &inst.aumid {
+    if let Some(s) = &inst.server {
+        start_server(s).map_err(|e| anyhow!(tr!("Failed to start: {e}", "启动失败：{e}")))?;
+    } else if let Some(aumid) = &inst.aumid {
         activate(aumid, args)?;
     } else if let Some(exe) = &inst.exe {
         start_exe(exe, args).map_err(|e| anyhow!(tr!("Failed to start: {e}", "启动失败：{e}")))?;
     }
     crate::applog::info("restart", format!("{agent}: launch call returned after {:.1}s", t1.elapsed().as_secs_f32()));
+    if let Some(s) = &inst.server {
+        let url = wait_served(s, on)?;
+        remember_launch(agent, &inst);
+        on(match url {
+            Some(url) => Progress::step("start", "done", Some(url)),
+            None => Progress::step("start", "warn", Some(tr!("No address seen within {}s; it may still be starting", "{} 秒内没有看到服务地址，可能还在启动", SERVE_WAIT.as_secs()))),
+        });
+        return Ok(done);
+    }
     // Wait until its process shows up, so "done" means it is actually up.
     if inst.dir.is_some() {
         on(Progress::step("start", "active", Some(crate::i18n::l("Waiting for the process", "等待进程出现").into())));
@@ -1141,6 +1243,9 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
 /// The app's main process: its main executable, not started by another of its processes
 /// (the oldest when several). (pid, start time).
 fn main_process(sys: &System, inst: &Install) -> Option<(Pid, u64)> {
+    if let Some(s) = &inst.server {
+        return server_roots(sys, s).into_iter().filter_map(|pid| sys.process(pid)).min_by_key(|p| p.start_time()).map(|p| (p.pid(), p.start_time()));
+    }
     let main = norm_dir(&inst.exe.as_deref()?.to_string_lossy());
     let pids = app_of(sys, inst);
     pids.iter()
@@ -1170,19 +1275,34 @@ fn remember_launch(agent: &str, inst: &Install) {
 /// one the last restart from AgentPlus started, or when it carries AgentPlus's DevTools
 /// port (an app started by an earlier AgentPlus). None while it isn't running.
 pub fn launch(agent: &str, inst: &Install) -> Option<crate::model::Launch> {
-    use sysinfo::{ProcessRefreshKind, UpdateKind};
     if !inst.running {
         return None;
     }
+    let (ours, argv) = main_launch(agent, inst)?;
+    let flag = "--remote-debugging-port=";
+    let debug_port = argv.iter().any(|a| a.starts_with(flag));
+    let wants_ui = agent == crate::adapters::codex::ID && crate::adapters::codex::ui_patches().any();
+    Some(crate::model::Launch { by_agentplus: ours || debug_port, debug_port, ui_inactive: wants_ui && !debug_port })
+}
+
+/// From one process scan: whether `inst`'s main process is the one AgentPlus last started for
+/// `agent`, and its command line. None when it isn't running.
+fn main_launch(agent: &str, inst: &Install) -> Option<(bool, Vec<String>)> {
+    use sysinfo::{ProcessRefreshKind, UpdateKind};
     let mut sys = processes();
     let (pid, start) = main_process(&sys, inst)?;
     let rec = crate::store::load().get("launched").and_then(|l| l.get(agent)).cloned();
     let ours = rec.is_some_and(|r| r["pid"].as_u64() == Some(u64::from(pid.as_u32())) && r["start"].as_u64() == Some(start));
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), false, ProcessRefreshKind::new().with_cmd(UpdateKind::Always));
-    let flag = "--remote-debugging-port=";
-    let debug_port = sys.process(pid).is_some_and(|p| p.cmd().iter().any(|a| a.to_string_lossy().starts_with(flag)));
-    let wants_ui = agent == crate::adapters::codex::ID && crate::adapters::codex::ui_patches().any();
-    Some(crate::model::Launch { by_agentplus: ours || debug_port, debug_port, ui_inactive: wants_ui && !debug_port })
+    let argv = sys.process(pid).map(|p| p.cmd().iter().map(|a| a.to_string_lossy().to_string()).collect()).unwrap_or_default();
+    Some((ours, argv))
+}
+
+/// `inst`'s running server: whether AgentPlus started it, and its command line (argv). None
+/// when it has no server or it isn't running.
+pub fn server_launch(agent: &str, inst: &Install) -> Option<(bool, Vec<String>)> {
+    inst.server.as_ref()?;
+    main_launch(agent, inst)
 }
 
 /// For the log when a started app wasn't found: processes named like its main executable and
@@ -1203,7 +1323,7 @@ fn near_misses(inst: &Install) -> String {
 pub fn running(agent: &str) -> (bool, Option<crate::model::Launch>) {
     let t0 = Instant::now();
     let inst = detect(agent);
-    let launch = if inst.dir.is_some() { launch(agent, &inst) } else { None };
+    let launch = if has_app(&inst) { launch(agent, &inst) } else { None };
     if t0.elapsed() > Duration::from_secs(2) {
         crate::applog::warn("detect", format!("{agent}: running check took {:.1}s", t0.elapsed().as_secs_f32()));
     }
@@ -1234,6 +1354,334 @@ fn start_exe(exe: &Path, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Starts server `s` in the background, without a window, its output going to `s.log`. It
+/// ends with AgentPlus unless it is independent (see [`set_independent`]).
+fn start_server(s: &Server) -> Result<()> {
+    if let Some(d) = s.log.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let out = std::fs::File::create(&s.log)?;
+    let err = out.try_clone()?;
+    // Lets `with_login_path` pass on the login PATH (macOS) that node's children need.
+    search_path();
+    let mut cmd = Command::new(&s.program);
+    cmd.args(&s.args).stdin(std::process::Stdio::null()).stdout(out).stderr(err);
+    if let Some(home) = dirs::home_dir() {
+        cmd.current_dir(home);
+    }
+    with_login_path(&mut cmd);
+    set_independent(s.independent);
+    let mut child = spawn_server(&mut cmd)?;
+    #[cfg(windows)]
+    if let Err(e) = job::adopt(&child, !s.independent) {
+        crate::applog::warn("restart", format!("{}: could not tie the server to AgentPlus: {e}", s.name));
+    }
+    let pid = child.id();
+    own_servers().push(pid);
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        own_servers().retain(|p| *p != pid);
+    });
+    Ok(())
+}
+
+/// Spawns a server without a window. On Windows it leaves any job AgentPlus runs in (a
+/// terminal's or an IDE's) when that job allows it, so only AgentPlus's own job (see [`job`])
+/// decides whether it outlives AgentPlus. Elsewhere it gets its own process group, so a
+/// Ctrl+C in the terminal that started AgentPlus doesn't reach it.
+fn spawn_server(cmd: &mut Command) -> Result<std::process::Child> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+        match cmd.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB).spawn() {
+            Ok(c) => Ok(c),
+            // Access denied: the job AgentPlus is in doesn't allow leaving it.
+            Err(e) if e.raw_os_error() == Some(5) => Ok(cmd.creation_flags(CREATE_NO_WINDOW).spawn()?),
+            Err(e) => Err(e.into()),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::process::CommandExt;
+        Ok(cmd.process_group(0).spawn()?)
+    }
+}
+
+/// Whether the servers AgentPlus started keep running after it quits (the agent's setting,
+/// applied at once to the ones already running).
+static INDEPENDENT: AtomicBool = AtomicBool::new(false);
+
+/// Servers this AgentPlus started that haven't exited yet (each leaves once reaped, so its pid
+/// can't have been reused).
+fn own_servers() -> std::sync::MutexGuard<'static, Vec<u32>> {
+    static PIDS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(vec![]);
+    PIDS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Lets the servers AgentPlus started outlive it (`true`), or ties them to it.
+pub fn set_independent(on: bool) {
+    INDEPENDENT.store(on, Ordering::SeqCst);
+    #[cfg(windows)]
+    job::kill_on_close(!on);
+}
+
+/// Agents whose Start runs a background server (see [`Server`]).
+const SERVER_AGENTS: &[&str] = &[crate::adapters::dsh::ID];
+
+/// On quit: ends the servers AgentPlus started unless they are independent. On Windows the
+/// ones this AgentPlus started are ended by their job (also when it crashes or is killed).
+pub fn end_own_servers() {
+    if !cfg!(windows) && !INDEPENDENT.load(Ordering::SeqCst) {
+        let roots: Vec<Pid> = own_servers().iter().map(|p| Pid::from_u32(*p)).collect();
+        if !roots.is_empty() {
+            let sys = processes();
+            for pid in with_descendants(&sys, &roots) {
+                if let Some(p) = sys.process(pid) {
+                    if p.kill_with(Signal::Term) != Some(true) {
+                        p.kill();
+                    }
+                }
+            }
+        }
+    }
+    end_launched_servers();
+    // A server that ends with AgentPlus won't be opened with its link again.
+    for agent in SERVER_AGENTS {
+        if let Some(s) = detect(agent).server.filter(|s| !s.independent) {
+            forget_served_token(&s.log);
+        }
+    }
+}
+
+/// Servers an earlier AgentPlus started while they were independent: once the setting is off,
+/// they end with this one too (no job of this AgentPlus holds them).
+fn end_launched_servers() {
+    let launched = crate::store::load().get("launched").cloned().unwrap_or_default();
+    for agent in SERVER_AGENTS.iter().filter(|a| launched.get(**a).is_some()) {
+        let inst = detect(agent);
+        let Some(s) = inst.server.as_ref().filter(|s| !s.independent && inst.running) else { continue };
+        if server_launch(agent, &inst).is_some_and(|(ours, _)| ours) {
+            end_app(&inst, true);
+            crate::applog::info("restart", format!("{agent}: server {} ended with AgentPlus", s.name));
+        }
+    }
+}
+
+/// The job object the servers AgentPlus starts run in: while it kills on close, Windows ends
+/// them (and whatever they started) once AgentPlus's handle to it closes, however AgentPlus
+/// exits. The handle is never closed by hand.
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    /// The job's handle as an integer (a raw pointer can't sit in a static); None when it
+    /// couldn't be created.
+    static JOB: OnceLock<Option<isize>> = OnceLock::new();
+
+    fn handle(h: isize) -> HANDLE {
+        HANDLE(h as *mut std::ffi::c_void)
+    }
+
+    fn set(job: HANDLE, kill: bool) -> windows::core::Result<()> {
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        if kill {
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        }
+        // SAFETY: `info` is the structure this information class expects, alive for the call.
+        unsafe { SetInformationJobObject(job, JobObjectExtendedLimitInformation, std::ptr::from_ref(&info).cast(), std::mem::size_of_val(&info) as u32) }
+    }
+
+    /// Puts `child` in the job, which kills on close when `kill`.
+    pub(super) fn adopt(child: &std::process::Child, kill: bool) -> windows::core::Result<()> {
+        // SAFETY: no name, default security; the handle lives as long as AgentPlus.
+        let job = JOB.get_or_init(|| unsafe { CreateJobObjectW(None, None) }.ok().map(|h| h.0 as isize)).map(handle);
+        let job = job.ok_or_else(windows::core::Error::from_win32)?;
+        set(job, kill)?;
+        // SAFETY: the child's process handle is valid while `child` is borrowed.
+        unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) }
+    }
+
+    /// Whether the job kills its processes on close, when there is one.
+    pub(super) fn kill_on_close(kill: bool) {
+        if let Some(Some(h)) = JOB.get() {
+            if let Err(e) = set(handle(*h), kill) {
+                crate::applog::warn("restart", format!("could not update the server job: {e}"));
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        use windows::Win32::Foundation::CloseHandle;
+
+        /// Whether `child` exits within a few seconds.
+        fn exits(child: &mut std::process::Child) -> bool {
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_secs(5) {
+                if child.try_wait().unwrap().is_some() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            false
+        }
+
+        /// A job that no longer kills on close (switched after the child joined, as the
+        /// setting does) lets it outlive the handle; one that does ends it.
+        #[test]
+        fn closing_the_job_ends_its_processes_only_while_it_kills_on_close() {
+            for keep in [true, false] {
+                let mut child = Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(Stdio::null()).spawn().unwrap();
+                // SAFETY: as in `adopt`; this job's handle is closed below.
+                let job = unsafe { CreateJobObjectW(None, None) }.unwrap();
+                set(job, true).unwrap();
+                unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) }.unwrap();
+                if keep {
+                    set(job, false).unwrap();
+                }
+                unsafe { CloseHandle(job) }.unwrap();
+                assert_eq!(exits(&mut child), !keep);
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
+/// Stops the server `agent` runs in the background (dsh web), whoever started it. The number
+/// of processes it had; 0 when it wasn't running.
+pub fn stop_server(agent: &str) -> Result<usize> {
+    let inst = detect(agent);
+    if inst.server.is_none() {
+        return Err(anyhow!(crate::i18n::l("Only a web UI server running in the background can be stopped here", "这里只能停止在后台运行的网页服务")));
+    }
+    let n = app_of(&processes(), &inst).len();
+    if n > 0 {
+        stop(&inst, &|_| {})?;
+        crate::applog::info("restart", format!("{agent}: server stopped ({n} process(es))"));
+    }
+    if let Some(s) = &inst.server {
+        forget_served_token(&s.log);
+    }
+    Ok(n)
+}
+
+/// On start: server logs whose server isn't running any more lose their sign-in token (it
+/// only opened that run of the server). Logs of other profiles are included.
+pub fn forget_idle_tokens() {
+    let running: Vec<PathBuf> = SERVER_AGENTS
+        .iter()
+        .map(|a| detect(a))
+        .filter(|i| i.running)
+        .filter_map(|i| i.server.map(|s| s.log))
+        .collect();
+    for log in server_logs() {
+        if !running.iter().any(|r| r == &log) {
+            forget_served_token(&log);
+        }
+    }
+}
+
+/// The logs servers write (`dsh-<profile>.log` in the log folder).
+pub(crate) fn server_logs() -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(crate::applog::dir()) else { return vec![] };
+    rd.flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("dsh-") && n.ends_with(".log")))
+        .collect()
+}
+
+/// How long a started server gets to print its address.
+const SERVE_WAIT: Duration = Duration::from_secs(30);
+
+/// Waits for server `s` to print its address, and returns it; None when it is still starting
+/// after [`SERVE_WAIT`]. Err when it exits first, with what it printed about why.
+fn wait_served(s: &Server, on: &dyn Fn(Progress)) -> Result<Option<String>> {
+    on(Progress::step("start", "active", Some(crate::i18n::l("Waiting for the server", "等待服务启动").into())));
+    let read = || std::fs::read(&s.log).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let t0 = Instant::now();
+    let mut seen = false;
+    loop {
+        if let Some(url) = served_url(&read()) {
+            crate::applog::info("restart", format!("{}: serving after {:.1}s", s.name, t0.elapsed().as_secs_f32()));
+            return Ok(Some(url));
+        }
+        let up = !server_roots(&processes(), s).is_empty();
+        seen |= up;
+        // Not seen at all: give the scan a moment to catch up with the new process.
+        if !up && (seen || t0.elapsed() > Duration::from_secs(5)) {
+            return Err(anyhow!(tr!("It exited while starting: {}", "启动过程中退出了：{}", failure_summary(&read()))));
+        }
+        if t0.elapsed() > SERVE_WAIT {
+            return Ok(None);
+        }
+        pause(Duration::from_millis(300))?;
+    }
+}
+
+/// The local sign-in link in the latest `dsh web:` announcement. A second, parenthesized
+/// LAN link and unrelated URLs in diagnostics must not become the browser's destination.
+pub(crate) fn served_link(output: &str) -> Option<&str> {
+    output.lines().rev().find_map(|line| {
+        let link = line.trim().strip_prefix("dsh web:")?.split_whitespace().next()?;
+        let url = url::Url::parse(link).ok()?;
+        (matches!(url.scheme(), "http" | "https") && url.host_str().is_some()).then_some(link)
+    })
+}
+
+/// Takes the sign-in token out of a server's log (the query and fragment of its `dsh web:`
+/// links), once the link isn't needed to open the running server; the rest stays for
+/// diagnosing a failed start. Written in place, so the file keeps its permissions.
+pub(crate) fn forget_served_token(log: &Path) {
+    use std::io::Write;
+    static LINK: OnceLock<regex::Regex> = OnceLock::new();
+    let Ok(bytes) = std::fs::read(log) else { return };
+    let text = String::from_utf8_lossy(&bytes);
+    let re = LINK.get_or_init(|| regex::Regex::new(r"(https?://[^\s?#()]*)[?#][^\s()]*").unwrap());
+    let out: String = text
+        .split_inclusive('\n')
+        .map(|l| if l.trim_start().starts_with("dsh web:") { re.replace_all(l, "$1").into_owned() } else { l.to_string() })
+        .collect();
+    if out != text {
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).truncate(true).open(log) {
+            let _ = f.write_all(out.as_bytes());
+        }
+    }
+}
+
+/// [`served_link`] without its query: the access token stays out of the UI and the log.
+fn served_url(output: &str) -> Option<String> {
+    let url = served_link(output)?;
+    Some(url.split(['?', '#']).next().unwrap_or(url).to_string())
+}
+
+/// What a server that failed to start printed about why: its first line, the error lines and
+/// its last line (where dsh names its diagnostics file).
+fn failure_summary(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let mut out: Vec<&str> = vec![];
+    for (i, l) in lines.iter().enumerate() {
+        if (i == 0 || i + 1 == lines.len() || l.starts_with("Error")) && !out.contains(l) {
+            out.push(l);
+        }
+    }
+    if out.is_empty() {
+        return crate::i18n::l("it printed nothing", "没有任何输出").into();
+    }
+    out.join("; ")
+}
+
 /// Starts `cmd` and reaps it in the background (a finished child would linger as a zombie on
 /// Unix until AgentPlus exits).
 fn spawn_detached(cmd: &mut Command) -> Result<()> {
@@ -1252,6 +1700,16 @@ pub fn open_dir(dir: &str) -> Result<()> {
         "xdg-open"
     };
     spawn_detached(Command::new(opener).arg(dir))
+}
+
+/// Opens a web page in the default browser. On Windows not through explorer.exe, which
+/// opens a File Explorer window for some addresses (a local `http://127.0.0.1:3080/`).
+pub fn open_url(url: &str) -> Result<()> {
+    if cfg!(windows) {
+        spawn_detached(no_window(Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", url])))
+    } else {
+        open_dir(url)
+    }
 }
 
 /// Opens the file manager with the file selected (Linux: its folder).
@@ -1470,6 +1928,39 @@ mod tests {
 mod any_os_tests {
     use super::*;
 
+    /// A launcher's grandchild (`npx.cmd` → node) goes with it.
+    #[test]
+    fn kill_tree_ends_the_grandchildren() {
+        let mut launcher = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.args(["/c", "ping -n 30 127.0.0.1 >NUL"]);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.args(["-c", "sleep 30; true"]);
+            c
+        };
+        let mut child = launcher.stdout(std::process::Stdio::null()).spawn().unwrap();
+        let pid = Pid::from_u32(child.id());
+        // Wait for the grandchild to show up.
+        let t0 = Instant::now();
+        let grandchild = loop {
+            let sys = processes();
+            if let Some(g) = sys.processes().values().find(|p| p.parent() == Some(pid)).map(|p| p.pid()) {
+                break g;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(10), "no grandchild");
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        kill_tree(child.id());
+        let _ = child.wait();
+        let t0 = Instant::now();
+        while processes().process(grandchild).is_some() {
+            assert!(t0.elapsed() < Duration::from_secs(5), "the grandchild kept running");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     #[test]
     fn a_cli_keeps_the_running_state_its_detector_found() {
         // Claude Code and the OpenCode CLI have no folder: nothing may overwrite what they found.
@@ -1488,6 +1979,78 @@ mod any_os_tests {
             let inst = detect_wsl(crate::adapters::ext(a).unwrap());
             assert!(!inst.installed && !inst.running && inst.version.is_none(), "{a}");
         }
+    }
+
+    #[test]
+    fn served_url_drops_the_token() {
+        assert_eq!(served_url("dsh web: http://127.0.0.1:3080/?token=abc\n").as_deref(), Some("http://127.0.0.1:3080/"));
+        assert_eq!(served_url("dsh web: https://localhost:8443#x").as_deref(), Some("https://localhost:8443"));
+        assert_eq!(served_url("dsh: startup failed\n"), None);
+        assert_eq!(served_url(""), None);
+        // The whole link (it signs the browser in), the last one printed.
+        assert_eq!(served_link("dsh web: http://127.0.0.1:3080/?token=abc\n"), Some("http://127.0.0.1:3080/?token=abc"));
+        assert_eq!(served_link("see https://docs.example\ndsh web: http://127.0.0.1:3081/?token=x"), Some("http://127.0.0.1:3081/?token=x"));
+    }
+
+    #[test]
+    fn forgetting_the_token_keeps_the_rest_of_the_log() {
+        let h = crate::util::TestHome::new("forget-token");
+        let log = h.0.join("dsh-web.log");
+        let text = "starting\ndsh web: http://127.0.0.1:3080/?token=abc (LAN: http://192.168.1.5:3080/?token=abc#x)\nsee https://docs.example/?q=keep\n";
+        std::fs::write(&log, text).unwrap();
+        forget_served_token(&log);
+        let out = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(out, "starting\ndsh web: http://127.0.0.1:3080/ (LAN: http://192.168.1.5:3080/)\nsee https://docs.example/?q=keep\n");
+        assert_eq!(served_link(&out), Some("http://127.0.0.1:3080/"), "the plain address is still there");
+        forget_served_token(&h.0.join("missing.log"));
+    }
+
+    #[test]
+    fn served_link_uses_the_local_announcement_not_the_lan_link() {
+        let output = "dsh web: http://127.0.0.1:3080/?token=abc (LAN: http://192.168.1.5:3080/?token=abc)\n\
+                      dsh web: opening the default browser; pass --no-open to disable\n\
+                      See https://docs.example/help for details\n";
+        let link = served_link(output).unwrap();
+        assert_eq!(link, "http://127.0.0.1:3080/?token=abc");
+        let parsed = url::Url::parse(link).unwrap();
+        assert_eq!(parsed.query_pairs().find(|(k, _)| k == "token").unwrap().1, "abc");
+        assert_eq!(served_url(output).as_deref(), Some("http://127.0.0.1:3080/"));
+        // An appended restart announcement supersedes the older one.
+        let output = format!("{output}dsh web: https://localhost:8443/?token=new\r\n");
+        assert_eq!(served_link(&output), Some("https://localhost:8443/?token=new"));
+    }
+
+    #[test]
+    fn served_link_ignores_unrelated_or_invalid_urls() {
+        for output in [
+            "Startup failed; see https://docs.example/help",
+            "dsh web: opening the default browser",
+            "dsh web: not-a-url (LAN: http://192.168.1.5:3080/?token=x)",
+            "dsh web: file:///tmp/index.html",
+        ] {
+            assert_eq!(served_link(output), None, "{output}");
+        }
+    }
+
+    #[test]
+    fn failure_summary_keeps_the_first_error_and_last_lines() {
+        let out = "dsh: startup failed: 2 required plugins did not activate\n\nFailed plugins (1):\n  webserver (required)\n    Error: listen EADDRINUSE: address already in use 127.0.0.1:3080\n        at Server.setupListenHandle\n\nFull diagnostics: C:\\x.log\n";
+        assert_eq!(
+            failure_summary(out),
+            "dsh: startup failed: 2 required plugins did not activate; Error: listen EADDRINUSE: address already in use 127.0.0.1:3080; Full diagnostics: C:\\x.log"
+        );
+        assert_eq!(failure_summary("only line\n"), "only line");
+        assert_eq!(failure_summary("\n \n"), "没有任何输出");
+    }
+
+    #[test]
+    fn a_server_install_counts_as_an_app() {
+        let s = Server { program: "node-that-does-not-run".into(), args: vec![], serves: |_| None, name: "web".into(), log: PathBuf::new(), independent: false };
+        let mut inst = Install { installed: true, running: true, server: Some(s), ..Default::default() };
+        assert!(has_app(&inst));
+        // No such process: not running, whatever the detector said.
+        set_app_running(&mut inst);
+        assert!(!inst.running);
     }
 
     #[test]

@@ -38,6 +38,8 @@ pub struct AgentState {
     pub model_fields: Vec<ModelField>,
     /// How the running desktop app was started; None unless restartable and running.
     pub launch: Option<Launch>,
+    /// What Start runs serves a browser UI (dsh web): Open shows it while it runs.
+    pub web_ui: bool,
     /// Installed plugins (extensions, bundles); None for agents without plugins. Filled in
     /// adapters::state.
     pub plugins: Option<Vec<PluginInfo>>,

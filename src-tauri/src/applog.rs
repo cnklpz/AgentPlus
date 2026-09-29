@@ -98,6 +98,13 @@ pub fn clear() -> anyhow::Result<LogInfo> {
         fs::remove_file(&p)?;
     }
     drop(_g);
+    // The web UI servers' output too; one still running (its file open) keeps the file but
+    // loses its sign-in token.
+    for p in crate::process::server_logs() {
+        if fs::remove_file(&p).is_err() {
+            crate::process::forget_served_token(&p);
+        }
+    }
     Ok(status())
 }
 

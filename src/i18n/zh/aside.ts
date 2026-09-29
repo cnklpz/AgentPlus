@@ -15,6 +15,9 @@ const zh: typeof en = {
   byAgentplus: "由 AgentPlus 启动",
   byAgentplusUi: "由 AgentPlus 启动 · 界面增强已生效",
   notByAgentplus: "不是从 AgentPlus 启动的",
+  stop: "停止",
+  stopping: "正在停止…",
+  stopTitle: "停止 {name} 的网页服务",
   uiInactive: "界面增强（Fast、完整模型名等）要在 AgentPlus 里重启 {name} 才会生效",
   footNewSession: "写入前自动备份原文件 · 新开的 {name} 会话就会读取",
 };

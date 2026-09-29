@@ -13,6 +13,9 @@ export default {
   byAgentplus: "By AgentPlus",
   byAgentplusUi: "By AgentPlus · UI enhancements active",
   notByAgentplus: "Not by AgentPlus",
+  stop: "Stop",
+  stopping: "Stopping…",
+  stopTitle: "Stop the {name} web UI server",
   uiInactive: "UI enhancements (Fast, full model names…) take effect once {name} is restarted from AgentPlus",
   footNewSession: "Original files are backed up before writing · New {name} sessions pick it up",
 };

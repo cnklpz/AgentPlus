@@ -172,6 +172,8 @@ export interface AgentState {
   modelFields?: ModelField[];
   /** How the running desktop app was started; null unless restartable and running. */
   launch?: Launch | null;
+  /** What Start runs serves a browser UI (dsh web): Open shows it while it runs. */
+  webUi?: boolean;
   /** Installed plugins; null (or missing, in old snapshots) for agents without plugins. */
   plugins?: PluginInfo[] | null;
 }
@@ -897,8 +899,12 @@ const real = {
   },
   /** Stops the running restart at its next wait (it then rejects); an app already started keeps running. */
   cancelRestart: () => invoke<void>("cancel_restart"),
+  /** Stops the web UI server the agent runs in the background (dsh web); resolves with a summary. */
+  stopAgent: (agent: AgentId) => invoke<string>("stop_agent", { agent }),
   agentRunning: (agent: AgentId) => invoke<RunState>("agent_running", { agent }),
   openConfigDir: (agent: AgentId) => invoke<void>("open_config_dir", { agent }),
+  /** Opens the agent's web UI in the browser; a note when the link can't sign the browser in. */
+  openWebUi: (agent: AgentId) => invoke<string | null>("open_web_ui", { agent }),
   codexSessions: () => invoke<SessionList>("codex_sessions"),
   codexHealth: () => invoke<HealthItem[]>("codex_health"),
   codexCleanupPreview: (days: number) => invoke<CleanupPreview>("codex_cleanup_preview", { days }),
@@ -1193,11 +1199,13 @@ const demo: typeof real = {
     return running ? "（演示）已重启" : "（演示）已启动";
   },
   cancelRestart: async () => { demoCancel = true; },
+  stopAgent: async (agent) => { demoRunning[agent] = false; return "（演示）已停止"; },
   agentRunning: async (agent) => {
     const running = (await fixture()).find((a) => a.id === agent)?.running ?? false;
     return { running, launch: running ? { byAgentplus: !!demoRunning[agent], debugPort: !!demoRunning[agent], uiInactive: agent === "codex" && !demoRunning[agent] } : null };
   },
   openConfigDir: async () => undefined,
+  openWebUi: async () => null,
   codexSessions: async () => ({
     sessions: [
       { id: "demo-1", title: "修复登录页样式", cwd: "D:\\xm\\demo", provider: "klpz", model: "gpt-6-astra", kind: "user", archived: false, updatedMs: Date.now() - 3600e3, size: 2_400_000, rolloutPath: "", rolloutExists: true, hidden: ["属于「klpz」，当前是「work」：最近列表和归档里可能看不到"] },

@@ -15,6 +15,10 @@ interface Props {
   detail: ReactNode | null;
   onDiscard: () => void;
   onApply: () => void;
+  /** Stops the agent's web UI server (dsh web); shown while it runs. */
+  onStop?: () => void;
+  /** The server is being stopped, or the agent is restarting. */
+  stopping?: boolean;
 }
 
 /** Allow line breaks after `_` / `.` so long keys like GOOGLE_GEMINI_BASE_URL wrap at word boundaries. */
@@ -23,7 +27,7 @@ function breakable(k: string): ReactNode {
   return parts.length < 2 ? k : parts.map((p, i) => <span key={i}>{p}{i < parts.length - 1 && <wbr />}</span>);
 }
 
-export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApply }: Props) {
+export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApply, onStop, stopping }: Props) {
   return (
     <aside className="aside" aria-label={t("aside.aria")}>
       {detail ?? <section className="aside-cur">
@@ -38,7 +42,7 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
               <span className={r.mono ? "mono small wrap" : "small wrap"}>{scrub(r.v)}</span>
             </div>
           ))}
-          {st.restartable && <LaunchRow st={st} />}
+          {st.restartable && <LaunchRow st={st} onStop={st.webUi ? onStop : undefined} stopping={!!stopping} />}
         </div>
       </section>}
 
@@ -65,8 +69,9 @@ export function Aside({ st, diff, pending, error, busy, detail, onDiscard, onApp
   );
 }
 
-/** Whether the running app is the one AgentPlus started (UI injection only reaches that one). */
-function LaunchRow({ st }: { st: AgentState }) {
+/** Whether the running app is the one AgentPlus started (UI injection only reaches that one);
+ *  a web UI server can be stopped from here. */
+function LaunchRow({ st, onStop, stopping }: { st: AgentState; onStop?: () => void; stopping: boolean }) {
   const l = st.running ? st.launch : null;
   const text = !st.running ? t("aside.notRunning")
     : !l ? t("aside.launchUnknown")
@@ -77,6 +82,11 @@ function LaunchRow({ st }: { st: AgentState }) {
       <span className="muted small">{t("aside.launch")}</span>
       <span className="small wrap">
         <span className={`launch-dot ${!st.running ? "off" : l?.byAgentplus ? "ok" : "warn"}`} />{text}
+        {st.running && onStop && (
+          <button className="link" onClick={onStop} disabled={stopping} title={t("aside.stopTitle", { name: st.name })}>
+            {t(stopping ? "aside.stopping" : "aside.stop")}
+          </button>
+        )}
         {l?.uiInactive && <span className="block tiny warn-text">{t("aside.uiInactive", { name: st.name })}</span>}
       </span>
     </div>

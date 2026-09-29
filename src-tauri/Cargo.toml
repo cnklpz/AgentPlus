@@ -40,7 +40,7 @@ ring = "0.17"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_Com", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
 
 # Already in the tree through Tauri; used to keep App Nap off while a restart waits.
 [target.'cfg(target_os = "macos")'.dependencies]

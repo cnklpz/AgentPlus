@@ -46,8 +46,10 @@ const DEEPSEEK_URL: &str = "https://api.deepseek.com/anthropic";
 /// The default model row and what the base bundle puts in it.
 const DEFAULT_MODEL_ROW: &str = "agent-default-model";
 const DEFAULT_MODEL: (&str, &str) = ("deepseek-official", "deepseek-flash");
-/// Setting keys: the profile AgentPlus edits (stored in the AgentPlus store), and one switch per plugin.
+/// Setting keys: the profile AgentPlus edits and whether the web UI server AgentPlus starts
+/// outlives it (both stored in the AgentPlus store), and one switch per plugin.
 const PROFILE_SETTING: &str = "profile";
+const INDEPENDENT_SETTING: &str = "independent";
 const PLUGIN_SETTING: &str = "plugin:";
 
 /// `$DSH_HOME` (Windows side only), else `~/.dsh`.
@@ -399,7 +401,9 @@ fn install_dir() -> Option<PathBuf> {
 }
 
 /// The npm package (another CLI is also called `dsh`, so a bare `dsh` on PATH only counts
-/// together with a dsh home), else the desktop app's profile (it bundles its own runtime).
+/// together with a dsh home), else the desktop app or its profile (it bundles its own
+/// runtime). What Start / Restart act on follows the profile AgentPlus edits: the desktop
+/// app for `desktop`, else the web UI server of that profile (see [`server`]).
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let shim = crate::process::on_path(&["dsh.cmd", "dsh.exe", "dsh"]);
@@ -409,7 +413,149 @@ pub fn detect() -> Install {
     } else if (shim.is_some() && default_dir().join("profiles").is_dir()) || default_dir().join(DESKTOP_MARKER).is_file() {
         inst.installed = true;
     }
+    let profile = profile_in(&store::load(), &profiles());
+    if profile == DESKTOP_PROFILE {
+        if let Some(c) = crate::process::detect_dsh_desktop() {
+            crate::process::use_copy(&mut inst, &c);
+        }
+    } else {
+        inst.server = server(&profile);
+    }
+    crate::process::set_app_running(&mut inst);
     inst
+}
+
+/// The profile only the desktop app runs (the CLI refuses it).
+const DESKTOP_PROFILE: &str = "desktop";
+/// The bundle that makes a profile serve the browser UI (`dsh web` and profiles made from it).
+const WEB_APP_BUNDLE: &str = "@deepseek-ai/dsh-web-app";
+
+/// `dsh --profile <profile>` as a background server, when the profile serves the web UI and
+/// the npm package and node are there to run it. Started with node directly, so the process
+/// AgentPlus tracks is the server itself, not a shim in front of it.
+fn server(profile: &str) -> Option<crate::process::Server> {
+    let manifest = read_pkg(&profile_dir(profile).join("package.json"))?;
+    if !selected(&manifest).iter().any(|b| b == WEB_APP_BUNDLE) {
+        return None;
+    }
+    let bin = install_dir()?.join("lib").join("bin.js");
+    let node = crate::process::on_path(&["node.exe"])?;
+    bin.is_file().then(|| crate::process::Server {
+        program: node,
+        args: vec![bin.to_string_lossy().to_string(), "--profile".into(), profile.into()],
+        serves: served_profile,
+        name: profile.into(),
+        log: crate::applog::dir().join(format!("dsh-{profile}.log")),
+        independent: independent(&store::load()),
+    })
+}
+
+/// Whether the web UI server AgentPlus starts keeps running after AgentPlus quits.
+fn independent(root: &J) -> bool {
+    store::get_flag(root, ID, INDEPENDENT_SETTING)
+}
+
+fn independent_setting(on: bool) -> Setting {
+    Setting {
+        key: INDEPENDENT_SETTING.into(),
+        group: "AgentPlus".into(),
+        label: l("Start as a separate process", "使用独立进程启动").into(),
+        desc: l(
+            "On: the web UI server started from AgentPlus keeps running after AgentPlus quits; stop it next to \"Launched\" on the right. Off: it stops when AgentPlus quits.",
+            "打开后，从 AgentPlus 启动的网页服务在 AgentPlus 退出后继续运行，可以在右侧「启动方式」旁停止它；关闭时它随 AgentPlus 一起退出。",
+        )
+        .into(),
+        kind: "bool".into(),
+        value: J::from(on),
+        options: vec![],
+        hints: vec![],
+        excludes: vec![],
+    }
+}
+
+/// The running web UI of the edited profile, and a note when the link can't sign the browser
+/// in: when AgentPlus started the server, its log has the launch token. Otherwise the plain
+/// address relies on the cookie an earlier visit left (dsh keeps it across restarts).
+pub(crate) fn web_link() -> Result<(String, Option<String>)> {
+    let inst = detect();
+    let Some(s) = &inst.server else { return Err(anyhow!(l("This profile has no web UI", "这个 profile 没有网页界面"))) };
+    let not_running = || anyhow!(tr!("{} isn't running; start it first", "{} 没在运行，先启动它", NAME));
+    if !inst.running {
+        return Err(not_running());
+    }
+    let (ours, argv) = crate::process::server_launch(ID, &inst).ok_or_else(not_running)?;
+    if ours {
+        let log = std::fs::read_to_string(&s.log).unwrap_or_default();
+        // Only a link that still carries its token (the log may have been cleared since).
+        if let Some(link) = crate::process::served_link(&log).filter(|l| l.contains(['?', '#'])) {
+            return Ok((link.to_string(), None));
+        }
+    }
+    let link = web_address(&argv, &s.name);
+    let note = if ours {
+        tr!(
+            "Opened {link}. Its sign-in link isn't in the server's log: if the page says unauthorized, restart it here.",
+            "已打开 {link}。服务日志里没有找到登录链接，页面提示未授权时在这里重启一次即可。"
+        )
+    } else {
+        tr!(
+            "Opened {link}. It wasn't started by AgentPlus: if the page says unauthorized, restart it here.",
+            "已打开 {link}。它不是 AgentPlus 启动的，页面提示未授权时在这里重启一次即可。"
+        )
+    };
+    Ok((link, Some(note)))
+}
+
+/// The plain address a server of `profile` listens on: `--host` / `--port` on its command
+/// line, else the `webserver` row of the patch layers (home first), else dsh's defaults. A
+/// server bound to every interface is reached on loopback.
+fn web_address(argv: &[String], profile: &str) -> String {
+    let flag = |name: &str| {
+        let eq = format!("{name}=");
+        argv.iter().enumerate().find_map(|(i, a)| if a == name { argv.get(i + 1).cloned() } else { a.strip_prefix(&eq).map(String::from) })
+    };
+    let row = [home_patch_path(), profile_patch_path(profile)].iter().find_map(|p| {
+        let patch = Patch::load(p).ok()?;
+        let i = patch.find("webserver")?;
+        patch.get(i).get("config").cloned()
+    });
+    // `!!js` expressions (the bundle's own) load as their source text: anything that isn't a
+    // host name or address reads as absent.
+    let cfg = |k: &str| row.as_ref().and_then(|c| c.get(k)).cloned();
+    let is_host = |h: &String| h.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c));
+    let host = flag("--host").or_else(|| cfg("host").and_then(|h| h.as_str().map(String::from))).filter(is_host).unwrap_or_else(|| "127.0.0.1".into());
+    let port = flag("--port").and_then(|p| p.parse::<u16>().ok()).or_else(|| cfg("port").and_then(|p| p.as_u64()).and_then(|p| u16::try_from(p).ok())).filter(|p| *p != 0).unwrap_or(3080);
+    let host = match host.as_str() {
+        "" | "0.0.0.0" => "127.0.0.1".to_string(),
+        "::" => "[::1]".to_string(),
+        h if h.contains(':') && !h.starts_with('[') => format!("[{h}]"),
+        h => h.to_string(),
+    };
+    format!("http://{host}:{port}/")
+}
+
+/// The profile a `dsh` command line (argv of its node process) boots, wherever the package
+/// is (npm global, npx cache): `dsh web`, `dsh --profile web`, `--profile=web`, after any
+/// `--patch` overlays. None for other commands (config dumps, `dsh plugin`) and other programs.
+fn served_profile(argv: &[String]) -> Option<String> {
+    let bin = argv.iter().position(|a| a.replace('\\', "/").to_ascii_lowercase().ends_with("/@deepseek-ai/dsh/lib/bin.js"))?;
+    let mut args = argv[bin + 1..].iter();
+    let mut profile: Option<String> = None;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--profile" => profile = Some(args.next()?.clone()),
+            "--patch" | "--from-default-profile" => {
+                args.next();
+            }
+            "--dump-config" | "--dump-default-config" | "--dump-config-schema" | "-h" | "--help" | "-V" | "--version" => return None,
+            s if s.starts_with("--profile=") => profile = Some(s["--profile=".len()..].to_string()),
+            s if s.starts_with("--patch=") || s.starts_with("--from-default-profile=") => {}
+            // The first other word is the profile (`dsh web`), or starts the app's own arguments.
+            s if !s.starts_with('-') && profile.is_none() => return (s != "plugin").then(|| s.to_string()),
+            _ => break,
+        }
+    }
+    profile
 }
 
 // ---------------------------------------------------------------- plugins
@@ -643,6 +789,9 @@ pub fn state(inst: &Install) -> AgentState {
     if all.len() > 1 {
         st.settings.push(profile_setting(&all, &profile));
     }
+    if inst.server.is_some() {
+        st.settings.push(independent_setting(independent(&root)));
+    }
     st
 }
 
@@ -706,6 +855,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }
         match op {
             Op::SetSetting { key, .. } if key == PROFILE_SETTING => {}
+            Op::SetSetting { key, value } if key == INDEPENDENT_SETTING => {
+                let on = value.as_bool().unwrap_or(false);
+                if independent(&root) != on {
+                    store::set_flag(&mut root, ID, INDEPENDENT_SETTING, on);
+                    let line = if on { l("Web UI server keeps running after AgentPlus quits", "网页服务在 AgentPlus 退出后继续运行") } else { l("Web UI server stops when AgentPlus quits", "网页服务随 AgentPlus 一起退出") };
+                    diff.push(l("AgentPlus settings", "AgentPlus 设置"), line, on);
+                    dirty.store = true;
+                }
+            }
             Op::SetSetting { key, value } if key.starts_with(PLUGIN_SETTING) => {
                 let name = &key[PLUGIN_SETTING.len()..];
                 if manifest.is_none() {
@@ -784,6 +942,8 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     }
     if !dry_run && dirty.store {
         store::save(&root)?;
+        // Also the server already running, when this AgentPlus started it.
+        crate::process::set_independent(independent(&root));
     }
     Ok((diff, written, backup_dir))
 }
@@ -1008,6 +1168,16 @@ mod tests {
         assert_eq!(creds()["refs"]["SHARED_KEY"], "sk-new-3333");
         plan(&[Op::SetProviderEnabled { provider: "gw".into(), enabled: true }], false).unwrap();
         assert!(patch_text().contains("apiKeyEnv: SHARED_KEY"));
+        // A reference another provider also uses isn't overwritten: this one gets its own.
+        let use_shared = "- id: llm-pi-ai\n  config:\n    providers:\n      gw:\n        api: openai-responses\n        baseURL: https://gw.example.com/v1\n        apiKeyEnv: SHARED_KEY\n        models:\n          - id: g1\n      other:\n        api: openai-responses\n        baseURL: https://other.example.com/v1\n        apiKeyEnv: SHARED_KEY\n        models:\n          - id: o1\n";
+        let before = patch_text();
+        std::fs::write(profile_patch_path("web"), use_shared).unwrap();
+        let other_key = Op::UpsertProvider { provider: ProviderInput { id: Some("other".into()), name: "other".into(), base_url: "https://other.example.com/v1".into(), api: "responses".into(), api_key: Some("sk-other-4444".into()), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
+        plan(&[other_key], false).unwrap();
+        assert_eq!(creds()["refs"]["SHARED_KEY"], "sk-new-3333", "gw keeps its key");
+        assert_eq!(creds()["refs"]["OTHER_API_KEY"], "sk-other-4444");
+        assert!(patch_text().contains("apiKeyEnv: OTHER_API_KEY"));
+        std::fs::write(profile_patch_path("web"), before).unwrap();
         // A reference not named after the provider is kept on delete.
         let (d, ..) = plan(&[Op::DeleteProvider { provider: "gw".into() }], false).unwrap();
         assert!(lines(&d).contains("refs.SHARED_KEY 保留"), "{}", lines(&d));
@@ -1084,6 +1254,83 @@ mod tests {
     }
 
     #[test]
+    fn served_profile_reads_the_launcher_flags() {
+        let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        let npm = r"C:\Users\me\AppData\Roaming\npm\\node_modules\@deepseek-ai\dsh\lib\bin.js";
+        assert_eq!(served_profile(&argv(&format!("node {npm} web"))).as_deref(), Some("web"));
+        assert_eq!(served_profile(&argv(&format!("D:\\nodejs\\node.exe {npm} web --no-open --port 8080"))).as_deref(), Some("web"));
+        assert_eq!(served_profile(&argv("node /home/me/.npm/_npx/1a/node_modules/@deepseek-ai/dsh/lib/bin.js --profile rescue")).as_deref(), Some("rescue"));
+        assert_eq!(served_profile(&argv(&format!("node {npm} --patch x.yml --profile=mine"))).as_deref(), Some("mine"));
+        assert_eq!(served_profile(&argv(&format!("node {npm} --patch x.yml web --resume abc"))).as_deref(), Some("web"));
+        // Not a server: a config dump, plugin management, the bare launcher, another program.
+        assert_eq!(served_profile(&argv(&format!("node {npm} --profile web --dump-config"))), None);
+        assert_eq!(served_profile(&argv(&format!("node {npm} plugin --profile web add x"))), None);
+        assert_eq!(served_profile(&argv(&format!("node {npm}"))), None);
+        assert_eq!(served_profile(&argv(r"node D:\nodejs\node_modules\npm\bin\npx-cli.js @deepseek-ai/dsh web")), None);
+        assert_eq!(served_profile(&argv("node /x/other-dsh/lib/bin.js web")), None);
+    }
+
+    #[test]
+    fn web_address_follows_flags_then_patch_then_defaults() {
+        let _h = setup("address", PATCH);
+        let argv = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        assert_eq!(web_address(&argv("node bin.js web"), "web"), "http://127.0.0.1:3080/");
+        assert_eq!(web_address(&argv("node bin.js web --port 8080"), "web"), "http://127.0.0.1:8080/");
+        assert_eq!(web_address(&argv("node bin.js web --host=0.0.0.0 --port=9000"), "web"), "http://127.0.0.1:9000/");
+        assert_eq!(web_address(&argv("node bin.js web --host ::1 --port 0"), "web"), "http://[::1]:3080/");
+        // A plain override in the profile; the home layer outranks it.
+        std::fs::write(profile_patch_path("web"), format!("{PATCH}\n- id: webserver\n  config:\n    host: 192.168.1.5\n    port: 4000\n")).unwrap();
+        assert_eq!(web_address(&argv("node bin.js web"), "web"), "http://192.168.1.5:4000/");
+        assert_eq!(web_address(&argv("node bin.js web --port 5000"), "web"), "http://192.168.1.5:5000/");
+        std::fs::write(home_patch_path(), "- id: webserver\n  config:\n    host: !!js ctx.webStartup.host ?? 'x'\n    port: 4100\n").unwrap();
+        assert_eq!(web_address(&argv("node bin.js web"), "web"), "http://127.0.0.1:4100/");
+    }
+
+    #[test]
+    fn only_web_ui_profiles_are_started_as_servers() {
+        let _h = setup("server", PATCH);
+        let tui = profile_dir("tui");
+        std::fs::create_dir_all(&tui).unwrap();
+        std::fs::write(tui.join("package.json"), MANIFEST.replace("dsh-web-app", "dsh-tui-app")).unwrap();
+        assert!(server("tui").is_none());
+        assert!(server("nope").is_none());
+        // The package and node are looked up on this machine: checked only where they are.
+        if install_dir().is_some() && crate::process::on_path(&["node.exe"]).is_some() {
+            let s = server("web").unwrap();
+            assert_eq!(s.args[1..], ["--profile", "web"]);
+            assert_eq!((s.serves)(&[s.program.to_string_lossy().to_string()].into_iter().chain(s.args.clone()).collect::<Vec<_>>()).as_deref(), Some("web"));
+            assert!(s.log.ends_with("dsh-web.log"));
+            assert!(!s.independent);
+        }
+    }
+
+    #[test]
+    fn separate_process_setting_follows_the_web_ui() {
+        let _h = setup("independent", PATCH);
+        let has = |inst: &Install| state(inst).settings.iter().find(|s| s.key == INDEPENDENT_SETTING).map(|s| s.value.clone());
+        // Only a profile served as a web UI has a server to keep running.
+        assert_eq!(has(&Install::default()), None);
+        let inst = Install {
+            server: Some(crate::process::Server { program: "node".into(), args: vec![], serves: |_| None, name: "web".into(), log: PathBuf::new(), independent: false }),
+            ..Default::default()
+        };
+        assert_eq!(has(&inst), Some(json!(false)));
+
+        let on = Op::SetSetting { key: INDEPENDENT_SETTING.into(), value: json!(true) };
+        let (d, written, _) = plan(std::slice::from_ref(&on), false).unwrap();
+        assert!(lines(&d).contains("网页服务在 AgentPlus 退出后继续运行"), "{}", lines(&d));
+        // Only AgentPlus's own store changes.
+        assert!(written.is_empty());
+        assert!(independent(&store::load()));
+        assert_eq!(has(&inst), Some(json!(true)));
+        // Already on: nothing to write.
+        assert!(plan(&[on], true).unwrap().0.groups.is_empty());
+        let (d, ..) = plan(&[Op::SetSetting { key: INDEPENDENT_SETTING.into(), value: json!(false) }], false).unwrap();
+        assert!(lines(&d).contains("网页服务随 AgentPlus 一起退出"));
+        assert!(!independent(&store::load()));
+    }
+
+    #[test]
     fn no_profile_is_read_only() {
         let _h = TestHome::new("dsh-none");
         let st = state(&Install::default());
@@ -1096,7 +1343,9 @@ mod tests {
     #[ignore]
     fn dump_dsh() {
         let inst = detect();
-        println!("installed={} version={:?} install_dir={:?}", inst.installed, inst.version, install_dir());
+        println!("installed={} version={:?} install_dir={:?} running={} exe={:?} server={:?}", inst.installed, inst.version, install_dir(), inst.running, inst.exe, inst.server.as_ref().map(|s| (&s.program, &s.args)));
+        let link = web_link().map(|(l, note)| (l.split('?').next().unwrap_or_default().to_string(), note));
+        println!("web_link={link:?}");
         let st = state(&inst);
         println!("dir={} readonly={} files={:?}", st.config_dir, st.readonly, st.files);
         for p in &st.providers {

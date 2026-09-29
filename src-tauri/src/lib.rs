@@ -490,7 +490,33 @@ fn open_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") || url.chars().any(|c| c.is_whitespace() || c == '"') {
         return Err(i18n::l("Only https links can be opened", "只能打开 https 链接").into());
     }
-    process::open_dir(&url).map_err(err)
+    process::open_url(&url).map_err(err)
+}
+
+/// Opens the web UI an agent serves (dsh web) in the default browser. The link can carry
+/// its sign-in token, so it stays in the backend. Some(note) when the link can't sign the
+/// browser in by itself.
+#[tauri::command]
+async fn open_web_ui(agent: String) -> Result<Option<String>, String> {
+    blocking(move || {
+        if agent != adapters::dsh::ID {
+            anyhow::bail!("{}", tr!("{agent} has no web UI", "{agent} 没有网页界面"));
+        }
+        let (link, note) = adapters::dsh::web_link()?;
+        process::open_url(&link)?;
+        Ok(note)
+    })
+    .await
+}
+
+/// Stops the web UI server an agent runs in the background (dsh web), whoever started it.
+#[tauri::command]
+async fn stop_agent(agent: String) -> Result<String, String> {
+    blocking(move || {
+        let n = process::stop_server(&agent)?;
+        Ok(if n > 0 { i18n::l("Stopped", "已停止") } else { i18n::l("Not running", "没有在运行") }.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -855,6 +881,8 @@ pub fn run() {
             std::thread::spawn(process::search_path);
             // models.dev's catalog, for filling in new models' settings (refreshed weekly).
             std::thread::spawn(modelinfo::refresh_if_stale);
+            // Sign-in tokens left in the logs of web UI servers that have stopped since.
+            std::thread::spawn(process::forget_idle_tokens);
             // The window starts hidden and the page shows it after its first render, so the
             // WebView's blank white never flashes. Fallback in case the page never gets there.
             if let Some(w) = app.get_webview_window("main") {
@@ -874,6 +902,7 @@ pub fn run() {
             apply,
             test_latency,
             restart_agent,
+            stop_agent,
             cancel_restart,
             agent_running,
             open_config_dir,
@@ -923,6 +952,7 @@ pub fn run() {
             sync_auto,
             open_path,
             open_url,
+            open_web_ui,
             codex_dismiss_fixed_prompt,
             list_envs,
             set_env,
@@ -968,11 +998,14 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running AgentPlus")
-        .run(|_app, _event| {
+        .run(|_app, event| {
             // macOS: a click on the Dock icon while the window sits hidden in the menu bar.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = _event {
+            if let tauri::RunEvent::Reopen { .. } = event {
                 tray::show_main(_app);
+            }
+            if let tauri::RunEvent::Exit = event {
+                process::end_own_servers();
             }
         });
 }

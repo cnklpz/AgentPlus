@@ -475,10 +475,12 @@ pub fn state(agent: &str) -> Result<AgentState> {
     }
     // A project folder is neither installed nor started: nothing below applies.
     let Some((e, inst)) = found else { return Ok(st) };
-    // Only desktop apps can be restarted; CLIs read the new config on their next run.
-    st.restartable = !crate::env::is_wsl() && (inst.exe.is_some() || inst.aumid.is_some());
+    // Only desktop apps (and servers a CLI runs, like dsh web) can be restarted; CLIs read the
+    // new config on their next run.
+    st.restartable = !crate::env::is_wsl() && (inst.exe.is_some() || inst.aumid.is_some() || inst.server.is_some());
     if st.restartable {
         st.launch = process::launch(agent, &inst);
+        st.web_ui = inst.server.is_some();
     }
     let custom = dir_override(agent).filter(|d| has_marker(d, e));
     if custom.is_some() || (config_counts() && has_marker(&(e.default_dir)(), e)) {

@@ -89,6 +89,7 @@ export default function App() {
   const [latency, setLatency] = useState<Record<string, Latency>>({});
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState<AgentId | null>(null);
+  const [stopping, setStopping] = useState<AgentId | null>(null);
   /** The restart shown in the progress dialog; null when closed or sent to the background. */
   const [run, setRun] = useState<RestartRun | null>(null);
   /** The running restart isn't shown in the dialog: report its result as a notice. */
@@ -519,6 +520,19 @@ export default function App() {
     await restartAgent(a);
   };
   const restart = () => { if (st) restartAsked(st); };
+  /** Stops the agent's web UI server (dsh web) after asking. */
+  const stopAgent = async (a: AgentState) => {
+    if (!(await ask({ title: t("app.stopAsk", { name: a.name }), message: t("app.stopAskMsg"), danger: true, confirmText: t("aside.stop") }))) return;
+    setStopping(a.id);
+    try {
+      flash(t("app.nameMsg", { name: a.name, msg: await api.stopAgent(a.id) }));
+      replaceAgent(await api.getAgent(a.id));
+    } catch (e) {
+      flash(t("app.stopFailed", { name: a.name, err: errText(e) }), true, 8000);
+    } finally {
+      setStopping(null);
+    }
+  };
   /** Closes the dialog; while the restart still runs it carries on with a notice instead. */
   const closeRun = () => {
     if (run && !run.result) {
@@ -1604,6 +1618,8 @@ export default function App() {
             busy={busy}
             onDiscard={() => setDraft({})}
             onApply={apply}
+            onStop={() => stopAgent(st)}
+            stopping={stopping === st.id || restarting === st.id}
             detail={pickedProvider && (
               <ProviderDetail
                 st={st}
