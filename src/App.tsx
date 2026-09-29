@@ -374,7 +374,7 @@ export default function App() {
     const report = (r: SyncAutoResult) => {
       if (r.outcome === "off" || r.outcome === "unchanged") return;
       setSyncTick((n) => n + 1);
-      if (r.message) flash(r.message, r.outcome === "failed");
+      if (r.message) flash(r.message, r.outcome === "failed" || r.outcome === "locked");
     };
     api.syncAuto("start").then(report).catch(() => undefined);
     const off = listen<SyncAutoResult>("sync-auto", (e) => report(e.payload));

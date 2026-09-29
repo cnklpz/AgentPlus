@@ -714,6 +714,9 @@ pub enum Outcome {
     Exported,
     /// Another device exported something new: import it first.
     RemotePending,
+    /// Another device exported something new that this device can't read as its password is set
+    /// (one device syncs with a password, the other without): the message says how to fix it.
+    Locked,
     Failed,
 }
 
@@ -747,6 +750,27 @@ pub fn auto(trigger: &str) -> AutoResult {
     };
     if let Some(d) = doc.as_ref().filter(|d| remote_pending(&root, d)) {
         let from = d["machine"].as_str().unwrap_or_default();
+        // One device with a sync password and one without: comparing can't open the file here,
+        // so "compare first" would never clear. Say what does.
+        let sealed = d.get("encryption").is_some();
+        if !sealed && has_password_in(&root) {
+            return AutoResult {
+                outcome: Outcome::Locked,
+                message: Some(tr!(
+                    "{from} synced without a sync password, and this device uses one, so it won't read that file. Set the same password on {from} and export there, or remove the password on this device",
+                    "{from} 同步时没有设置同步密码，而本机设置了，所以本机不会读取这个文件。请在 {from} 上设置相同的密码后重新导出，或者在本机移除同步密码"
+                )),
+            };
+        }
+        if sealed && !has_password_in(&root) {
+            return AutoResult {
+                outcome: Outcome::Locked,
+                message: Some(tr!(
+                    "{from} synced with a sync password. Enter it on the sync page so this device can read the file",
+                    "{from} 同步时设置了同步密码。请在同步页填写这个密码，本机才能读取同步文件"
+                )),
+            };
+        }
         return AutoResult {
             outcome: Outcome::RemotePending,
             message: Some(tr!("{from} synced new changes. Compare and import them on the sync page before this device syncs", "{from} 同步了新的内容。请先在同步页对比导入，本机才会继续自动同步")),
@@ -1751,6 +1775,26 @@ mod tests {
 
     fn preview_payload(id: &str) -> Value {
         read_snapshot(id).unwrap()
+    }
+
+    /// One device with a sync password, one without: automatic sync says how to fix it rather
+    /// than asking for a comparison that can't open the file.
+    #[test]
+    fn a_password_on_one_device_only_says_how_to_fix_it() {
+        let h = TestHome::new("sync-locked");
+        let dir = share(&h);
+        set_options(SyncOptions { on_start: true, on_change: true, keep: 5, content: SyncContent::default() }).unwrap();
+        std::fs::write(dir.join(FILE), seal_doc(&payload(), None, "2026-09-27T10:00:00+08:00", "OTHER-PC").unwrap().to_string()).unwrap();
+        set_password(Some("pass-1234"), false).unwrap();
+        let r = auto("start");
+        assert_eq!(r.outcome, Outcome::Locked);
+        assert!(r.message.unwrap().contains("移除同步密码"));
+        // The other way round: the file is sealed, this device has no password.
+        set_password(None, false).unwrap();
+        std::fs::write(dir.join(FILE), seal_doc(&payload(), Some("pass-1234"), "2026-09-27T11:00:00+08:00", "OTHER-PC").unwrap().to_string()).unwrap();
+        let r = auto("start");
+        assert_eq!(r.outcome, Outcome::Locked);
+        assert!(r.message.unwrap().contains("填写这个密码"));
     }
 
     #[test]

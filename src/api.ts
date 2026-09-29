@@ -725,7 +725,7 @@ export interface SyncHistoryEntry {
 }
 
 export interface SyncAutoResult {
-  outcome: "off" | "unchanged" | "exported" | "remotePending" | "failed";
+  outcome: "off" | "unchanged" | "exported" | "remotePending" | "locked" | "failed";
   message: string | null;
 }
 
