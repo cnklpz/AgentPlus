@@ -1484,12 +1484,23 @@ pub fn end_own_servers() {
         let roots: Vec<Pid> = own_servers().iter().map(|p| Pid::from_u32(*p)).collect();
         if !roots.is_empty() {
             let sys = processes();
-            for pid in with_descendants(&sys, &roots) {
-                if let Some(p) = sys.process(pid) {
+            let tree = with_descendants(&sys, &roots);
+            for pid in &tree {
+                if let Some(p) = sys.process(*pid) {
                     if p.kill_with(Signal::Term) != Some(true) {
                         p.kill();
                     }
                 }
+            }
+            // A few seconds to finish what it is writing (a session, its state), then whatever
+            // is left is killed. Right away, the kill below would have cut that short.
+            let t0 = Instant::now();
+            while t0.elapsed() < Duration::from_secs(3) && tree.iter().any(|p| processes().process(*p).is_some()) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            let sys = processes();
+            for p in tree.iter().filter_map(|p| sys.process(*p)) {
+                p.kill();
             }
         }
     }
