@@ -18,7 +18,7 @@
 mod decode;
 mod dsh;
 pub mod library;
-mod mask;
+pub(crate) mod mask;
 pub mod parse;
 pub mod probe;
 pub mod write;

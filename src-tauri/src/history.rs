@@ -519,24 +519,28 @@ fn line_diff(a: &str, b: &str) -> (Vec<DiffRow>, u32, u32) {
 }
 
 /// Keeps keys and tokens out of the UI: `sk-abcd…wxyz`.
+/// Judges names and values as the MCP masking does (`X-Key`, `Cookie`, `SERVICE_ROLE_KEY`, JWTs…),
+/// showing at most the last four characters.
 fn mask_secrets(line: &str) -> String {
+    use crate::mcp::mask::{is_ref, looks_secret, secret_name};
+    use crate::model::mask_key;
     use std::sync::OnceLock;
     static KV: OnceLock<regex::Regex> = OnceLock::new();
-    static SK: OnceLock<regex::Regex> = OnceLock::new();
-    let kv = KV.get_or_init(|| {
-        regex::Regex::new(r#"(?i)((?:api[_-]?key|apikey|token|secret|password|authorization)[\w-]*["']?\s*[:=]\s*["']?(?:bearer\s+)?)([^"'\s,]{8,})"#).unwrap()
-    });
-    let sk = SK.get_or_init(|| regex::Regex::new(r"\b(?:sk|ak|pk)-[A-Za-z0-9_\-]{8,}").unwrap());
-    let hide = |s: &str| {
-        let c: Vec<char> = s.chars().collect();
-        if c.len() <= 10 {
-            "••••••".to_string()
+    static WORD: OnceLock<regex::Regex> = OnceLock::new();
+    // name = value, "name": "value", Name: value; an auth scheme stays readable.
+    let kv = KV.get_or_init(|| regex::Regex::new(r#"(?i)([\w.-]+)(["']?\s*[:=]\s*["']?)((?:bearer|basic|token)\s+)?([^"'\s,]+)"#).unwrap());
+    let word = WORD.get_or_init(|| regex::Regex::new(r#"[A-Za-z0-9_\-.]{16,}"#).unwrap());
+    // An upper-case word is a variable's name (`env_key = "RELAY_KEY"`), not its value.
+    let var_name = |v: &str| v.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    let line = kv.replace_all(line, |c: &regex::Captures| {
+        let (name, v) = (&c[1], &c[4]);
+        if secret_name(name) && !is_ref(v) && !var_name(v) {
+            format!("{name}{}{}{}", &c[2], c.get(3).map_or("", |m| m.as_str()), mask_key(v))
         } else {
-            format!("{}…{}", c[..4].iter().collect::<String>(), c[c.len() - 4..].iter().collect::<String>())
+            c[0].to_string()
         }
-    };
-    let line = kv.replace_all(line, |m: &regex::Captures| format!("{}{}", &m[1], hide(&m[2])));
-    sk.replace_all(&line, |m: &regex::Captures| hide(&m[0])).to_string()
+    });
+    word.replace_all(&line, |c: &regex::Captures| if looks_secret(&c[0]) { mask_key(&c[0]) } else { c[0].to_string() }).into_owned()
 }
 
 #[cfg(test)]
@@ -647,7 +651,7 @@ description: d
         let (rows, added, removed) = line_diff(&a, &b);
         assert_eq!((added, removed), (1, 1));
         assert_eq!(rows[0].text, "6 行未变");
-        assert!(rows.iter().any(|r| r.kind == "+" && r.text == "api_key = \"sk-1…cdef\"" && r.new == Some(10)));
+        assert!(rows.iter().any(|r| r.kind == "+" && r.text == "api_key = \"••••cdef\"" && r.new == Some(10)));
         assert!(rows.iter().any(|r| r.kind == "-" && r.text == "line 10" && r.old == Some(10)));
         assert_eq!(rows.last().unwrap().text, "7 行未变");
     }
@@ -698,8 +702,15 @@ description: d
 
     #[test]
     fn masks_bare_keys() {
-        assert_eq!(mask_secrets("OPENAI_API_KEY=abcdefghijklmnop"), "OPENAI_API_KEY=abcd…mnop");
-        assert_eq!(mask_secrets(r#""apiKey": "short123""#), r#""apiKey": "••••••""#);
+        assert_eq!(mask_secrets("OPENAI_API_KEY=abcdefghijklmnop"), "OPENAI_API_KEY=••••mnop");
+        assert_eq!(mask_secrets(r#""apiKey": "short12""#), r#""apiKey": "••••""#);
         assert_eq!(mask_secrets("model = \"gpt-5\""), "model = \"gpt-5\"");
+        // Names the old list missed, an auth scheme, a bare JWT; variable names and references stay.
+        assert_eq!(mask_secrets(r#"http_headers = { "X-Key" = "abcdefgh12345678" }"#), r#"http_headers = { "X-Key" = "••••5678" }"#);
+        assert_eq!(mask_secrets("SERVICE_ROLE_KEY=abcdefgh12345678"), "SERVICE_ROLE_KEY=••••5678");
+        assert_eq!(mask_secrets("Authorization: Basic dXNlcjpwYXNzd29yZA=="), "Authorization: Basic ••••ZA==");
+        assert_eq!(mask_secrets("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.abcdef"), "token ••••cdef");
+        assert_eq!(mask_secrets(r#"env_key = "RELAY_KEY""#), r#"env_key = "RELAY_KEY""#);
+        assert_eq!(mask_secrets(r#""apiKey": "{env:OPENAI_API_KEY}""#), r#""apiKey": "{env:OPENAI_API_KEY}""#);
     }
 }
