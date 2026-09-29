@@ -1276,6 +1276,22 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         "「{name}」开启了官方登录混用却没有自己的密钥，切换后 Codex 会把你的登录凭据（ChatGPT 凭据，或登录用的 API Key）发给它。请先编辑供应商补充它的密钥"
                     )));
                 }
+                // The provider being left runs on the API key Codex is signed in with (set up by
+                // another tool): that key is its only one, and switching back would be refused
+                // above. It moves to ~/.codex/.env first, as editing the provider would do.
+                if provider != &before && before != "openai" {
+                    let leaving = key_info(&doc, &before, true, &auth);
+                    if let (KeySource::SignIn, Some(k)) = (&leaving.source, leaving.key.as_deref().filter(|k| !k.is_empty())) {
+                        let env_key = new_env_key(&doc, &env_lines, &before);
+                        set_env(&mut env_lines, &env_key, k);
+                        set_key(provider_mut(&mut doc, &before)?, "env_key", value(env_key.as_str()));
+                        diff.push(&cfg_file, format!("[model_providers.{before}] env_key = \"{env_key}\""), true);
+                        let (masked, from) = (mask_key(k), moved_from(&leaving.source));
+                        diff.push(&env_file, tr!("{env_key} = {masked} ({from})", "{env_key} = {masked}（{from}）"), true);
+                        cfg_dirty = true;
+                        env_dirty = true;
+                    }
+                }
                 // Keep the old provider's list, then bring in the new one's.
                 if let Some((_, v, _)) = catalog.as_mut() {
                     if provider != &before {
@@ -2346,6 +2362,27 @@ base_url = \"http://127.0.0.1:1234/v1\"
         let st = state(&Install::default());
         assert!(st.issues.is_empty(), "{:?}", st.issues);
         assert_eq!(provider_endpoint("cur").unwrap().1.as_deref(), Some("sk-signin"));
+    }
+
+    #[test]
+    fn switching_away_moves_a_sign_in_key_so_switching_back_works() {
+        let cfg = "model_provider = \"cur\"\n\n[model_providers.cur]\nname = \"Cur\"\nbase_url = \"https://cur.example.com/v1\"\nrequires_openai_auth = true\n\n[model_providers.b]\nname = \"B\"\nbase_url = \"https://b.example.com/v1\"\nenv_key = \"B_KEY\"\n";
+        let h = codex_home_with("codex-switch-back", cfg, Some("B_KEY=sk-b\n"));
+        let auth_file = h.0.join(".codex").join("auth.json");
+        let auth = json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "sk-signin" });
+        std::fs::write(&auth_file, auth.to_string()).unwrap();
+        plan(&[Op::SetCurrentProvider { provider: "b".into() }], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "cur", "env_key").as_deref(), Some("CUR_API_KEY"));
+        assert_eq!(env_value("CUR_API_KEY").as_deref(), Some("sk-signin"));
+        assert_eq!(read_json(&auth_file).unwrap().0, auth, "the sign-in is left as it is");
+        // Back again: it has a key of its own now.
+        plan(&[Op::SetCurrentProvider { provider: "cur".into() }], false).unwrap();
+        assert_eq!(provider_endpoint("cur").unwrap().1.as_deref(), Some("sk-signin"));
+        // Switching between providers with keys of their own moves nothing more.
+        let before = std::fs::read_to_string(env_path()).unwrap();
+        plan(&[Op::SetCurrentProvider { provider: "b".into() }], false).unwrap();
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), before);
     }
 
     #[test]
