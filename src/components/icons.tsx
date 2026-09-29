@@ -88,7 +88,7 @@ function TileIcon({ i, size }: { i: Tile; size: number }) {
   const box = { width: `${i.scale}%`, height: `${i.scale}%` };
   return (
     <span className="agent-icon" style={{ width: size, height: size, borderRadius: Math.round(size * 0.24), background: i.bg, boxShadow: i.ring }}>
-      {i.src ? <img src={i.src} alt="" style={box} /> : <span style={{ ...box, display: "grid" }}>{i.glyph}</span>}
+      {i.src ? <img src={i.src} alt="" draggable={false} style={box} /> : <span style={{ ...box, display: "grid" }}>{i.glyph}</span>}
     </span>
   );
 }

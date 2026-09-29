@@ -62,6 +62,8 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
         return (
           <button key={a.id} className={`agent-row${a.id === selected ? " active" : ""}`} data-ctx="agent" data-agent={a.id} onClick={() => onSelect(a.id)}
             onPointerDown={(e) => dragSort(e.nativeEvent, e.currentTarget, ".agent-row", (from, to) => flushSync(() => onReorder(moveItem(ids, from, to))))}
+            // An icon is an <img>: the browser's own image drag would start and cancel ours.
+            onDragStart={(e) => e.preventDefault()}
             onKeyDown={(e) => onKeyDown(e, i)}>
             <AgentIcon id={a.id} size={32} />
             <span className="agent-row-text">
