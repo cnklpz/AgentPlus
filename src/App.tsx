@@ -33,7 +33,7 @@ import {
   hostKey, importKey, importOp, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
-import { McpPage } from "./components/McpPage";
+import { AgentMcpTab, McpPage } from "./components/McpPage";
 import { SyncPage } from "./components/SyncPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
@@ -69,6 +69,9 @@ function WindowControls() {
     </div>
   );
 }
+
+/** Agents without MCP servers (pi has no MCP support; Trae is detect-only). */
+const NO_MCP: AgentId[] = ["pi", "trae"];
 
 /** `imported`: a new provider filled in from an import link; `n` tells one import from the next. */
 type Dialog = { editing: ViewProvider | null; imported?: ImportRequest; n?: number } | null;
@@ -1562,6 +1565,9 @@ export default function App() {
             onCopyProvider={projSt ? () => setCopyOpen(true) : undefined}
             settingsExtra={st.id === "codex" && gateway
               ? <CodexTimezone zone={gateway.timezone} setStatus={setGateway} flash={flash} /> : undefined}
+            mcpTab={!projSt && !NO_MCP.includes(st.id) ? (
+              <AgentMcpTab agent={st.id} agents={listed} drafts={drafts} setDraftFor={setDraftFor} flash={flash} onOpenPage={() => setPage("mcp")} />
+            ) : undefined}
             projectsTab={st.id === "opencode" ? {
               count: projects.length,
               body: (

@@ -678,6 +678,7 @@ button, input, textarea, select { font-family: inherit; }
 .mcp-text { height: auto; padding: 7px 10px; resize: vertical; line-height: 1.5; }
 .mcp-paste-btn { align-self: flex-start; }
 .mcp-parsed { flex-wrap: wrap; }
+.mcp-row.off > .minw0 { opacity: .55; }
 .mcp-variant { display: flex; flex-direction: column; gap: 8px; }
 .mcp-variant + .mcp-variant { padding-top: 12px; border-top: 1px dashed var(--line2); }
 .mcp-wrap, .mcp-pair { overflow-wrap: anywhere; }

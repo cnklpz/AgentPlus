@@ -19,7 +19,7 @@ import { t, tn } from "../i18n";
 import { scrub } from "../privacy";
 import { errText, type Flash, toggled, toggledIn } from "../util";
 
-export type Tab = "prov" | "models" | "sessions" | "maint" | "projects" | "set";
+export type Tab = "prov" | "models" | "mcp" | "sessions" | "maint" | "projects" | "set";
 
 interface Props {
   st: AgentState;
@@ -55,6 +55,8 @@ interface Props {
   projectsTab?: { body: ReactNode; count: number };
   /** Sections after the settings read from the agent's config (AgentPlus's own, saved right away). */
   settingsExtra?: ReactNode;
+  /** Body of the MCP tab; agents without MCP support have none. */
+  mcpTab?: ReactNode;
 }
 
 export function AgentPage(props: Props) {
@@ -68,12 +70,13 @@ export function AgentPage(props: Props) {
   const tabs: [Tab, string, number | null][] = [
     ["prov", t("common.providers"), st.mode === "single" ? providers.filter((p) => p.compatible && !p.isDeleted).length : provCount],
     ["models", t("agentPage.tabModels"), visibleCount(st, draft)],
+    ...(props.mcpTab ? ([["mcp", "MCP", null]] as [Tab, string, null][]) : []),
     ...(st.id === "codex" ? ([["sessions", t("agentPage.tabSessions"), null], ["maint", t("agentPage.tabMaint"), null]] as [Tab, string, null][]) : []),
     ...(props.projectsTab ? ([["projects", t("agentPage.tabProjects"), props.projectsTab.count || null]] as [Tab, string, number | null][]) : []),
     ...(hasSettings ? ([["set", t("agentPage.tabSettings"), null]] as [Tab, string, null][]) : []),
   ];
   // Coming from another agent's settings tab: this one has none.
-  useEffect(() => { if (tab === "set" && !hasSettings) setTab("prov"); }, [tab, hasSettings]);
+  useEffect(() => { if ((tab === "set" && !hasSettings) || (tab === "mcp" && !props.mcpTab)) setTab("prov"); }, [tab, hasSettings, !!props.mcpTab]);
   const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
@@ -235,6 +238,7 @@ export function AgentPage(props: Props) {
         {tab === "sessions" && <SessionsTab target={sessionTarget} flash={props.flash} initialQuery={props.sessionQuery} />}
         {tab === "maint" && <MaintenanceTab flash={props.flash} />}
         {tab === "projects" && props.projectsTab?.body}
+        {tab === "mcp" && props.mcpTab}
 
         {tab === "set" && hasSettings && (() => {
           // Fixed id is pre-enabled: shown as on, written together with the next provider switch.

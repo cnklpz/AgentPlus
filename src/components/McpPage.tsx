@@ -61,34 +61,16 @@ function stateText(e: Entry): string {
   return pending ? `${state} · ${t("mcpPage.pending")}` : state;
 }
 
-interface Props {
-  /** The agents in the sidebar. */
-  agents: AgentState[];
-  /** Everything "Apply" writes (agents and open project configs). */
-  pending: AgentState[];
-  drafts: Record<string, Draft>;
-  setDraftFor: (agent: string, d: Draft) => void;
-  busy: boolean;
-  onApplyAll: () => void;
-  onDiscard: (agent: AgentId | null) => void;
-  flash: Flash;
-  /** An MCP import link to fill in the add dialog with; `n` tells one link from the next. */
-  link: { link: McpLink; n: number } | null;
-}
-
-export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash, link }: Props) {
+/** What the MCP page and an agent's MCP tab share: the servers with their pending changes,
+ *  the edits, and the add / edit dialog. */
+function useMcp(agents: AgentState[], drafts: Record<string, Draft>, setDraftFor: (agent: string, d: Draft) => void, flash: Flash, onRenamed?: (from: string, to: string) => void) {
   const lang = useLang();
   const ids = useMemo(() => agents.map((a) => a.id).filter((id) => !id.includes("@")), [agents]);
   // Errors come from the backend in the UI language; `agents` changes after every apply.
   const { data, error, reload } = useLoad(() => api.mcpList(ids), [lang, agents]);
-  const [sel, setSel] = useState<string | null>(null);
   const [dialog, setDialog] = useState<McpEdit | null | undefined>(undefined);
   const [fromLink, setFromLink] = useState<{ link: McpLink; n: number } | null>(null);
-  useEffect(() => {
-    if (!link) return;
-    setFromLink(link);
-    setDialog(null);
-  }, [link?.n]);
+  const [defaultTo, setDefaultTo] = useState<McpSource[]>([]);
 
   const source = (from: [McpSource, string]) => from[0] === LIBRARY
     ? data?.library.find((s) => s.name === from[1])
@@ -100,8 +82,6 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
     return out;
   }, [data, drafts]);
   const list = useMemo(() => groups([...views].flatMap(([at, vs]) => vs.map((v) => ({ at, v })))), [views]);
-  const picked = list.find((g) => g.name === sel) ?? null;
-  const differ = list.filter((g) => g.variants.length > 1).length;
   const targets: McpTarget[] = [...views].map(([id, vs]) => ({ id, name: sourceName(id), names: new Set(vs.map((v) => v.s.name)) }));
 
   const edit = (agent: McpSource, f: (d: Draft) => Draft) => { if (agent !== LIBRARY) setDraftFor(agent, f(drafts[agent] ?? {})); };
@@ -124,6 +104,12 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
     // A copy is read from a holder that keeps the server (see `writeOrder`).
     const e = variant.find((x) => x.v.exists && !x.v.pending) ?? variant.find((x) => x.v.exists && x.v.pending === "toggled") ?? variant[0];
     setDialog({ s: e.v.s, from: fromOf(e), holders: variant.filter((x) => x.v.pending !== "deleted").map((x) => x.at) });
+  };
+  /** The add dialog; `to` is ticked to begin with, `link` fills it in. */
+  const openAdd = (to: McpSource[] = [], link: { link: McpLink; n: number } | null = null) => {
+    setDefaultTo(to);
+    setFromLink(link);
+    setDialog(null);
   };
 
   /** The copies of a server that stay once the pending removals are written. */
@@ -164,6 +150,12 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
     else edit(e.at, (d) => deleteMcp(d, name, e.v.exists));
   };
 
+  const toggle = (e: Entry, on: boolean) => {
+    const actual = e.v.exists ? data?.agents.find((a) => a.agent === e.at)?.servers.find((s) => s.name === e.v.s.name)?.enabled ?? null : null;
+    edit(e.at, (d) => setMcpEnabled(d, e.v.s.name, on, actual));
+  };
+  const undo = (e: Entry) => edit(e.at, (d) => undoMcp(d, e.v.s.name));
+
   const save = async (input: McpInput, to: McpSource[], removeFrom: McpSource[]): Promise<boolean> => {
     const old = dialog?.s.name ?? input.name;
     // Every copy unticked: nothing keeps the server.
@@ -184,9 +176,41 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
     if (to.includes(LIBRARY)) await api.mcpLibrarySave({ ...input, replaces: dialog?.holders.includes(LIBRARY) ? input.replaces : undefined });
     if (removeFrom.includes(LIBRARY)) await api.mcpLibraryDelete(old);
     if (to.includes(LIBRARY) || removeFrom.includes(LIBRARY)) await reload();
-    if (input.name !== sel && sel === old) setSel(input.name);
+    if (input.name !== old) onRenamed?.(old, input.name);
     return true;
   };
+
+  const dialogEl = dialog !== undefined && data && (
+    <McpDialog key={fromLink?.n ?? 0} edit={dialog} targets={targets} link={dialog === null ? fromLink?.link : undefined} defaultTo={defaultTo} onSave={save}
+      onClose={() => { setDialog(undefined); setFromLink(null); }} />
+  );
+
+  return { data, error, reload, views, list, openEdit, openAdd, remove, toggle, undo, dialogEl };
+}
+
+interface Props {
+  /** The agents in the sidebar. */
+  agents: AgentState[];
+  /** Everything "Apply" writes (agents and open project configs). */
+  pending: AgentState[];
+  drafts: Record<string, Draft>;
+  setDraftFor: (agent: string, d: Draft) => void;
+  busy: boolean;
+  onApplyAll: () => void;
+  onDiscard: (agent: AgentId | null) => void;
+  flash: Flash;
+  /** An MCP import link to fill in the add dialog with; `n` tells one link from the next. */
+  link: { link: McpLink; n: number } | null;
+}
+
+export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash, link }: Props) {
+  const [sel, setSel] = useState<string | null>(null);
+  const { data, error, reload, list, openEdit, openAdd, remove, toggle, undo, dialogEl } = useMcp(agents, drafts, setDraftFor, flash, (from, to) => setSel((s) => (s === from ? to : s)));
+  useEffect(() => {
+    if (link) openAdd(link.link.agents, link);
+  }, [link?.n]);
+  const picked = list.find((g) => g.name === sel) ?? null;
+  const differ = list.filter((g) => g.variants.length > 1).length;
 
   return (
     <>
@@ -199,7 +223,7 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
             </div>
             <div className="row gap6">
               <button className="btn" onClick={() => void reload()}>{t("common.refresh")}</button>
-              <button className="btn primary" disabled={!data} onClick={() => setDialog(null)}><Icon.plus size={12} />{t("mcpPage.add")}</button>
+              <button className="btn primary" disabled={!data} onClick={() => openAdd()}><Icon.plus size={12} />{t("mcpPage.add")}</button>
             </div>
           </div>
         </div>
@@ -241,10 +265,7 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
       </main>
       <aside className="aside" aria-label={t("mcpPage.detailTitle")}>
         {picked ? (
-          <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} onEdit={openEdit}
-            onToggle={(e, on) => edit(e.at, (d) => setMcpEnabled(d, e.v.s.name, on, e.v.exists ? data?.agents.find((a) => a.agent === e.at)?.servers.find((s) => s.name === e.v.s.name)?.enabled ?? null : null))}
-            onRemove={(e) => void remove(e)}
-            onUndo={(e) => edit(e.at, (d) => undoMcp(d, e.v.s.name))} />
+          <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} onEdit={openEdit} onToggle={toggle} onRemove={(e) => void remove(e)} onUndo={undo} />
         ) : (
           <section className="aside-cur mcp-scroll">
             <h2>{t("mcpPage.overview")}</h2>
@@ -282,11 +303,69 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
         )}
         <PendingPanel pending={pending} drafts={drafts} busy={busy} onDiscard={onDiscard} onApplyAll={onApplyAll} emptyHint={t("mcpPage.pendingHint")} />
       </aside>
-      {dialog !== undefined && data && (
-        <McpDialog key={fromLink?.n ?? 0} edit={dialog} targets={targets} link={dialog === null ? fromLink?.link : undefined} onSave={save}
-          onClose={() => { setDialog(undefined); setFromLink(null); }} />
-      )}
+      {dialogEl}
     </>
+  );
+}
+
+
+/** An agent's own MCP servers (its page's MCP tab): the same edits as the MCP page. */
+export function AgentMcpTab({ agent, agents, drafts, setDraftFor, flash, onOpenPage }: {
+  agent: AgentId;
+  /** Every agent in the sidebar (edits can copy a server to them). */
+  agents: AgentState[];
+  drafts: Record<string, Draft>;
+  setDraftFor: (agent: string, d: Draft) => void;
+  flash: Flash;
+  onOpenPage: () => void;
+}) {
+  const { data, error, list, openEdit, openAdd, remove, toggle, undo, dialogEl } = useMcp(agents, drafts, setDraftFor, flash);
+  const mine = data?.agents.find((a) => a.agent === agent);
+  const rows = list.flatMap((g) => g.entries.filter((e) => e.at === agent).map((e) => ({ g, e })));
+  const name = agentLabel(agent);
+  return (
+    <div className="stack12">
+      <div className="row between gap6">
+        <span className="mono muted small ellipsis" title={scrub(mine?.file ?? "")}>{scrub(mine?.file ?? "")}</span>
+        <div className="row gap6">
+          <button className="btn small" onClick={onOpenPage}>{t("mcpPage.openPage")}</button>
+          <button className="btn small primary" disabled={!data} onClick={() => openAdd([agent])}><Icon.plus size={12} />{t("mcpPage.add")}</button>
+        </div>
+      </div>
+      {error && <ErrorBox text={error} />}
+      {mine?.error && <ErrorBox text={mine.error} />}
+      {!data && !error && <div className="empty">{t("common.reading")}</div>}
+      {data && rows.length === 0 && !mine?.error && <div className="empty">{t("mcpPage.agentEmpty", { agent: name })}</div>}
+      {rows.length > 0 && (
+        <div className="stable">
+          {rows.map(({ g, e }) => {
+            const s = e.v.s;
+            const gone = e.v.pending === "deleted";
+            return (
+              <div key={s.name} className={`hrow mcp-row${s.enabled && !gone ? "" : " off"}`}>
+                <div className="minw0">
+                  <div className="row gap6">
+                    <span className="strong small">{s.name}</span>
+                    <span className="ptag tag-soft">{MCP_TRANSPORT[s.transport]}</span>
+                    {g.variants.length > 1 && <span className="ptag tag-warn" title={t("mcpPage.differsTitle")}>{t("mcpPage.differs")}</span>}
+                    {e.v.pending && <span className="ptag tag-new">{stateText(e)}</span>}
+                    {g.entries.length > 1 && <span className="tiny muted">{tn("mcpPage.alsoIn", g.entries.length - 1)}</span>}
+                  </div>
+                  <div className="mono tiny muted ellipsis">{scrub(summary(s))}</div>
+                </div>
+                <div className="row gap6">
+                  {e.v.pending && <button className="link tiny" onClick={() => undo(e)}>{t("common.undo")}</button>}
+                  {!gone && <Switch on={s.enabled} onChange={(on) => toggle(e, on)} label={t("mcpPage.toggleIn", { agent: name })} />}
+                  {!gone && <button className="icon-btn sm" aria-label={t("mcpPage.editOrCopy")} title={t("mcpPage.editOrCopy")} onClick={() => openEdit(g.variants.find((v) => v.includes(e)) ?? [e])}><Icon.edit size={12} /></button>}
+                  {!gone && <button className="icon-btn sm" aria-label={t("mcpPage.removeFrom", { agent: name })} title={t("mcpPage.removeFrom", { agent: name })} onClick={() => void remove(e)}><Icon.trash size={12} /></button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {dialogEl}
+    </div>
   );
 }
 

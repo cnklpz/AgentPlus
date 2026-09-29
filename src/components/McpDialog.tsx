@@ -39,6 +39,8 @@ interface Props {
   targets: McpTarget[];
   /** Adding from an import link: its servers fill the form, its agents are ticked. */
   link?: McpLink;
+  /** Adding: ticked to begin with (the agent whose MCP tab it was opened from). */
+  defaultTo?: McpSource[];
   /** False: the user backed out (the dialog stays open). */
   onSave: (input: McpInput, to: McpSource[], removeFrom: McpSource[]) => Promise<boolean>;
   onClose: () => void;
@@ -56,7 +58,7 @@ function pairs(text: string, sep: string): { key: string; value: string }[] {
 
 const joinPairs = (kv: { key: string; value: string }[], sep: string) => kv.map((p) => `${p.key}${sep}${p.value}`).join("\n");
 
-export function McpDialog({ edit, targets, link, onSave, onClose }: Props) {
+export function McpDialog({ edit, targets, link, defaultTo, onSave, onClose }: Props) {
   const s: McpServer | McpInput | undefined = edit?.s ?? link?.servers[0];
   const [name, setName] = useState(s?.name ?? "");
   const [transport, setTransport] = useState<McpTransport>(s?.transport ?? "stdio");
@@ -67,7 +69,7 @@ export function McpDialog({ edit, targets, link, onSave, onClose }: Props) {
   const [env, setEnv] = useState(s ? joinPairs(s.env, "=") : "");
   const [headers, setHeaders] = useState(s ? joinPairs(s.headers, ": ") : "");
   const [extra, setExtra] = useState<Pick<McpInput, "extra" | "extraFamily">>(link ? { extra: link.servers[0].extra, extraFamily: link.servers[0].extraFamily } : {});
-  const [to, setTo] = useState<Set<McpSource>>(new Set(edit?.holders ?? link?.agents.filter((a) => targets.some((x) => x.id === a)) ?? []));
+  const [to, setTo] = useState<Set<McpSource>>(new Set(edit?.holders ?? (link?.agents ?? defaultTo ?? []).filter((a) => targets.some((x) => x.id === a))));
   const [paste, setPaste] = useState<string | null>(null);
   const [parsed, setParsed] = useState<McpInput[]>(link?.servers ?? []);
   const [err, setErr] = useState<string | null>(null);
