@@ -23,6 +23,7 @@ mod sessions;
 mod store;
 mod dialog;
 mod seal;
+mod skills;
 mod sync;
 mod tray;
 mod update;
@@ -296,6 +297,12 @@ async fn fetch_models_url(base_url: String, api_key: Option<String>, api: String
 #[tauri::command]
 async fn gateway_models(routes: Vec<String>) -> Result<Vec<String>, String> {
     blocking(move || gateway::server::list_models(&routes)).await
+}
+
+/// The skills folders these agents read, with their skills, and each agent's view of them.
+#[tauri::command]
+async fn skills_list(agents: Vec<String>) -> Result<skills::Overview, String> {
+    blocking(move || Ok(skills::overview(&agents))).await
 }
 
 /// Global MCP servers of these agents and the MCP library, secrets masked.
@@ -854,6 +861,7 @@ pub fn run() {
             gateway_models,
             fetch_models_lib,
             guess_models,
+            skills_list,
             mcp_list,
             mcp_library_save,
             mcp_library_delete,

@@ -61,7 +61,7 @@ pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     dir().join(MARKER)
 }
 

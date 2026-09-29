@@ -11,6 +11,8 @@ export default {
   gatewayHint: "Protocol conversion between Chat, Responses and Anthropic",
   mcp: "MCP servers",
   mcpHint: "MCP servers of every agent",
+  skills: "Skills",
+  skillsHint: "Agent Skills of every agent",
   history: "History & rollback",
   historyHint: "Backups & rollback",
   sync: "Multi-device sync",

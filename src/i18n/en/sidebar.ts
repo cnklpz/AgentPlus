@@ -4,6 +4,7 @@ export default {
   singleSub: "Provider {provider} · {n} model|Provider {provider} · {n} models",
   gateway: "Local gateway",
   mcp: "MCP servers",
+  skills: "Skills",
   history: "History & rollback",
   sync: "Multi-device sync",
   nav: "Navigation",

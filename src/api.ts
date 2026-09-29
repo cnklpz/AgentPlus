@@ -512,6 +512,48 @@ export interface McpInput {
   extraFamily?: string;
 }
 
+/** How an agent comes to read a skills folder. */
+export type SkillKind = "own" | "shared" | "compat" | "extra" | "builtin";
+
+/** One skill folder (with a SKILL.md). */
+export interface SkillCopy {
+  /** Its path inside the folder it sits in ("pdf", "creative/ascii-art"). */
+  id: string;
+  name: string;
+  description: string;
+  dir: string;
+  files: number;
+  bytes: number;
+  /** Equal = the same files. */
+  sig: string;
+  problem: string | null;
+}
+
+/** A skills folder and the agents that read it. */
+export interface SkillRoot {
+  path: string;
+  kind: SkillKind;
+  exists: boolean;
+  owner: AgentId | null;
+  readers: AgentId[];
+  skills: SkillCopy[];
+}
+
+export interface AgentSkills {
+  agent: AgentId;
+  supported: boolean;
+  /** Folder paths, highest priority first. */
+  roots: string[];
+  /** Skills its config switches off (names or ids). */
+  disabled: string[];
+  switchable: boolean;
+}
+
+export interface SkillsOverview {
+  roots: SkillRoot[];
+  agents: AgentSkills[];
+}
+
 /** What a connection test found: the server's name, its protocol and its tools. */
 export interface McpProbe {
   server: string | null;
@@ -831,6 +873,8 @@ const real = {
   gatewayModels: (routes: string[]) => invoke<string[]>("gateway_models", { routes }),
   /** Catalog data for these model ids (unknown ids are left out); `agent` may be an OpenCode project id. */
   guessModels: (agent: string, ids: string[]) => invoke<Record<string, ModelGuess>>("guess_models", { agent, ids }),
+  /** The skills folders these agents read, with their skills. */
+  skillsList: (agents: AgentId[]) => invoke<SkillsOverview>("skills_list", { agents }),
   /** Global MCP servers of these agents, and the MCP library (secrets masked). */
   mcpList: (agents: AgentId[]) => invoke<McpOverview>("mcp_list", { agents }),
   mcpLibrarySave: (server: McpInput) => invoke<void>("mcp_library_save", { server }),
@@ -1137,6 +1181,16 @@ const demo: typeof real = {
     const supported = agent !== "pi";
     return { agent, supported, file: supported ? `~/.${agent}/config` : null, exists: agent in servers, servers: servers[agent] ?? [], error: null };
   }), library: [{ name: "memory", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"], cwd: null, url: null, env: [], headers: [], enabled: true, stashed: false, extra: {}, sig: "s-memory" }] }),
+  skillsList: async (agents) => {
+    const sk = (name: string, description: string, dir: string, sig = `s-${name}`, problem: string | null = null): SkillCopy => ({ id: name, name, description, dir: `${dir}/${name}`, files: 3, bytes: 12800, sig, problem });
+    const roots: SkillRoot[] = [
+      { path: "~/.codex/skills", kind: "own", exists: true, owner: "codex", readers: ["codex"], skills: [sk("frontend-design", "Distinctive, intentional visual design for new UI", "~/.codex/skills")] },
+      { path: "~/.agents/skills", kind: "shared", exists: true, owner: null, readers: agents.filter((a) => a !== "claude"), skills: [sk("pdf", "Read, fill and merge PDF files", "~/.agents/skills"), sk("changelog", "", "~/.agents/skills", "s-c", "（演示）SKILL.md 缺少 description")] },
+      { path: "~/.codex/skills/.system", kind: "builtin", exists: true, owner: null, readers: ["codex"], skills: [sk("skill-creator", "Create or update a skill", "~/.codex/skills/.system")] },
+      { path: "~/.zcode/skills", kind: "own", exists: true, owner: "zcode", readers: ["zcode"], skills: [sk("frontend-design", "Frontend design (older copy)", "~/.zcode/skills", "s-old"), sk("shadcn", "Build UIs with shadcn/ui", "~/.zcode/skills")] },
+    ];
+    return { roots, agents: agents.map((agent) => ({ agent, supported: agent !== "pi", roots: roots.filter((r) => r.readers.includes(agent)).map((r) => r.path), disabled: agent === "zcode" ? ["frontend-design"] : [], switchable: true })) };
+  },
   mcpLibrarySave: async () => undefined,
   mcpLibraryDelete: async () => undefined,
   mcpProbe: async (_source, name) => {

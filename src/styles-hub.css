@@ -682,6 +682,12 @@ button, input, textarea, select { font-family: inherit; }
 .mcp-probe { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
 .mcp-tools { display: flex; flex-wrap: wrap; gap: 4px; max-height: 96px; overflow-y: auto; }
 .mcp-probe .ok-text { color: var(--ok); }
+
+/* Skills page */
+.skills-tools { margin-top: 10px; }
+.skills-readers { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.skills-overview .kv-row.dim { opacity: .55; }
+.skills-desc { color: var(--ink2); line-height: 1.5; }
 .mcp-variant { display: flex; flex-direction: column; gap: 8px; }
 .mcp-variant + .mcp-variant { padding-top: 12px; border-top: 1px dashed var(--line2); }
 .mcp-wrap, .mcp-pair { overflow-wrap: anywhere; }

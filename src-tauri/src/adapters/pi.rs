@@ -35,7 +35,7 @@ pub fn default_dir() -> PathBuf {
 }
 
 /// The folder picked in AgentPlus, else the default.
-fn dir() -> PathBuf {
+pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 

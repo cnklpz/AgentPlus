@@ -34,6 +34,7 @@ import {
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
+import { SkillsPage } from "./components/SkillsPage";
 import { SyncPage } from "./components/SyncPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
@@ -1415,6 +1416,7 @@ export default function App() {
       "sep",
       { label: t("common.providers"), icon: <Icon.layers size={13} />, disabled: page === "providers", action: () => setPage("providers") },
       { label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") },
+      { label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") },
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
@@ -1447,7 +1449,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
+      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
         {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} />}
 
         {page === "providers" && (
@@ -1515,6 +1517,7 @@ export default function App() {
           <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash} link={mcpLink}
             onApplyAll={applyAll} onDiscard={(a) => (a ? setDraftFor(a, {}) : setDrafts({}))} />
         )}
+        {page === "skills" && <SkillsPage agents={listed} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "settings" && (

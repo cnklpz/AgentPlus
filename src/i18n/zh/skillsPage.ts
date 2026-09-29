@@ -1,0 +1,43 @@
+// src/components/SkillsPage.tsx
+import type en from "../en/skillsPage";
+
+const zh: typeof en = {
+  title: "技能",
+  subtitle: "各 Agent 用户级目录里的 Agent Skills（带 SKILL.md 的文件夹），不含项目目录。",
+  filter: "显示",
+  filterMine: "我的",
+  filterBuiltin: "内置",
+  filterAll: "全部",
+  search: "搜索技能",
+  empty: "还没有你自己的技能，内置技能在「内置」里。",
+  emptyBuiltin: "没有内置技能。",
+  noMatch: "没有匹配的技能。",
+  noDescription: "没有描述",
+  differs: "内容不一致",
+  differsTitle: "这个技能的几份副本文件不一样",
+  differsHint: "这个技能的几份副本文件不一样，下面分别列出，并标出读取它的 Agent。",
+  problem: "SKILL.md 有问题",
+  problemTitle: "有副本的 SKILL.md 不完整或无法读取",
+  on: "可用",
+  off: "已停用",
+  shadowed: "未使用：{path} 里有同名技能",
+  detailTitle: "技能详情",
+  overview: "技能目录",
+  overviewHint: "各 Agent 从哪些目录读取技能。~/.agents/skills 是共享目录，多数 Agent 都会读。",
+  statMine: "个我的技能",
+  statFolders: "个目录有技能",
+  statAgents: "个 Agent 支持",
+  skillCount: "{n} 个技能",
+  noFolder: "目录还不存在",
+  inAgents: "{n} 个 Agent 在用",
+  folder: "目录",
+  content: "内容",
+  fileCount: "{n} 个文件 · {size}",
+  kindOwn: "自有目录",
+  kindShared: "共享目录",
+  kindCompat: "兼容读取",
+  kindExtra: "配置添加",
+  kindBuiltin: "内置",
+};
+
+export default zh;

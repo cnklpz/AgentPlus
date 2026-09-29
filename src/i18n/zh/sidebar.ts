@@ -6,6 +6,7 @@ const zh: typeof en = {
   singleSub: "供应商 {provider} · {n} 个模型",
   gateway: "本地网关",
   mcp: "MCP 服务器",
+  skills: "技能",
   history: "历史与回滚",
   sync: "多设备同步",
   nav: "导航",

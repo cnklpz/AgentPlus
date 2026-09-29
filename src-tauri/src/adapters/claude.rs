@@ -57,7 +57,7 @@ pub fn detect() -> Install {
     crate::process::detect_claude()
 }
 
-fn settings_path() -> PathBuf {
+pub(crate) fn settings_path() -> PathBuf {
     dir().join("settings.json")
 }
 

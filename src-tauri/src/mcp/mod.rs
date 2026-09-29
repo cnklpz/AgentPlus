@@ -204,7 +204,7 @@ fn toml_value(v: &toml_edit::Value) -> Value {
     }
 }
 
-fn toml_item(i: &toml_edit::Item) -> Value {
+pub(crate) fn toml_item(i: &toml_edit::Item) -> Value {
     use toml_edit::Item;
     let table = |t: &toml_edit::Table| Value::Object(t.iter().map(|(k, i)| (k.to_string(), toml_item(i))).collect());
     match i {

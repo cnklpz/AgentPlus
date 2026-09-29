@@ -13,6 +13,8 @@ const zh: typeof en = {
   gatewayHint: "协议转换：Chat / Responses / Anthropic 互转",
   mcp: "MCP 服务器",
   mcpHint: "各 Agent 的 MCP 服务器",
+  skills: "技能",
+  skillsHint: "各 Agent 的技能（Skills）",
   history: "历史与回滚",
   historyHint: "备份和回滚",
   sync: "多设备同步",

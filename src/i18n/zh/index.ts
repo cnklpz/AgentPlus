@@ -26,6 +26,7 @@ import maintenanceTab from "./maintenanceTab";
 import historyPage from "./historyPage";
 import mcpPage from "./mcpPage";
 import mcpDialog from "./mcpDialog";
+import skillsPage from "./skillsPage";
 import pendingDialog from "./pendingDialog";
 import serviceDialog from "./serviceDialog";
 import serviceDetail from "./serviceDetail";
@@ -71,6 +72,7 @@ const zh: typeof en = {
   historyPage,
   mcpPage,
   mcpDialog,
+  skillsPage,
   pendingDialog,
   serviceDialog,
   serviceDetail,

@@ -42,7 +42,7 @@ pub fn detect() -> Install {
 pub(crate) fn engine_path() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir).join(MARKER)
 }
-fn app_dir() -> PathBuf {
+pub(crate) fn app_dir() -> PathBuf {
     // Tests: inside the temp home (`test_home` is always None in a real build).
     test_home().map(|h| h.join(".config")).or_else(dirs::config_dir).unwrap_or_else(home).join("Xiaomi MiMo")
 }

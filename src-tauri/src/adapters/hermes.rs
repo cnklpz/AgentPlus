@@ -84,7 +84,7 @@ fn expand_percent(s: &str) -> String {
     re.replace_all(s, |c: &regex::Captures| std::env::var(&c[1]).unwrap_or_else(|_| c[0].to_string())).to_string()
 }
 
-fn dir() -> PathBuf {
+pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 

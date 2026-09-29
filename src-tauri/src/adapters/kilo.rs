@@ -31,7 +31,7 @@ pub fn default_dir() -> PathBuf {
     env_config().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| home().join(".config").join("kilo"))
 }
 
-fn dir() -> PathBuf {
+pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
