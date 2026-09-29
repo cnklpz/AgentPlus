@@ -94,6 +94,9 @@ pub(crate) fn output_within(cmd: &mut Command, limit: Duration) -> Option<std::p
             }
             Ok(None) if t0.elapsed() < limit => std::thread::sleep(Duration::from_millis(30)),
             _ => {
+                // With what it started: a .cmd shim's node would keep running, and keep the pipe
+                // (and the thread reading it) open.
+                kill_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -636,19 +639,29 @@ fn detect_wsl(e: &crate::adapters::Ext) -> Install {
     inst
 }
 
-/// Version printed by a CLI (`<exe> --version`), cached per path, killed after 5 s. A .cmd /
-/// .bat is started directly too: the standard library runs it through `cmd /d /c` with proper
-/// quoting (paths with `&` or parentheses) and without AutoRun hooks.
+/// Version printed by a CLI (`<exe> --version`), killed after 5 s. A .cmd / .bat is started
+/// directly too: the standard library runs it through `cmd /d /c` with proper quoting (paths
+/// with `&` or parentheses) and without AutoRun hooks.
+///
+/// Cached per path while the file stays the same (size and time): an update in place (Claude
+/// Code's native installer) shows at once. No answer is kept only for a minute, since a first
+/// run can be slowed past the limit by an antivirus scan.
 pub(crate) fn cli_version(exe: &Path) -> Option<String> {
-    static CACHE: std::sync::Mutex<Vec<(PathBuf, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+    type Stamp = Option<(u64, Option<std::time::SystemTime>)>;
+    type Entry = (PathBuf, Stamp, Option<String>, Instant);
+    static CACHE: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
     let cache = || crate::util::lock(&CACHE);
-    if let Some((_, v)) = cache().iter().find(|(p, _)| p == exe) {
+    let stamp: Stamp = std::fs::metadata(exe).ok().map(|m| (m.len(), m.modified().ok()));
+    let fresh = |s: &Stamp, v: &Option<String>, at: &Instant| *s == stamp && (v.is_some() || at.elapsed() < Duration::from_secs(60));
+    if let Some((.., v, _)) = cache().iter().find(|(p, s, v, at)| p == exe && fresh(s, v, at)) {
         return v.clone();
     }
     // Lets `output_within` pass on the login PATH (macOS) that an npm script needs.
     search_path();
     let v = output_within(Command::new(exe).arg("--version"), Duration::from_secs(5)).and_then(|o| version_in(&String::from_utf8_lossy(&o.stdout)));
-    cache().push((exe.to_path_buf(), v.clone()));
+    let mut c = cache();
+    c.retain(|(p, ..)| p != exe);
+    c.push((exe.to_path_buf(), stamp, v.clone(), Instant::now()));
     v
 }
 
@@ -1806,6 +1819,9 @@ mod tests {
         let script = d.join("tool.cmd");
         std::fs::write(&script, "@echo tool v9.8.7, build 1\r\n").unwrap();
         assert_eq!(cli_version(&script).as_deref(), Some("9.8.7"));
+        // Updated in place: the new version, not the cached one.
+        std::fs::write(&script, "@echo tool v10.0.0, build 22\r\n").unwrap();
+        assert_eq!(cli_version(&script).as_deref(), Some("10.0.0"));
         let _ = std::fs::remove_dir_all(&d);
     }
 
