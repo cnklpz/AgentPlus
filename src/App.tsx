@@ -34,7 +34,7 @@ import {
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
-import { SkillsPage } from "./components/SkillsPage";
+import { AgentSkillsTab, SkillsPage } from "./components/SkillsPage";
 import { SyncPage } from "./components/SyncPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
@@ -1572,6 +1572,9 @@ export default function App() {
               ? <CodexTimezone zone={gateway.timezone} setStatus={setGateway} flash={flash} /> : undefined}
             mcpTab={!projSt && !NO_MCP.includes(st.id) ? (
               <AgentMcpTab agent={st.id} agents={listed} drafts={drafts} setDraftFor={setDraftFor} flash={flash} onOpenPage={() => setPage("mcp")} />
+            ) : undefined}
+            skillsTab={!projSt && st.id !== "trae" ? (
+              <AgentSkillsTab agent={st.id} agents={listed} flash={flash} onOpenPage={() => setPage("skills")} />
             ) : undefined}
             projectsTab={st.id === "opencode" ? {
               count: projects.length,

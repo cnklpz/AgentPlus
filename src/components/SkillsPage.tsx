@@ -6,7 +6,7 @@ import { ErrorBox, Seg, Switch } from "./controls";
 import { ask } from "./Confirm";
 import { Modal } from "./Modal";
 import { useLoad } from "../hooks";
-import { fmtSize } from "../format";
+import { fmtSize, joinList } from "../format";
 import { scrub } from "../privacy";
 import { agentLabel } from "../services";
 import { errText, type Flash, onActivateKey } from "../util";
@@ -85,21 +85,16 @@ function groups(o: SkillsOverview): Group[] {
 type Filter = "mine" | "builtin" | "all";
 const FILTERS: [Filter, TKey][] = [["mine", "skillsPage.filterMine"], ["builtin", "skillsPage.filterBuiltin"], ["all", "skillsPage.filterAll"]];
 
-export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Flash }) {
+/** What the Skills page and an agent's Skills tab share: the folders and their skills, the
+ *  actions, and the copy / import dialogs. */
+function useSkills(agents: AgentState[], flash: Flash) {
   const lang = useLang();
   const ids = useMemo(() => agents.map((a) => a.id).filter((id) => !id.includes("@")), [agents]);
   // Problems come from the backend in the UI language; `agents` changes after every apply.
   const { data, error, reload } = useLoad(() => api.skillsList(ids), [lang, agents]);
-  const [sel, setSel] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>("mine");
-  const [q, setQ] = useState("");
   const [copying, setCopying] = useState<Copy | null>(null);
   const [importing, setImporting] = useState(false);
   const all = useMemo(() => (data ? groups(data) : []), [data]);
-  const query = q.trim().toLowerCase();
-  const list = all.filter((g) => (filter === "all" || (filter === "builtin") === g.builtin)
-    && (!query || g.name.toLowerCase().includes(query) || g.copies.some((c) => c.s.description.toLowerCase().includes(query))));
-  const picked = all.find((g) => g.name === sel) ?? null;
 
   const run = async (p: Promise<unknown>, done?: string) => {
     try {
@@ -114,13 +109,32 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
     const users = c.root.readers.filter((a) => data && loaded(data, a, c.s.name) === c.root).map(agentLabel);
     const ok = await ask({
       title: t("skillsPage.deleteTitle", { name: c.s.name }),
-      message: `${t("skillsPage.deleteMessage", { dir: scrub(c.s.dir) })}${users.length ? ` ${t("skillsPage.deleteUsers", { agents: users.join("、") })}` : ""}`,
+      message: `${t("skillsPage.deleteMessage", { dir: scrub(c.s.dir) })}${users.length ? ` ${t("skillsPage.deleteUsers", { agents: joinList(users) })}` : ""}`,
       confirmText: t("common.delete"),
       danger: true,
     });
     if (ok) await run(api.skillsDelete(c.s.dir), t("skillsPage.deleted", { name: c.s.name }));
   };
   const toggle = (agent: AgentId, c: Copy, on: boolean) => run(api.skillsSetEnabled(agent, c.s.name, c.s.dir, on));
+
+  const dialogs = (
+    <>
+      {copying && data && <CopyDialog c={copying} o={data} flash={flash} onClose={() => setCopying(null)} onDone={() => void reload()} />}
+      {importing && <ImportDialog flash={flash} onClose={() => setImporting(false)} onDone={() => void reload()} />}
+    </>
+  );
+  return { data, error, reload, all, remove, toggle, copy: setCopying, openImport: () => setImporting(true), dialogs };
+}
+
+export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Flash }) {
+  const { data, error, reload, all, remove, toggle, copy, openImport, dialogs } = useSkills(agents, flash);
+  const [sel, setSel] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>("mine");
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const list = all.filter((g) => (filter === "all" || (filter === "builtin") === g.builtin)
+    && (!query || g.name.toLowerCase().includes(query) || g.copies.some((c) => c.s.description.toLowerCase().includes(query))));
+  const picked = all.find((g) => g.name === sel) ?? null;
 
   return (
     <>
@@ -133,7 +147,7 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
             </div>
             <div className="row gap6">
               <button className="btn" onClick={() => void reload()}>{t("common.refresh")}</button>
-              <button className="btn primary" onClick={() => setImporting(true)}><Icon.download size={12} />{t("skillsPage.import")}</button>
+              <button className="btn primary" onClick={openImport}><Icon.download size={12} />{t("skillsPage.import")}</button>
             </div>
           </div>
           <div className="row gap6 skills-tools">
@@ -179,12 +193,70 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
       </main>
       <aside className="aside" aria-label={t("skillsPage.detailTitle")}>
         {picked && data
-          ? <SkillDetail key={picked.name} g={picked} o={data} onClose={() => setSel(null)} onCopy={setCopying} onDelete={(c) => void remove(c)} onToggle={(a, c, on) => void toggle(a, c, on)} />
+          ? <SkillDetail key={picked.name} g={picked} o={data} onClose={() => setSel(null)} onCopy={copy} onDelete={(c) => void remove(c)} onToggle={(a, c, on) => void toggle(a, c, on)} />
           : <Overview o={data} count={all.filter((g) => !g.builtin).length} />}
       </aside>
-      {copying && data && <CopyDialog c={copying} o={data} flash={flash} onClose={() => setCopying(null)} onDone={() => void reload()} />}
-      {importing && <ImportDialog flash={flash} onClose={() => setImporting(false)} onDone={() => void reload()} />}
+      {dialogs}
     </>
+  );
+}
+
+/** An agent's own view (its page's Skills tab): the skills it loads, where each comes from. */
+export function AgentSkillsTab({ agent, agents, flash, onOpenPage }: { agent: AgentId; agents: AgentState[]; flash: Flash; onOpenPage: () => void }) {
+  const { data, error, all, remove, toggle, copy, openImport, dialogs } = useSkills(agents, flash);
+  const [builtin, setBuiltin] = useState(false);
+  const name = agentLabel(agent);
+  // The copy this agent loads, or the one AgentPlus moved aside for it.
+  const rows = data ? all.flatMap((g) => {
+    const root = loaded(data, agent, g.name);
+    const c = g.copies.find((x) => (root ? x.root === root : x.root.kind === "off" && x.root.owner === agent));
+    return c ? [{ g, c }] : [];
+  }) : [];
+  const shown = rows.filter((r) => builtin || r.c.root.kind !== "builtin");
+  const hidden = rows.length - rows.filter((r) => r.c.root.kind !== "builtin").length;
+  return (
+    <div className="stack12">
+      <div className="row between gap6">
+        <span className="muted small">{tn("skillsPage.agentCount", rows.filter((r) => r.c.root.kind !== "builtin").length)}{hidden > 0 && ` · ${tn("skillsPage.builtinCount", hidden)}`}</span>
+        <div className="row gap6">
+          {hidden > 0 && <button className="btn small" onClick={() => setBuiltin((b) => !b)}>{t(builtin ? "skillsPage.hideBuiltin" : "skillsPage.showBuiltin")}</button>}
+          <button className="btn small" onClick={onOpenPage}>{t("skillsPage.openPage")}</button>
+          <button className="btn small primary" onClick={openImport}><Icon.download size={12} />{t("skillsPage.import")}</button>
+        </div>
+      </div>
+      {error && <ErrorBox text={error} />}
+      {!data && !error && <div className="empty">{t("common.reading")}</div>}
+      {data && shown.length === 0 && <div className="empty">{t("skillsPage.agentEmpty", { agent: name })}</div>}
+      {shown.length > 0 && (
+        <div className="stable">
+          {shown.map(({ g, c }) => {
+            const off = c.root.kind === "off" || isOff(data!, agent, c);
+            const why = lockedReason(data!, agent, c);
+            return (
+              <div key={g.name} className={`hrow mcp-row${off ? " off" : ""}`}>
+                <div className="minw0">
+                  <div className="row gap6">
+                    <span className="strong small">{g.name}</span>
+                    <span className="ptag tag-soft" title={scrub(c.s.dir)}>{t(KIND[c.root.kind])}</span>
+                    {g.differs && <span className="ptag tag-warn" title={t("skillsPage.differsTitle")}>{t("skillsPage.differs")}</span>}
+                    {c.s.problem && <span className="ptag tag-warn" title={c.s.problem}>{t("skillsPage.problem")}</span>}
+                  </div>
+                  <div className="tiny muted ellipsis">{c.s.description || t("skillsPage.noDescription")}</div>
+                </div>
+                <div className="row gap6">
+                  <span title={why ?? undefined}>
+                    <Switch on={!off} disabled={!!why || c.root.kind === "builtin" && !data!.agents.find((a) => a.agent === agent)?.switchable} onChange={(on) => void toggle(agent, c, on)} label={t("skillsPage.toggleIn", { agent: name })} />
+                  </span>
+                  {c.root.kind !== "off" && <button className="icon-btn sm" aria-label={t("skillsPage.copyTo")} title={t("skillsPage.copyTo")} onClick={() => copy(c)}><Icon.copy size={12} /></button>}
+                  {writable(c.root) && <button className="icon-btn sm" aria-label={t("skillsPage.delete")} title={t("skillsPage.delete")} onClick={() => void remove(c)}><Icon.trash size={12} /></button>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {dialogs}
+    </div>
   );
 }
 

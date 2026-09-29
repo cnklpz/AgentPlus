@@ -68,5 +68,11 @@ export default {
   resultExists: "Another version is in the library",
   existsHint: "Tick the ones to replace (the version in the library is backed up first).",
   replaceChosen: "Replace {n}",
+  agentCount: "{n} skill|{n} skills",
+  builtinCount: "{n} built in|{n} built in",
+  showBuiltin: "Show built-in",
+  hideBuiltin: "Hide built-in",
+  openPage: "All agents' skills",
+  agentEmpty: "{agent} loads no skills of yours yet. Import some, or copy them from the Skills page.",
   copyHint: "The shared folder is read by most agents (not Claude Code or CodeBuddy). Changes take effect the next time an agent starts.",
 };

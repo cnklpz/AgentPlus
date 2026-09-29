@@ -2,6 +2,7 @@
 import type en from "../en/agentPage";
 
 const zh: typeof en = {
+  tabSkills: "技能",
   tabModels: "模型列表",
   tabSessions: "会话",
   tabMaint: "维护",

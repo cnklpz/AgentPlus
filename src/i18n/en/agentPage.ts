@@ -1,5 +1,6 @@
 // src/components/AgentPage.tsx
 export default {
+  tabSkills: "Skills",
   tabModels: "Model list",
   tabSessions: "Sessions",
   tabMaint: "Maintenance",

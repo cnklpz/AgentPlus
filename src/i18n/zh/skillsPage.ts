@@ -70,6 +70,12 @@ const zh: typeof en = {
   resultExists: "库里有其他版本",
   existsHint: "勾选要替换的技能（库里的旧版本会先备份）。",
   replaceChosen: "替换 {n} 个",
+  agentCount: "{n} 个技能",
+  builtinCount: "{n} 个内置",
+  showBuiltin: "显示内置",
+  hideBuiltin: "隐藏内置",
+  openPage: "所有 Agent 的技能",
+  agentEmpty: "{agent} 还没有加载你的技能。可以导入，或在「技能」页复制过来。",
   copyHint: "共享目录多数 Agent 都会读（Claude Code 和 CodeBuddy 除外）。改动在 Agent 下次启动时生效。",
 };
 
