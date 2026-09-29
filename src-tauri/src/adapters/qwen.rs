@@ -881,7 +881,8 @@ impl Ctx {
         }
         // Drop the key variable once nothing uses it any more.
         if let Some(var) = g.env_key.as_deref() {
-            let used = self.groups().iter().any(|o| o.env_key.as_deref() == Some(var));
+            // A group without envKey reads its protocol's default variable, which may be this one.
+            let used = self.groups().iter().any(|o| o.key_var().as_deref() == Some(var));
             let has = self.cfg.get("env").and_then(|e| e.get(var)).is_some();
             if !used && has {
                 self.cfg["env"].as_object_mut().unwrap().shift_remove(var);
@@ -1313,6 +1314,19 @@ mod tests {
         assert_eq!(cfg["modelProviders"]["anthropic"][0]["generationConfig"]["contextWindowSize"], 200000);
         assert!(store_list(&store::load(), "emptyProviders").is_empty());
         assert!(backup.unwrap().join("settings.json").exists());
+    }
+
+    /// A group without envKey reads the protocol's default variable: deleting another group that
+    /// names that variable keeps it.
+    #[test]
+    fn deleting_keeps_a_variable_another_group_reads_by_default() {
+        let cfg = r#"{ "$version": 4, "env": { "OPENAI_API_KEY": "sk-shared" }, "modelProviders": { "openai": [
+            { "id": "m1", "baseUrl": "https://a.example/v1", "envKey": "OPENAI_API_KEY" },
+            { "id": "m2", "baseUrl": "https://b.example/v1" } ] } }"#;
+        let _home = setup("default-var", Some(cfg));
+        let a = st().providers.into_iter().find(|p| p.base_url.as_deref() == Some("https://a.example/v1")).unwrap();
+        apply(vec![Op::DeleteProvider { provider: a.id }]);
+        assert_eq!(cfg_now()["env"]["OPENAI_API_KEY"], "sk-shared");
     }
 
     /// Two groups reading one variable: a key for one goes to a variable of its own.
