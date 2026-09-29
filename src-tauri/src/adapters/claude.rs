@@ -124,7 +124,8 @@ fn models_with_roles(list: &[(String, bool)], roles: &BTreeMap<String, String>) 
 }
 
 /// Env variables a provider needs (None = remove).
-fn desired_env(p: Option<&Value>) -> Vec<(&'static str, Option<String>)> {
+/// `helper`: settings.json has an `apiKeyHelper`, which supplies the key.
+fn desired_env(p: Option<&Value>, helper: bool) -> Vec<(&'static str, Option<String>)> {
     let mut out = vec![];
     match p {
         None => {
@@ -138,13 +139,21 @@ fn desired_env(p: Option<&Value>) -> Vec<(&'static str, Option<String>)> {
         Some(p) => {
             let key_env = if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN };
             let other = if key_env == TOKEN { API_KEY } else { TOKEN };
+            // The key comes from somewhere the user set up for relays: the helper, or a bearer token in
+            // the environment (the official key is ANTHROPIC_API_KEY, blanked below).
+            let key_elsewhere = helper || (key_env == TOKEN && crate::env::agent_var(TOKEN).is_some());
             out.push((BASE, Some(str_field(p, "baseUrl"))));
             // Without a key of its own, Claude Code would send this address whatever it finds
             // next: a key in the process environment, or its claude.ai sign-in. A placeholder
             // takes the key's place, so a relay that wants a key refuses instead (a keyless
             // local proxy still works).
+            // Not when the key is set up elsewhere for this: the placeholder would win over it.
             let key = str_field(p, "apiKey");
-            out.push((key_env, Some(if key.is_empty() { NO_KEY.to_string() } else { key })));
+            out.push((key_env, match key.is_empty() {
+                false => Some(key),
+                true if key_elsewhere => None,
+                true => Some(NO_KEY.to_string()),
+            }));
             // A key of the other kind set in the environment would go along too: blanked here.
             out.push((other, crate::env::agent_var(other).is_some().then(String::new)));
             let roles = roles_of(p);
@@ -428,10 +437,11 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
 
     // Bring the env block in line with the active provider (a profile is the source of truth;
     // the official account clears our variables only when switching to it).
+    let helper = cfg.get("apiKeyHelper").and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty());
     let want = match cur.as_str() {
-        OFFICIAL if before != OFFICIAL => Some(desired_env(None)),
+        OFFICIAL if before != OFFICIAL => Some(desired_env(None, helper)),
         OFFICIAL | UNMANAGED => None,
-        id => profs.get(id).map(|p| desired_env(Some(p))),
+        id => profs.get(id).map(|p| desired_env(Some(p), helper)),
     };
     if let Some(want) = want {
         let env = obj_at(&mut cfg, &["env"])?;
@@ -440,7 +450,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             if old == v {
                 continue;
             }
-            let shown = |x: &str| if secret(k) { mask_key(x) } else { x.to_string() };
+            let shown = |x: &str| match x {
+                // Not a key: said so, rather than masked like one.
+                NO_KEY => tr!("{NO_KEY} (placeholder: this provider has no key)", "{NO_KEY}（占位：这个供应商没有密钥）"),
+                _ if secret(k) => mask_key(x),
+                _ => x.to_string(),
+            };
             match &v {
                 Some(val) => {
                     env.insert(k.into(), json!(val));
@@ -509,6 +524,10 @@ mod tests {
         serde_json::from_str(&fs::read_to_string(settings_path()).unwrap()).unwrap()
     }
 
+    fn diff_text(d: &Diff) -> String {
+        d.groups.iter().flat_map(|g| g.lines.iter().map(|l| l.text.clone())).collect::<Vec<_>>().join("\n")
+    }
+
     fn models(id: &str) -> Vec<(String, bool)> {
         model_list(&profiles::load(&store::load(), ID)[id])
     }
@@ -552,6 +571,25 @@ mod tests {
         // Back to the official account: nothing of ours stays.
         apply(vec![Op::SetCurrentProvider { provider: OFFICIAL.into() }]).unwrap();
         assert!(settings().get("env").is_none());
+    }
+
+    /// A key the user set up for relays (an apiKeyHelper, a bearer token in the environment)
+    /// isn't overridden by the placeholder; the official ANTHROPIC_API_KEY still is blanked.
+    #[test]
+    fn a_key_set_up_elsewhere_gets_no_placeholder() {
+        let _h = setup(Some(r#"{ "apiKeyHelper": "~/bin/relay-key.sh" }"#));
+        crate::env::set_test_vars(&[("ANTHROPIC_API_KEY", "sk-ant-official-1234")]);
+        let d = apply(vec![Op::UpsertProvider { provider: pi(None, "Relay", "https://r", None, &["m"]) }, Op::SetCurrentProvider { provider: "relay".into() }]).unwrap();
+        let v = settings();
+        assert!(v.pointer("/env/ANTHROPIC_AUTH_TOKEN").is_none(), "{v}");
+        assert_eq!(v.pointer("/env/ANTHROPIC_API_KEY").and_then(|x| x.as_str()), Some(""));
+        assert!(!diff_text(&d).contains(NO_KEY));
+        drop(_h);
+        let _h = setup(Some("{}"));
+        crate::env::set_test_vars(&[("ANTHROPIC_AUTH_TOKEN", "relay-token-5678")]);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "Relay", "https://r", None, &["m"]) }, Op::SetCurrentProvider { provider: "relay".into() }]).unwrap();
+        assert!(settings().pointer("/env/ANTHROPIC_AUTH_TOKEN").is_none());
+        crate::env::set_test_vars(&[]);
     }
 
     #[test]
