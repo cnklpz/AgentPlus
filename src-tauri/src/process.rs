@@ -1034,6 +1034,23 @@ impl Progress {
 
 /// Set by the UI's "Cancel" while a restart runs; every wait of the run checks it.
 static CANCEL: AtomicBool = AtomicBool::new(false);
+static RESTARTING: AtomicBool = AtomicBool::new(false);
+
+/// Held while a restart runs; released when dropped, however the restart ends.
+pub struct RestartGuard(());
+
+impl RestartGuard {
+    /// None while another restart is running.
+    pub fn take() -> Option<Self> {
+        (!RESTARTING.swap(true, Ordering::SeqCst)).then_some(RestartGuard(()))
+    }
+}
+
+impl Drop for RestartGuard {
+    fn drop(&mut self) {
+        RESTARTING.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Called when a restart begins, so a cancel from an earlier run doesn't carry over.
 pub fn reset_cancel() {
@@ -1816,6 +1833,14 @@ mod tests {
         assert!(output_within(Command::new("ping").args(["-n", "30", "127.0.0.1"]), Duration::from_millis(300)).is_none());
         assert!(t0.elapsed() < Duration::from_secs(5), "{:?}", t0.elapsed());
         assert!(output_within(&mut Command::new(r"C:\no\such\program.exe"), Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn only_one_restart_runs_at_a_time() {
+        let first = RestartGuard::take().expect("free");
+        assert!(RestartGuard::take().is_none());
+        drop(first);
+        assert!(RestartGuard::take().is_some());
     }
 
     #[test]

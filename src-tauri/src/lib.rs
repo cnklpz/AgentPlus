@@ -123,6 +123,11 @@ async fn test_latency(url: String) -> Result<u64, String> {
 /// it is up. Each step is reported on `on_progress` while it runs.
 #[tauri::command]
 async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>) -> Result<String, String> {
+    // One at a time: a second one would clear the first's cancel, and the two would stop and
+    // start the same processes over each other.
+    let Some(_running) = process::RestartGuard::take() else {
+        return Err(i18n::l("A restart is already running", "已有一个重启在进行中").to_string());
+    };
     process::reset_cancel();
     blocking(move || {
         let _awake = process::stay_awake("Restarting an agent");
