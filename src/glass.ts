@@ -154,9 +154,12 @@ export function glass(el: HTMLElement): (ms?: number) => void {
     // inline and eased by hand, the rest is a plain animation between the two.
     const cs = getComputedStyle(el);
     const look = () => ({ backgroundColor: cs.backgroundColor, borderColor: cs.borderColor, boxShadow: cs.boxShadow });
-    const filter = cs.backdropFilter;
+    // WebKit before Safari 18 (macOS 11-13) knows only the prefixed property.
+    const prefixed = cs.backdropFilter === undefined;
+    const prop = prefixed ? "-webkit-backdrop-filter" : "backdrop-filter";
+    const filter = cs.getPropertyValue(prop) || "";
     const from = look();
-    el.style.backdropFilter = filter;
+    el.style.setProperty(prop, filter);
     delete el.dataset.glass;
     const anim = el.animate([from, look()], { duration: ms, easing: "cubic-bezier(.2, .7, .3, 1)" });
     const t0 = performance.now();
@@ -164,7 +167,7 @@ export function glass(el: HTMLElement): (ms?: number) => void {
     const done = () => {
       cancelAnimationFrame(frame);
       anim.cancel();
-      el.style.removeProperty("backdrop-filter");
+      el.style.removeProperty(prop);
       if (melting === done) melting = null;
     };
     const tick = (now: number) => {
@@ -172,7 +175,7 @@ export function glass(el: HTMLElement): (ms?: number) => void {
       if (t >= 1) return done();
       const k = (1 - t) ** 2;
       bend(k);
-      el.style.backdropFilter = easeFilter(filter, k);
+      if (filter) el.style.setProperty(prop, easeFilter(filter, k));
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
