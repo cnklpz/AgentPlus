@@ -46,10 +46,10 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 
-/// The DevTools port tried first. It can be unusable: Docker / WSL / Hyper-V reserve blocks
-/// of ports (39229 sits in one on some machines) without listing them in `netsh`, and
-/// Codex then starts but never listens.
-pub const PORT: u16 = 39229;
+/// Where the DevTools port is drawn from, at random each start: a fixed port is a known place
+/// for other programs on this machine to find Codex's debug port. High, and below the range
+/// most systems hand out for outgoing connections (one could take it before Codex binds it).
+const PORTS: std::ops::RangeInclusive<u16> = 20000..=48999;
 const FAST_MARK: &str = "/*agentplus-fast*/";
 const NAMES_MARK: &str = "/*agentplus-names*/";
 const QUOTA_MARK: &str = "/*agentplus-quota*/";
@@ -423,26 +423,40 @@ fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, first: Dur
     Ok(missing.map(|missing| Patched { missing, complete: seen.len() == BUNDLE_HINTS.len() }))
 }
 
-/// The DevTools port to start Codex with: [`PORT`] when it can be bound, otherwise a free
-/// one picked by the OS. Ports in `avoid` (ones that already failed) are skipped.
+/// The DevTools port to start Codex with: a random free one in [`PORTS`]. Ports in `avoid`
+/// (ones that already failed) are skipped. A port can still be taken between here and Codex
+/// binding it, or be reserved without showing it (Docker / WSL / Hyper-V): the caller then
+/// retries with another (see `PortTimeout`).
 pub fn pick_port(avoid: &[u16]) -> u16 {
-    pick_port_from(PORT, avoid)
+    let random = std::iter::repeat_with(|| {
+        let mut b = [0u8; 2];
+        getrandom::getrandom(&mut b).ok()?;
+        Some(PORTS.start() + u16::from_le_bytes(b) % (PORTS.end() - PORTS.start() + 1))
+    })
+    .flatten()
+    .take(64);
+    pick_from(random, avoid)
 }
 
-fn pick_port_from(preferred: u16, avoid: &[u16]) -> u16 {
+/// The first candidate that is free and not in `avoid`, else one the system picks.
+fn pick_from(candidates: impl IntoIterator<Item = u16>, avoid: &[u16]) -> u16 {
     use std::net::{Ipv4Addr, TcpListener};
-    let free = |p: u16| TcpListener::bind((Ipv4Addr::LOCALHOST, p)).and_then(|l| l.local_addr()).map(|a| a.port());
-    let usable = |r: std::io::Result<u16>| r.ok().filter(|p| !avoid.contains(p));
-    let picked = usable(free(preferred)).or_else(|| (0..5).find_map(|_| usable(free(0))));
-    match picked {
-        Some(p) => {
-            if p != preferred {
-                crate::applog::warn("inject", format!("debug port {preferred} can't be used, using {p}"));
-            }
-            p
-        }
-        None => preferred,
+    if let Some(p) = candidates.into_iter().find(|p| !avoid.contains(p) && port_free(*p)) {
+        return p;
     }
+    let os = || TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).and_then(|l| l.local_addr()).map(|a| a.port()).ok();
+    let p = (0..5).find_map(|_| os().filter(|p| !avoid.contains(p))).unwrap_or(*PORTS.start());
+    crate::applog::warn("inject", format!("no free debug port found at random, using {p}"));
+    p
+}
+
+/// Nothing uses port `p` on loopback: it can be bound on 127.0.0.1 (a port another program
+/// holds, or one the system reserves, can't be), and nothing answers on it, on 127.0.0.1 (a
+/// program listening on every address may not block the bind on Windows) or on [::1].
+fn port_free(p: u16) -> bool {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
+    let answers = |a: SocketAddr| TcpStream::connect_timeout(&a, Duration::from_millis(200)).is_ok();
+    TcpListener::bind((Ipv4Addr::LOCALHOST, p)).is_ok() && !answers(SocketAddr::from((Ipv4Addr::LOCALHOST, p))) && !answers(SocketAddr::from((Ipv6Addr::LOCALHOST, p)))
 }
 
 /// The debug port never came up: another program may hold it (Docker, WSL and Hyper-V
@@ -553,31 +567,37 @@ pub fn inject(port: u16, port_wait: Duration, want: Patches, on: &dyn Fn(Progres
 mod tests {
     use super::*;
 
-    #[test]
-    fn pick_port_keeps_a_free_preferred_port() {
-        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let free = probe.local_addr().unwrap().port();
-        drop(probe);
-        assert_eq!(pick_port_from(free, &[]), free);
+    fn free_port() -> u16 {
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port()
     }
 
     #[test]
-    fn pick_port_falls_back_when_the_preferred_port_is_taken() {
-        let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let taken = held.local_addr().unwrap().port();
-        let picked = pick_port_from(taken, &[]);
-        assert_ne!(picked, taken);
-        assert_ne!(picked, 0);
+    fn a_random_port_is_free_and_in_range() {
+        let picks: Vec<u16> = (0..5).map(|_| pick_port(&[])).collect();
+        for p in &picks {
+            assert!(PORTS.contains(p), "{p}");
+            assert!(std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, *p)).is_ok(), "{p} is taken");
+        }
+        assert!(picks.windows(2).any(|w| w[0] != w[1]), "not the same port every time: {picks:?}");
     }
 
     #[test]
-    fn pick_port_skips_ports_that_already_failed() {
-        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let free = probe.local_addr().unwrap().port();
-        drop(probe);
-        let picked = pick_port_from(free, &[free]);
-        assert_ne!(picked, free);
-        assert_ne!(picked, 0);
+    fn taken_and_failed_ports_are_skipped() {
+        let held4 = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken4 = held4.local_addr().unwrap().port();
+        // Taken on [::1] only: still not free (a client on "localhost" could reach it).
+        let held6 = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0));
+        let taken6 = held6.as_ref().ok().map(|l| l.local_addr().unwrap().port());
+        let (failed, free) = (free_port(), free_port());
+        assert!(!port_free(taken4));
+        if let Some(p) = taken6 {
+            assert!(!port_free(p));
+        }
+        let candidates = [Some(taken4), taken6, Some(failed), Some(free)].into_iter().flatten();
+        assert_eq!(pick_from(candidates, &[failed]), free);
+        // No candidate works: one the system picks, still not a failed one.
+        let p = pick_from([taken4], &[]);
+        assert!(p != taken4 && p != 0);
     }
 
     #[test]
