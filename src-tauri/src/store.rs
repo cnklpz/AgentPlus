@@ -19,11 +19,13 @@ static WRITE: Mutex<()> = Mutex::new(());
 
 fn read(p: &Path) -> Option<Value> {
     let text = fs::read_to_string(p).ok()?;
+    // An editor or `Out-File -Encoding UTF8` may have put a BOM in front; serde_json rejects it.
+    let text = text.trim_start_matches('\u{feff}');
     if text.trim().is_empty() {
         return None;
     }
     // Every writer indexes into the top level as an object: `[]` or `1` counts as broken.
-    serde_json::from_str::<Value>(&text).ok().filter(|v| v.is_object())
+    serde_json::from_str::<Value>(text).ok().filter(|v| v.is_object())
 }
 
 pub fn load() -> Value {
@@ -97,6 +99,15 @@ fn write(v: &Value) -> anyhow::Result<()> {
 fn write_in(dir: &Path, v: &Value) -> anyhow::Result<()> {
     crate::util::ensure_private_dir(dir)?;
     let path = dir.join("store.json");
+    // A file that can't be read right now (locked by a backup tool or antivirus) loaded as {}:
+    // writing then would replace the whole store, keys included, with that.
+    if path.exists() {
+        if let Err(e) = fs::read_to_string(&path) {
+            if e.kind() != std::io::ErrorKind::InvalidData {
+                return Err(e).with_context(|| tr!("Can't read {}, so it is not overwritten", "无法读取 {}，不会覆盖它", path.display()));
+            }
+        }
+    }
     // A file that exists but does not parse loaded as {}: keep it instead of overwriting it.
     if path.exists() && read(&path).is_none() && fs::metadata(&path).map(|m| m.len() > 0).unwrap_or(false) {
         let keep = dir.join(format!("store.broken-{}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
@@ -204,6 +215,20 @@ mod tests {
         for e in fs::read_dir(&d).unwrap().flatten() {
             assert_eq!(mode(&e.path()), 0o600);
         }
+    }
+
+    #[test]
+    fn a_bom_in_front_is_ignored_and_an_unreadable_store_is_not_overwritten() {
+        let d = tmp_dir("bom");
+        let p = d.join("store.json");
+        fs::write(&p, "\u{feff}{\"library\": [1]}").unwrap();
+        assert_eq!(read(&p).unwrap()["library"], json!([1]));
+        assert_eq!(load_in(&d)["library"], json!([1]));
+        // Not readable as a file (here a folder in its place): nothing is replaced.
+        fs::remove_file(&p).unwrap();
+        fs::create_dir(&p).unwrap();
+        assert!(write_in(&d, &json!({ "x": 1 })).is_err());
+        assert!(p.is_dir());
     }
 
     /// Readers running while the store is rewritten over and over never see a partial file.
