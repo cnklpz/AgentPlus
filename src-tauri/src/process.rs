@@ -871,11 +871,12 @@ pub(crate) fn detect_mimo() -> Install {
 }
 
 /// The DeepSeek Harness desktop app (electron-builder, per-user NSIS on Windows): its bundle
-/// on macOS; on Windows its uninstall entry ("DeepSeek Harness <version>"), else the
-/// installer's default folder.
+/// on macOS (app id `com.deepseek.dsh`, earlier builds `com.deepseek.harness`); on Windows
+/// its uninstall entry ("DeepSeek Harness <version>", in whatever folder was picked), else
+/// the installer's default folder.
 pub(crate) fn detect_dsh_desktop() -> Option<DesktopCopy> {
     const MAIN: &str = "DeepSeek Harness.exe";
-    if let Some(c) = app_bundles(&["com.deepseek.harness", "DeepSeek Harness.app"]).into_iter().next() {
+    if let Some(c) = app_bundles(&["com.deepseek.dsh", "com.deepseek.harness", "DeepSeek Harness.app"]).into_iter().next() {
         return Some(c);
     }
     if let Some(c) = desktop_copies("DeepSeek Harness", MAIN).into_iter().next() {

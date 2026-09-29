@@ -1,6 +1,7 @@
 #[macro_use]
 mod i18n;
 mod adapters;
+mod asar;
 mod attribution;
 mod applog;
 mod appmenu;

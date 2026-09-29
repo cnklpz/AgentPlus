@@ -571,37 +571,132 @@ struct Plugin {
     enabled: bool,
 }
 
+fn parse_pkg(text: &str) -> Option<J> {
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
+}
+
 fn read_pkg(p: &Path) -> Option<J> {
-    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
+    parse_pkg(&std::fs::read_to_string(p).ok()?)
 }
 
 fn is_bundle(pkg: &J) -> bool {
     pkg.pointer("/dsh/bundle").is_some()
 }
 
+/// Where a dsh installation keeps its packages: the npm package's folder, or the desktop
+/// app's `app.asar` (packages under `dsh/node_modules`).
+enum Runtime {
+    Npm(PathBuf),
+    Desktop(std::sync::Arc<crate::asar::Archive>),
+}
+
+/// A package folder, on disk or inside the desktop app's archive.
+enum PkgDir<'a> {
+    Fs(PathBuf),
+    Asar(&'a crate::asar::Archive, String),
+}
+
+#[derive(PartialEq)]
+enum Kind {
+    File,
+    Dir,
+}
+
+impl PkgDir<'_> {
+    fn kind(&self, rel: &str) -> Option<Kind> {
+        match self {
+            PkgDir::Fs(d) => {
+                let m = std::fs::metadata(d.join(rel)).ok()?;
+                Some(if m.is_dir() { Kind::Dir } else { Kind::File })
+            }
+            PkgDir::Asar(a, d) => {
+                let p = format!("{d}/{rel}");
+                a.is_dir(&p).then_some(Kind::Dir).or_else(|| a.is_file(&p).then_some(Kind::File))
+            }
+        }
+    }
+
+    fn read_json(&self, rel: &str) -> Option<J> {
+        match self {
+            PkgDir::Fs(d) => read_pkg(&d.join(rel)),
+            PkgDir::Asar(a, d) => parse_pkg(&a.read_string(&format!("{d}/{rel}"))?),
+        }
+    }
+
+    fn is_file(&self, rel: &str) -> bool {
+        self.kind(rel) == Some(Kind::File)
+    }
+
+    fn is_dir(&self, rel: &str) -> bool {
+        self.kind(rel) == Some(Kind::Dir)
+    }
+}
+
+/// The desktop app's archive next to `exe`: `resources/app.asar` (Windows), or
+/// `Contents/Resources/app.asar` in a macOS bundle.
+fn asar_path(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    [dir.join("resources"), dir.parent()?.join("Resources")].into_iter().map(|r| r.join("app.asar")).find(|p| p.is_file())
+}
+
+/// The desktop app's archive, parsed again only when the file changes (its header holds the
+/// whole file tree, and the plugin list is rebuilt on every refresh).
+fn desktop_runtime() -> Option<Runtime> {
+    use std::sync::{Arc, Mutex};
+    type Cached = (PathBuf, Option<std::time::SystemTime>, u64, Arc<crate::asar::Archive>);
+    static CACHE: Mutex<Option<Cached>> = Mutex::new(None);
+    let path = asar_path(&crate::process::detect_dsh_desktop()?.exe)?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let (mtime, len) = (meta.modified().ok(), meta.len());
+    let mut cache = lock(&CACHE);
+    if let Some((_, _, _, a)) = cache.as_ref().filter(|(p, t, n, _)| *p == path && *t == mtime && *n == len) {
+        return Some(Runtime::Desktop(a.clone()));
+    }
+    let archive = Arc::new(crate::asar::Archive::open(&path).ok()?);
+    *cache = Some((path, mtime, len, archive.clone()));
+    Some(Runtime::Desktop(archive))
+}
+
+/// The installation that runs `profile`: the desktop app for its own profile (the CLI refuses
+/// that one; without the app, its packages are the npm ones), else the npm package.
+fn runtime_for(profile: &str) -> Option<Runtime> {
+    let npm = || install_dir().map(Runtime::Npm);
+    if profile == DESKTOP_PROFILE {
+        desktop_runtime().or_else(npm)
+    } else {
+        npm()
+    }
+}
+
 /// A bundle package's display title and description in the UI language (`locale/<lang>.json`
 /// `meta`), else its package description.
-fn plugin_meta(dir: &Path, pkg: &J) -> (Option<String>, Option<String>) {
+fn plugin_meta(dir: &PkgDir, pkg: &J) -> (Option<String>, Option<String>) {
     let lang = if crate::i18n::is_en() { "en" } else { "zh" };
-    let meta = [lang, "en"].iter().find_map(|l| read_pkg(&dir.join("locale").join(format!("{l}.json")))).and_then(|v| v.get("meta").cloned());
+    let meta = [lang, "en"].iter().find_map(|l| dir.read_json(&format!("locale/{l}.json"))).and_then(|v| v.get("meta").cloned());
     let get = |k: &str| meta.as_ref().and_then(|m| m.get(k)).and_then(|x| x.as_str()).map(String::from).filter(|s| !s.is_empty());
     (get("title"), get("description").or_else(|| pkg.get("description").and_then(|d| d.as_str()).map(String::from)))
 }
 
 /// The bundles the installation ships switched off (dsh's `OPTIONAL_BUNDLES`: a bundle with an
-/// icon and locale metadata), from wherever npm placed its dependencies.
-fn optional_bundles(install: &Path) -> Vec<(String, PathBuf, J)> {
-    let scopes = [install.join("node_modules").join("@deepseek-ai"), install.parent().map(Path::to_path_buf).unwrap_or_default()];
-    let mut out: Vec<(String, PathBuf, J)> = vec![];
-    for scope in scopes {
-        let Ok(rd) = std::fs::read_dir(&scope) else { continue };
-        for e in rd.flatten() {
-            let d = e.path();
-            let Some(pkg) = read_pkg(&d.join("package.json")) else { continue };
-            let Some(name) = pkg.get("name").and_then(|n| n.as_str()).map(String::from) else { continue };
-            if is_bundle(&pkg) && d.join("icon.svg").is_file() && d.join("locale").is_dir() && !out.iter().any(|o| o.0 == name) {
-                out.push((name, d, pkg));
-            }
+/// icon and locale metadata), from wherever npm placed its dependencies, or from the desktop
+/// app's archive.
+fn optional_bundles(rt: &Runtime) -> Vec<(String, PkgDir<'_>, J)> {
+    let dirs: Vec<PkgDir> = match rt {
+        Runtime::Npm(install) => [install.join("node_modules").join("@deepseek-ai"), install.parent().map(Path::to_path_buf).unwrap_or_default()]
+            .iter()
+            .flat_map(|scope| std::fs::read_dir(scope).into_iter().flatten().flatten().map(|e| PkgDir::Fs(e.path())))
+            .collect(),
+        Runtime::Desktop(a) => {
+            let scope = "dsh/node_modules/@deepseek-ai";
+            a.read_dir(scope).into_iter().map(|n| PkgDir::Asar(a.as_ref(), format!("{scope}/{n}"))).collect()
+        }
+    };
+    let mut out: Vec<(String, PkgDir, J)> = vec![];
+    for d in dirs {
+        let Some(pkg) = d.read_json("package.json") else { continue };
+        let Some(name) = pkg.get("name").and_then(|n| n.as_str()).map(String::from) else { continue };
+        if is_bundle(&pkg) && d.is_file("icon.svg") && d.is_dir("locale") && !out.iter().any(|o| o.0 == name) {
+            out.push((name, d, pkg));
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -615,19 +710,19 @@ fn selected(manifest: &J) -> Vec<String> {
 
 /// The profile's switchable bundles: the optional ones the installation ships, then the
 /// bundles installed into the profile.
-fn plugins(profile: &str, install: Option<&Path>) -> Vec<Plugin> {
+fn plugins(profile: &str, rt: Option<&Runtime>) -> Vec<Plugin> {
     let pdir = profile_dir(profile);
     let manifest = read_pkg(&pdir.join("package.json")).unwrap_or(J::Null);
     let on = selected(&manifest);
     let mut out: Vec<Plugin> = vec![];
-    for (name, d, pkg) in install.map(optional_bundles).unwrap_or_default() {
+    for (name, d, pkg) in rt.map(optional_bundles).unwrap_or_default() {
         let (title, desc) = plugin_meta(&d, &pkg);
         out.push(Plugin { enabled: on.contains(&name), name, title, desc });
     }
     let deps = manifest.get("dependencies").and_then(|d| d.as_object()).map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
     for name in deps {
-        let d = name.split('/').fold(pdir.join("node_modules"), |d, p| d.join(p));
-        let Some(pkg) = read_pkg(&d.join("package.json")) else { continue };
+        let d = PkgDir::Fs(name.split('/').fold(pdir.join("node_modules"), |d, p| d.join(p)));
+        let Some(pkg) = d.read_json("package.json") else { continue };
         if is_bundle(&pkg) && !out.iter().any(|p| p.name == name) {
             let (title, desc) = plugin_meta(&d, &pkg);
             out.push(Plugin { enabled: on.contains(&name), name, title, desc });
@@ -737,8 +832,7 @@ fn profile_setting(all: &[String], current: &str) -> Setting {
 /// `Op::SetSetting` on `plugin_key(name)` (see `plan`).
 pub(crate) fn plugin_list() -> Vec<PluginInfo> {
     let profile = profile_in(&store::load(), &profiles());
-    let install = install_dir();
-    plugins(&profile, install.as_deref())
+    plugins(&profile, runtime_for(&profile).as_ref())
         .into_iter()
         .map(|p| PluginInfo { name: p.title.clone().unwrap_or_else(|| p.name.clone()), description: p.desc, source: Some(tr!("profile {profile}", "profile {profile}")), enabled: p.enabled, id: p.name, ..Default::default() })
         .collect()
@@ -759,8 +853,8 @@ pub fn state(inst: &Install) -> AgentState {
         return st;
     }
     st.notes.push(tr!(
-        "Editing the {profile} profile. dsh web picks up changes right away; other profiles on their next start.",
-        "正在管理 {profile} profile。dsh web 会立刻读取改动，其他 profile 下次启动时生效。"
+        "Editing the {profile} profile. dsh web and the desktop app pick up changes right away; other profiles on their next start.",
+        "正在管理 {profile} profile。dsh web 和桌面版会立刻读取改动，其他 profile 下次启动时生效。"
     ));
     let (patch, row) = match provider_layer(&profile) {
         Ok(x) => x,
@@ -1209,7 +1303,8 @@ mod tests {
         let _h = setup("plugins", PATCH);
         let desktop = default_dir().join("profiles").join("desktop");
         std::fs::create_dir_all(&desktop).unwrap();
-        std::fs::write(desktop.join("package.json"), MANIFEST.replace("dsh-web-app", "dsh-desktop-app")).unwrap();
+        // The desktop app's profile selects the same bundles as dsh web.
+        std::fs::write(desktop.join("package.json"), MANIFEST.replace("dsh-profile-web", "dsh-profile-desktop")).unwrap();
         std::fs::write(desktop.join("cordis.patch.yml"), "[]\n").unwrap();
         // The desktop profile is the default once it exists; the pick is remembered.
         assert_eq!(profile_in(&store::load(), &profiles()), "desktop");
@@ -1236,7 +1331,7 @@ mod tests {
         std::fs::create_dir_all(web.join("node_modules").join("turtle-ui")).unwrap();
         std::fs::write(web.join("node_modules").join("turtle-ui").join("package.json"), r#"{ "name": "turtle-ui", "description": "A turtle UI", "dsh": { "bundle": { "patch": "./p.yml" } } }"#).unwrap();
 
-        let got = plugins("web", Some(&install));
+        let got = plugins("web", Some(&Runtime::Npm(install)));
         assert_eq!(
             got,
             vec![
@@ -1252,6 +1347,71 @@ mod tests {
         let m: J = serde_json::from_str(&std::fs::read_to_string(web.join("package.json")).unwrap()).unwrap();
         assert_eq!(m["dsh"]["profile"]["bundles"], json!(["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app", "@deepseek-ai/dsh-experimental-voice-input-bundle"]));
         assert_eq!(m["dependencies"]["turtle-ui"], "github:x/turtle-ui");
+    }
+
+    #[test]
+    fn desktop_plugins_come_from_the_app_archive() {
+        let h = setup("desktop-plugins", PATCH);
+        let desktop = profile_dir("desktop");
+        std::fs::create_dir_all(&desktop).unwrap();
+        let mut m: J = serde_json::from_str(&MANIFEST.replace("dsh-profile-web", "dsh-profile-desktop")).unwrap();
+        m["dsh"]["profile"]["bundles"].as_array_mut().unwrap().push(json!("@deepseek-ai/dsh-experimental-schedule-bundle"));
+        std::fs::write(desktop.join("package.json"), serde_json::to_string_pretty(&m).unwrap()).unwrap();
+
+        // Shipped bundles in the archive: optional ones have an icon and locale metadata;
+        // the base bundle and plain packages don't count.
+        let scope = "dsh/node_modules/@deepseek-ai";
+        let bundle = |name: &str| format!(r#"{{ "name": "@deepseek-ai/{name}", "description": "{name}", "dsh": {{ "bundle": {{ "patch": "./cordis.patch.yml" }} }} }}"#);
+        let p = |rel: &str| format!("{scope}/{rel}");
+        let (schedule, voice, base) = (bundle("dsh-experimental-schedule-bundle"), bundle("dsh-experimental-voice-input-bundle"), bundle("dsh-base"));
+        let voice_icon = p("dsh-experimental-voice-input-bundle/icon.svg");
+        let files = [
+            (p("dsh-experimental-schedule-bundle/package.json"), schedule.as_str()),
+            (p("dsh-experimental-schedule-bundle/icon.svg"), "<svg/>"),
+            (p("dsh-experimental-schedule-bundle/locale/zh.json"), r#"{ "meta": { "title": "定时任务" } }"#),
+            (p("dsh-experimental-voice-input-bundle/package.json"), voice.as_str()),
+            (voice_icon.clone(), "<svg/>"),
+            (p("dsh-experimental-voice-input-bundle/locale/en.json"), r#"{ "meta": { "title": "Voice input", "description": "On-device" } }"#),
+            (p("dsh-base/package.json"), base.as_str()),
+            (p("dsh-agent/package.json"), r#"{ "name": "@deepseek-ai/dsh-agent" }"#),
+        ];
+        let files: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+        let archive = h.0.join("app.asar");
+        crate::asar::write_test_archive(&archive, &files, &[], &[voice_icon.as_str()]);
+        let rt = Runtime::Desktop(std::sync::Arc::new(crate::asar::Archive::open(&archive).unwrap()));
+        assert_eq!(
+            plugins("desktop", Some(&rt)),
+            vec![
+                Plugin { name: "@deepseek-ai/dsh-experimental-schedule-bundle".into(), title: Some("定时任务".into()), desc: Some("dsh-experimental-schedule-bundle".into()), enabled: true },
+                // No Chinese metadata: the English one.
+                Plugin { name: "@deepseek-ai/dsh-experimental-voice-input-bundle".into(), title: Some("Voice input".into()), desc: Some("On-device".into()), enabled: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn finds_the_archive_next_to_the_desktop_exe() {
+        let h = TestHome::new("dsh-asar-path");
+        let touch = |p: &Path| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        };
+        // Windows: `resources/` beside the exe.
+        let win = h.0.join("DeepSeek Harness");
+        touch(&win.join("resources").join("app.asar"));
+        assert_eq!(asar_path(&win.join("DeepSeek Harness.exe")), Some(win.join("resources").join("app.asar")));
+        // macOS: `Contents/Resources/` next to `Contents/MacOS/`.
+        let mac = h.0.join("DeepSeek Harness.app").join("Contents");
+        touch(&mac.join("Resources").join("app.asar"));
+        assert_eq!(asar_path(&mac.join("MacOS").join("DeepSeek Harness")), Some(mac.join("Resources").join("app.asar")));
+        // No archive (unpacked app): nothing.
+        assert!(asar_path(&h.0.join("other").join("x.exe")).is_none());
+    }
+
+    #[test]
+    fn package_json_with_a_byte_order_mark_parses() {
+        assert_eq!(parse_pkg("\u{feff}{\"name\":\"x\"}").unwrap()["name"], "x");
+        assert!(parse_pkg("not json").is_none());
     }
 
     #[test]
