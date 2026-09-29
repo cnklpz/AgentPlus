@@ -252,6 +252,12 @@ fn from_sse(api: &str, text: &str) -> Option<Result<serde_json::Value, String>> 
     let ty = |e: &Value| e.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
     for e in &events {
         let t = ty(e);
+        if let Some(error) = e.get("error").or_else(|| e.pointer("/response/error")).filter(|v| !v.is_null()) {
+            let message = crate::gateway::convert::error_message(e)
+                .or_else(|| e.get("response").and_then(crate::gateway::convert::error_message))
+                .unwrap_or_else(|| error.to_string());
+            return Some(Err(message));
+        }
         let msg = e.pointer("/error/message").or_else(|| e.pointer("/response/error/message")).or_else(|| if t == "error" { e.get("message") } else { None });
         if let Some(m) = msg {
             return Some(Err(m.as_str().map(String::from).unwrap_or_else(|| m.to_string())));
@@ -276,6 +282,9 @@ fn from_sse(api: &str, text: &str) -> Option<Result<serde_json::Value, String>> 
             // cover relays whose final event leaves the output out.
             let done = events.iter().rev().find(|e| matches!(ty(e).as_str(), "response.completed" | "response.incomplete" | "response.done"));
             let mut v = done.and_then(|e| e.get("response")).filter(|r| r.is_object()).cloned().unwrap_or_else(|| json!({}));
+            if done.is_some_and(|e| ty(e) == "response.incomplete") {
+                v["status"] = json!("incomplete");
+            }
             let deltas = text_of("response.output_text.delta", "/delta");
             if !deltas.is_empty() {
                 v["output_text"] = Value::String(deltas);
@@ -411,9 +420,19 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
             r.error = Some(tr!("Gemini did not complete generation: {reason}", "Gemini 未完成生成：{reason}"));
             return r;
         }
-        if v.get("error").is_some() || r.reply.is_none() {
+        if v.get("error").is_some_and(|e| !e.is_null()) || r.reply.is_none() {
             let reason = crate::gateway::convert::error_message(&v).or_else(|| finish.map(String::from)).unwrap_or_else(|| crate::i18n::l("No text in the response", "响应中没有文本").into());
             r.error = Some(tr!("Gemini test failed: {}", "Gemini 测试失败：{}", clip(&reason, 200)));
+            return r;
+        }
+    } else {
+        let state = v.get("status").and_then(|s| s.as_str());
+        let unfinished = !matches!(api, "chat" | "anthropic") && state.is_some_and(|s| s != "completed");
+        if v.get("error").is_some_and(|e| !e.is_null()) || v.get("type").and_then(|t| t.as_str()) == Some("error") || unfinished || r.reply.is_none() {
+            let reason = crate::gateway::convert::error_message(&v)
+                .or_else(|| unfinished.then(|| state.unwrap().to_string()))
+                .unwrap_or_else(|| crate::i18n::l("No text in the response", "响应中没有文本").into());
+            r.error = Some(tr!("Model test failed: {}", "模型测试失败：{}", clip(&reason, 200)));
             return r;
         }
     }
@@ -453,6 +472,46 @@ mod tests {
         assert!(!r.ok && r.status == Some(401) && r.error.as_deref().unwrap().contains("密钥无效") && r.error.as_deref().unwrap().contains("invalid api key"));
         let r = test_call("http://127.0.0.1:9", None, "chat", "m");
         assert!(!r.ok && r.status.is_none());
+    }
+
+    #[test]
+    fn successful_http_status_requires_a_valid_generation() {
+        for api in ["chat", "responses", "anthropic", "gemini"] {
+            for body in [r#"{"error":{"message":"quota exhausted"}}"#, r#"{"error":"quota exhausted"}"#] {
+                let r = test_call(&serve(200, body), None, api, "m");
+                assert!(!r.ok && r.status == Some(200) && r.error.as_deref().unwrap().contains("quota exhausted"), "{api}: {r:?}");
+            }
+            for body in ["{}", "null", "[]"] {
+                let r = test_call(&serve(200, body), None, api, "m");
+                assert!(!r.ok && r.error.is_some(), "{api}: {r:?}");
+            }
+        }
+        for body in [
+            r#"{"status":"failed","output_text":"partial"}"#,
+            r#"{"status":"incomplete","output_text":"partial"}"#,
+            r#"{"status":"completed","output_text":"pong","error":{"message":"late error"}}"#,
+        ] {
+            let r = test_call(&serve(200, body), None, "responses", "m");
+            assert!(!r.ok && r.error.is_some(), "{r:?}");
+        }
+        for (api, body) in [
+            ("chat", r#"{"choices":[{"message":{"content":"  "}}]}"#),
+            ("anthropic", r#"{"content":[{"type":"thinking","thinking":"pong"}]}"#),
+            ("responses", r#"{"output":[]}"#),
+        ] {
+            assert!(!test_call(&serve(200, body), None, api, "m").ok);
+        }
+        assert!(test_call(&serve(200, r#"{"status":"completed","output_text":"pong","error":null}"#), None, "responses", "m").ok);
+    }
+
+    #[test]
+    fn stream_error_envelopes_and_incomplete_responses_fail() {
+        for api in ["chat", "anthropic", "responses"] {
+            let r = test_call(&serve(200, "data: {\"error\":\"quota exhausted\"}\n\n"), None, api, "m");
+            assert!(!r.ok && r.error.unwrap().contains("quota exhausted"));
+        }
+        let r = test_call(&serve(200, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\ndata: {\"type\":\"response.incomplete\",\"response\":{}}\n\n"), None, "responses", "m");
+        assert!(!r.ok && r.error.unwrap().contains("incomplete"));
     }
 
     /// Local server answering `n` requests with `reply(request)`; each request's head is sent on the channel.
