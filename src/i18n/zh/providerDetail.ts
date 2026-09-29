@@ -18,12 +18,10 @@ const zh: typeof en = {
   keyEmpty: "未填写",
   visibleOf: "{visible}/{total} 可见",
   alsoIn: "同一服务也配置在",
-  undoAdd: "撤销添加",
   switchOnApply: "写入后切换到这个供应商",
   setCurrent: "设为当前供应商",
   disableThis: "停用这个供应商",
   enableThis: "启用这个供应商",
-  deleteInUse: "正在使用，先切换到其他供应商",
 };
 
 export default zh;

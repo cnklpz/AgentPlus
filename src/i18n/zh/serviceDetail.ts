@@ -2,8 +2,6 @@
 import type en from "../en/serviceDetail";
 
 const zh: typeof en = {
-  builtinNoDelete: "内置供应商不能删除",
-  inUse: "正在使用，先在 Codex 里切换到别的供应商",
   detailsAria: "{name} 详情",
   accountLogin: "账号登录",
   hostGroups: "{host} · {n} 个分组",
@@ -13,6 +11,7 @@ const zh: typeof en = {
   inLibrary: "已收录",
   editGroup: "编辑分组",
   deleteGroup: "删除分组",
+  deleteStation: "删除供应商",
   deleteFrom: "从哪里删除「{name}」？",
   reason: "（{why}）",
   removeFromLibrary: "从供应商库移除（地址和密钥）",

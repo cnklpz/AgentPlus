@@ -403,6 +403,9 @@ button, input, textarea, select { font-family: inherit; }
 .ctx-icon { width: 16px; display: grid; place-items: center; color: var(--muted); flex-shrink: 0; }
 .ctx-item.hi .ctx-icon { color: var(--accent); }
 .ctx-hint { font-size: 11px; color: var(--faint); }
+.ctx-item.has-note { height: auto; min-height: 30px; padding-top: 6px; padding-bottom: 6px; align-items: flex-start; }
+.ctx-item.has-note .ctx-icon { height: 18px; }
+.ctx-note { display: block; margin-top: 2px; font-size: 11px; line-height: 1.4; color: var(--faint); }
 .ctx-sep { height: 1px; margin: 4px 6px; background: var(--line2); }
 /* Port field sits on one line with the buttons, same height. */
 .gw-port-field { flex-direction: row; align-items: center; gap: 8px; }
@@ -552,6 +555,7 @@ button, input, textarea, select { font-family: inherit; }
 .confirm-check { margin-top: 12px; padding: 9px 12px; gap: 10px; }
 .af-replace { margin-top: 6px; padding: 9px 12px; gap: 10px; }
 .confirm-list { margin: 4px 0 0; padding-left: 18px; }
+.confirm-sub { margin-top: 10px; }
 .btn.danger-solid { background: var(--del); border-color: var(--del); color: #fff; }
 .btn.danger-solid:hover:not(:disabled) { background: var(--del-hover); }
 .detect-show { gap: 12px; cursor: default; border-bottom: 1px solid var(--line2); }

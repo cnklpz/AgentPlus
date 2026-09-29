@@ -2,7 +2,14 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { useLatest, useListNav, usePopover } from "../hooks";
 
 export type MenuItem =
-  | { label: string; icon?: ReactNode; hint?: string; danger?: boolean; disabled?: boolean; action: () => void }
+  | {
+      label: string; icon?: ReactNode;
+      /** Short text at the right, like a keyboard shortcut. */
+      hint?: string;
+      /** A sentence under the label, e.g. why the item is disabled. */
+      note?: string;
+      danger?: boolean; disabled?: boolean; action: () => void;
+    }
   | "sep";
 
 interface Props {
@@ -72,10 +79,10 @@ export function ContextMenu({ build }: Props) {
       onContextMenu={(e) => e.preventDefault()}>
       {menu.items.map((it, i) =>
         it === "sep" ? <div key={i} className="ctx-sep" role="separator" /> : (
-          <button key={i} role="menuitem" className={`ctx-item${i === nav.hi ? " hi" : ""}${it.danger ? " danger" : ""}`} disabled={it.disabled}
+          <button key={i} role="menuitem" className={`ctx-item${i === nav.hi ? " hi" : ""}${it.danger ? " danger" : ""}${it.note ? " has-note" : ""}`} disabled={it.disabled}
             onMouseEnter={() => { if (!it.disabled) nav.setHi(i); }} onMouseDown={(e) => e.preventDefault()} onClick={() => { close(); it.action(); }}>
             <span className="ctx-icon">{it.icon}</span>
-            <span className="grow">{it.label}</span>
+            <span className="grow minw0">{it.label}{it.note && <span className="ctx-note">{it.note}</span>}</span>
             {it.hint && <span className="ctx-hint">{it.hint}</span>}
           </button>
         ),

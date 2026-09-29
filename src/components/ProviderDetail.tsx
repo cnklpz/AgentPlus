@@ -135,7 +135,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
       {p.isDeleted || p.isNew ? (
         <div className="grid2">
           {p.isNew && <button className="btn full" onClick={onEdit}>{t("common.edit")}</button>}
-          <button className="btn full" onClick={onUndo}>{p.isNew ? t("providerDetail.undoAdd") : t("common.undoDelete")}</button>
+          <button className="btn full" onClick={onUndo}>{p.isNew ? t("common.undoAdd") : t("common.undoDelete")}</button>
         </div>
       ) : (
         <>
@@ -149,7 +149,7 @@ export function ProviderDetail({ st, p, draft, agents, latency, onClose, onTest,
           {p.editable && (
             <div className="grid2">
               <button className="btn full" disabled={st.readonly} onClick={onEdit}>{t("common.edit")}</button>
-              <button className="btn full danger" disabled={st.readonly || isCurrent} title={isCurrent ? t("providerDetail.deleteInUse") : undefined} onClick={onDelete}>{t("common.delete")}</button>
+              <button className="btn full danger" disabled={st.readonly || isCurrent} title={isCurrent ? t("common.deleteInUse") : undefined} onClick={onDelete}>{t("common.delete")}</button>
             </div>
           )}
         </>

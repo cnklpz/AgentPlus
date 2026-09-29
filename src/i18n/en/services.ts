@@ -10,4 +10,7 @@ export default {
   useAdding: "To be added",
   useRemoving: "To be removed",
   useNew: "New · not applied",
+  builtinNoDelete: "Built-in providers can't be deleted",
+  inUse: "In use; switch {agent} to another provider first",
+  readonlyNoDelete: "{agent} is read-only here",
 };

@@ -31,7 +31,7 @@ import { mergeOrder, sortByOrder } from "./order";
 import { t, tn, tSaved, useLang } from "./i18n";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
-  hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
+  hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, stationDeletePlan,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
@@ -480,6 +480,15 @@ export default function App() {
     if (!(await ask({ title: t("app.deleteProviderTitle", { name: p.name }), message: t("app.deleteProviderMsg", { agent: st.name }), danger: true }))) return;
     setDraftFor(st.id, (d) => deleteProvider(d, p.id));
   };
+  /** Undoes a pending add (the card goes away) or a pending delete. */
+  const undoProvider = (p: ViewProvider) => {
+    if (p.isNew) {
+      if (p.draftKey) setDraft(withOp(draft, p.draftKey, null));
+      if (picked[sid] === p.id) closeDetail();
+    } else {
+      setDraft(withOp(draft, keys.deleteProvider(p.id), null));
+    }
+  };
 
   /** Codex without a catalog: create one from the model list built into Codex. */
   const createCodexCatalog = async () => {
@@ -766,31 +775,61 @@ export default function App() {
     const k = u.importKey ?? (u.state === "new" ? u.p?.draftKey : u.p ? keys.deleteProvider(u.p.id) : undefined);
     if (k) setDraftFor(u.agent.id, withOp(drafts[u.agent.id] ?? {}, k, null));
   };
-  const hubDelete = async (s: Group, uses: Use[], fromLib: boolean) => {
-    const parts = [
-      ...uses.map((u) => t("app.hubDeleteUse", { agent: u.agent.name, name: u.p?.name ?? "" })),
-      ...(fromLib && s.lib ? [t("app.hubDeleteLib")] : []),
-    ];
-    if (!(await ask({ title: t("app.deleteGroupTitle", { name: s.name }), message: <ul className="confirm-list">{parts.map((p) => <li key={p}>{p}</li>)}</ul>, danger: true }))) return;
+  const confirmList = (items: string[]) => <ul className="confirm-list">{items.map((x, i) => <li key={i}>{x}</li>)}</ul>;
+  const useLine = (u: Use) => t("app.hubDeleteUse", { agent: u.agent.name, name: u.p?.name ?? "" });
+  const importLine = (u: Use) => t("app.hubDeleteImport", { agent: u.agent.name });
+  /** Carries out a confirmed hub deletion: queues the agent removals, cancels the pending adds, deletes the library entries. */
+  const runHubDelete = async (uses: Use[], imports: Use[], libs: LibEntry[]) => {
     setDrafts((all) => {
       const next = { ...all };
       for (const u of uses) {
         // A pending new entry (id = its draft key) is dropped; the agent has nothing to delete yet.
         if (u.p) next[u.agent.id] = removeProvider(next[u.agent.id] ?? {}, u.p);
       }
+      for (const u of imports) if (u.importKey) next[u.agent.id] = withOp(next[u.agent.id] ?? {}, u.importKey, null);
       return next;
     });
-    if (fromLib && s.lib) {
+    if (libs.length) {
       try {
-        await api.libraryDelete(s.lib.id);
+        for (const e of libs) await api.libraryDelete(e.id);
       } catch (e) {
-        // The agent deletes are queued; only the library entry is still there.
+        // The agent deletes are queued; only (some of) the library entries are still there.
         flash(uses.length ? tn("app.queuedDeletesLibFailed", uses.length, { err: errText(e) }) : errText(e), true);
+        await reloadLib();
         return;
       }
       await reloadLib();
     }
-    flash(uses.length ? tn(fromLib ? "app.queuedDeletesAndLib" : "app.queuedDeletes", uses.length) : t("app.removedFromLib"));
+    flash(uses.length ? tn(libs.length ? "app.queuedDeletesAndLib" : "app.queuedDeletes", uses.length)
+      : libs.length ? t("app.removedFromLib")
+      : tn("app.cancelledAdds", imports.length));
+  };
+  const hubDelete = async (g: Group, uses: Use[], fromLib: boolean) => {
+    const libs = fromLib && g.lib ? [g.lib] : [];
+    // Pending adds that copy from what is deleted would fail on apply.
+    const imports = orphanImports([g], drafts, uses, libs.map((e) => e.id));
+    const parts = [...uses.map(useLine), ...imports.map(importLine), ...(libs.length ? [t("app.hubDeleteLib")] : [])];
+    if (!(await ask({ title: t("app.deleteGroupTitle", { name: g.name }), message: confirmList(parts), danger: true }))) return;
+    await runHubDelete(uses, imports, libs);
+  };
+  /** Hub: delete a whole provider (station) — every group, from every agent that can let it go, and the library. */
+  const askDeleteStation = async (s: Station) => {
+    const plan = stationDeletePlan(s);
+    const parts = [...plan.uses.map(useLine), ...plan.imports.map(importLine), ...plan.libs.map((e) => t("app.hubDeleteLibNamed", { name: e.name }))];
+    if (!parts.length) return;
+    const kept = plan.kept.map(({ u, why }) => t("app.hubDeleteKept", { agent: u.agent.name, name: u.p?.name ?? "", why }));
+    const message = <>
+      {confirmList(parts)}
+      {kept.length > 0 && <><div className="small muted confirm-sub">{t("app.hubDeleteKeptLabel")}</div>{confirmList(kept)}</>}
+    </>;
+    if (!(await ask({ title: t("app.deleteStationTitle", { name: s.name }), message, danger: true }))) return;
+    await runHubDelete(plan.uses, plan.imports, plan.libs);
+  };
+  /** Why a station can't be deleted (nothing it holds can go), else null. */
+  const stationUndeletable = (s: Station): string | null => {
+    const plan = stationDeletePlan(s);
+    if (plan.uses.length || plan.imports.length || plan.libs.length) return null;
+    return plan.kept[0]?.why ?? t("app.nothingToDelete");
   };
   /** Library entries the open hub dialog has already created (a failed save can be retried). */
   const hubSaved = useRef<{ main: string | null; alt: Partial<Record<ApiKind, string>> }>({ main: null, alt: {} });
@@ -1317,14 +1356,15 @@ export default function App() {
         const on = isEnabled(p, draft);
         return [
           { label: t("app.viewDetails"), action: () => setPicked((m) => ({ ...m, [st.id]: p.id })) },
-          ...(p.editable ? [{ label: t("app.editMenu"), icon: <Icon.edit size={12} />, disabled: st.readonly, action: () => setDialog({ editing: p }) }] : []),
+          ...(p.editable && !p.isDeleted ? [{ label: t("app.editMenu"), icon: <Icon.edit size={12} />, disabled: st.readonly, action: () => setDialog({ editing: p }) }] : []),
           ...(p.compatible && !p.isNew && !p.isDeleted && !(st.mode === "multi" && p.builtin)
             ? [st.mode === "single"
               ? { label: t(isCur ? "common.inUse" : "app.setCurrent"), icon: <Icon.check size={13} />, disabled: isCur || st.readonly, action: () => providerAction(p) }
               : { label: t(on ? "app.disable" : "app.enable"), icon: <Icon.check size={13} />, disabled: st.readonly, action: () => providerAction(p) }]
             : []),
           ...(p.models.length ? [{ label: t("common.viewModels"), action: () => showModels(st.id, p.id) }] : []),
-          ...(p.editable && !p.isNew && !p.isDeleted ? ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly || isCur, action: () => { askDeleteProvider(p); } }] : []),
+          ...(p.editable && !p.isNew && !p.isDeleted ? ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly || isCur, note: isCur && !st.readonly ? t("common.deleteInUse") : undefined, action: () => { askDeleteProvider(p); } }] : []),
+          ...(p.isNew || p.isDeleted ? ["sep" as const, { label: t(p.isNew ? "common.undoAdd" : "common.undoDelete"), icon: <Icon.back size={12} />, action: () => undoProvider(p) }] : []),
           "sep",
         ];
       }
@@ -1339,7 +1379,7 @@ export default function App() {
         // changes to this model or its provider (or a provider switch for Codex's catalog)
         // must be applied first. A read-only config can still be tested.
         const attrItems = (): MenuItem[] => {
-          if (attrBank === "failed") return [{ label: t("app.attributionTest"), icon: <Icon.pulse size={13} />, disabled: true, hint: t("app.attributionBankError"), action: () => undefined }];
+          if (attrBank === "failed") return [{ label: t("app.attributionTest"), icon: <Icon.pulse size={13} />, disabled: true, note: t("app.attributionBankError"), action: () => undefined }];
           const match = attrBank && matchCandidate(mid, attrBank.models);
           if (!match) return [];
           const catalog = pid === CATALOG;
@@ -1348,7 +1388,7 @@ export default function App() {
           const blocked = !!(m.isNew || m.isDeleted || (catalog && draft[keys.cur()]) || (target && pending(target)));
           const names = Object.fromEntries(st.providers.map((p) => [p.id, p.name]));
           return ["sep", {
-            label: t("app.attributionTest"), icon: <Icon.pulse size={13} />, disabled: blocked, hint: blocked ? t("app.attributionPending") : undefined,
+            label: t("app.attributionTest"), icon: <Icon.pulse size={13} />, disabled: blocked, note: blocked ? t("app.attributionPending") : undefined,
             action: () => setAttr({ n: Date.now(), agent: st.id, provider: pid, model: mid, match, names, pending }),
           }];
         };
@@ -1374,6 +1414,10 @@ export default function App() {
         return [
           { label: t("app.viewDetails"), action: () => setHubSel(stn.key) },
           ...(!stn.builtin ? [{ label: t("app.addGroupMenu"), icon: <Icon.plus size={12} />, action: () => addGroupIn(stn) }] : []),
+          ...(!stn.builtin ? (() => {
+            const why = stationUndeletable(stn);
+            return ["sep" as const, { label: t("app.deleteProviderMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: !!why, note: why ?? undefined, action: () => { askDeleteStation(stn); } }];
+          })() : []),
           "sep",
         ];
       }
@@ -1536,6 +1580,8 @@ export default function App() {
                 onUndo={hubUndo}
                 onModels={(u) => goTo({ kind: "agent", agent: u.agent.id, tab: "models", provider: u.p?.id })}
                 onDeleteGroup={hubDelete}
+                onDeleteStation={() => { askDeleteStation(hubStation); }}
+                deleteBlocked={stationUndeletable(hubStation)}
                 onViaGateway={viaGateway}
                 gatewayHost={gatewayHosts}
               />
@@ -1670,14 +1716,7 @@ export default function App() {
                 onEdit={() => setDialog({ editing: pickedProvider })}
                 onDelete={() => askDeleteProvider(pickedProvider)}
                 gatewayRoute={routeOfProvider(pickedProvider)}
-                onUndo={() => {
-                  if (pickedProvider.isNew) {
-                    setDraft(withOp(draft, pickedProvider.draftKey!, null));
-                    closeDetail();
-                  } else {
-                    setDraft(withOp(draft, keys.deleteProvider(pickedProvider.id), null));
-                  }
-                }}
+                onUndo={() => undoProvider(pickedProvider)}
               />
             )}
           />

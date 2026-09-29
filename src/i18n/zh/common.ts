@@ -77,6 +77,8 @@ const zh: typeof en = {
   providerCount: "{n} 个供应商",
   viewModels: "查看模型列表",
   undoDelete: "撤销删除",
+  undoAdd: "撤销添加",
+  deleteInUse: "正在使用，先切换到其他供应商",
   notSet: "未设置",
   tagNew: "新",
   tagDeleting: "将删除",

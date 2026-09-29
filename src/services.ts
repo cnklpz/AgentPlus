@@ -139,6 +139,56 @@ export function liveUses(g: Group): Use[] {
   return g.uses.filter((u) => u.state !== "removing");
 }
 
+/** Why a use can't be removed from the hub: null = it can; "—" = nothing to remove (a pending add or removal). */
+export function removable(u: Use): string | null {
+  if (!u.p || u.state === "removing" || u.state === "adding") return "—";
+  if (!u.p.editable) return t("services.builtinNoDelete");
+  if (u.agent.readonly) return t("services.readonlyNoDelete", { agent: u.agent.name });
+  if (u.state === "current") return t("services.inUse", { agent: u.agent.name });
+  return null;
+}
+
+/** What deleting these groups from the hub does. */
+export interface DeletePlan {
+  /** Agent entries that get a pending removal. */
+  uses: Use[];
+  /** Library entries that are deleted. */
+  libs: LibEntry[];
+  /** Pending adds that are cancelled (the provider won't be there to copy from). */
+  imports: Use[];
+  /** Agent entries that stay, with the reason. */
+  kept: { u: Use; why: string }[];
+}
+
+/** Deleting a whole station: every removable entry, every library entry and every pending add in its groups. */
+export function stationDeletePlan(s: Station): DeletePlan {
+  const all = s.groups.flatMap((g) => g.uses);
+  const libs = [...new Map(s.groups.flatMap((g) => (g.lib ? [[g.lib.id, g.lib] as const] : []))).values()];
+  return {
+    uses: all.filter((u) => removable(u) === null),
+    libs,
+    imports: all.filter((u) => u.importKey),
+    kept: all.flatMap((u) => {
+      const why = removable(u);
+      return why && why !== "—" ? [{ u, why }] : [];
+    }),
+  };
+}
+
+/**
+ * Pending adds in these groups that copy from something being deleted: an agent entry in
+ * `removed`, or a library entry in `libIds` (applying them would fail).
+ */
+export function orphanImports(groups: Group[], drafts: Record<string, Draft>, removed: Use[], libIds: string[]): Use[] {
+  return groups.flatMap((g) => g.uses).filter((u) => {
+    const op = u.importKey ? drafts[u.agent.id]?.[u.importKey] : undefined;
+    if (op?.op !== "import_provider") return false;
+    return op.fromAgent === "library"
+      ? libIds.includes(op.provider)
+      : removed.some((r) => r.agent.id === op.fromAgent && r.p?.id === op.provider);
+  });
+}
+
 /** Stable React key / set member for a use: its agent and provider. */
 export function useKey(u: Use): string {
   return `${u.agent.id}:${u.p?.id}`;

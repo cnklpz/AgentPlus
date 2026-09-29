@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { AgentState, GatewayRouteView, SyncSuggestion } from "./api";
+import type { AgentState, GatewayRouteView, LibEntry, SyncSuggestion } from "./api";
+import type { Draft } from "./draft";
 import {
-  API_LABEL, GATEWAY_KEY, type Group, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayPoolBase, gatewayPoolIds,
-  gatewayRouteId, groupKey, hostKey, importKey, importMatches, keySource, movedHost, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute, splitStations, syncSuggestionId,
+  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayPoolBase, gatewayPoolIds,
+  gatewayRouteId, groupKey, hostKey, importKey, importMatches, keySource, movedHost, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, removable, splitStations, stationDeletePlan, syncSuggestionId,
   syncSuggestionIds, tripped, useKey,
 } from "./services";
 
@@ -238,6 +239,17 @@ describe("groups and uses", () => {
     expect(relays.map((v: { key: string }) => v.key)).toEqual(["a", "c"]);
     expect(accounts.map((v: { key: string }) => v.key)).toEqual(["b"]);
   });
+  it("removable: pending adds/removals have nothing to remove; built-ins and the current one stay", () => {
+    const u = (state: Use["state"], editable = true, p = true) => ({ agent: x, p: p ? { id: "p", editable } : null, state, models: 0 }) as unknown as Use;
+    expect(removable(u("on"))).toBeNull();
+    expect(removable(u("off"))).toBeNull();
+    expect(removable(u("new"))).toBeNull();
+    expect(removable(u("removing"))).toBe("—");
+    expect(removable(u("adding", true, false))).toBe("—");
+    expect(removable(u("on", false))).not.toBeNull();
+    expect(removable(u("current"))).toContain("opencode");
+    expect(removable({ ...u("on"), agent: ro })).toContain("zcode");
+  });
   it("agentLabel: product names, other ids as is", () => {
     expect(agentLabel("claude")).toBe("Claude Code");
     expect(agentLabel("codex@wsl")).toBe("codex@wsl");
@@ -301,5 +313,52 @@ describe("syncSuggestionId for MCP", () => {
   it("uses the MCP change's key", () => {
     const s: SyncSuggestion = { agent: "library", title: "t", detail: "", ops: [], lib: null, mcp: { key: "mcp:gh", name: "gh", server: {} }, skill: null };
     expect(syncSuggestionId(s)).toBe("library\nmcp:gh");
+  });
+});
+
+describe("hub deletes", () => {
+  const agent = (id: string) => ({ id, name: id, installed: true, readonly: false }) as AgentState;
+  const [codex, claude, qwen] = [agent("codex"), agent("claude"), agent("qwen")];
+  const use = (a: AgentState, state: Use["state"], pid: string, editable = true): Use => ({ agent: a, p: { id: pid, editable } as Use["p"], state, models: 0 });
+  const adding = (a: AgentState, importKey: string): Use => ({ agent: a, p: null, importKey, state: "adding", models: 0 });
+  const lib = (id: string) => ({ id, name: id }) as LibEntry;
+  const group = (uses: Use[], l: LibEntry | null = null) => ({ key: Math.random().toString(), name: "g", lib: l, uses }) as unknown as Group;
+  const station = (...groups: Group[]) => ({ key: "s", name: "S", host: "s", baseUrl: null, builtin: false, groups }) as Station;
+
+  it("stationDeletePlan: removable entries, each library entry once, every pending add; the rest is kept with a reason", () => {
+    const l = lib("l1");
+    const cur = use(codex, "current", "relay");
+    const s = station(
+      group([cur, use(claude, "on", "relay"), adding(qwen, "k1")], l),
+      group([use(claude, "off", "relay-2"), use(qwen, "removing", "old"), use(qwen, "on", "ro", false)], l),
+    );
+    const plan = stationDeletePlan(s);
+    expect(plan.uses.map(useKey)).toEqual(["claude:relay", "claude:relay-2"]);
+    expect(plan.libs).toEqual([l]);
+    expect(plan.imports.map((u) => u.importKey)).toEqual(["k1"]);
+    expect(plan.kept.map(({ u }) => useKey(u))).toEqual(["codex:relay", "qwen:ro"]);
+    expect(plan.kept.every(({ why }) => why && why !== "—")).toBe(true);
+  });
+  it("stationDeletePlan: nothing to do for a station of in-use entries only", () => {
+    const plan = stationDeletePlan(station(group([use(codex, "current", "relay")])));
+    expect([plan.uses, plan.libs, plan.imports].map((x) => x.length)).toEqual([0, 0, 0]);
+    expect(plan.kept).toHaveLength(1);
+  });
+
+  it("orphanImports: pending adds whose source (library entry or agent entry) goes away", () => {
+    const src = use(codex, "on", "relay");
+    const g = group([src, adding(claude, "fromLib"), adding(qwen, "fromCodex")], lib("l1"));
+    const drafts: Record<string, Draft> = {
+      claude: { fromLib: { op: "import_provider", fromAgent: "library", provider: "l1", api: "chat", name: "g" } },
+      qwen: { fromCodex: { op: "import_provider", fromAgent: "codex", provider: "relay", api: "chat", name: "g" } },
+    };
+    const keys = (removed: Use[], libIds: string[]) => orphanImports([g], drafts, removed, libIds).map((u) => u.importKey);
+    expect(keys([], [])).toEqual([]);
+    expect(keys([], ["l1"])).toEqual(["fromLib"]);
+    expect(keys([src], [])).toEqual(["fromCodex"]);
+    expect(keys([use(codex, "on", "other")], ["l2"])).toEqual([]);
+  });
+  it("orphanImports: ignores a use whose draft op is gone", () => {
+    expect(orphanImports([group([adding(claude, "k")])], {}, [], ["l1"])).toEqual([]);
   });
 });

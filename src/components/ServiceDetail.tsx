@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
-import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, freeAgents, gatewayCapable, gatewayRouteId, importSource, liveUses, useKey } from "../services";
+import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, freeAgents, gatewayCapable, gatewayRouteId, importSource, liveUses, removable, useKey } from "../services";
 import { AgentIcon, Icon } from "./icons";
 import { Avatar, Bars, type Latency, latencyText, stationColor } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
@@ -23,17 +23,14 @@ interface Props {
   onModels: (u: Use) => void;
   /** Remove the chosen agent entries of a group and (optionally) its library entry. */
   onDeleteGroup: (g: Group, uses: Use[], fromLibrary: boolean) => void;
+  /** Delete the whole station (asks first). */
+  onDeleteStation: () => void;
+  /** Why the station can't be deleted, else null. */
+  deleteBlocked: string | null;
   /** Add the group to an agent through the local gateway (any protocol). */
   onViaGateway: (g: Group, agent: AgentId) => void;
   /** "127.0.0.1:<port>" of the gateway, to avoid routing the gateway through itself. */
   gatewayHost: GatewayHosts;
-}
-
-function removable(u: Use): string | null {
-  if (!u.p || u.state === "removing" || u.state === "adding") return "—";
-  if (!u.p.editable) return t("serviceDetail.builtinNoDelete");
-  if (u.state === "current") return t("serviceDetail.inUse");
-  return null;
 }
 
 /** Right-column details of a station: each group with its address, key, test and agent entries. */
@@ -71,6 +68,15 @@ export function ServiceDetail(props: Props) {
           <GroupPanel key={g.key} g={g} open={open.has(g.key) || s.groups.length === 1} onToggle={() => toggle(g.key)} builtin={s.builtin} {...props} />
         ))}
       </div>
+
+      {!s.builtin && (
+        <div className="stack6">
+          <button className="btn full danger" disabled={!!props.deleteBlocked} onClick={props.onDeleteStation}>
+            <Icon.trash size={12} />{t("serviceDetail.deleteStation")}
+          </button>
+          {props.deleteBlocked && <span className="tiny muted">{props.deleteBlocked}</span>}
+        </div>
+      )}
     </section>
   );
 }

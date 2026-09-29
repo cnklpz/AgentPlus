@@ -12,6 +12,9 @@ const zh: typeof en = {
   useAdding: "待添加",
   useRemoving: "待移除",
   useNew: "新 · 未应用",
+  builtinNoDelete: "内置供应商不能删除",
+  inUse: "正在使用，先把 {agent} 切换到别的供应商",
+  readonlyNoDelete: "{agent} 在这里是只读的",
 };
 
 export default zh;

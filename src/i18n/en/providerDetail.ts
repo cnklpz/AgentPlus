@@ -16,10 +16,8 @@ export default {
   keyEmpty: "Not set",
   visibleOf: "{visible}/{total} visible",
   alsoIn: "Same service is also set up in",
-  undoAdd: "Undo add",
   switchOnApply: "Switches to this provider on apply",
   setCurrent: "Make current provider",
   disableThis: "Disable this provider",
   enableThis: "Enable this provider",
-  deleteInUse: "In use. Switch to another provider first.",
 };

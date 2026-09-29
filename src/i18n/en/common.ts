@@ -75,6 +75,8 @@ export default {
   providerCount: "{n} provider|{n} providers",
   viewModels: "View model list",
   undoDelete: "Undo delete",
+  undoAdd: "Undo add",
+  deleteInUse: "In use. Switch to another provider first.",
   notSet: "Not set",
   tagNew: "New",
   tagDeleting: "To be deleted",

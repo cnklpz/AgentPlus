@@ -1,7 +1,5 @@
 // src/components/ServiceDetail.tsx
 export default {
-  builtinNoDelete: "Built-in providers can't be deleted",
-  inUse: "In use; switch Codex to another provider first",
   detailsAria: "{name} details",
   accountLogin: "Account sign-in",
   hostGroups: "{host} · {n} group|{host} · {n} groups",
@@ -11,6 +9,7 @@ export default {
   inLibrary: "In library",
   editGroup: "Edit group",
   deleteGroup: "Delete group",
+  deleteStation: "Delete provider",
   deleteFrom: "Delete \"{name}\" from where?",
   reason: "({why})",
   removeFromLibrary: "Remove from provider library (URL and API key)",
