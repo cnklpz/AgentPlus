@@ -58,7 +58,11 @@ const HINTS: { v: Hints; label: TKey }[] = [
   { v: "brief", label: "settingsPage.hintsBrief" },
 ];
 
-const CLOSE_ACTIONS: { v: CloseAction; label: TKey; hint: TKey }[] = [
+const CLOSE_ACTIONS: { v: CloseAction; label: TKey; hint: TKey }[] = isMac ? [
+  { v: "ask", label: "settingsPage.closeAsk", hint: "settingsPage.closeAskHintMac" },
+  { v: "tray", label: "common.minimizeToMenuBar", hint: "settingsPage.closeTrayHintMac" },
+  { v: "quit", label: "common.quitApp", hint: "settingsPage.closeQuitHint" },
+] : [
   { v: "ask", label: "settingsPage.closeAsk", hint: "settingsPage.closeAskHint" },
   { v: "tray", label: "common.minimizeToTray", hint: "settingsPage.closeTrayHint" },
   { v: "quit", label: "common.quitApp", hint: "settingsPage.closeQuitHint" },
@@ -151,12 +155,11 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         <SettingRow label={t("settingsPage.privacy")} desc={t("settingsPage.privacyHint", { keys: shortcut("H", true, "+") })}>
           <Switch on={prefs.privacy} onChange={(v) => setPrefs({ ...prefs, privacy: v })} label={t("settingsPage.privacy")} />
         </SettingRow>
-        {/* macOS: closing always hides the window and the app stays in the Dock (⌘Q quits). */}
-        {!isMac && <SettingRow label={t("settingsPage.closeAction")}
-          desc={t("settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}>
+        <SettingRow label={t("settingsPage.closeAction")}
+          desc={t(isMac ? "settingsPage.closeActionHintMac" : "settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}>
           <Seg value={prefs.closeAction} onChange={(v) => setPrefs({ ...prefs, closeAction: v })} label={t("settingsPage.closeAction")}
             options={CLOSE_ACTIONS.map((m) => ({ value: m.v, label: t(m.label) }))} />
-        </SettingRow>}
+        </SettingRow>
       </section>
 
       <section className="sgroup">

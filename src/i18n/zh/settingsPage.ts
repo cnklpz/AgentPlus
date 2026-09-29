@@ -47,9 +47,12 @@ const zh: typeof en = {
   privacyHint: "遮挡 API 密钥、服务商地址、路径里的用户名，模糊对话标题和项目名，适合截图或共享屏幕。只影响显示。快捷键 {keys}",
   closeAction: "关闭窗口时",
   closeActionHint: "点右上角 × 或按 Alt+F4 时：{hint}",
+  closeActionHintMac: "点红色关闭按钮或按 ⌘W 时（⌘Q 始终直接退出）：{hint}",
   closeAsk: "每次询问",
   closeAskHint: "弹窗让你选择最小化到托盘还是退出",
   closeTrayHint: "隐藏到托盘，后台继续运行，点托盘图标重新打开",
+  closeAskHintMac: "弹窗让你选择最小化到菜单栏还是退出",
+  closeTrayHintMac: "隐藏到菜单栏，后台继续运行，点菜单栏图标重新打开",
   closeQuitHint: "直接退出，本地网关随之停止",
 
   dataTitle: "数据与备份",

@@ -45,9 +45,12 @@ export default {
   privacyHint: "Hides API keys, provider addresses and the user name in paths, and blurs conversation titles and project names, for screenshots and screen sharing. Display only. Shortcut: {keys}",
   closeAction: "When closing the window",
   closeActionHint: "The × button and Alt+F4: {hint}",
+  closeActionHintMac: "The red close button and ⌘W (⌘Q always quits): {hint}",
   closeAsk: "Ask every time",
   closeAskHint: "ask whether to minimize to tray or quit",
   closeTrayHint: "hide in the tray and keep running; click the tray icon to reopen",
+  closeAskHintMac: "ask whether to minimize to the menu bar or quit",
+  closeTrayHintMac: "hide in the menu bar and keep running; click its icon to reopen",
   closeQuitHint: "quit right away; the local gateway stops too",
 
   dataTitle: "Data & backups",

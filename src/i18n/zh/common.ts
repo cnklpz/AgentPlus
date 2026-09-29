@@ -32,6 +32,7 @@ const zh: typeof en = {
   apiKey: "密钥",
   baseUrl: "地址",
   minimizeToTray: "最小化到托盘",
+  minimizeToMenuBar: "最小化到菜单栏",
   quitApp: "退出程序",
   copyFailed: "复制失败",
   listSep: "、",

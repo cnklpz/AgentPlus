@@ -135,9 +135,8 @@ export default function App() {
   // The window starts hidden (tauri.conf.json) so the WebView's blank white never shows;
   // reveal it once the first frame is committed with theme and styles in place.
   useEffect(() => { if (inTauri) getCurrentWindow().show().catch(() => {}); }, []);
-  // Closing the window (× or Alt+F4) hides it in the tray or quits, per Settings › Interface › When closing the window.
-  // macOS works the Mac way instead: the red button / ⌘W only hides the window, the app
-  // (and its gateway) stays in the Dock, a Dock click brings it back and ⌘Q quits.
+  // Closing the window (× / Alt+F4, or the red button / ⌘W on macOS) hides it in the tray (macOS: the
+  // menu bar) or quits, per Settings › Interface › When closing the window. ⌘Q always quits.
   const [closeAsk, setCloseAsk] = useState<((c: CloseChoice | null) => void) | null>(null);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
@@ -147,10 +146,6 @@ export default function App() {
     let asking = false;
     const unlisten = win.onCloseRequested(async (e) => {
       e.preventDefault();
-      if (isMac) {
-        await win.hide();
-        return;
-      }
       let action = prefsRef.current.closeAction;
       if (action === "ask") {
         if (asking) return;
@@ -165,7 +160,7 @@ export default function App() {
         action = choice.action;
         if (choice.remember) setPrefs({ ...prefsRef.current, closeAction: action });
       }
-      if (action === "tray") await win.hide();
+      if (action === "tray") await api.hideToTray();
       else await api.quitApp();
     });
     return () => { unlisten.then((f) => f()); };

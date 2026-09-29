@@ -992,6 +992,7 @@ const real = {
   logExport: () => invoke<string>("log_export"),
   openLogDir: () => invoke<void>("open_log_dir"),
   quitApp: () => invoke<void>("quit_app"),
+  hideToTray: () => invoke<void>("hide_to_tray"),
   detectAgents: () => invoke<AgentDetect[]>("detect_agents"),
   testProvider: (agent: string, provider: string, model: string) => invoke<TestResult>("test_provider", { agent, provider, model }),
   /** `provider` is the model list's: a provider id, or `CATALOG` for Codex's shared catalog. */
@@ -1421,6 +1422,7 @@ const demo: typeof real = {
   logExport: async () => { await sleep(500); return "C:\\Users\\me\\Downloads\\AgentPlus-log-20260926-190512.txt"; },
   openLogDir: async () => undefined,
   quitApp: async () => undefined,
+  hideToTray: async () => undefined,
   detectAgents: async () => (await fixture()).map((a) => ({
     id: a.id, name: a.name, appFound: a.installed, version: a.version, running: a.running,
     defaultDir: a.configDir, customDir: null, configDir: a.configDir, configFound: true, enabled: a.installed, note: null,

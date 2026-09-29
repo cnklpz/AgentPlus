@@ -660,6 +660,12 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// Hide the window in the tray (macOS: the menu bar) from the close dialog / preference.
+#[tauri::command]
+fn hide_to_tray(app: tauri::AppHandle) {
+    tray::hide_main(&app);
+}
+
 #[tauri::command]
 fn log_info() -> applog::LogInfo {
     applog::status()
@@ -962,6 +968,7 @@ pub fn run() {
             open_data_dir,
             set_locale,
             quit_app,
+            hide_to_tray,
             detect_agents,
             test_provider,
             attribution_target,

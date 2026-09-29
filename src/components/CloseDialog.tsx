@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CloseAction } from "../prefs";
 import { t } from "../i18n";
+import { isMac } from "../platform";
 import { Icon } from "./icons";
 import { ConfirmFrame } from "./Modal";
 
@@ -20,14 +21,14 @@ export function CloseDialog({ onDone }: { onDone: (c: CloseChoice | null) => voi
     <ConfirmFrame
       title={t("closeDialog.title")}
       icon={<Icon.power size={16} />}
-      message={t("closeDialog.message")}
+      message={t(isMac ? "closeDialog.messageMac" : "closeDialog.message")}
       check={{ label: t("closeDialog.remember"), hint: t("closeDialog.rememberHint"), on: remember, onChange: setRemember }}
       onClose={() => onDone(null)}
       foot={<>
         <button className="btn" onClick={() => onDone(null)}>{t("common.cancel")}</button>
         <span className="grow" />
         <button className="btn" onClick={() => pick("quit")}>{t("common.quitApp")}</button>
-        <button ref={trayRef} className="btn primary" onClick={() => pick("tray")}>{t("common.minimizeToTray")}</button>
+        <button ref={trayRef} className="btn primary" onClick={() => pick("tray")}>{t(isMac ? "common.minimizeToMenuBar" : "common.minimizeToTray")}</button>
       </>}
     />
   );

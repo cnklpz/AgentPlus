@@ -30,6 +30,7 @@ export default {
   apiKey: "API key",
   baseUrl: "Base URL",
   minimizeToTray: "Minimize to tray",
+  minimizeToMenuBar: "Minimize to menu bar",
   quitApp: "Quit",
   copyFailed: "Copy failed",
   listSep: ", ",
