@@ -280,6 +280,20 @@ function shards(root: HTMLElement, box: DOMRect): { pieces: HTMLElement[]; shell
 const rnd = (a: number) => (Math.random() - 0.5) * 2 * a;
 
 /**
+ * The colour a piece is painted on: its own background, else that of the nearest card around
+ * it (a warning box, a note), so its scraps keep the colour instead of turning card-white.
+ * Read before the cards are made see-through. Null when nothing between it and the page has one.
+ */
+function paperOf(el: HTMLElement, host: HTMLElement): string | null {
+  for (let n: HTMLElement | null = el; n && n !== host; n = n.parentElement) {
+    const c = getComputedStyle(n).backgroundColor;
+    // "rgba(0, 0, 0, 0)", "transparent" or a colour() form with alpha 0.
+    if (c !== "transparent" && !/(?:,|\/)\s*0\)$/.test(c)) return c;
+  }
+  return null;
+}
+
+/**
  * Tears a w x h piece into at most `max` scraps like paper: a jittered grid whose inner seams
  * zigzag, the outer edges straight. Neighbours share their seams, so the scraps fit back
  * together exactly.
@@ -341,6 +355,8 @@ function tear(host: HTMLElement, dir: number) {
     return;
   }
   const each = Math.max(2, Math.floor(SCRAPS / pieces.length));
+  // Colours first: the cards are about to lose theirs.
+  const papers = new Map(pieces.map((el) => [el, getComputedStyle(el).backgroundImage === "none" ? paperOf(el, host) : null]));
   // First the cards stop clipping and the pieces' parents get a position (a card that no
   // longer clips drops any scroll it had inside), then everything is measured in that final
   // layout, then built: one layout, not one per piece.
@@ -365,7 +381,7 @@ function tear(host: HTMLElement, dir: number) {
     }
     // Where it rests on screen, for the fall.
     const r = { left: pr.left + parent.clientLeft - parent.scrollLeft + left, top: pr.top + parent.clientTop - parent.scrollTop + top, width: w, height: h };
-    return { el, parent, r, left, top };
+    return { el, parent, r, left, top, paper: papers.get(el) ?? null };
   });
   const list: Scrap[] = [];
   const cx0 = box.left + box.width / 2;
@@ -376,6 +392,8 @@ function tear(host: HTMLElement, dir: number) {
       const c = p.el.cloneNode(true) as HTMLElement;
       for (const n of [c, ...c.querySelectorAll("[id]")]) n.removeAttribute("id");
       c.classList.add("ap-scrap");
+      // Over the card surface (.ap-scrap), so a translucent colour still lands right.
+      if (p.paper) c.style.backgroundImage = `linear-gradient(${p.paper}, ${p.paper})`;
       c.setAttribute("aria-hidden", "true");
       c.inert = true;
       Object.assign(c.style, {
