@@ -39,7 +39,8 @@ interface Props {
   targets: McpTarget[];
   /** Adding from an import link: its servers fill the form, its agents are ticked. */
   link?: McpLink;
-  onSave: (input: McpInput, to: McpSource[], removeFrom: McpSource[]) => Promise<void>;
+  /** False: the user backed out (the dialog stays open). */
+  onSave: (input: McpInput, to: McpSource[], removeFrom: McpSource[]) => Promise<boolean>;
   onClose: () => void;
 }
 
@@ -120,8 +121,8 @@ export function McpDialog({ edit, targets, link, onSave, onClose }: Props) {
         enabled: true,
         ...(edit ? { ...(edit.from ? { from: edit.from } : {}), ...(edit.s.name !== trimmed ? { replaces: edit.s.name } : {}) } : extra),
       };
-      await onSave(input, chosen, removed);
-      onClose();
+      if (await onSave(input, chosen, removed)) onClose();
+      else setSaving(false);
     } catch (e) {
       setErr(errText(e));
       setSaving(false);

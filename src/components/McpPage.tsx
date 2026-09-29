@@ -4,6 +4,7 @@ import { type Draft, type McpView, deleteMcp, keys, mcpView, sameCore, setMcpEna
 import { t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
 import { ErrorBox, Switch } from "./controls";
+import { ask, askCheck } from "./Confirm";
 import { PendingPanel } from "./HubAside";
 import { MCP_TRANSPORT, type McpEdit, McpDialog, type McpTarget } from "./McpDialog";
 import { useLoad } from "../hooks";
@@ -125,8 +126,51 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
     setDialog({ s: e.v.s, from: fromOf(e), holders: variant.filter((x) => x.v.pending !== "deleted").map((x) => x.at) });
   };
 
-  const save = async (input: McpInput, to: McpSource[], removeFrom: McpSource[]) => {
+  /** The copies of a server that stay once the pending removals are written. */
+  const kept = (name: string) => list.find((g) => g.name === name)?.entries.filter((x) => x.v.pending !== "deleted") ?? [];
+
+  /**
+   * Asks before the last copy of a server goes. With `from`, it offers to keep a copy in the
+   * MCP library first. True to go ahead.
+   */
+  const confirmLast = async (name: string, message: string, from?: [McpSource, string], s?: McpServer): Promise<boolean> => {
+    const opts = { title: t("mcpPage.lastTitle", { name }), message, confirmText: t("common.delete"), danger: true };
+    if (!from || !s) return ask(opts);
+    const keep = await askCheck({ ...opts, check: { label: t("mcpPage.keepInLibrary"), value: false } });
+    if (keep === null) return false;
+    if (keep) {
+      const pair = (kv: McpKv[]) => kv.map(({ key, value }) => ({ key, value }));
+      try {
+        await api.mcpLibrarySave({ name: s.name, transport: s.transport, command: s.command, args: s.args, cwd: s.cwd, url: s.url, env: pair(s.env), headers: pair(s.headers), enabled: true, from });
+        await reload();
+      } catch (e) {
+        flash(errText(e), true);
+        return false;
+      }
+    }
+    return true;
+  };
+
+  const remove = async (e: Entry) => {
+    const name = e.v.s.name;
+    const left = kept(name);
+    // A copy that is only a pending addition isn't anyone's configuration yet.
+    if (left.length === 1 && left[0].at === e.at && (e.at === LIBRARY || e.v.exists)) {
+      const lib = e.at === LIBRARY;
+      const ok = await confirmLast(name, t(lib ? "mcpPage.lastLibrary" : "mcpPage.lastAgent", { agent: sourceName(e.at) }), lib ? undefined : fromOf(e), lib ? undefined : e.v.s);
+      if (!ok) return;
+    }
+    if (e.at === LIBRARY) await attempt(api.mcpLibraryDelete(name));
+    else edit(e.at, (d) => deleteMcp(d, name, e.v.exists));
+  };
+
+  const save = async (input: McpInput, to: McpSource[], removeFrom: McpSource[]): Promise<boolean> => {
     const old = dialog?.s.name ?? input.name;
+    // Every copy unticked: nothing keeps the server.
+    if (dialog && to.length === 0 && removeFrom.length > 0 && kept(old).every((x) => removeFrom.includes(x.at))) {
+      const offer = !removeFrom.includes(LIBRARY) && dialog.from;
+      if (!(await confirmLast(old, t("mcpPage.lastEverywhere"), offer ? dialog.from : undefined, offer ? dialog.s : undefined))) return false;
+    }
     const viewIn = (at: McpSource) => views.get(at)?.find((v) => v.s.name === old);
     for (const at of to) {
       if (at === LIBRARY) continue;
@@ -141,6 +185,7 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
     if (removeFrom.includes(LIBRARY)) await api.mcpLibraryDelete(old);
     if (to.includes(LIBRARY) || removeFrom.includes(LIBRARY)) await reload();
     if (input.name !== sel && sel === old) setSel(input.name);
+    return true;
   };
 
   return (
@@ -198,7 +243,7 @@ export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll
         {picked ? (
           <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} onEdit={openEdit}
             onToggle={(e, on) => edit(e.at, (d) => setMcpEnabled(d, e.v.s.name, on, e.v.exists ? data?.agents.find((a) => a.agent === e.at)?.servers.find((s) => s.name === e.v.s.name)?.enabled ?? null : null))}
-            onRemove={(e) => (e.at === LIBRARY ? attempt(api.mcpLibraryDelete(e.v.s.name)) : edit(e.at, (d) => deleteMcp(d, e.v.s.name, e.v.exists)))}
+            onRemove={(e) => void remove(e)}
             onUndo={(e) => edit(e.at, (d) => undoMcp(d, e.v.s.name))} />
         ) : (
           <section className="aside-cur mcp-scroll">
