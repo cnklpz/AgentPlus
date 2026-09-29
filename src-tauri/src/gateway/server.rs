@@ -1464,12 +1464,20 @@ fn parse_call(s: &mut TcpStream, req: &Request, rest: &str, log: &mut LogEntry) 
 fn count_tokens(s: &mut TcpStream, t: Option<&Target>, req: &Request, log: &mut LogEntry) -> Result<u16> {
     log.inbound = Proto::Anthropic.api().into();
     if let Some(t) = t.filter(|t| t.proto == Proto::Anthropic) {
-        let resp = t
-            .request(reqwest::Method::POST, "/messages/count_tokens")
-            .header("content-type", "application/json")
-            .body(req.body.clone())
-            .timeout(Duration::from_secs(30))
-            .send()?;
+        // The model the forward sends `/messages` for, and the betas the client asked for: a
+        // mapped upstream doesn't know the client's model name.
+        let body = match serde_json::from_slice::<Value>(&req.body) {
+            Ok(mut v) if v.is_object() => {
+                apply_model_map(&mut v, &t.route.model_map);
+                v.to_string().into_bytes()
+            }
+            _ => req.body.clone(),
+        };
+        let mut up = t.request(reqwest::Method::POST, "/messages/count_tokens").header("content-type", "application/json");
+        if let Some(b) = req.header("anthropic-beta") {
+            up = up.header("anthropic-beta", b);
+        }
+        let resp = up.body(body).timeout(Duration::from_secs(30)).send()?;
         let status = resp.status().as_u16();
         let text = resp.text().unwrap_or_default();
         write_full(s, status, "application/json", text.as_bytes());
@@ -2145,6 +2153,33 @@ mod tests {
         let v: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
         let ids: Vec<&str> = v["data"].as_array().unwrap().iter().filter_map(|m| m["id"].as_str()).collect();
         assert!(ids.contains(&"glm-5") && ids.contains(&"kimi-k3"), "{ids:?}");
+        lock(&TEST_ROUTES).clear();
+    }
+
+    /// Token counts go upstream for the model the forward maps to, with the client's betas.
+    #[test]
+    fn count_tokens_uses_the_mapped_model() {
+        let _guard = lock(&TEST_LOCK);
+        type Seen = Vec<(String, Option<String>)>;
+        let seen: Arc<Mutex<Seen>> = Arc::default();
+        let log = seen.clone();
+        let up = mock_upstream(Arc::default(), move |req| {
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or_default();
+            log.lock().unwrap().push((body["model"].as_str().unwrap_or_default().to_string(), req.header("anthropic-beta").map(String::from)));
+            http_resp("200 OK", "application/json", r#"{"input_tokens":7}"#)
+        });
+        *lock(&TEST_ROUTES) = vec![(test_route("anth", "anthropic", &[("claude-x", "glm-5")]), up, None)];
+        breaker::reset(Some("anth"));
+        let port = gateway_once();
+        let r = reqwest::blocking::Client::new()
+            .post(format!("http://127.0.0.1:{port}/anth/v1/messages/count_tokens"))
+            .header("x-api-key", test_key())
+            .header("anthropic-beta", "context-1m")
+            .body(r#"{"model":"claude-x","messages":[{"role":"user","content":"hi"}]}"#)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200);
+        assert_eq!(*seen.lock().unwrap(), [("glm-5".to_string(), Some("context-1m".to_string()))]);
         lock(&TEST_ROUTES).clear();
     }
 
