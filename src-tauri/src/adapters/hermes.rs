@@ -507,8 +507,10 @@ fn entries(cfg: &Y) -> Vec<(String, Src)> {
     let mut out: Vec<(String, Src)> = vec![];
     if let Some(m) = cfg.get("providers").and_then(|p| p.as_mapping()) {
         for (k, v) in m {
-            if let (Some(k), true) = (key_str(k), v.is_mapping()) {
-                out.push((k.clone(), Src::Dict(k)));
+            // Only string keys: `def_of` finds an entry by its string key, and a `123:` or `true:`
+            // entry would list here but not be found there.
+            if let (Y::String(k), true) = (k, v.is_mapping()) {
+                out.push((k.clone(), Src::Dict(k.clone())));
             }
         }
     }
@@ -2121,6 +2123,18 @@ hooks:
         assert_eq!(fs::read_to_string(t.0.join(".env")).unwrap(), "RELAY_KEY=sk-a\n");
         assert_eq!(provider_endpoint("a").unwrap().1.as_deref(), Some("sk-a"));
         assert_eq!(provider_endpoint("b").unwrap().1.as_deref(), Some("sk-b"));
+        drop(t);
+    }
+
+    /// A `123:` or `true:` entry isn't listed (it used to be, and then not found: a panic).
+    #[test]
+    fn an_entry_under_a_numeric_or_boolean_key_is_left_alone() {
+        let t = setup("model:\n  provider: custom:real\n  default: m\nproviders:\n  123:\n    base_url: https://n/v1\n    models: [m]\n  true:\n    base_url: https://t/v1\n    models: [m]\n  real:\n    base_url: https://r/v1\n    models: [m]\n");
+        let ids: Vec<String> = state(&Install::default()).providers.into_iter().map(|p| p.id).collect();
+        assert!(ids.contains(&"real".to_string()) && !ids.iter().any(|i| i == "123" || i == "true"), "{ids:?}");
+        apply(vec![Op::SetCurrentProvider { provider: "real".into() }]).unwrap();
+        let text = fs::read_to_string(t.0.join("config.yaml")).unwrap();
+        assert!(text.contains("123:") && text.contains("https://t/v1"), "{text}");
         drop(t);
     }
 
