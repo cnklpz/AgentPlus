@@ -63,7 +63,8 @@ pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
-fn home_patch_path() -> PathBuf {
+/// The home-level patch layer: it outranks every profile's.
+pub(crate) fn home_patch_path() -> PathBuf {
     dir().join("cordis.patch.yml")
 }
 
@@ -104,7 +105,6 @@ pub(crate) fn profile_patch_path(profile: &str) -> PathBuf {
 }
 
 /// The patch layer of the profile AgentPlus edits.
-#[allow(dead_code)] // for the MCP codec (mcp/)
 pub(crate) fn patch_path() -> PathBuf {
     profile_patch_path(&profile_in(&store::load(), &profiles()))
 }
@@ -121,6 +121,9 @@ pub(crate) struct Patch {
     items: Vec<Item>,
     /// The entries aren't all block-style `- ` items (a flow list): read-only.
     flow: bool,
+    /// `!!js` environment references (`process.env.X`) don't block edits: the caller writes
+    /// them back as `!!js` itself (see [`Patch::allow_env_js`]).
+    env_js: bool,
 }
 
 struct Item {
@@ -129,6 +132,19 @@ struct Item {
     value: Y,
     changed: bool,
     removed: bool,
+}
+
+/// A line with its `!!js` environment references (`!!js process.env.X`, or a template literal
+/// of them) written as plain scalars, for the editability check.
+fn env_js_plain(line: &str) -> String {
+    static R: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let r = R.get_or_init(|| {
+        // A template literal whose only substitutions are `${process.env.X}`.
+        let env = r"\$\{process\.env\.[A-Za-z_][A-Za-z0-9_]*\}";
+        let tpl = format!(r#"`(?:[^`$'"\\]|\$[^{{`]|{env})*`"#);
+        regex::Regex::new(&format!(r#"!!js\s+(process\.env\.[A-Za-z_][A-Za-z0-9_]*|'{tpl}'|"{tpl}")\s*$"#)).unwrap()
+    });
+    r.replace(line, "$1").into_owned()
 }
 
 /// The `id` of a loader entry.
@@ -172,7 +188,7 @@ impl Patch {
                 Item { span, value, changed: false, removed: false }
             })
             .collect();
-        Ok(Patch { path: path.to_path_buf(), lines, meta, items, flow })
+        Ok(Patch { path: path.to_path_buf(), lines, meta, items, flow, env_js: false })
     }
 
     pub fn file(&self) -> String {
@@ -193,8 +209,15 @@ impl Patch {
         self.entries().filter(|(_, v)| inserted(v).is_none() && row_id(v) == Some(id)).map(|(k, _)| k).last()
     }
 
+    /// Lets entries whose only `!!js` expressions read environment variables be rewritten. The
+    /// caller promises to put those back as `!!js` scalars in every value it sets (serde_yaml
+    /// reads them as plain strings); the MCP codec does, the provider code doesn't.
+    pub fn allow_env_js(&mut self) {
+        self.env_js = true;
+    }
+
     /// The `insert` entry that adds row `id`, and the row's position in it.
-    #[allow(dead_code)] // for the MCP codec (mcp/)
+    #[allow(dead_code)] // unused so far
     pub fn find_inserted(&self, id: &str) -> Option<(usize, usize)> {
         self.entries().find_map(|(k, v)| inserted(v)?.iter().position(|r| row_id(r) == Some(id)).map(|j| (k, j)))
     }
@@ -205,7 +228,8 @@ impl Patch {
             return Err(anyhow!(tr!("{} is written as a flow list ([...]); not writing it", "{} 是流式列表（[...]），不写入", self.file())));
         }
         if let Some((s, e)) = self.items[i].span {
-            let lines: Vec<&str> = self.lines[s..e].iter().map(String::as_str).collect();
+            let kept: Vec<String> = self.lines[s..e].iter().map(|l| if self.env_js { env_js_plain(l) } else { l.clone() }).collect();
+            let lines: Vec<&str> = kept.iter().map(String::as_str).collect();
             if super::hermes::has_extras(&lines) {
                 let id = row_id(&self.items[i].value).unwrap_or("?");
                 return Err(anyhow!(tr!(
@@ -236,7 +260,6 @@ impl Patch {
         Ok(self.items.len() - 1)
     }
 
-    #[allow(dead_code)] // for the MCP codec (mcp/)
     pub fn remove(&mut self, i: usize) -> Result<()> {
         self.check_editable(i)?;
         self.items[i].removed = true;
@@ -268,7 +291,6 @@ impl Patch {
         Ok(true)
     }
 
-    #[allow(dead_code)] // for the MCP codec (mcp/)
     pub fn changed(&self) -> bool {
         self.items.iter().any(|i| i.changed || i.removed)
     }
@@ -322,7 +344,7 @@ impl Patch {
         }
         let text = out.join("\n");
         let back: Y = serde_yaml::from_str(&text).map_err(|e| anyhow!(tr!("The generated YAML can't be parsed: {e}", "生成的 YAML 无法解析：{e}")))?;
-        let expected = Y::Sequence(live.into_iter().cloned().collect());
+        let expected = super::hermes::untag_js(&Y::Sequence(live.into_iter().cloned().collect()));
         if back != expected {
             return Err(anyhow!(tr!("The rewritten {} failed verification; not writing it", "改写后的 {} 校验失败，不写入", self.file())));
         }

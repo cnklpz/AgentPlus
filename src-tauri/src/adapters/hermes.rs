@@ -372,7 +372,33 @@ fn quote(s: &str) -> String {
     }
 }
 
+/// A `!!js` scalar: a loader expression in dsh's patch files (`!!js process.env.TOKEN`). The
+/// only tag the emitter writes; serde_yaml reads it back as a plain string.
+pub(crate) fn js(expr: &str) -> Y {
+    Y::Tagged(Box::new(serde_yaml::value::TaggedValue { tag: serde_yaml::value::Tag::new("!!js"), value: Y::String(expr.into()) }))
+}
+
+/// The expression of a [`js`] scalar.
+pub(crate) fn js_expr(v: &Y) -> Option<&str> {
+    match v {
+        Y::Tagged(t) if t.tag == "!!js" => t.value.as_str(),
+        _ => None,
+    }
+}
+
+/// `v` as serde_yaml reads it back: `!!js` scalars are plain strings there.
+pub(crate) fn untag_js(v: &Y) -> Y {
+    match v {
+        Y::Mapping(m) => Y::Mapping(m.iter().map(|(k, x)| (k.clone(), untag_js(x))).collect()),
+        Y::Sequence(s) => Y::Sequence(s.iter().map(untag_js).collect()),
+        other => js_expr(other).map(Y::from).unwrap_or_else(|| other.clone()),
+    }
+}
+
 fn scalar(v: &Y) -> Result<String> {
+    if let Some(e) = js_expr(v) {
+        return Ok(format!("!!js {}", quote(e)));
+    }
     Ok(match v {
         Y::Null => "null".into(),
         Y::Bool(b) => b.to_string(),
@@ -399,7 +425,7 @@ fn emit_entry(out: &mut Vec<String>, indent: usize, key: &Y, v: &Y) -> Result<()
             out.push(format!("{pad}{k}:"));
             emit_seq(out, indent + 2, s)?;
         }
-        Y::Tagged(_) => return Err(anyhow!(tr!("{k} has a YAML tag; not writing it", "{k} 带 YAML 标签，不写入"))),
+        Y::Tagged(_) if js_expr(v).is_none() => return Err(anyhow!(tr!("{k} has a YAML tag; not writing it", "{k} 带 YAML 标签，不写入"))),
         _ => out.push(format!("{pad}{k}: {}", scalar(v)?)),
     }
     Ok(())
@@ -419,7 +445,7 @@ pub(crate) fn emit_seq(out: &mut Vec<String>, indent: usize, s: &[Y]) -> Result<
         match item {
             Y::Mapping(m) if !m.is_empty() => emit_map(&mut sub, indent + 2, m)?,
             Y::Sequence(ss) if !ss.is_empty() => emit_seq(&mut sub, indent + 2, ss)?,
-            Y::Tagged(_) => return Err(anyhow!(l("A list item has a YAML tag; not writing it", "列表项带 YAML 标签，不写入"))),
+            Y::Tagged(_) if js_expr(item).is_none() => return Err(anyhow!(l("A list item has a YAML tag; not writing it", "列表项带 YAML 标签，不写入"))),
             _ => {
                 out.push(format!("{pad}- {}", scalar(item)?));
                 continue;

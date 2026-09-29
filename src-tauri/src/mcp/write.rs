@@ -9,7 +9,7 @@
 
 use super::decode::{self, Raw};
 use super::{load, mask, pointer, source, toml_item, Family, KvIn, McpInput, LIBRARY, STASH_KEY};
-use crate::adapters::{claude, codebuddy, codex, display_name, droid, gemini, hermes, kilo, mimo, msg, opencode, qwen, zcode, Plan};
+use crate::adapters::{claude, codebuddy, codex, display_name, droid, dsh, gemini, hermes, kilo, mimo, msg, opencode, qwen, zcode, Plan};
 use crate::i18n::l;
 use crate::model::{Diff, Op};
 use crate::store;
@@ -46,7 +46,7 @@ fn transports(agent: &str) -> &'static [&'static str] {
     match agent {
         claude::ID => &["stdio", "http", "sse", "ws"],
         opencode::ID | kilo::ID | mimo::ID => &["stdio", "remote"],
-        codex::ID => &["stdio", "http"],
+        codex::ID | dsh::ID => &["stdio", "http"],
         _ => &["stdio", "http", "sse"],
     }
 }
@@ -116,7 +116,7 @@ fn codex_no_refs(what: &str) -> anyhow::Error {
 
 /// The server as `agent` writes it. `base` is the definition being edited (its other fields
 /// are kept); `on` = enabled.
-fn encode(agent: &str, fam: Family, i: &McpInput, base: Option<&Map<String, Value>>, on: bool) -> Result<Value> {
+pub(super) fn encode(agent: &str, fam: Family, i: &McpInput, base: Option<&Map<String, Value>>, on: bool) -> Result<Value> {
     let t = transport_for(agent, &i.transport)?;
     let stdio = t == "stdio";
     let command = i.command.as_deref().map(str::trim).filter(|c| !c.is_empty());
@@ -154,6 +154,27 @@ fn encode(agent: &str, fam: Family, i: &McpInput, base: Option<&Map<String, Valu
                 }
             } else {
                 put("type", json!("remote"));
+                put("url", json!(url));
+                if !headers.is_empty() {
+                    put("headers", obj(&headers));
+                }
+            }
+        }
+        Family::Dsh => {
+            if stdio {
+                put("transport", json!("stdio"));
+                put("command", json!(command));
+                if !args.is_empty() {
+                    put("args", json!(args));
+                }
+                if !env.is_empty() {
+                    put("env", obj(&env));
+                }
+                if let Some(c) = &cwd {
+                    put("cwd", json!(c));
+                }
+            } else {
+                put("transport", json!("streamable-http"));
                 put("url", json!(url));
                 if !headers.is_empty() {
                     put("headers", obj(&headers));
@@ -271,7 +292,7 @@ fn encode(agent: &str, fam: Family, i: &McpInput, base: Option<&Map<String, Valu
 }
 
 /// What runs, for diff lines (secrets masked).
-fn summary(fam: Family, def: &Value) -> String {
+pub(super) fn summary(fam: Family, def: &Value) -> String {
     let r = decode::decode(fam, def);
     if r.transport == "stdio" {
         std::iter::once(r.command.unwrap_or_default()).chain(mask::args(&r.args)).collect::<Vec<_>>().join(" ")
@@ -545,7 +566,7 @@ impl Doc {
     }
 }
 
-fn onoff(name: &str, on: bool) -> String {
+pub(super) fn onoff(name: &str, on: bool) -> String {
     if on {
         tr!("MCP \"{name}\" → on", "MCP「{name}」→ 启用")
     } else {
@@ -582,6 +603,9 @@ fn table_of(o: &Map<String, Value>) -> toml_edit::Table {
 
 /// The MCP ops of one apply (see `adapters::plan_resolved`).
 pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
+    if agent == dsh::ID {
+        return super::dsh::plan(ops, dry_run);
+    }
     let mut doc = Doc::open(agent)?;
     let mut diff = Diff::default();
     for op in ops {
@@ -617,6 +641,9 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
 
 /// A server as `agent` has it (the config or the stash), read into the common shape.
 fn raw_in(agent: &str, name: &str) -> Result<(Raw, Family)> {
+    if agent == dsh::ID {
+        return super::dsh::raw(name).map(|r| (r, Family::Dsh));
+    }
     let doc = Doc::open(agent)?;
     let def = doc.servers.get(name).or_else(|| doc.stash.get(name)).ok_or_else(|| anyhow!(tr!("{} has no MCP server named \"{name}\"", "{} 没有名为「{name}」的 MCP 服务器", display_name(agent))))?;
     Ok((decode::decode(doc.fam, def), doc.fam))

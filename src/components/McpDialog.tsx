@@ -21,7 +21,7 @@ export interface McpTarget {
 export function mcpBlocked(target: McpSource, transport: McpTransport, cwd: boolean): string | null {
   if (target === "library") return null;
   if (transport === "ws" && target !== "claude") return t("mcpDialog.noTransport", { transport: MCP_TRANSPORT.ws });
-  if (transport === "sse" && target === "codex") return t("mcpDialog.noTransport", { transport: MCP_TRANSPORT.sse });
+  if (transport === "sse" && (target === "codex" || target === "dsh")) return t("mcpDialog.noTransport", { transport: MCP_TRANSPORT.sse });
   if (transport === "stdio" && cwd && ["claude", "codebuddy", "droid", "hermes"].includes(target)) return t("mcpDialog.noCwd");
   return null;
 }

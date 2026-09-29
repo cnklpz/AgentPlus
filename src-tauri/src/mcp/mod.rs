@@ -10,11 +10,13 @@
 //! - Codex: `config.toml` → `[mcp_servers.<name>]`. Hermes: `config.yaml` → `mcp_servers`.
 //! - OpenClaw: `openclaw.json` (JSON5) → `mcp.servers`. ZCode: `~/.zcode/cli/config.json` →
 //!   `mcp.servers` (its engine's config, not the `v2` provider files).
+//! - DeepSeek Harness: `@deepseek-ai/dsh-mcp-client` rows in its patch layers (see `dsh`).
 //! - pi has no MCP support.
 //!
 //! Secrets never reach the UI (see `mask`); servers are compared across agents by `sig`.
 
 mod decode;
+mod dsh;
 pub mod library;
 mod mask;
 pub mod parse;
@@ -43,6 +45,8 @@ pub enum Family {
     Hermes,
     OpenClaw,
     ZCode,
+    /// DeepSeek Harness loader rows (see `dsh`).
+    Dsh,
 }
 
 /// Store key (per agent) of definitions AgentPlus turned off by taking them out of a config
@@ -239,6 +243,8 @@ fn pointer(fam: Family) -> &'static str {
         Family::OpenCode => "/mcp",
         Family::Codex | Family::Hermes => "/mcp_servers",
         Family::OpenClaw | Family::ZCode => "/mcp/servers",
+        // Read and written by `dsh`, not through a pointer.
+        Family::Dsh => "",
     }
 }
 
@@ -340,6 +346,9 @@ fn servers(agent: &str, fam: Family, cfg: &Value, root: &Value) -> Vec<McpServer
 
 /// One agent's global MCP servers.
 pub fn read(agent: &str) -> AgentMcp {
+    if agent == adapters::dsh::ID {
+        return dsh::read();
+    }
     let Some((fam, path)) = source(agent) else {
         return AgentMcp { agent: agent.into(), supported: false, file: None, exists: false, servers: vec![], error: None };
     };
