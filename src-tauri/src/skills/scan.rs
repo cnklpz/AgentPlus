@@ -2,8 +2,10 @@
 //! YAML frontmatter with `name` and `description`) is one skill; its subfolders are part of it.
 
 use crate::util::display_path;
+use anyhow::{Context, Result};
 use serde::Serialize;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 /// One skill folder.
@@ -19,16 +21,14 @@ pub struct SkillCopy {
     pub dir: String,
     pub files: usize,
     pub bytes: u64,
-    /// Fingerprint of every file's path and content: equal means the same skill.
+    /// Fingerprint of every file's path and content; empty if files couldn't be read.
     pub sig: String,
-    /// What's wrong with its SKILL.md, if anything.
+    /// What's wrong with its SKILL.md or files, if anything.
     pub problem: Option<String>,
 }
 
 /// Scanning stops after this many folders (a skills root is not a disk).
 const MAX_DIRS: usize = 3000;
-/// Files counted and hashed per skill; a bigger folder is still listed.
-const MAX_FILES: usize = 2000;
 const MAX_SKILL_MD: u64 = 1 << 20;
 
 /// The skills under `root`, looking `depth` levels down (Hermes keeps them in category
@@ -96,7 +96,10 @@ fn read(root: &Path, dir: &Path) -> SkillCopy {
             },
         },
     }
-    let (files, bytes, sig) = content(dir);
+    let (files, bytes, sig) = content(dir).unwrap_or_else(|e| {
+        problem = Some(tr!("Can't read skill files: {e}", "读不了技能文件：{e}"));
+        (0, 0, String::new())
+    });
     SkillCopy {
         id,
         name: name.unwrap_or(folder),
@@ -111,45 +114,79 @@ fn read(root: &Path, dir: &Path) -> SkillCopy {
 
 /// (files, bytes, fingerprint) of a skill folder: every file's relative path and content, in
 /// path order, so two copies compare equal wherever they are.
-pub fn content(dir: &Path) -> (usize, u64, String) {
-    let mut files = vec![];
-    collect(dir, dir, &mut files);
-    files.sort();
+pub fn content(dir: &Path) -> Result<(usize, u64, String)> {
+    let files = files(dir)?;
     let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
     let mut bytes = 0u64;
-    for rel in files.iter().take(MAX_FILES) {
+    let mut buf = [0u8; 64 * 1024];
+    for rel in &files {
         let p = dir.join(rel);
         ctx.update(rel.as_bytes());
         ctx.update(&[0]);
-        let len = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-        bytes += len;
-        // Big files (images, archives) count by size, not by content.
-        if len <= 8 << 20 {
-            if let Ok(b) = fs::read(&p) {
-                ctx.update(&b);
+        let mut file = fs::File::open(&p).with_context(|| tr!("Failed to read {}", "读取 {} 失败", p.display()))?;
+        loop {
+            let n = file.read(&mut buf).with_context(|| tr!("Failed to read {}", "读取 {} 失败", p.display()))?;
+            if n == 0 {
+                break;
             }
-        } else {
-            ctx.update(&len.to_le_bytes());
+            bytes += n as u64;
+            ctx.update(&buf[..n]);
         }
         ctx.update(&[0]);
     }
     let hex: String = ctx.finish().as_ref().iter().take(6).map(|b| format!("{b:02x}")).collect();
-    (files.len(), bytes, hex)
+    Ok((files.len(), bytes, hex))
 }
 
-fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let Ok(rd) = fs::read_dir(dir) else { return };
-    for e in rd.flatten() {
-        if out.len() >= MAX_FILES * 2 {
-            return;
-        }
+/// The files of a skill folder (relative, `/`-separated, sorted): what copying, fingerprinting
+/// and syncing a skill take. Links are not followed out of the folder: a linked file counts
+/// only when it points inside the skill, and linked folders are skipped (they could point
+/// anywhere, or loop). Otherwise a skill from the web linking to `~/.ssh/id_ed25519` would
+/// carry that file into the library and the sync folder.
+pub fn files(dir: &Path) -> Result<Vec<String>> {
+    let mut out = vec![];
+    let root = dir.canonicalize()?;
+    collect(dir, &root, dir, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+fn collect(root: &Path, real_root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
+    let rd = fs::read_dir(dir).with_context(|| tr!("Failed to read {}", "读取 {} 失败", dir.display()))?;
+    for e in rd {
+        let e = e?;
+        let ft = e.file_type()?;
         let p = e.path();
-        if p.is_dir() {
-            collect(root, &p, out);
-        } else if let Ok(rel) = p.strip_prefix(root) {
-            out.push(rel.to_string_lossy().replace('\\', "/"));
+        let file = if ft.is_symlink() {
+            // A link to a file inside the skill; anything else is left out.
+            p.canonicalize().is_ok_and(|t| t.starts_with(real_root) && t.is_file())
+        } else if ft.is_dir() {
+            collect(root, real_root, &p, out)?;
+            false
+        } else {
+            ft.is_file()
+        };
+        if file {
+            if let Ok(rel) = p.strip_prefix(root) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
         }
     }
+    Ok(())
+}
+
+/// Copies skill folder `from` to `to` (created), file by file as [`files`] lists them.
+pub fn copy_skill(from: &Path, to: &Path) -> anyhow::Result<()> {
+    let files = files(from)?;
+    fs::create_dir_all(to)?;
+    for rel in files {
+        let (src, dst) = (from.join(&rel), to.join(&rel));
+        if let Some(d) = dst.parent() {
+            fs::create_dir_all(d)?;
+        }
+        fs::copy(&src, &dst).with_context(|| tr!("Failed to copy {}", "复制 {} 失败", src.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -190,9 +227,112 @@ mod tests {
         let md = "---\nname: a\ndescription: d\n---\n";
         skill(&h.0.join("x"), "a", md);
         skill(&h.0.join("y"), "a", md);
-        let (a, b) = (content(&h.0.join("x/a")), content(&h.0.join("y/a")));
+        let (a, b) = (content(&h.0.join("x/a")).unwrap(), content(&h.0.join("y/a")).unwrap());
         assert_eq!(a, b);
         fs::write(h.0.join("y/a/extra.md"), "more").unwrap();
-        assert_ne!(content(&h.0.join("y/a")).2, a.2);
+        assert_ne!(content(&h.0.join("y/a")).unwrap().2, a.2);
+    }
+
+    #[test]
+    fn all_files_are_copied_and_hashed_in_large_skills() {
+        let h = TestHome::new("skills-many-files");
+        let dir = h.0.join("src");
+        fs::create_dir_all(&dir).unwrap();
+        for i in 0..4002 {
+            fs::write(dir.join(format!("{i:04}.txt")), "a").unwrap();
+        }
+        let before = content(&dir).unwrap();
+        assert_eq!((before.0, before.1), (4002, 4002));
+        let to = h.0.join("copy");
+        copy_skill(&dir, &to).unwrap();
+        assert_eq!(content(&to).unwrap(), before);
+        fs::write(dir.join("4001.txt"), "b").unwrap();
+        assert_ne!(content(&dir).unwrap().2, before.2);
+    }
+
+    #[test]
+    fn large_files_are_hashed_by_content_and_read_failures_are_errors() {
+        let h = TestHome::new("skills-large-file");
+        let mut data = vec![0; (8 << 20) + 1];
+        let path = h.0.join("large.bin");
+        fs::write(&path, &data).unwrap();
+        let before = content(&h.0).unwrap();
+        data[8 << 20] = 1;
+        fs::write(&path, &data).unwrap();
+        let after = content(&h.0).unwrap();
+        assert_eq!(before.1, after.1);
+        assert_ne!(before.2, after.2);
+        assert!(content(&path).is_err());
+        assert!(files(&h.0.join("missing")).is_err());
+        assert!(copy_skill(&h.0.join("missing"), &h.0.join("copy")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unreadable_files_never_produce_a_successful_fingerprint_or_copy() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let h = TestHome::new("skills-read-error");
+        skill(&h.0, "pdf", "---\nname: pdf\ndescription: PDF\n---\n");
+        let dir = h.0.join("pdf");
+        fs::write(dir.join("locked.txt"), "private").unwrap();
+        let _lock = fs::OpenOptions::new().read(true).share_mode(0).open(dir.join("locked.txt")).unwrap();
+        assert!(content(&dir).is_err());
+        let found = scan(&h.0, 1);
+        assert!(found[0].sig.is_empty() && found[0].problem.is_some());
+        assert!(copy_skill(&dir, &h.0.join("copy")).is_err());
+    }
+
+    #[cfg(unix)]
+    fn link(target: &Path, at: &Path, _dir: bool) -> bool {
+        std::os::unix::fs::symlink(target, at).is_ok()
+    }
+
+    /// Windows needs Developer Mode (or admin) for symbolic links; a folder falls back to a
+    /// junction, which any user can make (and which reads as a link too).
+    #[cfg(windows)]
+    fn link(target: &Path, at: &Path, dir: bool) -> bool {
+        if !dir {
+            return std::os::windows::fs::symlink_file(target, at).is_ok();
+        }
+        let win = |p: &Path| p.to_string_lossy().replace('/', "\\");
+        std::os::windows::fs::symlink_dir(target, at).is_ok()
+            || std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(win(at)).arg(win(target)).stdout(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+    }
+
+    #[test]
+    fn linked_folders_out_of_a_skill_are_not_followed() {
+        let h = TestHome::new("skills-dir-links");
+        let secret = h.0.join(".ssh");
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("id_ed25519"), "PRIVATE").unwrap();
+        skill(&h.0.join("repo"), "evil", "---\nname: evil\ndescription: x\n---\n");
+        let d = h.0.join("repo/evil");
+        assert!(link(&secret, &d.join("ssh"), true));
+        assert!(d.join("ssh/id_ed25519").is_file(), "the link works");
+        assert_eq!(files(&d).unwrap(), ["SKILL.md"]);
+        copy_skill(&d, &h.0.join("lib/evil")).unwrap();
+        assert!(!h.0.join("lib/evil/ssh").exists());
+    }
+
+    #[test]
+    fn links_out_of_a_skill_are_not_followed() {
+        let h = TestHome::new("skills-links");
+        let secret = h.0.join(".ssh");
+        fs::create_dir_all(&secret).unwrap();
+        fs::write(secret.join("id_ed25519"), "PRIVATE").unwrap();
+        let d = h.0.join("repo/evil");
+        skill(&h.0.join("repo"), "evil", "---\nname: evil\ndescription: x\n---\n");
+        fs::write(d.join("inside.md"), "ok").unwrap();
+        if !link(&secret.join("id_ed25519"), &d.join("key"), false) {
+            return;
+        }
+        assert!(link(&secret, &d.join("ssh"), true));
+        assert!(link(&d.join("inside.md"), &d.join("alias.md"), false));
+        assert_eq!(files(&d).unwrap(), ["SKILL.md", "alias.md", "inside.md"]);
+        let to = h.0.join("lib/evil");
+        copy_skill(&d, &to).unwrap();
+        assert_eq!(fs::read_to_string(to.join("alias.md")).unwrap(), "ok");
+        assert!(!to.join("key").exists() && !to.join("ssh").exists());
+        assert_eq!(content(&d).unwrap(), content(&to).unwrap(), "the fingerprint covers what a copy holds");
     }
 }

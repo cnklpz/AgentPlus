@@ -183,6 +183,14 @@ fn open_doc(doc: &Value, password: Option<&str>) -> Result<Value> {
         bail!("{}", crate::i18n::l("The sync file was made by a newer AgentPlus. Update AgentPlus on this device first", "同步文件来自更新版本的 AgentPlus，请先更新本机的 AgentPlus"));
     }
     let Some(enc) = doc.get("encryption") else {
+        // With a password here, the file should be sealed: a plain one may have been put in its
+        // place by whoever can write the shared folder, and must not be trusted.
+        if password.is_some() {
+            bail!("{}", crate::i18n::l(
+                "This device syncs with a password, but the sync file isn't encrypted, so it may have been replaced. Export from a device with the same password, or remove the password here to use it",
+                "本机设置了同步密码，但同步文件没有加密，可能被人替换过。请在设置了相同密码的设备上重新导出，或者在本机移除同步密码后再使用它"
+            ));
+        }
         let keys = if doc["keys"].is_object() { doc["keys"].clone() } else { json!({}) };
         return Ok(json!({ "agents": doc["agents"], "library": doc["library"], "mcp": doc["mcp"], "skills": doc["skills"], "keys": keys }));
     };
@@ -219,8 +227,14 @@ fn read_snapshot(id: &str) -> Result<Value> {
 /// The API key stored under fingerprint `fp`: in the sync file, else in the newest record
 /// that holds it (a restore from an older record).
 pub fn key(fp: &str) -> Result<String> {
-    let first = read_payload().and_then(|p| key_in(&p, fp));
+    let payload = read_payload();
+    let first = payload.as_ref().map_err(|e| anyhow!("{e:#}")).and_then(|p| key_in(p, fp));
     if first.is_ok() {
+        return first;
+    }
+    // The file names this fingerprint with another value: forged, not an older export. Its
+    // entry must not be completed with the real key from the records.
+    if payload.is_ok_and(|p| p["keys"].get(fp).is_some()) {
         return first;
     }
     let dir = folder().map(|f| history_dir(Path::new(&f)));
@@ -308,33 +322,91 @@ struct Built {
     /// Library skills too big for the file.
     too_big: Vec<String>,
     keys: usize,
+    /// Why the file couldn't be read to keep what this device leaves out (then it isn't
+    /// exported: that would empty those parts for every device).
+    unreadable: Option<String>,
 }
 
-fn build(root: &Value) -> Built {
+fn build(root: &Value) -> Result<Built> {
     let with_keys = include_keys_in(root);
+    let content = options_in(root).content;
     let mut keys = Map::new();
     let mut agents = Map::new();
     let mut providers = 0;
-    for a in adapters::ALL {
-        if let Ok(st) = adapters::state(a) {
-            let v = export_agent(a, &st, with_keys.then_some(&mut keys));
-            providers += v["providers"].as_array().map(|x| x.len()).unwrap_or(0);
-            agents.insert(a.to_string(), v);
+    if content.providers {
+        for a in adapters::ALL {
+            if let Ok(st) = adapters::state(a) {
+                let v = export_agent(a, &st, with_keys.then_some(&mut keys));
+                providers += v["providers"].as_array().map(|x| x.len()).unwrap_or(0);
+                agents.insert(a.to_string(), v);
+            }
         }
     }
-    let lib = export_library(root, with_keys.then_some(&mut keys));
-    let mcp = crate::mcp::library::export(root, &mut |v| {
-        let fp = key_fingerprint(v);
-        if with_keys {
+    let lib = if content.library { export_library(root, with_keys.then_some(&mut keys)) } else { vec![] };
+    let mcp = if content.mcp {
+        // Without keys the file only marks where a secret goes (an empty reference): a
+        // fingerprint is a short, unsalted hash, so a short secret (a password, a PIN) could be
+        // guessed back from it by anyone who can read the folder.
+        crate::mcp::library::export(root, &mut |v| {
+            if !with_keys {
+                return String::new();
+            }
+            let fp = key_fingerprint(v);
             keys.insert(fp.clone(), json!(v));
-        }
-        fp
-    });
-    let (skills, too_big) = crate::skills::sync::export();
+            fp
+        })
+    } else {
+        vec![]
+    };
+    let (skills, too_big) = if content.skills { crate::skills::sync::export()? } else { Default::default() };
     let (library, n_mcp, n_skills, n_keys) = (lib.len(), mcp.len(), skills.len(), keys.len());
-    let payload = json!({ "agents": agents, "library": lib, "mcp": mcp, "skills": skills, "keys": keys });
+    let mut payload = json!({ "agents": agents, "library": lib, "mcp": mcp, "skills": skills, "keys": keys });
+    // Only this device's own content: what the file already holds for the rest doesn't count as a change here.
     let hash = hex(ring::digest::digest(&ring::digest::SHA256, &serde_json::to_vec(&payload).unwrap_or_default()).as_ref());
-    Built { payload, hash, providers, library, mcp: n_mcp, skills: n_skills, too_big, keys: n_keys }
+    // Reading the file may mean deriving its key (slow on purpose): only when something is left out.
+    let mut n_keys = n_keys;
+    let mut unreadable = None;
+    if !content.all() && sync_path().is_ok_and(|p| p.exists()) {
+        match read_payload() {
+            Ok(file) => {
+                carry_over(&mut payload, &file, content, with_keys);
+                // What the file holds, carried keys included (the export message counts them).
+                n_keys = payload["keys"].as_object().map_or(0, Map::len);
+            }
+            Err(e) => unreadable = Some(format!("{e:#}")),
+        }
+    }
+    Ok(Built { payload, hash, providers, library, mcp: n_mcp, skills: n_skills, too_big, keys: n_keys, unreadable })
+}
+
+/// The file is shared: content this device leaves out keeps what the file holds for it (other
+/// devices' exports), with the API keys it refers to when this device includes keys.
+fn carry_over(payload: &mut Value, file: &Value, content: SyncContent, with_keys: bool) {
+    let left_out = [("agents", content.providers), ("library", content.library), ("mcp", content.mcp), ("skills", content.skills)];
+    let file_keys = file["keys"].as_object();
+    for (k, on) in left_out {
+        if on || file.get(k).is_none_or(Value::is_null) {
+            continue;
+        }
+        payload[k] = file[k].clone();
+        if let Some(fk) = file_keys.filter(|_| with_keys) {
+            let mut refs = vec![];
+            key_refs(&file[k], fk, &mut refs);
+            for fp in refs {
+                payload["keys"][fp.as_str()] = fk[&fp].clone();
+            }
+        }
+    }
+}
+
+/// The key fingerprints (keys of `keys`) that `v` mentions anywhere.
+fn key_refs(v: &Value, keys: &Map<String, Value>, out: &mut Vec<String>) {
+    match v {
+        Value::String(s) if keys.contains_key(s) && !out.contains(s) => out.push(s.clone()),
+        Value::Array(a) => a.iter().for_each(|x| key_refs(x, keys, out)),
+        Value::Object(o) => o.values().for_each(|x| key_refs(x, keys, out)),
+        _ => {}
+    }
 }
 
 fn hex(b: &[u8]) -> String {
@@ -347,10 +419,16 @@ static RUN: Mutex<()> = Mutex::new(());
 pub fn export() -> Result<String> {
     let _g = crate::util::lock(&RUN);
     let root = store::load();
-    export_built(&root, build(&root))
+    export_built(&root, build(&root)?)
 }
 
 fn export_built(root: &Value, b: Built) -> Result<String> {
+    if let Some(e) = &b.unreadable {
+        bail!("{}", tr!(
+            "Not exported: some content is left out on this device, and the sync file, which keeps other devices' copy of it, can't be read ({e})",
+            "没有导出：本机不同步部分内容，而同步文件（保存着其他设备的这部分内容）无法读取（{e}）"
+        ));
+    }
     let path = sync_path()?;
     let pw = password_in(root)?;
     let with_keys = include_keys_in(root);
@@ -376,8 +454,14 @@ fn export_built(root: &Value, b: Built) -> Result<String> {
         store::set_str(s, SECTION, "lastAck", &exported_at);
         Ok(())
     })?;
-    let (agents_n, lib_n) = (trn!(b.providers, "{n} agent provider", "{n} agent providers", "{n} 个 Agent 供应商"), trn!(b.library, "{n} library entry", "{n} library entries", "{n} 个供应商库条目"));
-    let mut parts = vec![agents_n, lib_n];
+    let content = options_in(root).content;
+    let mut parts = vec![];
+    if content.providers {
+        parts.push(trn!(b.providers, "{n} agent provider", "{n} agent providers", "{n} 个 Agent 供应商"));
+    }
+    if content.library {
+        parts.push(trn!(b.library, "{n} library entry", "{n} library entries", "{n} 个供应商库条目"));
+    }
     if b.mcp > 0 {
         parts.push(trn!(b.mcp, "{n} MCP server", "{n} MCP servers", "{n} 个 MCP 服务器"));
     }
@@ -511,6 +595,39 @@ pub struct SyncOptions {
     pub on_change: bool,
     /// Sync records kept in the folder.
     pub keep: u32,
+    /// What goes into the file and what a compare looks at.
+    #[serde(default)]
+    pub content: SyncContent,
+}
+
+/// The kinds of content that can be synced; each one can be left out on this device.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SyncContent {
+    /// Every agent's providers and model lists.
+    pub providers: bool,
+    /// The provider library.
+    pub library: bool,
+    /// The MCP library.
+    pub mcp: bool,
+    /// The skill library.
+    pub skills: bool,
+}
+
+impl Default for SyncContent {
+    fn default() -> Self {
+        SyncContent { providers: true, library: true, mcp: true, skills: true }
+    }
+}
+
+impl SyncContent {
+    fn any(self) -> bool {
+        self.providers || self.library || self.mcp || self.skills
+    }
+
+    fn all(self) -> bool {
+        self.providers && self.library && self.mcp && self.skills
+    }
 }
 
 const KEEP_DEFAULT: u32 = 10;
@@ -519,15 +636,24 @@ const KEEP_MAX: u32 = 100;
 fn options_in(root: &Value) -> SyncOptions {
     let flag = |k| store::agent_get(root, SECTION, k).and_then(|v| v.as_bool()).unwrap_or(false);
     let keep = store::agent_get(root, SECTION, "keep").and_then(|v| v.as_u64()).map(|n| n.clamp(1, KEEP_MAX as u64) as u32).unwrap_or(KEEP_DEFAULT);
-    SyncOptions { on_start: flag("onStart"), on_change: flag("onChange"), keep }
+    // Anything not turned off is synced.
+    let with = |k| store::agent_get(root, SECTION, k).and_then(|v| v.as_bool()).unwrap_or(true);
+    let content = SyncContent { providers: with("withProviders"), library: with("withLibrary"), mcp: with("withMcp"), skills: with("withSkills") };
+    SyncOptions { on_start: flag("onStart"), on_change: flag("onChange"), keep, content }
 }
 
 pub fn set_options(o: SyncOptions) -> Result<()> {
+    if !o.content.any() {
+        bail!("{}", crate::i18n::l("Choose at least one kind of content to sync", "至少选择一类要同步的内容"));
+    }
     let keep = o.keep.clamp(1, KEEP_MAX);
     store::update(|s| {
         store::set_value(s, SECTION, "onStart", Value::Bool(o.on_start));
         store::set_value(s, SECTION, "onChange", Value::Bool(o.on_change));
         store::set_value(s, SECTION, "keep", json!(keep));
+        for (k, v) in [("withProviders", o.content.providers), ("withLibrary", o.content.library), ("withMcp", o.content.mcp), ("withSkills", o.content.skills)] {
+            store::set_value(s, SECTION, k, Value::Bool(v));
+        }
         Ok(())
     })?;
     if let Some(f) = folder() {
@@ -610,7 +736,10 @@ pub fn auto(trigger: &str) -> AutoResult {
             message: Some(tr!("{from} synced new changes. Compare and import them on the sync page before this device syncs", "{from} 同步了新的内容。请先在同步页对比导入，本机才会继续自动同步")),
         };
     }
-    let b = build(&root);
+    let b = match build(&root) {
+        Ok(b) => b,
+        Err(e) => return fail(e),
+    };
     if doc.is_some() && store::get_str(&root, SECTION, "lastHash").as_deref() == Some(b.hash.as_str()) {
         return AutoResult { outcome: Outcome::Unchanged, message: None };
     }
@@ -623,6 +752,12 @@ pub fn auto(trigger: &str) -> AutoResult {
 static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
 static CHANGE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+thread_local! {
+    /// Observe scheduled changes without spawning threads that would lose TestHome.
+    pub(crate) static TEST_CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Lets `changed` report to the window.
 pub fn init(app: tauri::AppHandle) {
     let _ = APP.set(app);
@@ -633,6 +768,11 @@ pub fn init(app: tauri::AppHandle) {
 /// tells the window with a `sync-auto` event.
 pub fn changed() {
     if !options_in(&store::load()).on_change {
+        return;
+    }
+    #[cfg(test)]
+    if crate::util::test_home().is_some() {
+        TEST_CHANGES.with(|n| n.set(n.get() + 1));
         return;
     }
     let n = CHANGE.fetch_add(1, Ordering::SeqCst) + 1;
@@ -736,7 +876,8 @@ pub struct SkillChange {
     /// Stable id of the change (not shown).
     pub key: String,
     pub name: String,
-    /// Which version: its files are read from the sync file (or a record) by this.
+    /// Fingerprint of all files, even for legacy snapshots whose stored sig was partial.
+    /// The exact content previewed is read from the sync file or a record by this.
     pub sig: String,
 }
 
@@ -764,6 +905,21 @@ fn key_note(has: bool) -> &'static str {
     }
 }
 
+/// Prefer the same account even when another account or a key-less entry comes first.
+/// Old exports omit fingerprints, and a sole key-less entry can be filled in, but an
+/// endpoint-only match is safe only when neither side has multiple accounts there.
+fn matching_account<'a, T>(local: &[&'a T], fp: Option<&str>, unique_remote: bool, key: impl Fn(&T) -> (bool, Option<&str>)) -> Option<&'a T> {
+    if let Some(fp) = fp {
+        if let Some(entry) = local.iter().copied().find(|entry| key(entry).1 == Some(fp)) {
+            return Some(entry);
+        }
+    }
+    match local {
+        [entry] if unique_remote && (fp.is_none() || !key(entry).0) => Some(*entry),
+        _ => None,
+    }
+}
+
 fn library_suggestions(remote: &[Value], local: &[LibEntry], keys: &Value) -> Vec<Suggestion> {
     let mut out = vec![];
     for r in remote {
@@ -773,8 +929,13 @@ fn library_suggestions(remote: &[Value], local: &[LibEntry], keys: &Value) -> Ve
         }
         let models = str_list(r.get("models")).unwrap_or_default();
         let fp = remote_key(r, keys);
-        let key = format!("lib:{}|{api}", norm_url(&base));
-        match local.iter().find(|e| norm_url(&e.base_url) == norm_url(&base) && e.api == api) {
+        // Identity does not depend on whether the file still contains the secret itself.
+        let account = r["keyFp"].as_str().filter(|fp| !fp.is_empty());
+        let endpoint = norm_url(&base);
+        let key = format!("lib:{endpoint}|{api}|{}", account.unwrap_or_default());
+        let candidates: Vec<_> = local.iter().filter(|e| norm_url(&e.base_url) == endpoint && e.api == api).collect();
+        let unique_remote = remote.iter().filter(|r| norm_url(&str_field(r, "baseUrl")) == endpoint && str_field(r, "api") == api).count() == 1;
+        match matching_account(&candidates, account, unique_remote, |e| (e.has_key, e.key_fp.as_deref())) {
             None => out.push(Suggestion {
                 agent: library::FROM.into(),
                 title: tr!("Add \"{name}\" to the provider library", "供应商库添加「{name}」"),
@@ -814,18 +975,25 @@ fn library_suggestions(remote: &[Value], local: &[LibEntry], keys: &Value) -> Ve
 
 fn agent_suggestions(a: &str, remote: &Value, local: &AgentState, keys: &Value) -> Vec<Suggestion> {
     let mut out = vec![];
-    for rp in remote["providers"].as_array().cloned().unwrap_or_default() {
+    let providers = remote["providers"].as_array().map(Vec::as_slice).unwrap_or_default();
+    for rp in providers {
         let base = rp["baseUrl"].as_str().unwrap_or_default();
         let name = rp["name"].as_str().unwrap_or_default();
         let api = rp["api"].as_str().unwrap_or("chat");
-        let lp = local.providers.iter().find(|p| p.api == api && p.base_url.as_deref().map(norm_url) == Some(norm_url(base)));
+        let account = rp["keyFp"].as_str().filter(|fp| !fp.is_empty());
+        let base_key = norm_url(base);
+        let candidates: Vec<_> = local.providers.iter().filter(|p| p.api == api && p.base_url.as_deref().map(norm_url).as_deref() == Some(base_key.as_str())).collect();
+        let unique_remote = providers.iter().filter(|r| norm_url(&str_field(r, "baseUrl")) == base_key && r["api"].as_str().unwrap_or("chat") == api).count() == 1;
+        let lp = matching_account(&candidates, account, unique_remote, |p| (p.has_key, p.key_fp.as_deref()));
         let rmodels: Vec<Value> = rp["models"].as_array().cloned().unwrap_or_default();
         match lp {
             None => {
                 let ids: Vec<String> = rmodels.iter().filter(|m| m["visible"].as_bool().unwrap_or(true)).filter_map(|m| m["id"].as_str().map(String::from)).collect();
-                let fp = remote_key(&rp, keys);
-                // Per address and protocol too: remote providers can share both name and URL.
-                let key = format!("pu:sync-{a}-{}-{}-{api}", slug(name), slug(base));
+                let fp = remote_key(rp, keys);
+                // Preserve the endpoint's full identity: slug(base) would merge paths that
+                // differ only in case or punctuation and overwrite another draft op.
+                let endpoint = hex(ring::digest::digest(&ring::digest::SHA256, base_key.as_bytes()).as_ref());
+                let key = format!("pu:sync-{a}-{}-{endpoint}-{api}-{}", slug(name), account.unwrap_or_default());
                 out.push(Suggestion {
                     agent: a.into(),
                     title: tr!("Add provider \"{name}\"", "添加供应商「{name}」"),
@@ -896,10 +1064,19 @@ pub fn preview_import(snapshot: Option<&str>) -> Result<Vec<Suggestion>> {
         ack_current();
     }
     let keys = &payload["keys"];
-    let mut out = library_suggestions(payload["library"].as_array().map(Vec::as_slice).unwrap_or_default(), &library::list(), keys);
-    out.extend(mcp_suggestions(payload["mcp"].as_array().map(Vec::as_slice).unwrap_or_default(), &crate::mcp::library::all(), &|fp| key_in(&payload, fp).ok()));
-    out.extend(skill_suggestions(payload["skills"].as_array().map(Vec::as_slice).unwrap_or_default(), &crate::skills::sync::local()));
-    for a in adapters::ALL {
+    let content = options_in(&store::load()).content;
+    let list = |k: &str| payload[k].as_array().map(Vec::as_slice).unwrap_or_default().to_vec();
+    let mut out = vec![];
+    if content.library {
+        out.extend(library_suggestions(&list("library"), &library::list(), keys));
+    }
+    if content.mcp {
+        out.extend(mcp_suggestions(&list("mcp"), &crate::mcp::library::all(), &|fp| key_in(&payload, fp).ok()));
+    }
+    if content.skills {
+        out.extend(skill_suggestions(&list("skills"), &crate::skills::sync::local())?);
+    }
+    for a in adapters::ALL.iter().filter(|_| content.providers) {
         let Some(remote) = payload["agents"].get(a) else { continue };
         let Ok(local) = adapters::state(a) else { continue };
         out.extend(agent_suggestions(a, remote, &local, keys));
@@ -909,8 +1086,14 @@ pub fn preview_import(snapshot: Option<&str>) -> Result<Vec<Suggestion>> {
 
 /// A value the sync file doesn't hold is taken from this machine's entry of the same name
 /// (same env / header name, same argument position), so an update without keys keeps them.
+/// Only when the entry still runs the same program or talks to the same origin: a synced entry
+/// that points elsewhere must not pick up this machine's secrets (anyone who can write the
+/// shared folder could otherwise send them to their own server).
 fn fill_missing(i: &mut crate::mcp::McpInput, local: Option<&crate::mcp::McpInput>) {
     let Some(l) = local else { return };
+    if !same_target(i, l) {
+        return;
+    }
     for (mine, theirs) in [(&mut i.env, &l.env), (&mut i.headers, &l.headers)] {
         for p in mine.iter_mut().filter(|p| p.value.is_empty()) {
             if let Some(x) = theirs.iter().find(|x| x.key == p.key) {
@@ -925,6 +1108,24 @@ fn fill_missing(i: &mut crate::mcp::McpInput, local: Option<&crate::mcp::McpInpu
     }
     if i.url.as_deref() == Some("") {
         i.url = l.url.clone();
+    }
+}
+
+/// Where the values would go stays the same: a stdio server (a program on this machine, which
+/// can read this machine's secrets anyway once it runs), or a remote one at the same origin (an
+/// address the file leaves out is this machine's). A remote entry moved elsewhere gets none.
+fn same_target(i: &crate::mcp::McpInput, l: &crate::mcp::McpInput) -> bool {
+    let stdio = |x: &crate::mcp::McpInput| x.transport == "stdio";
+    if stdio(i) || stdio(l) {
+        return stdio(i) && stdio(l);
+    }
+    match (i.url.as_deref().filter(|u| !u.is_empty()), l.url.as_deref()) {
+        (None, _) => true,
+        (Some(a), Some(b)) => match (url::Url::parse(a), url::Url::parse(b)) {
+            (Ok(a), Ok(b)) => crate::net::same_origin(&a, &b),
+            _ => false,
+        },
+        (Some(_), None) => false,
     }
 }
 
@@ -976,12 +1177,13 @@ pub fn adopt_mcp(changes: Vec<McpChange>) -> Result<String> {
     Ok(trn!(changes.len(), "Updated {n} MCP library entry", "Updated {n} MCP library entries", "已更新 MCP 库里的 {n} 项"))
 }
 
-fn skill_suggestions(remote: &[Value], local: &[(String, String)]) -> Vec<Suggestion> {
+fn skill_suggestions(remote: &[Value], local: &[(String, String)]) -> Result<Vec<Suggestion>> {
     let mut out = vec![];
     for r in remote {
-        let (Some(name), Some(sig)) = (r["name"].as_str(), r["sig"].as_str()) else { continue };
+        let Some(name) = r["name"].as_str() else { continue };
+        let sig = crate::skills::sync::fingerprint(r)?;
         let mine = local.iter().find(|(n, _)| n == name);
-        if mine.is_some_and(|(_, s)| s == sig) {
+        if mine.is_some_and(|(_, s)| *s == sig) {
             continue;
         }
         let files = r["files"].as_array().map(Vec::len).unwrap_or(0);
@@ -992,16 +1194,18 @@ fn skill_suggestions(remote: &[Value], local: &[(String, String)]) -> Vec<Sugges
             ops: vec![],
             lib: None,
             mcp: None,
-            skill: Some(SkillChange { key: format!("skill:{name}"), name: name.into(), sig: sig.into() }),
+            skill: Some(SkillChange { key: format!("skill:{name}"), name: name.into(), sig }),
         });
     }
-    out
+    Ok(out)
 }
 
 /// Writes the chosen skill-library changes, reading each version from the sync file or, for a
 /// restore from an older record, from the records.
 pub fn adopt_skills(changes: Vec<SkillChange>) -> Result<String> {
-    let find = |p: &Value, c: &SkillChange| p["skills"].as_array().and_then(|a| a.iter().find(|s| s["name"] == c.name.as_str() && s["sig"] == c.sig.as_str())).cloned();
+    let find = |p: &Value, c: &SkillChange| p["skills"].as_array().and_then(|a| a.iter().find(|s| {
+        s["name"] == c.name.as_str() && crate::skills::sync::fingerprint(s).is_ok_and(|sig| sig == c.sig)
+    })).cloned();
     let current = read_payload().ok();
     let records: Vec<String> = folder().map(|f| snapshots(&history_dir(Path::new(&f)))).unwrap_or_default();
     for c in &changes {
@@ -1109,9 +1313,19 @@ mod tests {
     /// A version 1 file (no format, no library) still imports.
     #[test]
     fn old_plain_files_still_open() {
-        let back = open_doc(&json!({ "version": 1, "agents": { "codex": {} } }), Some("pass-1234")).unwrap();
+        let back = open_doc(&json!({ "version": 1, "agents": { "codex": {} } }), None).unwrap();
         assert!(back["agents"]["codex"].is_object());
         assert!(back["library"].is_null());
+    }
+
+    /// With a sync password here, a plain file is a possible swap, not something to import.
+    #[test]
+    fn a_plain_file_is_refused_when_this_device_has_a_password() {
+        let plain = json!({ "version": 2, "agents": {}, "mcp": [{ "name": "x", "transport": "http", "url": "https://evil.example/mcp" }] });
+        let err = open_doc(&plain, Some("pass-1234")).unwrap_err().to_string();
+        assert!(err.contains("没有加密"), "{err}");
+        let sealed = seal_doc(&json!({ "agents": {} }), Some("pass-1234"), "t", "PC").unwrap();
+        assert!(open_doc(&sealed, Some("pass-1234")).is_ok());
     }
 
     #[test]
@@ -1123,7 +1337,7 @@ mod tests {
     }
 
     fn entry(id: &str, url: &str, api: &str, models: &[&str], has_key: bool) -> LibEntry {
-        LibEntry { id: id.into(), name: id.into(), base_url: url.into(), api: api.into(), has_key, key_hint: None, key_fp: None, models: models.iter().map(|s| s.to_string()).collect() }
+        LibEntry { id: id.into(), name: id.into(), base_url: url.into(), api: api.into(), has_key, key_hint: None, key_fp: has_key.then(|| key_fingerprint("sk-relay")), models: models.iter().map(|s| s.to_string()).collect() }
     }
 
     #[test]
@@ -1141,12 +1355,185 @@ mod tests {
         let s = library_suggestions(remote, &[entry("relay", "https://Relay.example.com/v1/", "chat", &[], false)], &p["keys"]);
         let c = s[0].lib.as_ref().unwrap();
         assert_eq!((c.id.as_deref(), c.models.clone(), c.key_fp.clone()), (Some("relay"), vec!["m1".to_string()], Some(fp)));
-        // Already has the model and a key of its own: nothing to do.
+        // Already has the model and the same key: nothing to do.
         assert!(library_suggestions(remote, &[entry("relay", "https://relay.example.com/v1", "chat", &["m1"], true)], &p["keys"]).is_empty());
         // Another protocol at the same address is another entry.
         assert_eq!(library_suggestions(remote, &[entry("relay", "https://relay.example.com/v1", "anthropic", &["m1"], true)], &p["keys"])[0].lib.as_ref().unwrap().id, None);
         // A key the file doesn't hold (a plain export) is not offered.
         assert_eq!(library_suggestions(remote, &[], &json!({}))[0].lib.as_ref().unwrap().key_fp, None);
+    }
+
+    #[test]
+    fn library_sync_keeps_accounts_and_their_models_separate() {
+        let h = TestHome::new("sync-library-accounts");
+        let folder = share(&h);
+        let personal = library::save(LibInput {
+            id: None, name: "Personal".into(), base_url: "https://relay.example/v1".into(), api: "chat".into(),
+            api_key: Some("sk-personal".into()), models: Some(vec!["shared".into()]), adopt_from: None,
+        }).unwrap();
+        let work = key_fingerprint("sk-work");
+        let other = key_fingerprint("sk-other");
+        let p = json!({ "library": [
+            { "name": "Relay", "baseUrl": "https://RELAY.example:443/v1/", "api": "chat", "models": ["shared"], "keyFp": work },
+            { "name": "Relay", "baseUrl": "https://relay.example/v1", "api": "chat", "models": ["other-only"], "keyFp": other }
+        ], "keys": { work.clone(): "sk-work", other.clone(): "sk-other" } });
+        std::fs::write(folder.join(FILE), seal_doc(&p, None, "t", "OTHER").unwrap().to_string()).unwrap();
+        let changes: Vec<_> = preview_import(None).unwrap().into_iter().filter_map(|s| s.lib).collect();
+        assert_eq!(changes.len(), 2, "different accounts are offered even when their models already exist");
+        assert!(changes.iter().all(|c| c.id.is_none()));
+        assert_ne!(changes[0].key, changes[1].key);
+        adopt_library(changes).unwrap();
+        assert_eq!(library::list().len(), 3);
+        let original = library::endpoint(&personal.id).unwrap();
+        assert_eq!(original.key.as_deref(), Some("sk-personal"));
+        assert_eq!(original.models, ["shared"]);
+        for (fp, secret, model) in [(work, "sk-work", "shared"), (other, "sk-other", "other-only")] {
+            let e = library::list().into_iter().find(|e| e.key_fp.as_deref() == Some(fp.as_str())).unwrap();
+            assert_eq!(library::endpoint(&e.id).unwrap().key.as_deref(), Some(secret));
+            assert_eq!(e.models, [model]);
+        }
+        assert!(preview_import(None).unwrap().is_empty(), "repeated comparisons must find the exact account");
+    }
+
+    #[test]
+    fn library_sync_prefers_the_exact_account_over_keyless_and_other_accounts() {
+        let p = payload();
+        let base = "https://relay.example.com/v1";
+        let blank = entry("blank", base, "chat", &[], false);
+        let mut other = entry("other", base, "chat", &[], true);
+        other.key_fp = Some(key_fingerprint("sk-other"));
+        let same = entry("same", base, "chat", &[], true);
+        for local in [[blank.clone(), other.clone(), same.clone()], [other, same, blank]] {
+            let s = library_suggestions(p["library"].as_array().unwrap(), &local, &p["keys"]);
+            assert_eq!(s.len(), 1);
+            let c = s[0].lib.as_ref().unwrap();
+            assert_eq!(c.id.as_deref(), Some("same"));
+            assert_eq!(c.models, ["m1"]);
+            assert!(c.key_fp.is_none(), "an existing account's key is not rewritten");
+        }
+    }
+
+    #[test]
+    fn library_sync_uses_keyless_matches_only_when_unambiguous() {
+        let p = payload();
+        let first = p["library"][0].clone();
+        let mut second = first.clone();
+        second["keyFp"] = json!(key_fingerprint("sk-other"));
+        let blank = entry("blank", "https://relay.example.com/v1", "chat", &[], false);
+        let s = library_suggestions(std::slice::from_ref(&first), std::slice::from_ref(&blank), &p["keys"]);
+        assert_eq!(s[0].lib.as_ref().unwrap().id.as_deref(), Some("blank"));
+        assert!(s[0].lib.as_ref().unwrap().key_fp.is_some());
+        // Two remote accounts must never both fill the same key-less entry.
+        let s = library_suggestions(&[first.clone(), second], std::slice::from_ref(&blank), &p["keys"]);
+        assert_eq!(s.len(), 2);
+        assert!(s.iter().all(|s| s.lib.as_ref().unwrap().id.is_none()));
+        let mut keyed = entry("keyed", "https://relay.example.com/v1", "chat", &[], true);
+        keyed.key_fp = Some(key_fingerprint("sk-other"));
+        // A missing key value does not erase a known account mismatch.
+        let s = library_suggestions(std::slice::from_ref(&first), std::slice::from_ref(&keyed), &json!({}));
+        let c = s[0].lib.as_ref().unwrap();
+        assert!(c.id.is_none() && c.key_fp.is_none());
+        // Old exports have no fingerprint: retain the unique endpoint match, without
+        // picking an arbitrary account when several local entries share that endpoint.
+        let mut old = first;
+        old.as_object_mut().unwrap().remove("keyFp");
+        let s = library_suggestions(std::slice::from_ref(&old), std::slice::from_ref(&keyed), &json!({}));
+        assert_eq!(s[0].lib.as_ref().unwrap().id.as_deref(), Some("keyed"));
+        let s = library_suggestions(&[old], &[blank, keyed], &json!({}));
+        assert!(s[0].lib.as_ref().unwrap().id.is_none());
+    }
+
+    #[test]
+    fn agent_sync_keeps_accounts_in_separate_drafts_and_configs() {
+        let h = TestHome::new("sync-agent-accounts");
+        let folder = share(&h);
+        let personal: crate::model::Op = serde_json::from_value(json!({ "op": "upsert_provider", "provider": {
+            "id": null, "name": "Personal", "baseUrl": "https://relay.example/v1", "api": "chat",
+            "apiKey": "sk-personal", "models": ["shared"]
+        } })).unwrap();
+        adapters::plan("opencode", &[personal], false).unwrap();
+        let work = key_fingerprint("sk-work");
+        let other = key_fingerprint("sk-other");
+        let p = json!({ "agents": { "opencode": { "providers": [
+            { "name": "Relay", "baseUrl": "https://relay.example/v1", "api": "chat", "models": [{ "id": "shared" }], "keyFp": work },
+            { "name": "Relay", "baseUrl": "https://RELAY.example:443/v1/", "api": "chat", "models": [{ "id": "other-only" }], "keyFp": other }
+        ] } }, "keys": { work.clone(): "sk-work", other.clone(): "sk-other" } });
+        std::fs::write(folder.join(FILE), seal_doc(&p, None, "t", "OTHER").unwrap().to_string()).unwrap();
+        let suggestions = preview_import(None).unwrap();
+        assert_eq!(suggestions.len(), 2);
+        // The frontend stores ops by their draft key; both same-name accounts must survive.
+        let draft: std::collections::BTreeMap<_, _> = suggestions.into_iter().flat_map(|s| s.ops).collect();
+        assert_eq!(draft.len(), 2);
+        let ops: Vec<crate::model::Op> = draft.into_values().map(|v| serde_json::from_value(v).unwrap()).collect();
+        assert!(ops.iter().all(|o| matches!(o, crate::model::Op::UpsertProvider { provider } if provider.id.is_none() && provider.api_key.is_none() && provider.key_from_sync.is_some())));
+        adapters::plan("opencode", &ops, false).unwrap();
+        let state = adapters::state("opencode").unwrap();
+        for (secret, model) in [("sk-personal", "shared"), ("sk-work", "shared"), ("sk-other", "other-only")] {
+            let fp = key_fingerprint(secret);
+            let matches: Vec<_> = state.providers.iter().filter(|p| p.key_fp.as_deref() == Some(fp.as_str())).collect();
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0].models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), [model]);
+            assert_eq!(adapters::provider_endpoint("opencode", &matches[0].id).unwrap().1.as_deref(), Some(secret));
+        }
+        assert!(preview_import(None).unwrap().is_empty());
+        // A later model addition targets its own account, not the first entry at the URL.
+        let mut updated = p["agents"]["opencode"].clone();
+        updated["providers"][1]["models"] = json!([{ "id": "new-other-model" }]);
+        let s = agent_suggestions("opencode", &updated, &state, &p["keys"]);
+        assert_eq!(s.len(), 1);
+        let target = state.providers.iter().find(|p| p.key_fp.as_deref() == Some(other.as_str())).unwrap();
+        assert_eq!(s[0].ops[0].1["provider"], target.id);
+        assert_eq!(s[0].ops[0].1["op"], "upsert_model");
+    }
+
+    #[test]
+    fn library_sync_keeps_case_sensitive_endpoints_and_their_keys_separate() {
+        let h = TestHome::new("sync-library-url-case");
+        let folder = share(&h);
+        set_options(SyncOptions { on_start: false, on_change: false, keep: 5, content: SyncContent { providers: false, library: true, mcp: false, skills: false } }).unwrap();
+        let input = |name: &str, base: &str| LibInput { id: None, name: name.into(), base_url: base.into(), api: "chat".into(), api_key: None, models: Some(vec![]), adopt_from: None };
+        let local = library::save(input("Team A", "https://relay.example/TeamA/v1")).unwrap();
+        let query = library::save(input("Query A", "https://relay.example/v1?team=A")).unwrap();
+        let fp = key_fingerprint("remote-key");
+        let p = json!({ "library": [
+            { "name": "Team a", "baseUrl": "https://relay.example/teama/v1", "api": "chat", "models": ["remote-only"], "keyFp": fp },
+            { "name": "Query a", "baseUrl": "https://relay.example/v1?team=a", "api": "chat", "models": [], "keyFp": fp }
+        ], "keys": { fp.clone(): "remote-key" } });
+        std::fs::write(folder.join(FILE), seal_doc(&p, None, "t", "OTHER").unwrap().to_string()).unwrap();
+        let changes: Vec<_> = preview_import(None).unwrap().into_iter().filter_map(|s| s.lib).collect();
+        assert_eq!(changes.len(), 2);
+        assert!(changes.iter().all(|c| c.id.is_none()));
+        adopt_library(changes).unwrap();
+        assert_eq!(library::list().len(), 4);
+        for original in [&local, &query] {
+            let e = library::endpoint(&original.id).unwrap();
+            assert_eq!(e.base_url, original.base_url);
+            assert!(e.key.is_none() && e.models.is_empty());
+        }
+        let added: Vec<_> = library::list().into_iter().filter(|e| e.id != local.id && e.id != query.id).collect();
+        assert!(added.iter().all(|e| library::endpoint(&e.id).unwrap().key.as_deref() == Some("remote-key")));
+        assert!(preview_import(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn agent_sync_keeps_distinct_endpoints_and_draft_keys() {
+        use crate::model::{Model, Provider};
+        let bases = ["https://relay.example/TeamA/v1", "https://relay.example/teama/v1", "https://relay.example/v1?team=A", "https://relay.example/v1?team=a"];
+        let providers: Vec<_> = bases.iter().map(|base| json!({ "name": "Relay", "baseUrl": base, "api": "chat", "models": [{ "id": "m" }] })).collect();
+        let remote = json!({ "providers": providers });
+        let mut local = AgentState::default();
+        let added = agent_suggestions("opencode", &remote, &local, &json!({}));
+        assert_eq!(added.len(), 4);
+        let keys: std::collections::HashSet<_> = added.iter().map(|s| &s.ops[0].0).collect();
+        assert_eq!(keys.len(), 4, "all suggestions must survive being added to the draft");
+        local.providers.push(Provider {
+            id: "upper".into(), api: "chat".into(), base_url: Some("https://RELAY.example:443/TeamA/v1/".into()),
+            models: vec![Model { id: "m".into(), ..Default::default() }], ..Default::default()
+        });
+        let added = agent_suggestions("opencode", &remote, &local, &json!({}));
+        assert_eq!(added.len(), 3);
+        let urls: Vec<_> = added.iter().map(|s| s.ops[0].1["provider"]["baseUrl"].as_str().unwrap()).collect();
+        assert_eq!(urls, bases[1..]);
     }
 
     #[test]
@@ -1236,7 +1623,7 @@ mod tests {
     }
 
     fn built(payload: Value, hash: &str) -> Built {
-        Built { payload, hash: hash.into(), providers: 0, library: 1, mcp: 0, skills: 0, too_big: vec![], keys: 1 }
+        Built { payload, hash: hash.into(), providers: 0, library: 1, mcp: 0, skills: 0, too_big: vec![], keys: 1, unreadable: None }
     }
 
     /// A temp home with a sync folder set; returns the folder.
@@ -1266,7 +1653,7 @@ mod tests {
     fn exports_keep_records_up_to_the_limit() {
         let h = TestHome::new("sync-records");
         let dir = share(&h);
-        set_options(SyncOptions { on_start: false, on_change: false, keep: 3 }).unwrap();
+        set_options(SyncOptions { on_start: false, on_change: false, keep: 3, content: SyncContent::default() }).unwrap();
         for i in 0..5 {
             export_built(&store::load(), built(payload(), &format!("h{i}"))).unwrap();
         }
@@ -1282,10 +1669,10 @@ mod tests {
         assert_eq!(store::get_str(&root, SECTION, "lastAck"), status().exported_at);
         // Lowering the limit prunes right away; other files in the folder are never touched.
         std::fs::write(history_dir(&dir).join("notes.txt"), "mine").unwrap();
-        set_options(SyncOptions { on_start: true, on_change: false, keep: 1 }).unwrap();
+        set_options(SyncOptions { on_start: true, on_change: false, keep: 1, content: SyncContent::default() }).unwrap();
         assert_eq!(history().len(), 1);
         assert!(history_dir(&dir).join("notes.txt").exists());
-        assert_eq!(status().options, SyncOptions { on_start: true, on_change: false, keep: 1 });
+        assert_eq!(status().options, SyncOptions { on_start: true, on_change: false, keep: 1, content: SyncContent::default() });
         assert!(read_snapshot("../agentplus-sync.json").is_err());
     }
 
@@ -1331,7 +1718,7 @@ mod tests {
         assert!(status().remote_pending);
         // Off unless the trigger is turned on.
         assert_eq!(auto("start").outcome, Outcome::Off);
-        set_options(SyncOptions { on_start: true, on_change: true, keep: 5 }).unwrap();
+        set_options(SyncOptions { on_start: true, on_change: true, keep: 5, content: SyncContent::default() }).unwrap();
         let r = auto("start");
         assert_eq!(r.outcome, Outcome::RemotePending);
         assert!(r.message.unwrap().contains("OTHER-PC"));
@@ -1381,6 +1768,49 @@ mod tests {
         assert_eq!(crate::mcp::library::all(), vec![entry("npx")]);
     }
 
+    /// Without keys, the file holds nothing to guess a secret from: no fingerprint, no last
+    /// characters. The other device still learns it has to enter the value.
+    #[test]
+    fn mcp_secrets_leave_no_trace_without_keys() {
+        let h = TestHome::new("sync-mcp-nofp");
+        let dir = share(&h);
+        set_include_keys(false).unwrap();
+        crate::mcp::library::save(serde_json::from_value(json!({ "name": "db", "transport": "http", "url": "https://u:pw4521@db.example.com/mcp?token=pin7788",
+            "headers": [{ "key": "X-Api-Key", "value": "hunter22" }], "env": [] })).unwrap()).unwrap();
+        export().unwrap();
+        let file = std::fs::read_to_string(dir.join(FILE)).unwrap();
+        for leak in [key_fingerprint("hunter22"), key_fingerprint("https://u:pw4521@db.example.com/mcp?token=pin7788"), "4521".into(), "7788".into(), "hunter22".into()] {
+            assert!(!file.contains(&leak), "{leak} in {file}");
+        }
+        crate::mcp::library::delete("db").unwrap();
+        let s: Vec<Suggestion> = preview_import(None).unwrap().into_iter().filter(|s| s.mcp.is_some()).collect();
+        assert!(s[0].detail.contains("个隐私值需要在本机填写"), "{}", s[0].detail);
+    }
+
+    /// Someone who can write the shared folder can't have this machine's secret filled into an
+    /// entry that points at their own server.
+    #[test]
+    fn secrets_are_not_filled_into_an_entry_moved_elsewhere() {
+        let remote = |url: &str, token: &str| -> crate::mcp::McpInput {
+            serde_json::from_value(json!({ "name": "gh", "transport": "http", "url": url, "headers": [{ "key": "Authorization", "value": token }] })).unwrap()
+        };
+        let mine = remote("https://api.githubcopilot.com/mcp/", "Bearer ghp_secret");
+        let filled = |from: crate::mcp::McpInput| {
+            let mut i = from;
+            fill_missing(&mut i, Some(&mine));
+            i.headers[0].value.clone()
+        };
+        assert_eq!(filled(remote("https://api.githubcopilot.com/mcp/v2", "")), "Bearer ghp_secret", "same origin: an update without keys keeps them");
+        assert_eq!(filled(remote("https://evil.example/mcp", "")), "");
+        assert_eq!(filled(remote("http://api.githubcopilot.com/mcp/", "")), "", "another scheme is another origin");
+        let mut other_transport = remote("https://api.githubcopilot.com/mcp/", "");
+        other_transport.transport = "sse".into();
+        assert_eq!(filled(other_transport), "Bearer ghp_secret", "same origin over SSE");
+        let mut stdio: crate::mcp::McpInput = serde_json::from_value(json!({ "name": "gh", "transport": "stdio", "command": "evil", "env": [{ "key": "Authorization", "value": "" }] })).unwrap();
+        fill_missing(&mut stdio, Some(&mine));
+        assert_eq!(stdio.env[0].value, "", "a remote entry's values never go into a local program");
+    }
+
     #[test]
     fn the_skill_library_travels_as_files() {
         let h = TestHome::new("sync-skills");
@@ -1407,6 +1837,223 @@ description: PDFs v2
         assert_eq!(preview_import(None).unwrap().into_iter().find(|s| s.skill.is_some()).unwrap().title, "更新技能库里的「pdf」");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn unreadable_skills_preserve_the_snapshot_and_sync_state() {
+        use std::fs;
+        use std::os::windows::fs::OpenOptionsExt;
+        let h = TestHome::new("sync-skills-read-error");
+        let dir = share(&h);
+        set_options(SyncOptions { on_start: false, on_change: true, keep: 5, content: SyncContent { providers: false, library: false, mcp: false, skills: true } }).unwrap();
+        let skill = crate::skills::library_dir().join("pdf");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\nname: pdf\ndescription: PDF\n---\n").unwrap();
+        fs::write(skill.join("busy.txt"), "before").unwrap();
+        export().unwrap();
+        let snapshot = fs::read(dir.join(FILE)).unwrap();
+        let state = store::load()[SECTION].clone();
+        let records = || snapshots(&history_dir(&dir)).into_iter().map(|n| {
+            let bytes = fs::read(history_dir(&dir).join(&n)).unwrap();
+            (n, bytes)
+        }).collect::<Vec<_>>();
+        let before_records = records();
+        // Even when other content changed, an unreadable file must stop both export paths.
+        fs::write(skill.join("SKILL.md"), "---\nname: pdf\ndescription: Updated PDF\n---\n").unwrap();
+        let lock = fs::OpenOptions::new().read(true).share_mode(0).open(skill.join("busy.txt")).unwrap();
+        assert!(export().is_err());
+        assert_eq!(auto("change").outcome, Outcome::Failed);
+        assert_eq!(fs::read(dir.join(FILE)).unwrap(), snapshot);
+        assert_eq!(store::load()[SECTION], state);
+        assert_eq!(records(), before_records);
+        drop(lock);
+        assert_eq!(auto("change").outcome, Outcome::Exported);
+        assert_ne!(fs::read(dir.join(FILE)).unwrap(), snapshot);
+        assert_eq!(read_payload().unwrap()["skills"].as_array().unwrap().len(), 1);
+        assert_eq!(auto("change").outcome, Outcome::Unchanged);
+    }
+
+    fn legacy_skill_entry() -> Value {
+        let mut files = vec![("SKILL.md".to_string(), "---\nname: pdf\ndescription: PDF\n---\n".to_string())];
+        files.extend((0..2000).map(|i| (format!("file-{i:04}.txt"), "x".to_string())));
+        files.sort();
+        // Independent fixture for the original algorithm: only the first 2000 paths.
+        let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+        for (path, body) in files.iter().take(2000) {
+            ctx.update(path.as_bytes());
+            ctx.update(&[0]);
+            ctx.update(body.as_bytes());
+            ctx.update(&[0]);
+        }
+        let old_sig = hex(&ctx.finish().as_ref()[..6]);
+        let list: Vec<_> = files.iter().map(|(path, body)| json!({ "path": path, "data": B64.encode(body) })).collect();
+        json!({ "name": "pdf", "description": "PDF", "sig": old_sig, "files": list })
+    }
+
+    #[test]
+    fn complete_legacy_skills_restore_and_compare_all_files() {
+        let _h = TestHome::new("sync-skills-legacy");
+        let entry = legacy_skill_entry();
+        let old_sig = entry["sig"].as_str().unwrap();
+        let full = crate::skills::sync::fingerprint(&entry).unwrap();
+        assert_ne!(full, old_sig);
+        assert_eq!(crate::skills::sync::write(&entry).unwrap(), crate::skills::write::Copied::Added);
+        let dir = crate::skills::library_dir().join("pdf");
+        assert_eq!(crate::skills::content(&dir).unwrap().0, 2001);
+        assert_eq!(std::fs::read_to_string(dir.join("file-1999.txt")).unwrap(), "x");
+        assert_eq!(crate::skills::sync::write(&entry).unwrap(), crate::skills::write::Copied::Same);
+        let local = crate::skills::sync::local();
+        assert_eq!(local, [("pdf".into(), full.clone())]);
+        assert!(skill_suggestions(std::slice::from_ref(&entry), &local).unwrap().is_empty());
+        let mut remote_change = entry.clone();
+        remote_change["files"][2000]["data"] = json!(B64.encode("changed"));
+        assert_eq!(skill_suggestions(std::slice::from_ref(&remote_change), &local).unwrap().len(), 1);
+        std::fs::write(dir.join("file-1999.txt"), "local change").unwrap();
+        assert_eq!(skill_suggestions(std::slice::from_ref(&entry), &crate::skills::sync::local()).unwrap().len(), 1);
+        // Old hashes still reject changes in their covered prefix.
+        let mut damaged = entry.clone();
+        damaged["files"][1]["data"] = json!(B64.encode("changed"));
+        assert!(crate::skills::sync::write(&damaged).is_err());
+        // A versioned full hash must also reject changes beyond the old limit.
+        remote_change["sigVersion"] = json!(2);
+        remote_change["sig"] = json!(full);
+        assert!(crate::skills::sync::write(&remote_change).is_err());
+        assert!(skill_suggestions(&[remote_change], &[]).is_err());
+    }
+
+    #[test]
+    fn legacy_restore_uses_the_previewed_content_and_rejects_missing_versions() {
+        let h = TestHome::new("sync-skills-legacy-record");
+        let folder = share(&h);
+        set_options(SyncOptions { on_start: false, on_change: false, keep: 5, content: SyncContent { providers: false, library: false, mcp: false, skills: true } }).unwrap();
+        let old = legacy_skill_entry();
+        let mut current = old.clone();
+        current["files"][2000]["data"] = json!(B64.encode("current"));
+        assert_eq!(old["sig"], current["sig"], "the legacy hashes collide after file 2000");
+        let old_sig = crate::skills::sync::fingerprint(&old).unwrap();
+        let current_sig = crate::skills::sync::fingerprint(&current).unwrap();
+        assert_ne!(old_sig, current_sig);
+        let record = "20260928T100000.000Z_OTHER.json";
+        let records = history_dir(&folder);
+        std::fs::create_dir_all(&records).unwrap();
+        let old_doc = seal_doc(&json!({ "skills": [old] }), None, "old", "OTHER").unwrap();
+        let current_doc = seal_doc(&json!({ "skills": [current] }), None, "current", "OTHER").unwrap();
+        std::fs::write(records.join(record), old_doc.to_string()).unwrap();
+        std::fs::write(folder.join(FILE), current_doc.to_string()).unwrap();
+        let changes: Vec<_> = preview_import(Some(record)).unwrap().into_iter().filter_map(|s| s.skill).collect();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].sig, old_sig);
+        adopt_skills(changes.clone()).unwrap();
+        let restored = crate::skills::library_dir().join("pdf/file-1999.txt");
+        assert_eq!(std::fs::read_to_string(&restored).unwrap(), "x");
+        assert!(preview_import(Some(record)).unwrap().is_empty());
+        let newer: Vec<_> = preview_import(None).unwrap().into_iter().filter_map(|s| s.skill).collect();
+        assert_eq!(newer[0].sig, current_sig);
+        // A chosen record removed after preview must not silently fall back to another
+        // version with the same old hash, or touch the local copy.
+        std::fs::remove_file(records.join(record)).unwrap();
+        std::fs::write(&restored, "local").unwrap();
+        assert!(adopt_skills(changes).is_err());
+        assert_eq!(std::fs::read_to_string(&restored).unwrap(), "local");
+        adopt_skills(newer).unwrap();
+        assert_eq!(std::fs::read_to_string(&restored).unwrap(), "current");
+    }
+
+    #[test]
+    fn content_left_out_is_neither_exported_nor_compared() {
+        let h = TestHome::new("sync-content");
+        let dir = share(&h);
+        crate::mcp::library::save(serde_json::from_value(json!({ "name": "gh", "transport": "stdio", "command": "npx" })).unwrap()).unwrap();
+        let d = crate::skills::library_dir().join("pdf");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), "---
+name: pdf
+description: PDFs
+---
+").unwrap();
+        let all = SyncContent::default();
+        let opts = |content| SyncOptions { on_start: false, on_change: false, keep: 5, content };
+        assert!(status().options.content == all);
+        export().unwrap();
+        let file = |k: &str| read_json(&dir.join(FILE)).unwrap().0[k].clone();
+        assert_eq!((file("mcp").as_array().unwrap().len(), file("skills").as_array().unwrap().len()), (1, 1));
+        // Turned off: left out of the summary, while the file keeps what it held for other devices.
+        set_options(opts(SyncContent { skills: false, mcp: false, ..all })).unwrap();
+        assert_eq!(status().options.content, SyncContent { skills: false, mcp: false, ..all });
+        crate::mcp::library::save(serde_json::from_value(json!({ "name": "local-only", "transport": "stdio", "command": "uvx" })).unwrap()).unwrap();
+        let msg = export().unwrap();
+        assert!(!msg.contains("MCP") && !msg.contains("技能"), "{msg}");
+        let names: Vec<_> = file("mcp").as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap_or_default().to_string()).collect();
+        assert_eq!(names, ["gh"], "this device's MCP library isn't exported, the file's is kept");
+        assert_eq!(file("skills").as_array().unwrap().len(), 1);
+        // The file from another device that has them: ignored here, and not a change of this device.
+        std::fs::write(dir.join(FILE), seal_doc(&json!({ "agents": {}, "library": [], "mcp": [{ "name": "new", "transport": "stdio", "command": "uvx" }], "skills": [], "keys": {} }), None, "t", "PC").unwrap().to_string()).unwrap();
+        assert!(preview_import(None).unwrap().is_empty());
+        let root = store::load();
+        assert_eq!(store::get_str(&root, SECTION, "lastHash"), Some(build(&root).unwrap().hash));
+        set_options(opts(all)).unwrap();
+        assert!(preview_import(None).unwrap().iter().any(|s| s.mcp.is_some()));
+        // Something has to stay on.
+        assert!(set_options(opts(SyncContent { providers: false, library: false, mcp: false, skills: false })).is_err());
+        assert_eq!(status().options.content, all);
+    }
+
+    /// Content left out here, and a file this device can't read: exporting would empty those
+    /// parts for every device, so it isn't done.
+    #[test]
+    fn an_unreadable_file_is_not_overwritten_when_content_is_left_out() {
+        let h = TestHome::new("sync-unreadable");
+        let dir = share(&h);
+        let other = seal_doc(&json!({ "agents": {}, "library": [], "mcp": [{ "name": "theirs", "transport": "stdio", "command": "x" }], "skills": [], "keys": {} }), Some("their-password"), "t", "PC").unwrap().to_string();
+        std::fs::write(dir.join(FILE), &other).unwrap();
+        set_password(Some("pass-1234"), false).unwrap();
+        set_options(SyncOptions { on_start: false, on_change: false, keep: 5, content: SyncContent { mcp: false, ..SyncContent::default() } }).unwrap();
+        let err = export().unwrap_err().to_string();
+        assert!(err.contains("没有导出"), "{err}");
+        assert_eq!(std::fs::read_to_string(dir.join(FILE)).unwrap(), other);
+        // Everything on: this device's export replaces the file as before.
+        set_options(SyncOptions { on_start: false, on_change: false, keep: 5, content: SyncContent::default() }).unwrap();
+        export().unwrap();
+    }
+
+    #[test]
+    fn carried_keys_are_counted_in_the_export_message() {
+        let h = TestHome::new("sync-carried-keys");
+        let dir = share(&h);
+        set_include_keys(true).unwrap();
+        let other = json!({ "agents": { "codex": { "providers": [{ "id": "a", "key": "fp-a" }] } }, "library": [], "mcp": [], "skills": [], "keys": { "fp-a": "sk-a" } });
+        std::fs::write(dir.join(FILE), seal_doc(&other, None, "t", "PC").unwrap().to_string()).unwrap();
+        set_options(SyncOptions { on_start: false, on_change: false, keep: 5, content: SyncContent { providers: false, ..SyncContent::default() } }).unwrap();
+        let b = build(&store::load()).unwrap();
+        assert_eq!(b.keys, 1);
+        let msg = export_built(&store::load(), b).unwrap();
+        assert!(msg.contains("1 个 API Key 以明文写入"), "{msg}");
+    }
+
+    #[test]
+    fn content_left_out_keeps_the_files_part_and_its_keys() {
+        let file = json!({
+            "agents": { "codex": { "providers": [{ "id": "a", "key": "fp-a" }] } },
+            "library": [{ "name": "L", "key": "fp-l" }],
+            "mcp": [], "skills": [],
+            "keys": { "fp-a": "sk-a", "fp-l": "sk-l", "fp-x": "sk-x" },
+        });
+        let mine = || json!({ "agents": {}, "library": [{ "name": "Mine" }], "mcp": [], "skills": [], "keys": {} });
+        let only_lib = SyncContent { providers: false, mcp: false, skills: false, library: true };
+        let mut p = mine();
+        carry_over(&mut p, &file, only_lib, true);
+        assert_eq!(p["agents"], file["agents"]);
+        assert_eq!(p["library"][0]["name"], "Mine", "what this device syncs is its own");
+        assert_eq!(p["keys"], json!({ "fp-a": "sk-a" }), "only the keys the carried part refers to");
+        // Without keys on this device, none are copied.
+        let mut p = mine();
+        carry_over(&mut p, &file, only_lib, false);
+        assert_eq!(p["keys"], json!({}));
+        // Everything on: the file changes nothing.
+        let mut p = mine();
+        carry_over(&mut p, &file, SyncContent::default(), true);
+        assert_eq!(p, mine());
+    }
+
     #[test]
     fn keys_are_found_in_older_records() {
         let h = TestHome::new("sync-old-key");
@@ -1421,5 +2068,10 @@ description: PDFs v2
         assert!(dir.join(FILE).exists());
         assert_eq!(key(&key_fingerprint("sk-relay")).unwrap(), "sk-relay");
         assert!(key(&key_fingerprint("sk-none")).is_err());
+        // A file naming the fingerprint with another value is forged: the records aren't asked.
+        let mut forged = payload();
+        forged["keys"] = json!({ key_fingerprint("sk-relay"): "x" });
+        export_built(&store::load(), built(forged, "c")).unwrap();
+        assert!(key(&key_fingerprint("sk-relay")).is_err());
     }
 }

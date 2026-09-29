@@ -211,8 +211,7 @@ fn depth(agent: &str) -> usize {
 
 /// A path as a comparable key (case-insensitive on Windows, either slash).
 fn norm(p: &str) -> String {
-    let p = p.replace('\\', "/").trim_end_matches('/').to_string();
-    if cfg!(windows) { p.to_lowercase() } else { p }
+    crate::env::current().path_key(p)
 }
 
 /// Skills an agent's config switches off, by name; `copies` maps SKILL.md paths to names for
@@ -295,13 +294,14 @@ pub fn overview(agents: &[String]) -> Overview {
             .filter(|r| keys.contains(&r.path))
             .flat_map(|r| r.skills.iter().map(|s| (format!("{}/SKILL.md", crate::env::resolve_path(&s.dir).to_string_lossy()), s.name.clone())))
             .collect();
-        let (switchable, mut off) = disabled(a, &copies);
+        let (switchable, off) = disabled(a, &copies);
         // Without a switch of its own: what AgentPlus moved out of its folder.
-        let parked = write::off_dir(a);
-        if !switchable && parked.is_dir() {
-            let skills = scan::scan(&parked, depth(a));
-            off.extend(skills.iter().map(|s| s.name.clone()));
-            found.push(SkillRoot { path: display_path(&parked), kind: Kind::Off, exists: true, owner: Some(a.clone()), readers: vec![], skills });
+        if !switchable {
+            for (parked, skills) in write::off_roots(a) {
+                // A parked copy is off, but a same-named copy in a readable root still loads.
+                // Only native config switches belong in the agent-wide disabled list.
+                found.push(SkillRoot { path: display_path(&parked), kind: Kind::Off, exists: true, owner: Some(a.clone()), readers: vec![], skills });
+            }
         }
         out.push(AgentSkills { agent: a.clone(), supported: true, roots: keys, disabled: off, switchable });
     }
@@ -350,6 +350,29 @@ mod tests {
         assert_eq!(agent(gemini::ID).disabled, ["shared-one"]);
         assert!(!agent(pi::ID).switchable);
         assert_eq!(agent(codex::ID).roots.len(), 3);
+    }
+
+    #[test]
+    fn parking_an_own_skill_does_not_disable_its_shared_copy() {
+        let h = TestHome::new("skills-parked-shared");
+        let own = h.0.join(".kimi-code/skills");
+        let shared = h.0.join(".agents/skills");
+        skill(&own, "pdf");
+        skill(&shared, "pdf");
+        write::set_enabled(kimi::ID, "pdf", &display_path(&own.join("pdf")), false).unwrap();
+        let o = overview(&[kimi::ID.into()]);
+        let a = &o.agents[0];
+        assert!(!a.switchable && a.disabled.is_empty());
+        let loaded = a.roots.iter().find_map(|p| o.roots.iter().find(|r| &r.path == p && r.skills.iter().any(|s| s.name == "pdf"))).unwrap();
+        assert_eq!(loaded.kind, Kind::Shared);
+        assert!(shared.join("pdf/SKILL.md").is_file());
+        let parked = o.roots.iter().find(|r| r.kind == Kind::Off && r.owner.as_deref() == Some(kimi::ID)).unwrap();
+        assert!(parked.readers.is_empty() && !a.roots.contains(&parked.path));
+        assert_eq!(parked.skills[0].name, "pdf");
+        write::set_enabled(kimi::ID, "pdf", &parked.skills[0].dir, true).unwrap();
+        assert!(own.join("pdf/SKILL.md").is_file());
+        let restored = overview(&[kimi::ID.into()]);
+        assert!(restored.roots.iter().filter(|r| r.kind == Kind::Off).all(|r| r.skills.is_empty()));
     }
 }
 

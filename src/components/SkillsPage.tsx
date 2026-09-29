@@ -55,12 +55,13 @@ function loaded(o: SkillsOverview, agent: AgentId, name: string): SkillRoot | un
 
 const isOff = (o: SkillsOverview, agent: AgentId, c: Copy) => !!o.agents.find((x) => x.agent === agent)?.disabled.some((d) => d === c.s.name || d === c.s.id);
 
-function seenBy(o: SkillsOverview, agent: AgentId, c: Copy): Seen {
+export function seenBy(o: SkillsOverview, agent: AgentId, c: Copy): Seen {
+  if (c.root.kind === "off" && c.root.owner === agent) return "disabled";
   if (loaded(o, agent, c.s.name) !== c.root) return "shadowed";
   return isOff(o, agent, c) ? "disabled" : "active";
 }
 
-function groups(o: SkillsOverview): Group[] {
+export function groups(o: SkillsOverview): Group[] {
   const by = new Map<string, Copy[]>();
   for (const root of o.roots) for (const s of root.skills) by.set(s.name, [...(by.get(s.name) ?? []), { root, s }]);
   return [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, copies]) => {
@@ -76,7 +77,7 @@ function groups(o: SkillsOverview): Group[] {
       copies,
       agents,
       builtin: copies.every((c) => c.root.kind === "builtin"),
-      differs: new Set(copies.map((c) => c.s.sig)).size > 1,
+      differs: copies.some((c) => !c.s.sig) || new Set(copies.map((c) => c.s.sig)).size > 1,
       problem: copies.some((c) => !!c.s.problem),
     };
   });
@@ -141,6 +142,7 @@ export function SkillsPage({ agents, flash }: { agents: AgentState[]; flash: Fla
       <main className="page">
         <div className="page-top">
           <div className="page-head">
+              <span className="page-icon"><Icon.book size={20} /></span>
             <div className="page-title">
               <h1>{t("skillsPage.title")}</h1>
               <span className="muted small hint">{t("skillsPage.subtitle")}</span>
@@ -343,7 +345,7 @@ function SkillDetail({ g, o, onClose, onCopy, onDelete, onToggle }: {
             {agents.length > 0 && (
               <div className="mcp-holders">
                 {agents.map((a) => {
-                  const seen: Seen = c.root.kind === "off" ? "disabled" : seenBy(o, a, c);
+                  const seen = seenBy(o, a, c);
                   const winner = seen === "shadowed" ? loaded(o, a, c.s.name) : undefined;
                   const why = seen === "shadowed" ? null : lockedReason(o, a, c);
                   return (
@@ -420,7 +422,7 @@ function CopyDialog({ c, o, flash, onClose, onDone }: { c: Copy; o: SkillsOvervi
       <div className="agent-picks skills-targets">
         {targets.map((r) => {
           const ex = there(r);
-          const same = ex?.sig === c.s.sig;
+          const same = !!c.s.sig && ex?.sig === c.s.sig;
           return (
             <label key={r.path} className={`apick${picked.has(r.path) && !same ? " on" : ""}${same ? " dim" : ""}`}>
               <input type="checkbox" disabled={same} checked={picked.has(r.path) && !same}

@@ -5,8 +5,8 @@
 //!
 //! Switching uses the agent's own setting when it has one (see `disabled`). Agents without
 //! one (Kimi, pi, DeepSeek Harness, OpenCode, Kilo) get the folder moved out of their skills
-//! folder into `~/.agentplus/skills-off/<agent>/`, and back when switched on; only folders
-//! the agent owns move, since a shared folder is read by other agents too.
+//! folder into an environment-specific folder in `~/.agentplus/skills-off/`, and back when
+//! switched on; only folders the agent owns move, since shared folders have other readers.
 
 use super::{norm, roots, Kind};
 use crate::adapters::{self, claude, codebuddy, codex, droid, gemini, hermes, mimo, msg, openclaw, qwen, zcode};
@@ -30,7 +30,83 @@ fn reason((en, zh): (&'static str, &'static str)) -> &'static str {
 
 /// Where AgentPlus keeps an agent's switched-off skills.
 pub fn off_dir(agent: &str) -> PathBuf {
+    off_dir_in(agent, &crate::env::current())
+}
+
+fn off_dir_in(agent: &str, target: &crate::env::Target) -> PathBuf {
+    let env = match target {
+        crate::env::Target::Windows => "windows".to_string(),
+        crate::env::Target::Wsl { distro, .. } => {
+            // A fixed-length, filesystem-safe key; distro names can contain Windows punctuation.
+            let hash = ring::digest::digest(&ring::digest::SHA256, distro.to_lowercase().as_bytes());
+            format!("wsl-{}", hash.as_ref().iter().map(|b| format!("{b:02x}")).collect::<String>())
+        }
+    };
+    agentplus_dir().join("skills-off").join("environments").join(env).join(agent)
+}
+
+fn legacy_dir(agent: &str) -> PathBuf {
     agentplus_dir().join("skills-off").join(agent)
+}
+
+/// Old stashes shared a physical folder. Only a unique metadata claim identifies its owner.
+fn legacy_origin(s: &Value, agent: &str, rel: &str) -> Option<(String, PathBuf)> {
+    let prefix = format!("{agent}@wsl:");
+    let mut claims = s.as_object()?.iter().filter(|(k, _)| *k == agent || k.starts_with(&prefix))
+        .filter_map(|(k, v)| v.get(OFF_KEY)?.get(rel)?.as_str().map(|p| (k.clone(), PathBuf::from(p))));
+    let first = claims.next()?;
+    claims.next().is_none().then_some(first)
+}
+
+fn legacy_problem() -> &'static str {
+    l("The original environment of this legacy disabled skill is unknown or ambiguous; recover it from its folder manually", "无法确定这个旧版停用技能的原环境，请从其目录手动恢复")
+}
+
+/// Include recoverable legacy folders, but never offer another environment's skill.
+pub(super) fn off_roots(agent: &str) -> Vec<(PathBuf, Vec<super::SkillCopy>)> {
+    let parked = off_dir(agent);
+    let mut out = vec![];
+    if parked.is_dir() {
+        let skills = super::scan::scan(&parked, super::depth(agent));
+        out.push((parked, skills));
+    }
+    let legacy = legacy_dir(agent);
+    let s = store::load();
+    let skills: Vec<_> = super::scan::scan(&legacy, super::depth(agent)).into_iter().filter_map(|mut skill| {
+        match legacy_origin(&s, agent, &skill.id) {
+            Some((scope, _)) if scope == store::scoped(agent) => Some(skill),
+            None if !crate::env::is_wsl() => {
+                skill.problem = Some(legacy_problem().into());
+                Some(skill)
+            }
+            _ => None,
+        }
+    }).collect();
+    if !skills.is_empty() {
+        out.push((legacy, skills));
+    }
+    out
+}
+
+/// Move an unambiguous old stash before reusing its metadata key for a new stash.
+fn migrate_legacy(agent: &str, rel: &str) -> Result<()> {
+    let from = legacy_dir(agent).join(rel);
+    if !from.exists() {
+        return Ok(());
+    }
+    let (scope, _) = legacy_origin(&store::load(), agent, rel).ok_or_else(|| anyhow!(legacy_problem()))?;
+    let target = if scope == agent {
+        crate::env::Target::Windows
+    } else {
+        crate::env::Target::Wsl { distro: scope.strip_prefix(&format!("{agent}@wsl:")).unwrap().into(), unix_home: String::new() }
+    };
+    let to = off_dir_in(agent, &target).join(rel);
+    if to.exists() {
+        bail!("{}", tr!("A disabled skill already exists at {}; recover the legacy copy first", "{} 已有停用技能，请先恢复旧版副本", display_path(&to)));
+    }
+    fs::create_dir_all(to.parent().unwrap())?;
+    fs::rename(from, to)?;
+    Ok(())
 }
 
 /// Every folder some agent keeps its own skills in, or shares, or adds in its config: the
@@ -80,7 +156,8 @@ fn put_copy(from: &Path, to: &Path) -> Result<()> {
     if tmp.exists() {
         fs::remove_dir_all(&tmp)?;
     }
-    if let Err(e) = copy_dir(from, &tmp) {
+    // Only the skill's own files: links out of it are not followed (see `scan::files`).
+    if let Err(e) = super::scan::copy_skill(from, &tmp) {
         let _ = fs::remove_dir_all(&tmp);
         return Err(e);
     }
@@ -107,18 +184,36 @@ pub enum Copied {
 
 /// Copies skill folder `from` into skills folder `to_root` (under the same folder name).
 pub fn copy(from: &str, to_root: &str, replace: bool) -> Result<Copied> {
+    copy_named(from, to_root, replace, None)
+}
+
+/// A portable single directory name, including Windows device-name restrictions.
+pub(super) fn safe_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or_default().to_ascii_uppercase();
+    !name.is_empty() && name.len() <= 200 && !name.starts_with('.') && !name.ends_with(['.', ' '])
+        && !name.chars().any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+        && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CLOCK$" | "CONIN$" | "CONOUT$")
+        && !["COM", "LPT"].iter().any(|p| stem.strip_prefix(p).is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")))
+}
+
+/// Imports may supply a stable name when the source is a temporary extraction folder.
+pub(super) fn copy_named(from: &str, to_root: &str, replace: bool, name: Option<&str>) -> Result<Copied> {
     let from = skill_dir(from)?;
     let to_root = crate::env::resolve_path(to_root);
     if !writable().iter().any(|(p, _)| same_path(p, &to_root)) && !same_path(&to_root, &super::library_dir()) {
         bail!("{}", l("That folder isn't one of the skills folders AgentPlus manages", "这个目录不在 AgentPlus 管理的技能目录里"));
     }
-    let name = from.file_name().ok_or_else(|| anyhow!(l("Invalid skill folder", "无效的技能目录")))?;
+    let name = match name {
+        Some(n) if safe_name(n) => std::ffi::OsStr::new(n),
+        Some(_) => bail!("{}", l("Invalid skill folder name", "无效的技能目录名")),
+        None => from.file_name().ok_or_else(|| anyhow!(l("Invalid skill folder", "无效的技能目录")))?,
+    };
     let to = to_root.join(name);
     if same_path(&from, &to) {
         return Ok(Copied::Same);
     }
     if to.exists() {
-        if super::content(&to).2 == super::content(&from).2 {
+        if super::content(&to)?.2 == super::content(&from)?.2 {
             return Ok(Copied::Same);
         }
         if !replace {
@@ -126,10 +221,16 @@ pub fn copy(from: &str, to_root: &str, replace: bool) -> Result<Copied> {
         }
         backup_with_dirs(JOB, &[], std::slice::from_ref(&to), reason(REASON_SKILL_REPLACE))?;
         put_copy(&from, &to)?;
+        if same_path(&to_root, &super::library_dir()) {
+            crate::sync::changed();
+        }
         return Ok(Copied::Replaced);
     }
     fs::create_dir_all(&to_root)?;
     put_copy(&from, &to)?;
+    if same_path(&to_root, &super::library_dir()) {
+        crate::sync::changed();
+    }
     Ok(Copied::Added)
 }
 
@@ -142,6 +243,9 @@ pub fn delete(dir: &str) -> Result<()> {
     }
     backup_with_dirs(JOB, &[], std::slice::from_ref(&d), reason(REASON_SKILL_DELETE))?;
     fs::remove_dir_all(&d)?;
+    if in_library {
+        crate::sync::changed();
+    }
     Ok(())
 }
 
@@ -213,7 +317,21 @@ fn codex_switch(dir: &Path, off: bool) -> Result<bool> {
     let path = codex::config_path();
     let (text, meta) = read_text_or_new(&path)?;
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| anyhow!(tr!("Failed to parse config.toml: {e}", "config.toml 解析失败：{e}")))?;
-    let md = dir.join("SKILL.md");
+    if !codex_config(&mut doc, dir, off, &crate::env::current())? {
+        return Ok(false);
+    }
+    if path.exists() {
+        backup_with_dirs(JOB, std::slice::from_ref(&path), &[], reason(REASON_SKILL_SWITCH))?;
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_text_atomic(&path, &doc.to_string(), meta)?;
+    Ok(true)
+}
+
+fn codex_config(doc: &mut toml_edit::DocumentMut, dir: &Path, off: bool, target: &crate::env::Target) -> Result<bool> {
+    let md = target.config_path(&dir.join("SKILL.md").to_string_lossy());
     let skills = doc.entry("skills").or_insert_with(|| {
         let mut t = toml_edit::Table::new();
         t.set_implicit(true);
@@ -222,41 +340,33 @@ fn codex_switch(dir: &Path, off: bool) -> Result<bool> {
     let skills = skills.as_table_mut().ok_or_else(|| anyhow!(l("skills in config.toml is not a table", "config.toml 里的 skills 不是表")))?;
     let list = skills.entry("config").or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
     let list = list.as_array_of_tables_mut().ok_or_else(|| anyhow!(l("skills.config in config.toml is not a list of tables", "config.toml 里的 skills.config 不是表数组")))?;
-    let at = list.iter().position(|t| t.get("path").and_then(|p| p.as_str()).is_some_and(|p| same_path(Path::new(p), &md)));
-    let changed = match (at, off) {
-        (Some(i), false) => {
-            list.remove(i);
-            true
-        }
-        (Some(i), true) => {
+    let matches: Vec<usize> = list.iter().enumerate().filter_map(|(i, t)| t.get("path").and_then(|p| p.as_str()).is_some_and(|p| target.path_key(p) == target.path_key(&md)).then_some(i)).collect();
+    let mut changed = false;
+    for &i in matches.iter().rev() {
+        if off && Some(&i) == matches.first() {
             let t = list.get_mut(i).unwrap();
-            let was = t.get("enabled").and_then(|e| e.as_bool()) == Some(false);
+            changed |= t.get("enabled").and_then(|e| e.as_bool()) != Some(false) || t.get("path").and_then(|p| p.as_str()) != Some(&md);
+            t["path"] = toml_edit::value(&md);
             t["enabled"] = toml_edit::value(false);
-            !was
+        } else {
+            list.remove(i);
+            changed = true;
         }
-        (None, true) => {
-            let mut t = toml_edit::Table::new();
-            t["path"] = toml_edit::value(md.to_string_lossy().to_string());
-            t["enabled"] = toml_edit::value(false);
-            list.push(t);
-            true
-        }
-        (None, false) => false,
-    };
+    }
+    if off && matches.is_empty() {
+        let mut t = toml_edit::Table::new();
+        t["path"] = toml_edit::value(&md);
+        t["enabled"] = toml_edit::value(false);
+        list.push(t);
+        changed = true;
+    }
     if list.is_empty() {
         skills.remove("config");
     }
     if skills.is_empty() {
         doc.remove("skills");
     }
-    if !changed {
-        return Ok(false);
-    }
-    if path.exists() {
-        backup_with_dirs(JOB, std::slice::from_ref(&path), &[], reason(REASON_SKILL_SWITCH))?;
-    }
-    write_text_atomic(&path, &doc.to_string(), meta)?;
-    Ok(true)
+    Ok(changed)
 }
 
 /// Hermes `skills.disabled` in config.yaml, rewriting only the `skills:` block.
@@ -296,8 +406,11 @@ fn stash(agent: &str, dir: &Path) -> Result<()> {
         ));
     };
     let rel = dir.strip_prefix(&root).map_err(|_| anyhow!(l("Invalid skill folder", "无效的技能目录")))?.to_path_buf();
+    migrate_legacy(agent, &rel.to_string_lossy().replace('\\', "/"))?;
     let to = off_dir(agent).join(&rel);
     if to.exists() {
+        // An earlier copy switched off under the same name: kept in History, not lost.
+        backup_with_dirs(JOB, &[], std::slice::from_ref(&to), reason(REASON_SKILL_SWITCH))?;
         fs::remove_dir_all(&to)?;
     }
     fs::create_dir_all(to.parent().unwrap())?;
@@ -314,11 +427,25 @@ fn stash(agent: &str, dir: &Path) -> Result<()> {
 
 fn unstash(agent: &str, dir: &Path) -> Result<()> {
     let off = off_dir(agent);
-    let rel = dir.strip_prefix(&off).map_err(|_| anyhow!(l("This skill isn't switched off by AgentPlus", "这个技能不是由 AgentPlus 停用的")))?.to_string_lossy().replace('\\', "/");
-    let back = store::get_obj(&store::load(), agent, OFF_KEY).get(&rel).and_then(Value::as_str).map(PathBuf::from).unwrap_or_else(|| {
-        let own = roots(agent).unwrap_or_default().into_iter().find(|(_, k)| *k == Kind::Own).map(|(p, _)| p).unwrap_or_default();
-        own.join(&rel)
-    });
+    let legacy = legacy_dir(agent);
+    let (rel, old) = dir.strip_prefix(&off).map(|r| (r, false)).or_else(|_| dir.strip_prefix(&legacy).map(|r| (r, true)))
+        .map_err(|_| anyhow!(l("This skill isn't switched off by AgentPlus", "这个技能不是由 AgentPlus 停用的")))?;
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    let s = store::load();
+    let stored = if old {
+        let (scope, p) = legacy_origin(&s, agent, &rel).ok_or_else(|| anyhow!(legacy_problem()))?;
+        if scope != store::scoped(agent) {
+            bail!("{}", l("This disabled skill belongs to another environment", "这个停用技能属于其他环境"));
+        }
+        Some(p)
+    } else {
+        store::get_obj(&s, agent, OFF_KEY).get(&rel).and_then(Value::as_str).map(PathBuf::from)
+    };
+    let own: Vec<_> = roots(agent).unwrap_or_default().into_iter().filter(|(_, k)| *k == Kind::Own).map(|(p, _)| p).collect();
+    let back = stored.map(|p| crate::env::resolve_path(&p.to_string_lossy())).or_else(|| own.first().map(|r| r.join(&rel))).ok_or_else(|| anyhow!(l("No skills folder for this agent", "这个 Agent 没有技能目录")))?;
+    if !own.iter().any(|r| back.ancestors().skip(1).any(|p| same_path(p, r))) {
+        bail!("{}", l("The original skill folder is outside this environment's agent folders", "技能的原目录不在当前环境的 Agent 目录中"));
+    }
     if back.exists() {
         bail!("{}", tr!("{} is back in place already; delete one of the two first", "{} 已经有同名技能，请先删掉其中一个", display_path(&back)));
     }
@@ -412,6 +539,105 @@ mod tests {
     }
 
     #[test]
+    fn library_mutations_schedule_sync_but_noops_and_agent_copies_do_not() {
+        let h = TestHome::new("skills-auto-sync");
+        crate::sync::set_options(crate::sync::SyncOptions {
+            on_start: false, on_change: true, keep: 5, content: crate::sync::SyncContent::default(),
+        }).unwrap();
+        let count = || crate::sync::TEST_CHANGES.with(|n| n.get());
+        let start = count();
+        let src = skill(&h.0.join("source"), "pdf", "v1");
+        let lib = display_path(&super::super::library_dir());
+        let from = display_path(&src);
+        assert_eq!(super::super::import::import(&from, &[]).unwrap()[0].result, Copied::Added);
+        assert_eq!(count(), start + 1);
+        assert_eq!(copy(&from, &lib, false).unwrap(), Copied::Same);
+        fs::write(src.join("extra.txt"), "new").unwrap();
+        assert_eq!(copy(&from, &lib, false).unwrap(), Copied::Exists);
+        assert_eq!(count(), start + 1);
+        assert_eq!(copy(&from, &lib, true).unwrap(), Copied::Replaced);
+        assert_eq!(count(), start + 2);
+        let shared = h.0.join(".agents/skills");
+        copy(&from, &display_path(&shared), false).unwrap();
+        delete(&display_path(&shared.join("pdf"))).unwrap();
+        assert_eq!(count(), start + 2);
+        delete(&display_path(&super::super::library_dir().join("pdf"))).unwrap();
+        assert_eq!(count(), start + 3);
+        assert!(copy(&from, &display_path(&h.0.join("unknown")), false).is_err());
+        assert_eq!(count(), start + 3);
+    }
+
+    #[test]
+    fn codex_wsl_switch_repairs_unc_paths_and_preserves_linux_case() {
+        let target = crate::env::Target::Wsl { distro: "Ubuntu".into(), unix_home: "/home/me".into() };
+        let dir = Path::new(r"\\wsl.localhost\Ubuntu\home\me\.codex\skills\PDF");
+        let unix = "/home/me/.codex/skills/PDF/SKILL.md";
+        let mut doc: toml_edit::DocumentMut = format!(
+            "[[skills.config]]\npath = '{}'\nenabled = false\n[[skills.config]]\npath = '{unix}'\nenabled = false\n[[skills.config]]\npath = '/home/me/.codex/skills/pdf/SKILL.md'\nenabled = false\n",
+            dir.join("SKILL.md").display(),
+        ).parse().unwrap();
+        assert!(codex_config(&mut doc, dir, true, &target).unwrap());
+        let list = doc["skills"]["config"].as_array_of_tables().unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.get(0).unwrap()["path"].as_str(), Some(unix));
+        assert!(!codex_config(&mut doc, dir, true, &target).unwrap());
+        assert!(codex_config(&mut doc, dir, false, &target).unwrap());
+        let list = doc["skills"]["config"].as_array_of_tables().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.get(0).unwrap()["path"].as_str(), Some("/home/me/.codex/skills/pdf/SKILL.md"));
+        assert!(!codex_config(&mut doc, dir, false, &target).unwrap());
+        let mut fresh = toml_edit::DocumentMut::new();
+        assert!(codex_config(&mut fresh, dir, true, &target).unwrap());
+        assert_eq!(fresh["skills"]["config"].as_array_of_tables().unwrap().get(0).unwrap()["path"].as_str(), Some(unix));
+    }
+
+    #[test]
+    fn disabled_folders_are_separate_and_legacy_wsl_skills_keep_their_owner() {
+        let h = TestHome::new("skills-env-stash");
+        let agent = adapters::kimi::ID;
+        let ubuntu = crate::env::Target::Wsl { distro: "Ubuntu".into(), unix_home: "/home/me".into() };
+        let debian = crate::env::Target::Wsl { distro: "Debian".into(), unix_home: "/home/me".into() };
+        let native = off_dir(agent);
+        assert_ne!(native, off_dir_in(agent, &ubuntu));
+        assert_ne!(off_dir_in(agent, &ubuntu), off_dir_in(agent, &debian));
+        let own = skill(&h.0.join(".kimi-code/skills"), "pdf", "Windows");
+        let legacy = skill(&legacy_dir(agent), "pdf", "WSL");
+        store::save(&json!({ "kimi@wsl:Ubuntu": { "skillsOff": { "pdf": r"\\wsl.localhost\Ubuntu\home\me\.kimi-code\skills\pdf" } } })).unwrap();
+        assert!(off_roots(agent).is_empty());
+        assert!(unstash(agent, &legacy).is_err());
+        stash(agent, &own).unwrap();
+        assert!(!legacy.exists());
+        assert!(fs::read_to_string(off_dir_in(agent, &ubuntu).join("pdf/SKILL.md")).unwrap().contains("WSL"));
+        assert!(fs::read_to_string(native.join("pdf/SKILL.md")).unwrap().contains("Windows"));
+        assert_eq!(off_roots(agent).iter().map(|(_, s)| s.len()).sum::<usize>(), 1);
+        unstash(agent, &native.join("pdf")).unwrap();
+        assert!(own.is_dir());
+        assert!(off_dir_in(agent, &ubuntu).join("pdf/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn legacy_stashes_restore_only_with_an_unambiguous_origin() {
+        let h = TestHome::new("skills-legacy");
+        let agent = adapters::kimi::ID;
+        let back = h.0.join(".kimi-code/skills/pdf");
+        let legacy = skill(&legacy_dir(agent), "pdf", "legacy");
+        // An orphan remains visible and intact instead of being restored into a guessed environment.
+        assert!(off_roots(agent)[0].1[0].problem.is_some());
+        assert!(unstash(agent, &legacy).is_err());
+        let mut state = json!({ "kimi": { "skillsOff": { "pdf": back.to_string_lossy() } }, "kimi@wsl:Ubuntu": { "skillsOff": { "pdf": "/home/me/.kimi-code/skills/pdf" } } });
+        store::save(&state).unwrap();
+        assert!(unstash(agent, &legacy).is_err());
+        assert!(migrate_legacy(agent, "pdf").is_err());
+        assert!(legacy.join("SKILL.md").is_file());
+        state.as_object_mut().unwrap().remove("kimi@wsl:Ubuntu");
+        store::save(&state).unwrap();
+        assert!(off_roots(agent)[0].1[0].problem.is_none());
+        unstash(agent, &legacy).unwrap();
+        assert!(back.join("SKILL.md").is_file());
+        assert!(!legacy.exists());
+    }
+
+    #[test]
     fn copying_adds_skips_the_same_and_asks_before_replacing() {
         let h = TestHome::new("skills-copy");
         let src = skill(&h.0.join(".codex/skills"), "pdf", "one");
@@ -487,5 +713,13 @@ mod tests {
         assert!(own.join("SKILL.md").is_file() && !parked.exists());
         let err = set_enabled(adapters::kimi::ID, "pdf", &display_path(&shared), false).unwrap_err().to_string();
         assert!(err.contains("没有单个技能的开关"), "{err}");
+        // Switched off again while an older copy is still parked: that one goes to History.
+        set_enabled(adapters::kimi::ID, "notes", &display_path(&own), false).unwrap();
+        skill(&h.0.join(".kimi-code/skills"), "notes", "newer");
+        set_enabled(adapters::kimi::ID, "notes", &display_path(&own), false).unwrap();
+        assert!(fs::read_to_string(parked.join("SKILL.md")).unwrap().contains("newer"));
+        let e = crate::history::list().unwrap().into_iter().find(|e| e.agent == JOB).expect("the older copy is backed up");
+        crate::history::restore(&e.id).unwrap();
+        assert!(fs::read_to_string(parked.join("SKILL.md")).unwrap().contains("description: x"));
     }
 }

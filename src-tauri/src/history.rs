@@ -388,7 +388,10 @@ fn file_detail(dir: &Path, f: BackupFile) -> FileDetail {
             backup_bytes: dir_size(&old_path),
             current_bytes: cur.as_ref().map(|p| dir_size(p)),
             current_modified: cur.as_ref().and_then(|p| fs::metadata(p).ok()).as_ref().and_then(fmt_mtime),
-            same: cur.as_ref().is_some_and(|p| crate::skills::content(p).2 == crate::skills::content(&old_path).2),
+            same: cur.as_ref().is_some_and(|p| match (crate::skills::content(p), crate::skills::content(&old_path)) {
+                (Ok(a), Ok(b)) => a.2 == b.2,
+                _ => false,
+            }),
             binary: true,
             path: f.path,
             diff: vec![],

@@ -2,7 +2,7 @@
 //! a .zip file (unpacked with the system's `tar`, which refuses paths outside the target), or
 //! a Git repository (a shallow clone with the `git` on PATH, prompts and exotic protocols off).
 
-use super::write::{copy, Copied};
+use super::write::{copy_named, safe_name, Copied};
 use super::{library_dir, scan};
 use crate::i18n::l;
 use crate::util::{agentplus_dir, display_path};
@@ -47,21 +47,30 @@ impl Drop for Scratch {
 fn run(mut cmd: Command, limit: Duration) -> Result<()> {
     crate::process::no_window(&mut cmd);
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
+    // Read while it runs: a child writing more than the pipe holds would block until killed.
+    let mut stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut err = Vec::new();
+        if let Some(e) = stderr.as_mut() {
+            let _ = e.read_to_end(&mut err);
+        }
+        String::from_utf8_lossy(&err).into_owned()
+    });
     let t0 = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
             if status.success() {
                 return Ok(());
             }
-            let mut err = String::new();
-            use std::io::Read;
-            if let Some(mut e) = child.stderr.take() {
-                let _ = e.read_to_string(&mut err);
-            }
+            let err = reader.join().unwrap_or_default();
             bail!("{}", crate::util::clip(err.trim(), 600));
         }
         if t0.elapsed() > limit {
+            // With what it started (git runs git-remote-https), so nothing keeps the scratch folder.
+            crate::process::kill_tree(child.id());
             let _ = child.kill();
+            let _ = child.wait();
             bail!("{}", l("It took too long and was stopped", "耗时太久，已停止"));
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -76,7 +85,7 @@ fn git_source(s: &str) -> Option<(String, Option<String>, Option<String>)> {
     if !is_git {
         return None;
     }
-    if let Some((repo, rest)) = s.split_once("/tree/").or_else(|| s.split_once("/-/tree/")) {
+    if let Some((repo, rest)) = s.split_once("/-/tree/").or_else(|| s.split_once("/tree/")) {
         let mut parts = rest.splitn(2, '/');
         let branch = parts.next().map(String::from).filter(|b| !b.is_empty());
         let path = parts.next().map(String::from).filter(|p| !p.is_empty());
@@ -122,17 +131,25 @@ pub fn import(source: &str, replace: &[String]) -> Result<Vec<Imported>> {
         bail!("{}", l("Enter a folder, a .zip file or a Git address", "请填写文件夹、.zip 文件或 Git 地址"));
     }
     let scratch;
+    let mut root_name = None;
     let base = if let Some((url, branch, sub)) = git_source(source) {
         scratch = Scratch::new()?;
         let repo = scratch.0.join("repo");
         clone(&url, branch.as_deref(), &repo)?;
+        // Keep clone metadata outside the skill; its contents change on each import.
+        // Moving also avoids deleting read-only Git object files before the import.
+        std::fs::rename(repo.join(".git"), scratch.0.join("git"))?;
         match sub {
             Some(p) => repo.join(p),
-            None => repo,
+            None => {
+                root_name = Some(url.rsplit(['/', ':']).next().unwrap_or_default().trim_end_matches(".git").to_string());
+                repo
+            }
         }
     } else {
         let p = crate::env::resolve_path(source);
         if p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
+            root_name = p.file_stem().map(|n| n.to_string_lossy().to_string());
             scratch = Scratch::new()?;
             unzip(&p, &scratch.0)?;
             scratch.0.clone()
@@ -142,16 +159,26 @@ pub fn import(source: &str, replace: &[String]) -> Result<Vec<Imported>> {
             bail!("{}", tr!("Not a folder, .zip file or Git address: {source}", "不是文件夹、.zip 文件或 Git 地址：{source}"));
         }
     };
-    let found = skills_in(&base);
+    import_base(&base, root_name.as_deref(), replace)
+}
+
+fn import_base(base: &Path, root_name: Option<&str>, replace: &[String]) -> Result<Vec<Imported>> {
+    let found = skills_in(base);
     if found.is_empty() {
         bail!("{}", l("No skills found (folders with a SKILL.md)", "没有找到技能（带 SKILL.md 的文件夹）"));
     }
     let lib = display_path(&library_dir());
     let mut out = vec![];
     for dir in found {
-        let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let description = std::fs::read_to_string(dir.join("SKILL.md")).ok().and_then(|t| scan::frontmatter(&t).ok()).and_then(|(_, d)| d).unwrap_or_default();
-        let result = copy(&display_path(&dir), &lib, replace.contains(&name))?;
+        let (declared, description) = std::fs::read_to_string(dir.join("SKILL.md")).ok().and_then(|t| scan::frontmatter(&t).ok()).unwrap_or_default();
+        let named = if dir == base {
+            root_name.map(|fallback| declared.as_deref().filter(|n| safe_name(n)).unwrap_or(fallback))
+        } else {
+            None
+        };
+        let name = named.map(String::from).unwrap_or_else(|| dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+        let description = description.unwrap_or_default();
+        let result = copy_named(&display_path(&dir), &lib, replace.contains(&name), named)?;
         out.push(Imported { name, description: crate::util::clip(&description, 300), result });
     }
     Ok(out)
@@ -170,6 +197,30 @@ mod tests {
     }
 
     #[test]
+    fn a_child_with_lots_of_errors_does_not_hang() {
+        let h = TestHome::new("skills-import-stderr");
+        let big = h.0.join("big.txt");
+        fs::write(&big, "error line\n".repeat(20_000)).unwrap();
+        #[cfg(windows)]
+        let cmd = {
+            use std::os::windows::process::CommandExt;
+            let mut c = Command::new("cmd");
+            c.raw_arg(format!("/c type \"{}\" 1>&2 & exit /b 3", big.display()));
+            c
+        };
+        #[cfg(not(windows))]
+        let cmd = {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(format!("cat '{}' >&2; exit 3", big.display()));
+            c
+        };
+        let t0 = Instant::now();
+        let err = run(cmd, Duration::from_secs(20)).unwrap_err().to_string();
+        assert!(t0.elapsed() < Duration::from_secs(15), "blocked on a full pipe");
+        assert!(err.starts_with("error line"), "{err}");
+    }
+
+    #[test]
     fn git_addresses() {
         assert_eq!(git_source("https://github.com/anthropics/skills"), Some(("https://github.com/anthropics/skills".into(), None, None)));
         assert_eq!(
@@ -177,6 +228,55 @@ mod tests {
             Some(("https://github.com/anthropics/skills.git".into(), Some("main".into()), Some("document-skills/pdf".into())))
         );
         assert_eq!(git_source("D:\\skills"), None);
+        assert_eq!(git_source("https://gitlab.com/team/skills/-/tree/main/pdf/"), Some(("https://gitlab.com/team/skills.git".into(), Some("main".into()), Some("pdf".into()))));
+        assert_eq!(git_source("https://gitlab.com/team/nested/skills/-/tree/main"), Some(("https://gitlab.com/team/nested/skills.git".into(), Some("main".into()), None)));
+    }
+
+    #[test]
+    fn root_repository_skills_have_stable_safe_names() {
+        let h = TestHome::new("skills-root-repo");
+        let repo = h.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(repo.join("SKILL.md"), "---\nname: pdf\ndescription: PDF\n---\n").unwrap();
+        let got = import_base(&repo, Some("document-tools"), &[]).unwrap();
+        assert_eq!((got[0].name.as_str(), got[0].result), ("pdf", Copied::Added));
+        assert_eq!(import_base(&repo, Some("document-tools"), &[]).unwrap()[0].result, Copied::Same);
+        for name in ["../escape", "a/b", "a\\b", "C:escape", "NUL", "con.txt", "LPT1", "COM¹", ".hidden", "trailing."] {
+            assert!(!safe_name(name), "{name}");
+            fs::write(repo.join("SKILL.md"), format!("---\nname: '{name}'\ndescription: PDF\n---\n")).unwrap();
+            assert_eq!(import_base(&repo, Some("document-tools"), &[]).unwrap()[0].name, "document-tools");
+            assert!(import_base(&repo, Some("../unsafe"), &[]).is_err());
+        }
+        fs::write(repo.join("SKILL.md"), "# No frontmatter\n").unwrap();
+        assert_eq!(import_base(&repo, Some("second-repository"), &[]).unwrap()[0].name, "second-repository");
+        assert!(!library_dir().join("repo").exists());
+        assert!(!h.0.join("escape").exists());
+        // Ordinary source folders retain their existing names.
+        assert_eq!(import_base(&repo, None, &[]).unwrap()[0].name, "repo");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn root_zip_imports_deduplicate_and_replace_by_the_stable_name() {
+        let h = TestHome::new("skills-root-zip");
+        let src = h.0.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let zip = h.0.join("archive-name.zip");
+        let pack = |body: &str| {
+            fs::write(src.join("SKILL.md"), body).unwrap();
+            let tar = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/tar.exe");
+            assert!(Command::new(tar).arg("-a").arg("-cf").arg(&zip).arg("-C").arg(&src).arg("SKILL.md").status().unwrap().success());
+        };
+        pack("---\nname: pdf\ndescription: v1\n---\n");
+        let got = import(&zip.to_string_lossy(), &[]).unwrap();
+        assert_eq!((got[0].name.as_str(), got[0].result), ("pdf", Copied::Added));
+        assert_eq!(import(&zip.to_string_lossy(), &[]).unwrap()[0].result, Copied::Same);
+        pack("---\nname: pdf\ndescription: v2\n---\n");
+        assert_eq!(import(&zip.to_string_lossy(), &[]).unwrap()[0].result, Copied::Exists);
+        assert_eq!(import(&zip.to_string_lossy(), &["pdf".into()]).unwrap()[0].result, Copied::Replaced);
+        assert_eq!(fs::read_dir(library_dir()).unwrap().count(), 1);
+        pack("# No name\n");
+        assert_eq!(import(&zip.to_string_lossy(), &[]).unwrap()[0].name, "archive-name");
     }
 
     #[test]

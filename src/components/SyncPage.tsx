@@ -1,12 +1,12 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { type SyncHistoryEntry, type SyncOptions, type SyncStatus, type SyncSuggestion, api } from "../api";
+import { type SyncContent, type SyncHistoryEntry, type SyncOptions, type SyncStatus, type SyncSuggestion, api } from "../api";
 import { AgentIcon, Icon } from "./icons";
 import { ErrorBox, Seg, SettingRow, Switch, ToggleRow } from "./controls";
 import { ConfirmFrame, Modal } from "./Modal";
 import { ask } from "./Confirm";
 import { useEscape } from "../hooks";
 import { syncSuggestionIds } from "../services";
-import { locale, t, tn, useLang } from "../i18n";
+import { locale, t, type TKey, tn, useLang } from "../i18n";
 import { scrub } from "../privacy";
 import { copyText, errText, type Flash, toggled } from "../util";
 
@@ -22,6 +22,13 @@ interface Props {
 const MIN_PASSWORD = 8;
 /** Choices for the number of sync records kept. */
 const KEEP_CHOICES = [5, 10, 20, 50];
+/** The kinds of content that can be left out, with their dictionary keys. */
+const CONTENT: { id: keyof SyncContent; label: TKey; desc: TKey }[] = [
+  { id: "providers", label: "syncPage.contentProviders", desc: "syncPage.contentProvidersDesc" },
+  { id: "library", label: "syncPage.contentLibrary", desc: "syncPage.contentLibraryDesc" },
+  { id: "mcp", label: "syncPage.contentMcp", desc: "syncPage.contentMcpDesc" },
+  { id: "skills", label: "syncPage.contentSkills", desc: "syncPage.contentSkillsDesc" },
+];
 
 /** Setting a new sync password, or unlocking a file another device encrypted. */
 type DialogMode = "set" | "unlock";
@@ -121,6 +128,7 @@ export function SyncPage({ flash, onAdopt, tick }: Props) {
       <main className="page">
         <div className="page-top">
           <div className="page-head">
+              <span className="page-icon"><Icon.cloud size={20} /></span>
             <div className="page-title">
               <h1>{t("syncPage.title")}</h1>
               <span className="muted small hint">{t("syncPage.intro")}</span>
@@ -150,6 +158,20 @@ export function SyncPage({ flash, onAdopt, tick }: Props) {
                   ) : <span>{t("syncPage.noFolderHint")}</span>}
                 </div>
               </div>
+            </section>
+
+            <section className="sgroup">
+              <h2>{t("syncPage.content")}</h2>
+              {CONTENT.map((c) => {
+                const on = !!status?.options.content[c.id];
+                const only = on && CONTENT.filter((x) => status?.options.content[x.id]).length === 1;
+                return (
+                  <SettingRow key={c.id} label={t(c.label)} desc={t(c.desc)}>
+                    <Switch on={on} disabled={busy || !status || only} label={t(c.label)}
+                      onChange={(v) => setOptions({ content: { ...status!.options.content, [c.id]: v } })} />
+                  </SettingRow>
+                );
+              })}
             </section>
 
             <section className="sgroup">

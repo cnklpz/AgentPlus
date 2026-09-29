@@ -16,6 +16,49 @@ pub enum Target {
     Wsl { distro: String, unix_home: String },
 }
 
+/// A WSL UNC path, including the older `wsl$` host and canonical Windows prefixes.
+pub(crate) fn wsl_path(s: &str) -> Option<(String, String)> {
+    let p = s.replace('\\', "/");
+    let p = p.strip_prefix("//?/UNC/").map(|s| format!("//{s}")).unwrap_or(p);
+    let mut parts = p.strip_prefix("//")?.splitn(3, '/');
+    let host = parts.next()?;
+    if !host.eq_ignore_ascii_case("wsl.localhost") && !host.eq_ignore_ascii_case("wsl$") {
+        return None;
+    }
+    let distro = parts.next()?;
+    Some((distro.into(), format!("/{}", parts.next().unwrap_or_default())))
+}
+
+impl Target {
+    /// A path as the agent sees it, rather than the UNC path used to open it on Windows.
+    pub(crate) fn config_path(&self, path: &str) -> String {
+        if let Self::Wsl { distro, unix_home } = self {
+            if let Some((d, p)) = wsl_path(path) {
+                if d.eq_ignore_ascii_case(distro) {
+                    return p;
+                }
+            }
+            if let Some(p) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+                return format!("{}/{}", unix_home.trim_end_matches('/'), p.replace('\\', "/"));
+            }
+        }
+        path.to_string()
+    }
+
+    /// Windows paths ignore case; paths inside a Linux filesystem do not.
+    pub(crate) fn path_key(&self, path: &str) -> String {
+        let p = self.config_path(path).replace('\\', "/").trim_end_matches('/').to_string();
+        if let Some((distro, unix)) = wsl_path(&p) {
+            return format!("//wsl.localhost/{}{unix}", distro.to_lowercase());
+        }
+        if cfg!(windows) && !(matches!(self, Self::Wsl { .. }) && p.starts_with('/') && !p.starts_with("//")) {
+            p.to_lowercase()
+        } else {
+            p
+        }
+    }
+}
+
 static CURRENT: RwLock<Option<Target>> = RwLock::new(None);
 
 #[derive(Serialize, Clone, Debug)]
@@ -239,4 +282,29 @@ pub fn set_test_vars(vars: &[(&str, &str)]) {
 #[cfg(test)]
 pub fn test_var(name: &str) -> Option<String> {
     TEST_VARS.with(|v| v.borrow().iter().find(|(k, _)| k == name).map(|(_, x)| x.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_paths_round_trip_wsl_unc_aliases_without_folding_linux_case() {
+        let t = Target::Wsl { distro: "Ubuntu".into(), unix_home: "/home/me".into() };
+        let unix = "/home/me/.codex/skills/PDF/SKILL.md";
+        for path in [
+            r"\\wsl.localhost\Ubuntu\home\me\.codex\skills\PDF\SKILL.md",
+            r"\\wsl$\Ubuntu\home\me\.codex\skills\PDF\SKILL.md",
+            r"\\?\UNC\wsl.localhost\Ubuntu\home\me\.codex\skills\PDF\SKILL.md",
+            "//WSL.LOCALHOST/ubuntu/home/me/.codex/skills/PDF/SKILL.md",
+        ] {
+            assert_eq!(t.config_path(path), unix);
+            assert_eq!(t.path_key(path), t.path_key(unix));
+        }
+        assert_eq!(t.path_key("~/.codex/skills/PDF/SKILL.md"), unix);
+        assert_ne!(t.path_key(unix), t.path_key(&unix.to_lowercase()));
+        assert_ne!(t.path_key(r"\\wsl.localhost\Debian\home\me\.codex\skills\PDF\SKILL.md"), unix);
+        assert_eq!(Target::Windows.config_path(r"C:\Users\me\SKILL.md"), r"C:\Users\me\SKILL.md");
+        assert_ne!(Target::Windows.path_key(r"\\wsl$\Ubuntu\home\me\PDF"), Target::Windows.path_key(r"\\wsl$\Ubuntu\home\me\pdf"));
+    }
 }

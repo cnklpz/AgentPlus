@@ -700,6 +700,16 @@ export interface SyncOptions {
   onChange: boolean;
   /** Sync records kept in the folder (1–100). */
   keep: number;
+  /** What is exported and compared; at least one is on. */
+  content: SyncContent;
+}
+
+export interface SyncContent {
+  /** Every agent's providers and model lists. */
+  providers: boolean;
+  library: boolean;
+  mcp: boolean;
+  skills: boolean;
 }
 
 /** One earlier export kept in the sync folder. */
@@ -747,7 +757,7 @@ export interface SyncMcpChange {
 export interface SyncSkillChange {
   key: string;
   name: string;
-  /** Which version (its files are read in the backend). */
+  /** Fingerprint of all files, including for legacy snapshots (read in the backend). */
   sig: string;
 }
 
@@ -1107,7 +1117,7 @@ async function fixture(): Promise<AgentState[]> {
 
 let demoEnv = "windows";
 const demoSync: SyncStatus = { folder: null, fileExists: false, exportedAt: null, machine: null, fileEncrypted: false, hasPassword: false, passwordError: null, systemProtected: true, includeKeys: false, filePlainKeys: false,
-  options: { onStart: true, onChange: false, keep: 10 }, remotePending: false };
+  options: { onStart: true, onChange: false, keep: 10, content: { providers: true, library: true, mcp: true, skills: true } }, remotePending: false };
 const demoHistory: SyncHistoryEntry[] = [
   { id: "20260927T021500.000Z_DEMO-PC.json", exportedAt: "2026-09-27T10:15:00+08:00", machine: "DEMO-PC", encrypted: true, mine: true, current: true },
   { id: "20260926T123000.000Z_LAPTOP.json", exportedAt: "2026-09-26T20:30:00+08:00", machine: "LAPTOP", encrypted: true, mine: false, current: false },
