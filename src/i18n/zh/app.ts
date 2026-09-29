@@ -44,6 +44,7 @@ const zh: typeof en = {
   savedViaQueued: "已保存到供应商库，经网关 {url} 转发，{n} 处 Agent 改动已加入待写入",
   savedToLib: "已保存到供应商库",
   importFailed: "无法导入链接：{err}",
+  importMcpHidden: "MCP 已隐藏，请先在设置里打开「显示 MCP」再导入这个链接",
   importNeedsGemini: "这个链接是给 Gemini CLI 用的，但这里没有检测到 Gemini CLI",
   forwardFailed: "开启转发失败：{err}",
   routeDeletedRestored: "已删除转发，{n} 个供应商改回原地址已加入待写入",

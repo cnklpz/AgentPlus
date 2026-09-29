@@ -118,7 +118,8 @@ export default function App() {
     if (page !== "settings") setBeforeSettings(page);
     setPage("settings");
   };
-  const closeSettings = () => setPage(beforeSettings);
+  // The page settings was opened from may have been switched off there.
+  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) ? null : beforeSettings);
   const [hubSel, setHubSel] = useState<string | null>(null);
   const [hubDialog, setHubDialog] = useState<HubDialog>(undefined);
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
@@ -1120,6 +1121,10 @@ export default function App() {
     setLinkOpen(false);
     setPalette(false);
     if (item.mcp) {
+      if (!prefs.showMcp) {
+        flash(t("app.importMcpHidden"), true);
+        return;
+      }
       setDialog(null);
       setHubDialog(undefined);
       setPage("mcp");
@@ -1509,8 +1514,8 @@ export default function App() {
     items.push(
       "sep",
       { label: t("common.providers"), icon: <Icon.layers size={13} />, disabled: page === "providers", action: () => setPage("providers") },
-      { label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") },
-      { label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") },
+      ...(prefs.showMcp ? [{ label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") }] : []),
+      ...(prefs.showSkills ? [{ label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") }] : []),
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
@@ -1544,7 +1549,7 @@ export default function App() {
       </header>
 
       <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
-        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage}
+        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills}
           onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
         {page === "providers" && (
@@ -1610,11 +1615,11 @@ export default function App() {
           />
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
-        {page === "mcp" && (
+        {page === "mcp" && prefs.showMcp && (
           <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash} link={mcpLink} onLinkUsed={() => setMcpLink(null)}
             onApplyAll={applyAll} onDiscard={(a) => (a ? setDraftFor(a, {}) : setDrafts({}))} />
         )}
-        {page === "skills" && <SkillsPage agents={listed} flash={flash} />}
+        {page === "skills" && prefs.showSkills && <SkillsPage agents={listed} flash={flash} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "settings" && (
@@ -1671,10 +1676,10 @@ export default function App() {
             onCopyProvider={projSt ? () => setCopyOpen(true) : undefined}
             settingsExtra={st.id === "codex" && gateway
               ? <CodexTimezone zone={gateway.timezone} setStatus={setGateway} flash={flash} /> : undefined}
-            mcpTab={!projSt && !NO_MCP.includes(st.id) ? (
+            mcpTab={prefs.showMcp && !projSt && !NO_MCP.includes(st.id) ? (
               <AgentMcpTab agent={st.id} agents={listed} drafts={drafts} setDraftFor={setDraftFor} flash={flash} onOpenPage={() => setPage("mcp")} />
             ) : undefined}
-            skillsTab={!projSt && st.id !== "trae" ? (
+            skillsTab={prefs.showSkills && !projSt && st.id !== "trae" ? (
               <AgentSkillsTab agent={st.id} agents={listed} flash={flash} onOpenPage={() => setPage("skills")} />
             ) : undefined}
             projectsTab={st.id === "opencode" ? {
@@ -1730,7 +1735,7 @@ export default function App() {
       </div>
 
       {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onSave={saveProvider} onClose={() => setDialog(null)} />}
-      {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} />}
+      {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} others={hubDialog.others}
         onReplace={(g) => {

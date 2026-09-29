@@ -42,6 +42,7 @@ export default {
   savedViaQueued: "Saved to the provider library, forwarded through the gateway at {url}; queued {n} agent change|Saved to the provider library, forwarded through the gateway at {url}; queued {n} agent changes",
   savedToLib: "Saved to the provider library",
   importFailed: "Can't import the link: {err}",
+  importMcpHidden: "MCP is hidden. Turn on \"Show MCP\" in Settings to import this link",
   importNeedsGemini: "This link is for Gemini CLI, which AgentPlus can't find here",
   forwardFailed: "Couldn't turn on the forward: {err}",
   routeDeletedRestored: "Forward deleted; queued restoring {n} provider to its original URL|Forward deleted; queued restoring {n} providers to their original URL",

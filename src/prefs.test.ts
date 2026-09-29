@@ -26,6 +26,12 @@ describe("normalizePrefs", () => {
     expect(p.closeAction).toBe("ask");
   });
 
+  it("shows MCP and skills unless told not to", () => {
+    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true });
+    expect(normalizePrefs({ showMcp: false, showSkills: false })).toMatchObject({ showMcp: false, showSkills: false });
+    expect(normalizePrefs({ showMcp: "no", showSkills: 0 })).toMatchObject({ showMcp: true, showSkills: true });
+  });
+
   it("forgets keys it doesn't know", () => {
     expect(Object.keys(normalizePrefs({ stale: 1 }))).not.toContain("stale");
   });

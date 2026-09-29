@@ -22,6 +22,9 @@ interface Props {
   gateway: GatewayStatus | null;
   /** The agents' new order, after one is dragged (or moved with Alt+↑/↓). */
   onReorder: (ids: AgentId[]) => void;
+  /** Whether the MCP and skills links are shown (Settings → Interface). */
+  showMcp: boolean;
+  showSkills: boolean;
 }
 
 function subline(a: AgentState, d: Draft): string {
@@ -32,7 +35,7 @@ function subline(a: AgentState, d: Draft): string {
   return `${tn("common.providerCount", on)} · ${tn("common.modelCount", n)}`;
 }
 
-export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway, onReorder }: Props) {
+export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway, onReorder, showMcp, showSkills }: Props) {
   const detected = agents.filter((a) => a.installed).length;
   const ids = agents.map((a) => a.id);
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, i: number) => {
@@ -46,8 +49,8 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
   const pending = pendingTotal(drafts);
   const links: [Page, TKey, JSX.Element][] = [
     ["providers", "common.providers", <Icon.layers key="l" />],
-    ["mcp", "sidebar.mcp", <Icon.plug key="m" />],
-    ["skills", "sidebar.skills", <Icon.book key="s" />],
+    ...(showMcp ? [["mcp", "sidebar.mcp", <Icon.plug key="m" />] as [Page, TKey, JSX.Element]] : []),
+    ...(showSkills ? [["skills", "sidebar.skills", <Icon.book key="s" />] as [Page, TKey, JSX.Element]] : []),
     ["gateway", "sidebar.gateway", <Icon.gateway key="g" />],
     ["history", "sidebar.history", <Icon.history key="h" />],
     ["sync", "sidebar.sync", <Icon.cloud key="c" />],

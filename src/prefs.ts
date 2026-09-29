@@ -32,10 +32,14 @@ export interface Prefs {
   autoUpdate: boolean;
   /** "brief" hides descriptions and hints (elements with the `hint` class). */
   hints: Hints;
+  /** Show the MCP page and the MCP tab of each agent. Display only: configs stay as they are. */
+  showMcp: boolean;
+  /** Show the skills page and the skills tab of each agent. Display only. */
+  showSkills: boolean;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full" };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true };
 
 export function loadPrefs(): Prefs {
   try {
@@ -67,6 +71,8 @@ export function normalizePrefs(v: unknown): Prefs {
     privacy: bool(o.privacy, DEFAULTS.privacy),
     autoUpdate: bool(o.autoUpdate, DEFAULTS.autoUpdate),
     hints: oneOf(o.hints, ["full", "brief"], DEFAULTS.hints),
+    showMcp: bool(o.showMcp, DEFAULTS.showMcp),
+    showSkills: bool(o.showSkills, DEFAULTS.showSkills),
   };
 }
 
