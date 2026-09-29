@@ -1179,8 +1179,8 @@ pub fn launch(agent: &str, inst: &Install) -> Option<crate::model::Launch> {
     let rec = crate::store::load().get("launched").and_then(|l| l.get(agent)).cloned();
     let ours = rec.is_some_and(|r| r["pid"].as_u64() == Some(u64::from(pid.as_u32())) && r["start"].as_u64() == Some(start));
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), false, ProcessRefreshKind::new().with_cmd(UpdateKind::Always));
-    let flag = format!("--remote-debugging-port={}", crate::cdp::PORT);
-    let debug_port = sys.process(pid).is_some_and(|p| p.cmd().iter().any(|a| a.to_string_lossy() == flag));
+    let flag = "--remote-debugging-port=";
+    let debug_port = sys.process(pid).is_some_and(|p| p.cmd().iter().any(|a| a.to_string_lossy().starts_with(flag)));
     let wants_ui = agent == crate::adapters::codex::ID && crate::adapters::codex::ui_patches().any();
     Some(crate::model::Launch { by_agentplus: ours || debug_port, debug_port, ui_inactive: wants_ui && !debug_port })
 }

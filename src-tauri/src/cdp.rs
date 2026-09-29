@@ -46,6 +46,9 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 
+/// The DevTools port tried first. It can be unusable: Docker / WSL / Hyper-V reserve blocks
+/// of ports (39229 sits in one on some machines) without listing them in `netsh`, and
+/// Codex then starts but never listens.
 pub const PORT: u16 = 39229;
 const FAST_MARK: &str = "/*agentplus-fast*/";
 const NAMES_MARK: &str = "/*agentplus-names*/";
@@ -420,6 +423,26 @@ fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, first: Dur
     Ok(missing.map(|missing| Patched { missing, complete: seen.len() == BUNDLE_HINTS.len() }))
 }
 
+/// The DevTools port to start Codex with: [`PORT`] when it can be bound, otherwise a free
+/// one picked by the OS.
+pub fn pick_port() -> u16 {
+    pick_port_from(PORT)
+}
+
+fn pick_port_from(preferred: u16) -> u16 {
+    use std::net::{Ipv4Addr, TcpListener};
+    let free = |p: u16| TcpListener::bind((Ipv4Addr::LOCALHOST, p)).and_then(|l| l.local_addr()).map(|a| a.port());
+    match free(preferred).or_else(|_| free(0)) {
+        Ok(p) => {
+            if p != preferred {
+                crate::applog::warn("inject", format!("debug port {preferred} can't be bound, using {p}"));
+            }
+            p
+        }
+        Err(_) => preferred,
+    }
+}
+
 /// Waits for Codex windows on the debug port and patches each one.
 pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String> {
     on(Progress::step("port", "active", Some(port.to_string())));
@@ -513,6 +536,23 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pick_port_keeps_a_free_preferred_port() {
+        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let free = probe.local_addr().unwrap().port();
+        drop(probe);
+        assert_eq!(pick_port_from(free), free);
+    }
+
+    #[test]
+    fn pick_port_falls_back_when_the_preferred_port_is_taken() {
+        let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let taken = held.local_addr().unwrap().port();
+        let picked = pick_port_from(taken);
+        assert_ne!(picked, taken);
+        assert_ne!(picked, 0);
+    }
 
     const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
     const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };

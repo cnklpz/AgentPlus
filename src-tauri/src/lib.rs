@@ -128,7 +128,6 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
         };
         let patches = if agent == adapters::codex::ID { adapters::codex::ui_patches() } else { cdp::Patches::default() };
         let inject = patches.any();
-        let args = if inject { format!("--remote-debugging-port={}", cdp::PORT) } else { String::new() };
         let mut steps = vec!["stop", "start"];
         if inject {
             steps.extend(["port", "patch"]);
@@ -139,9 +138,11 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
             applog::error("restart", format!("{agent}: {e:#}"));
             e
         };
+        let port = cdp::pick_port();
+        let args = if inject { format!("--remote-debugging-port={port}") } else { String::new() };
         let r = process::restart(&agent, &args, &report).map_err(logged)?;
         let mut msg = if inject {
-            cdp::inject(cdp::PORT, patches, &report).map_err(logged)?
+            cdp::inject(port, patches, &report).map_err(logged)?
         } else if r.was_running {
             i18n::l("Restarted", "已重启").into()
         } else {
