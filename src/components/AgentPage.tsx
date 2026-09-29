@@ -1,8 +1,8 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { type AgentState, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { type AgentId, type AgentState, type Issue, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
-  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, guessedModel, hasDefaultModel, isEnabled, isVisible, keys, mergeExtra, opCount,
-  pluginOn, providerModelCount, setModelVisible, setPluginEnabled, setSetting, setSettingIn, settingValue, excludedOn, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
+  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, editProvider, guessedModel, hasDefaultModel, isEnabled, isVisible, issueStaged, keys, mergeExtra, opCount,
+  pluginOn, providerModelCount, setModelVisible, setPluginEnabled, setSetting, setSettingIn, settingValue, excludedOn, syncKeys, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
 import { MaintenanceTab } from "./MaintenanceTab";
@@ -45,6 +45,10 @@ interface Props {
   onDeclineFixed: () => void;
   /** Re-read this agent from disk. */
   onReload: () => void;
+  /** Re-read this agent from disk on request (its icon), saying when it is done. */
+  onRefresh: () => Promise<void>;
+  /** Opens a provider's edit dialog (to add a missing key). */
+  onEditProvider: (p: ViewProvider) => void;
   /** Codex without a catalog: create one from the model list built into Codex. */
   onCreateCatalog: () => Promise<void>;
   /** Replaces the icon / name / buttons row (project pages). */
@@ -91,31 +95,45 @@ export function AgentPage(props: Props) {
   const fixedOn = fixedSetting?.value === true;
   const sessionTarget = fixedOn ? "agentplus" : st.currentProvider ?? "openai";
 
+  const openWeb = () => {
+    api.openWebUi(st.id).then((note) => { if (note) props.flash(note); }).catch((e) => props.flash(errText(e), true));
+  };
+
   const toggleModel = (pid: string, m: Model) => setDraft(setModelVisible(draft, pid, m, !isVisible(pid, m, draft)));
+  /** Bumped by a refresh: tabs that load their own data (MCP, skills, sessions…) remount and read it again. */
+  const [reads, setReads] = useState(0);
+  const refresh = async () => {
+    await props.onRefresh();
+    setReads((n) => n + 1);
+  };
 
   return (
     <main className="page">
       <div className="page-top">
         {props.head ?? <div className="page-head">
-          <AgentIcon id={st.id} size={46} />
+          <RefreshIcon id={st.id} name={st.name} onRefresh={refresh} />
           <div className="page-title">
-            <div className="row gap10">
-              <h1>{st.name}</h1>
+            <div className="row gap10 minw0 page-title-row">
+              <h1 className="ellipsis" title={st.name}>{st.name}</h1>
               {st.installed ? (
                 <span className="chip-ok">{t("agentPage.detected", { version: st.version ?? "?" })}{st.running ? t("agentPage.running") : ""}</span>
               ) : (
                 <span className="chip-muted">{t("agentPage.notInstalled")}</span>
               )}
             </div>
-            <span className="mono muted small ellipsis">{scrub(st.files.join(" · "))}</span>
+            <span className="mono muted small ellipsis" title={scrub(st.files.join("\n"))}>{scrub(st.files.join(" · "))}</span>
           </div>
           <button className="btn" onClick={onOpenDir}><Icon.folder />{t("common.openConfigDir")}</button>
+          {st.webUi && st.running && (
+            <button className="btn" onClick={openWeb} disabled={restarting} title={t("agentPage.openWebTitle", { name: st.name })}><Icon.external />{t("agentPage.openWeb")}</button>
+          )}
           {st.restartable && (
-            <button className="btn strong" onClick={onRestart} disabled={!st.installed || restarting}>
+            // The page already names the agent: the button says only what it does.
+            <button className="btn strong" onClick={onRestart} disabled={!st.installed || restarting} title={t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name })}>
               {st.running ? <Icon.refresh /> : <Icon.play />}
               {restarting
                 ? t(st.running ? "agentPage.restarting" : "agentPage.starting")
-                : t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name })}
+                : t(st.running ? "agentPage.restart" : "agentPage.start")}
             </button>
           )}
         </div>}
@@ -128,6 +146,7 @@ export function AgentPage(props: Props) {
       <div className={`page-body slide-${slide}`} key={tab}>
         {tab === "prov" && (
           <div className="stack12">
+            <ConfigIssues st={st} draft={draft} setDraft={setDraft} providers={providers} onEditProvider={props.onEditProvider} />
             <div className="row between">
               <span className={`muted small${st.fixedPending && fixedSetting && settingValue(fixedSetting, draft) !== true ? "" : " hint"}`}>
                 {st.mode === "single"
@@ -239,11 +258,12 @@ export function AgentPage(props: Props) {
           )
         )}
 
-        {tab === "sessions" && <SessionsTab target={sessionTarget} flash={props.flash} initialQuery={props.sessionQuery} />}
-        {tab === "maint" && <MaintenanceTab flash={props.flash} />}
-        {tab === "projects" && props.projectsTab?.body}
-        {tab === "mcp" && props.mcpTab}
-        {tab === "skills" && props.skillsTab}
+        {/* Tabs that load their own data: a refresh remounts them so they read it again. */}
+        {tab === "sessions" && <SessionsTab key={reads} target={sessionTarget} flash={props.flash} initialQuery={props.sessionQuery} />}
+        {tab === "maint" && <MaintenanceTab key={reads} flash={props.flash} />}
+        {tab === "projects" && <Fragment key={reads}>{props.projectsTab?.body}</Fragment>}
+        {tab === "mcp" && <Fragment key={reads}>{props.mcpTab}</Fragment>}
+        {tab === "skills" && <Fragment key={reads}>{props.skillsTab}</Fragment>}
         {tab === "plugins" && st.plugins && (
           <div className="stack12">
             <span className="muted small hint">{t("agentPage.pluginsHint", { name: st.name })}</span>
@@ -300,6 +320,73 @@ export function AgentPage(props: Props) {
         })()}
       </div>
     </main>
+  );
+}
+
+/** The agent's icon; hovering shows a faint refresh mark, and a click re-reads its config. */
+function RefreshIcon({ id, name, onRefresh }: { id: AgentId; name: string; onRefresh: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const click = async () => {
+    if (busy) return;
+    setBusy(true);
+    // Reading is quick: keep the mark turning long enough to be seen.
+    await Promise.all([onRefresh().catch(() => undefined), new Promise((r) => window.setTimeout(r, 450))]);
+    setBusy(false);
+  };
+  const label = t("agentPage.reloadTitle", { name });
+  return (
+    <button className={`agent-reload${busy ? " busy" : ""}`} onClick={click} title={label} aria-label={label} aria-busy={busy}>
+      <AgentIcon id={id} size={46} />
+      <span className="agent-reload-mark"><Icon.refresh size={20} sw={2.4} /></span>
+    </button>
+  );
+}
+
+/** What in the agent's config differs from how AgentPlus writes it, and what fixes each. */
+function ConfigIssues({ st, draft, setDraft, providers, onEditProvider }: {
+  st: AgentState; draft: Draft; setDraft: (d: Draft) => void; providers: ViewProvider[]; onEditProvider: (p: ViewProvider) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const issues = st.issues ?? [];
+  if (!issues.length) return null;
+  const movable = issues.filter((i) => i.kind === "key-elsewhere");
+  const synced = movable.every((i) => issueStaged(draft, i));
+  const action = (i: Issue) => {
+    if (issueStaged(draft, i)) return <span className="ptag tag-new">{t("agentPage.issuePending")}</span>;
+    const p = providers.find((x) => x.id === i.provider);
+    const base = st.providers.find((x) => x.id === i.provider);
+    if (!p || !base || st.readonly) return null;
+    if (i.kind === "key-missing") {
+      return <button className="btn small" onClick={() => onEditProvider(p)}><Icon.key size={12} />{t("agentPage.issueAddKey")}</button>;
+    }
+    if (i.kind === "api-key-sign-in") {
+      return <button className="btn small" onClick={() => setDraft(editProvider(draft, base, { officialAuth: false }))}>{t("agentPage.issueMixOff")}</button>;
+    }
+    return null;
+  };
+  return (
+    <section className="issues">
+      <div className="issues-head">
+        <Icon.warn size={14} />
+        <span className="strong small minw0">{tn("agentPage.issuesHead", issues.length, { name: st.name })}</span>
+        {movable.length > 0 && (
+          <button className="btn small primary" disabled={st.readonly || synced} title={t("agentPage.issuesSyncTitle")} onClick={() => setDraft(syncKeys(draft, st))}>
+            {synced ? t("agentPage.issuesSynced") : t("agentPage.issuesSync")}
+          </button>
+        )}
+        <button className="link tiny" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t("agentPage.collapse") : t("agentPage.issuesExpand")}</button>
+      </div>
+      {open && (
+        <ul className="issues-list">
+          {issues.map((i, n) => (
+            <li key={`${i.kind}:${i.provider ?? ""}:${n}`}>
+              <span className="small minw0">{scrub(i.text)}</span>
+              {action(i)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -480,7 +567,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
           </div>
           <div className="pick-list wide">
             {fetched.map((m) => (
-              <label key={m} className="pick">
+              <label key={m} className="pick" title={m}>
                 <input type="checkbox" checked={pick.has(m)} onChange={() => setPick((s) => toggled(s, m))} />
                 <span className="mono small">{m}</span>
               </label>

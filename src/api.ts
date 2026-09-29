@@ -176,6 +176,24 @@ export interface AgentState {
   webUi?: boolean;
   /** Installed plugins; null (or missing, in old snapshots) for agents without plugins. */
   plugins?: PluginInfo[] | null;
+  /** What in the config isn't the way AgentPlus writes it, or keeps a setting from working. */
+  issues?: Issue[];
+  /** Codex: how it is signed in. */
+  signIn?: SignInMode | null;
+}
+
+export type SignInMode = "chatgpt" | "apikey" | "none" | "unknown";
+
+/**
+ * Something in an agent's config that differs from how AgentPlus writes it. `kind` is stable:
+ * "key-elsewhere" (editing the provider moves its key where AgentPlus keeps keys), "key-missing"
+ * (the user adds one), "api-key-sign-in" (sign out in the agent, or turn the sign-in mix off),
+ * "not-signed-in". `text` is in the UI language.
+ */
+export interface Issue {
+  kind: "key-elsewhere" | "key-missing" | "api-key-sign-in" | "not-signed-in";
+  provider: string | null;
+  text: string;
 }
 
 /** Whether the running desktop app is the one AgentPlus started. */
@@ -1056,6 +1074,18 @@ const DEMO_PLUGINS: Partial<Record<AgentId, PluginInfo[]>> = {
   ],
 };
 
+/** Codex as another tool left it (the snapshot has no issues): a key in the sign-in, one missing. */
+const DEMO_ISSUES: Partial<Record<AgentId, Pick<AgentState, "issues" | "signIn">>> = {
+  codex: {
+    signIn: "apikey",
+    issues: [
+      { kind: "key-elsewhere", provider: "work", text: "\"work\" uses the API key Codex is signed in with (~/.codex/auth.json): it's gone once you sign out, and goes to whichever provider you switch to. AgentPlus keeps keys in ~/.codex/.env." },
+      { kind: "api-key-sign-in", provider: "work", text: "Codex is signed in with an API key, so the official sign-in mix of \"work\" doesn't take effect and account features stay locked. Sign out in Codex, then sign in with a ChatGPT account. Don't need the mix? Turn it off. Sync its key first, or \"work\" has no key once you sign out." },
+      { kind: "key-missing", provider: "klpz", text: "\"klpz\" has no API key of its own; requests to it will likely fail." },
+    ],
+  },
+};
+
 async function fixture(): Promise<AgentState[]> {
   const load = FIXTURE["./dev-fixture.json"];
   const raw = load ? ((await load()).default as AgentState[]) : [];
@@ -1063,7 +1093,7 @@ async function fixture(): Promise<AgentState[]> {
   // model fields' `caps` and built-ins' `probeUrl` (demo latencies are made up anyway).
   const list = raw.map((a) => ({
     ...a, restartable: a.restartable ?? true, running: demoRunning[a.id] ?? a.running,
-    currentModel: a.currentModel ?? null, plugins: a.plugins ?? DEMO_PLUGINS[a.id] ?? null, modelFields: a.modelFields?.map((f) => ({ ...f, caps: f.caps ?? [] })),
+    currentModel: a.currentModel ?? null, plugins: a.plugins ?? DEMO_PLUGINS[a.id] ?? null, ...(a.issues ? {} : DEMO_ISSUES[a.id]), modelFields: a.modelFields?.map((f) => ({ ...f, caps: f.caps ?? [] })),
     catalog: a.catalog?.map(withTags) ?? null, providers: a.providers.map((p) => ({ ...p, probeUrl: p.probeUrl ?? (p.builtin && !p.baseUrl ? "https://official.example" : null), models: p.models.map(withTags) })),
   }));
   // No OpenCode in the snapshot: MiMo runs the same config format, so it stands in.

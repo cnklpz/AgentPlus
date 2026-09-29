@@ -365,18 +365,59 @@ fn env_lookup(name: &str) -> Option<(String, bool)> {
     }
 }
 
-/// Value of an env_key (see `env_lookup`); None when unset or empty.
-pub fn env_value(name: &str) -> Option<String> {
-    env_lookup(name).map(|(v, _)| v).filter(|v| !v.is_empty())
-}
-
 /// Sets `name` to `val` so Codex (dotenvy) reads it back: the value is quoted when it needs
 /// to be, and later duplicates of the key are dropped (they would win over the rewritten line).
 fn set_env(lines: &mut Vec<String>, name: &str, val: &str) {
     *lines = dotenv::set_dotenvy(&lines.join("\n"), name, val).lines().map(String::from).collect();
 }
 
-/// Where the key comes from; agrees with `env_value` (an empty `KEY=` in .env is not a key).
+/// A new key variable must not replace another provider's key or an unrelated .env entry.
+/// Read the pending document and lines too, so allocations within one plan stay distinct.
+fn new_env_key(doc: &DocumentMut, lines: &[String], id: &str) -> String {
+    let mut used: std::collections::HashSet<String> = lines.iter().filter_map(|l| dotenv::line_key(l)).map(str::to_ascii_uppercase).collect();
+    if let Some(providers) = doc.get("model_providers").and_then(|p| p.as_table_like()) {
+        for (_, p) in providers.iter() {
+            if let Some(k) = p.get("env_key").and_then(|v| v.as_str()) {
+                used.insert(k.trim().to_ascii_uppercase());
+            }
+            if let Some(headers) = p.get("env_http_headers").and_then(|h| h.as_table_like()) {
+                used.extend(headers.iter().filter_map(|(_, v)| v.as_str()).map(|k| k.trim().to_ascii_uppercase()));
+            }
+        }
+    }
+    // Codex skips CODEX_ variables in .env; use a prefix it will load.
+    let base = format!("{}_API_KEY", id.to_uppercase().replace('-', "_"));
+    let base = if codex_ignores_in_file(&base) { format!("AGENTPLUS_{base}") } else { base };
+    let mut name = base.clone();
+    let mut suffix = 2;
+    while used.contains(&name) || crate::env::agent_var(&name).is_some() {
+        name = format!("{base}_{suffix}");
+        suffix += 1;
+    }
+    name
+}
+
+/// The lower-case `host:port` of an address, for telling one party from another (two local
+/// servers differ by port).
+pub(crate) fn host_of_url(url: &str) -> Option<String> {
+    let u = url::Url::parse(url.trim()).ok()?;
+    Some(format!("{}:{}", u.host_str()?.to_ascii_lowercase(), u.port_or_known_default().unwrap_or(0)))
+}
+
+/// Whether a provider other than `id` (the fixed-id mirror aside: it copies one) at another
+/// host than `base` reads variable `name`, as its `env_key` or in `env_http_headers`.
+fn env_shared(doc: &DocumentMut, id: &str, name: &str, base: &str) -> bool {
+    let Some(providers) = doc.get("model_providers").and_then(|p| p.as_table_like()) else { return false };
+    let same = |v: &str| v.trim().eq_ignore_ascii_case(name.trim());
+    let host = host_of_url(base);
+    providers.iter().filter(|(k, _)| *k != id && *k != FIXED_ID).any(|(_, p)| {
+        let reads = p.get("env_key").and_then(|v| v.as_str()).is_some_and(same)
+            || p.get("env_http_headers").and_then(|h| h.as_table_like()).is_some_and(|h| h.iter().any(|(_, v)| v.as_str().is_some_and(same)));
+        reads && p.get("base_url").and_then(|v| v.as_str()).and_then(host_of_url) != host
+    })
+}
+
+/// Where the key comes from (an empty `KEY=` in .env is not a key).
 fn key_status(name: &str) -> &'static str {
     match env_lookup(name) {
         Some((v, from_file)) if !v.is_empty() => {
@@ -392,23 +433,49 @@ fn key_status(name: &str) -> &'static str {
 
 // ---------------------------------------------------------------- ~/.codex/auth.json
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy, Default)]
 enum SignIn {
     ChatGpt,
     ApiKey,
+    #[default]
     None,
     /// Credentials kept in the OS keyring; AgentPlus can't tell.
     Unknown,
 }
 
+impl SignIn {
+    /// Stable id for the UI (`AgentState::sign_in`).
+    fn id(self) -> &'static str {
+        match self {
+            SignIn::ChatGpt => "chatgpt",
+            SignIn::ApiKey => "apikey",
+            SignIn::None => "none",
+            SignIn::Unknown => "unknown",
+        }
+    }
+}
+
+/// What ~/.codex/auth.json says: how Codex is signed in, and the API key when it is signed in with one.
+#[derive(Debug, Default)]
+struct Auth {
+    sign_in: SignIn,
+    api_key: Option<String>,
+}
+
 /// How Codex is signed in, following its own rule: an explicit `auth_mode` wins,
 /// otherwise a non-empty `OPENAI_API_KEY` means API-key mode.
-fn sign_in(doc: &DocumentMut) -> SignIn {
+fn read_auth(doc: &DocumentMut) -> Auth {
     let Ok((v, _)) = read_json(&codex_home().join("auth.json")) else {
         let store = doc.get("cli_auth_credentials_store").and_then(|v| v.as_str()).unwrap_or("file");
-        return if store == "file" { SignIn::None } else { SignIn::Unknown };
+        return Auth { sign_in: if store == "file" { SignIn::None } else { SignIn::Unknown }, api_key: None };
     };
-    sign_in_from(&v)
+    auth_from(&v)
+}
+
+fn auth_from(v: &Value) -> Auth {
+    let sign_in = sign_in_from(v);
+    let api_key = v.get("OPENAI_API_KEY").and_then(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|_| sign_in == SignIn::ApiKey);
+    Auth { sign_in, api_key }
 }
 
 /// Signed in with a ChatGPT account (what Codex needs to download the official model list).
@@ -429,9 +496,182 @@ fn sign_in_from(v: &Value) -> SignIn {
     }
 }
 
+// ---------------------------------------------------------------- where a provider's key is
+
+/// Where Codex takes a provider's key from, in its own order: `env_key` (which then has to be
+/// set), `experimental_bearer_token`, and, for a provider with `requires_openai_auth`, its
+/// sign-in in auth.json. AgentPlus keeps keys the first way (in ~/.codex/.env); the others
+/// come from hand edits or other tools.
+#[derive(Debug, PartialEq)]
+enum KeySource {
+    /// `env_key`, set in ~/.codex/.env (`from_file`) or in the environment.
+    Env { from_file: bool },
+    /// `env_key` names a variable that is set nowhere: Codex's requests fail.
+    EnvMissing(String),
+    /// `experimental_bearer_token` in config.toml.
+    Bearer,
+    /// `Authorization = "Bearer …"` in the provider's `http_headers`.
+    Header,
+    /// Some other credential header (`x-api-key`, one taken from the environment…).
+    OtherHeader,
+    /// `OPENAI_API_KEY` of auth.json: Codex is signed in with an API key, and the provider
+    /// (the current one: the file holds one key) has `requires_openai_auth`.
+    SignIn,
+    /// `requires_openai_auth` under a ChatGPT sign-in, and no key: Codex sends the account's token.
+    ChatGptToken,
+    /// `requires_openai_auth` with the sign-in in the OS keyring: can't tell.
+    Keyring,
+    None,
+}
+
+/// A provider's key: where Codex takes it from, and the key when AgentPlus can read it.
+#[derive(Debug)]
+struct KeyInfo {
+    source: KeySource,
+    key: Option<String>,
+}
+
+/// Header names that carry credentials.
+fn credential_header(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n == "authorization" || n.contains("key") || n.contains("token")
+}
+
+/// The token of an `Authorization = "Bearer …"` entry in `http_headers`.
+fn header_bearer(item: &Item) -> Option<String> {
+    let h = item.get("http_headers")?.as_table_like()?;
+    h.iter().find_map(|(k, v)| {
+        let v = v.as_str()?.trim();
+        let token = v.get(..7).filter(|p| k.eq_ignore_ascii_case("authorization") && p.eq_ignore_ascii_case("bearer "))?;
+        Some(v[token.len()..].trim().to_string()).filter(|t| !t.is_empty())
+    })
+}
+
+/// Where provider `id`'s key comes from; `current` when Codex is using it now.
+fn key_info(doc: &DocumentMut, id: &str, current: bool, auth: &Auth) -> KeyInfo {
+    let none = |source| KeyInfo { source, key: None };
+    let Some(item) = provider_item(doc, id) else { return none(KeySource::None) };
+    let get = |k: &str| item.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(String::from);
+    if let Some(name) = get("env_key") {
+        return match env_lookup(&name) {
+            Some((v, from_file)) if !v.trim().is_empty() => KeyInfo { source: KeySource::Env { from_file }, key: Some(v) },
+            _ => none(KeySource::EnvMissing(name)),
+        };
+    }
+    if let Some(k) = get("experimental_bearer_token") {
+        return KeyInfo { source: KeySource::Bearer, key: Some(k) };
+    }
+    if let Some(k) = header_bearer(item) {
+        return KeyInfo { source: KeySource::Header, key: Some(k) };
+    }
+    let headers = ["http_headers", "env_http_headers"]
+        .iter()
+        .any(|h| item.get(h).and_then(|t| t.as_table_like()).is_some_and(|t| t.iter().any(|(k, _)| credential_header(k))));
+    if headers {
+        return none(KeySource::OtherHeader);
+    }
+    if !current || !item.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return none(KeySource::None);
+    }
+    match auth.sign_in {
+        SignIn::ApiKey => KeyInfo { source: KeySource::SignIn, key: auth.api_key.clone() },
+        SignIn::ChatGpt => none(KeySource::ChatGptToken),
+        SignIn::Unknown => none(KeySource::Keyring),
+        SignIn::None => none(KeySource::None),
+    }
+}
+
+/// The API key row of a provider's details.
+fn key_text(source: &KeySource, env_key: Option<&str>) -> String {
+    match source {
+        KeySource::Env { .. } | KeySource::EnvMissing(_) => {
+            let k = env_key.unwrap_or_default();
+            tr!("Environment variable {k} · {}", "环境变量 {k} · {}", key_status(k))
+        }
+        KeySource::Bearer => l("experimental_bearer_token in config.toml (not where AgentPlus keeps keys)", "config.toml 的 experimental_bearer_token（不是 AgentPlus 存放密钥的位置）").into(),
+        KeySource::Header => l("Authorization header in config.toml (http_headers; not where AgentPlus keeps keys)", "config.toml 的 Authorization 请求头（http_headers，不是 AgentPlus 存放密钥的位置）").into(),
+        KeySource::OtherHeader => l("Custom request headers in config.toml", "config.toml 里的自定义请求头").into(),
+        KeySource::SignIn => l("The API key Codex is signed in with (~/.codex/auth.json)", "Codex 登录用的 API Key（~/.codex/auth.json）").into(),
+        KeySource::ChatGptToken => l("None of its own · Codex sends the ChatGPT sign-in token", "没有自己的密钥 · Codex 会发送 ChatGPT 登录凭据").into(),
+        KeySource::Keyring => l("Codex's sign-in (kept in the system keyring)", "Codex 的登录凭据（在系统钥匙串里）").into(),
+        KeySource::None => l("env_key not set", "未设置 env_key").into(),
+    }
+}
+
+/// Where a key AgentPlus moves to ~/.codex/.env came from, for the diff.
+fn moved_from(source: &KeySource) -> &'static str {
+    match source {
+        KeySource::Bearer => l("from experimental_bearer_token in config.toml", "来自 config.toml 的 experimental_bearer_token"),
+        KeySource::Header => l("from the Authorization header in config.toml", "来自 config.toml 的 Authorization 请求头"),
+        _ => l("copied from Codex's API key sign-in (~/.codex/auth.json, left as it is)", "复制自 Codex 的 API Key 登录（~/.codex/auth.json 保持不变）"),
+    }
+}
+
+/// A server on this machine (a local model server), which usually needs no key.
+fn is_local(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase()))
+        .is_some_and(|h| h == "localhost" || h.ends_with(".localhost") || h == "::1" || h == "0.0.0.0" || h.starts_with("127."))
+}
+
+/// What in config.toml differs from how AgentPlus writes it, or keeps the official sign-in mix
+/// from working: keys kept elsewhere than ~/.codex/.env (editing the provider moves them),
+/// missing keys, and a sign-in that doesn't fit the mix.
+fn issues(doc: &DocumentMut, providers: &[Provider], cur: &str, auth: &Auth) -> Vec<Issue> {
+    let (mut elsewhere, mut missing) = (vec![], vec![]);
+    // The provider whose only key is the sign-in's (it loses it when Codex signs out).
+    let mut key_in_sign_in = None;
+    for p in providers.iter().filter(|p| !p.builtin && p.compatible) {
+        let info = key_info(doc, &p.id, p.id == cur, auth);
+        let (id, name) = (Some(p.id.as_str()), &p.name);
+        match info.source {
+            // Moving the key is an edit of the provider, which needs its address.
+            KeySource::Bearer | KeySource::Header | KeySource::SignIn if info.key.is_some() && p.base_url.is_some() => {
+                let text = match info.source {
+                    KeySource::Bearer => tr!("\"{name}\"'s API key is written in config.toml (experimental_bearer_token); AgentPlus keeps keys in ~/.codex/.env.", "「{name}」的密钥直接写在 config.toml 里（experimental_bearer_token），AgentPlus 把密钥放在 ~/.codex/.env。"),
+                    KeySource::Header => tr!("\"{name}\"'s API key is written in config.toml (the Authorization header in http_headers); AgentPlus keeps keys in ~/.codex/.env.", "「{name}」的密钥直接写在 config.toml 里（http_headers 的 Authorization），AgentPlus 把密钥放在 ~/.codex/.env。"),
+                    _ => {
+                        key_in_sign_in = Some(p.id.as_str());
+                        tr!("\"{name}\" uses the API key Codex is signed in with (~/.codex/auth.json): it's gone once you sign out, and goes to whichever provider you switch to. AgentPlus keeps keys in ~/.codex/.env.", "「{name}」用的是 Codex 登录时填的 API Key（~/.codex/auth.json）：退出登录就没了，切换供应商后还会发给别的供应商。AgentPlus 把密钥放在 ~/.codex/.env。")
+                    }
+                };
+                elsewhere.push(Issue::new("key-elsewhere", id, text));
+            }
+            KeySource::EnvMissing(var) => missing.push(Issue::new("key-missing", id, tr!("\"{name}\" has no API key: environment variable {var} isn't set anywhere, so its requests fail.", "「{name}」没有密钥：环境变量 {var} 哪里都没有设置，请求会失败。"))),
+            KeySource::ChatGptToken => missing.push(Issue::new("key-missing", id, tr!("\"{name}\" has no API key of its own, so Codex sends your ChatGPT sign-in token to it. Add its key.", "「{name}」没有自己的密钥，Codex 会把你的 ChatGPT 登录凭据发给它。请补充它的密钥。"))),
+            KeySource::None if !p.base_url.as_deref().is_some_and(is_local) => missing.push(Issue::new("key-missing", id, tr!("\"{name}\" has no API key of its own; requests to it will likely fail.", "「{name}」没有自己的密钥，请求多半会失败。"))),
+            _ => {}
+        }
+    }
+    let mut sign_in = vec![];
+    if let Some(p) = providers.iter().find(|p| p.id == cur && p.official_auth) {
+        let name = &p.name;
+        match auth.sign_in {
+            SignIn::ApiKey => {
+                let mut text = tr!(
+                    "Codex is signed in with an API key, so the official sign-in mix of \"{name}\" doesn't take effect and account features stay locked. Sign out in Codex, then sign in with a ChatGPT account. Don't need the mix? Turn it off.",
+                    "Codex 现在是 API Key 登录，「{name}」的官方登录混用不会生效，账号功能也不会解锁：请先在 Codex 里退出登录，再用 ChatGPT 账号登录。用不到混用就把它关掉。"
+                );
+                if key_in_sign_in == Some(p.id.as_str()) {
+                    text.push_str(&tr!(" Sync its key first, or \"{name}\" has no key once you sign out.", "退出前先同步它的密钥，否则退出登录后「{name}」就没有密钥了。"));
+                }
+                sign_in.push(Issue::new("api-key-sign-in", Some(&p.id), text));
+            }
+            SignIn::None => sign_in.push(Issue::new("not-signed-in", Some(&p.id), l(
+                "The current provider uses the official sign-in mix, but Codex isn't signed in with a ChatGPT account yet. Sign in in Codex so requests can go to the relay.",
+                "当前供应商开启了官方登录混用，但 Codex 还没有登录 ChatGPT 账号：在 Codex 里登录后，对话才会发往中转站。",
+            ))),
+            _ => {}
+        }
+    }
+    elsewhere.into_iter().chain(sign_in).chain(missing).collect()
+}
+
 // ---------------------------------------------------------------- read
 
-fn providers(doc: &DocumentMut) -> Vec<Provider> {
+/// The providers in config.toml; `cur` is the one Codex uses now (see `current_provider`).
+fn providers(doc: &DocumentMut, cur: &str, auth: &Auth) -> Vec<Provider> {
     let mut out = vec![Provider::builtin(
         "openai",
         l("OpenAI official", "OpenAI 官方"),
@@ -463,10 +703,8 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
             if official_auth {
                 details.push(Kv::text(l("Official sign-in mix", "官方登录混用"), l("On · Codex stays signed in with ChatGPT; requests go to this provider with its own API key", "已开启 · Codex 用 ChatGPT 账号登录，对话请求发往此供应商并使用它的密钥")));
             }
-            match &env_key {
-                Some(k) => details.push(Kv::text(lbl::api_key(), tr!("Environment variable {k} · {}", "环境变量 {k} · {}", key_status(k)))),
-                None => details.push(Kv::text(lbl::api_key(), l("env_key not set", "未设置 env_key"))),
-            }
+            let key = key_info(doc, id, id == cur, auth);
+            details.push(Kv::text(lbl::api_key(), key_text(&key.source, env_key.as_deref())));
             details.push(Kv::text("Fast", l("Hidden by Codex by default (can be shown via injection in \"Other settings\")", "Codex 默认隐藏（可在「其他设置」注入显示）")));
             out.push(Provider {
                 details,
@@ -480,7 +718,7 @@ fn providers(doc: &DocumentMut) -> Vec<Provider> {
                 reason: if chat { Some(l("Codex no longer supports the Chat API", "Codex 已不支持 Chat 接口").into()) } else { None },
                 editable: true,
                 api: api.into(),
-                has_key: env_key.as_deref().and_then(env_value).is_some(),
+                has_key: key.key.is_some() || matches!(key.source, KeySource::OtherHeader | KeySource::Keyring),
                 official_auth,
                 ..Default::default()
             });
@@ -662,7 +900,10 @@ pub fn state(inst: &Install) -> AgentState {
     let cur = current_provider(&doc, &store);
     let raw = configured_provider(&doc);
     let fixed = raw == FIXED_ID;
-    st.providers = providers(&doc);
+    let auth = read_auth(&doc);
+    st.providers = providers(&doc, &cur, &auth);
+    st.issues = issues(&doc, &st.providers, &cur, &auth);
+    st.sign_in = Some(auth.sign_in.id().into());
     st.current_provider = Some(cur.clone());
     // Not on the fixed id yet, but could be (a custom provider is active).
     st.fixed_pending = !fixed && raw != "openai";
@@ -744,12 +985,8 @@ pub fn state(inst: &Install) -> AgentState {
     let prov = st.providers.iter().find(|p| p.id == cur);
     let custom = prov.map(|p| !p.builtin).unwrap_or(false);
     let mixed = prov.is_some_and(|p| p.official_auth);
-    let signed = mixed.then(|| sign_in(&doc));
-    match signed {
-        Some(SignIn::None) => st.notes.push(l("The current provider uses the official sign-in mix, but Codex isn't signed in with a ChatGPT account yet. Sign in in Codex so requests can go to the relay.", "当前供应商开启了官方登录混用，但 Codex 还没有登录 ChatGPT 账号：在 Codex 里登录后，对话才会发往中转站。").into()),
-        Some(SignIn::ApiKey) => st.notes.push(l("The current provider uses the official sign-in mix, but Codex is signed in with an API key (~/.codex/auth.json), so account features stay locked. Sign out in Codex and sign in with a ChatGPT account.", "当前供应商开启了官方登录混用，但 Codex 现在是 API Key 登录（~/.codex/auth.json），官方账号功能不会解锁：在 Codex 里退出后改用 ChatGPT 账号登录。").into()),
-        _ => {}
-    }
+    // A sign-in that doesn't fit the mix is reported in `issues`.
+    let signed = mixed.then_some(auth.sign_in);
     st.current_model = doc.get("model").and_then(|v| v.as_str()).map(str::trim).filter(|m| !m.is_empty()).map(String::from);
     st.current = vec![
         Kv::mono("model_provider", format!("\"{raw}\"")),
@@ -790,7 +1027,9 @@ pub fn state(inst: &Install) -> AgentState {
 pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
     let (doc, _) = load_doc()?;
     let base = provider_str(&doc, id, "base_url").ok_or_else(|| anyhow!(tr!("Provider {id} has no base_url", "供应商 {id} 没有 base_url")))?;
-    let key = provider_str(&doc, id, "env_key").and_then(|k| env_value(&k));
+    // The key wherever Codex takes it from (the fixed-id mirror counts as the current provider too).
+    let current = id == configured_provider(&doc) || id == current_provider(&doc, &store::load());
+    let key = key_info(&doc, id, current, &read_auth(&doc)).key;
     let api = provider_item(&doc, id).map(wire_api).unwrap_or("responses");
     Ok((base, key, api.into()))
 }
@@ -827,6 +1066,35 @@ fn set_official_auth(doc: &mut DocumentMut, id: &str, on: bool) -> Result<bool> 
     Ok(true)
 }
 
+/// Removes a key written into config.toml (`experimental_bearer_token`, a bearer
+/// `Authorization` header) once ~/.codex/.env holds the provider's key. True when anything went.
+fn drop_inline_key(doc: &mut DocumentMut, id: &str, diff: &mut Diff, file: &str) -> Result<bool> {
+    let t = provider_mut(doc, id)?;
+    let mut changed = false;
+    if t.remove("experimental_bearer_token").is_some() {
+        diff.push(file, format!("[model_providers.{id}] - experimental_bearer_token"), false);
+        changed = true;
+    }
+    let mut emptied = false;
+    if let Some(h) = t.get_mut("http_headers").and_then(|h| h.as_table_like_mut()) {
+        let bearer: Vec<String> = h
+            .iter()
+            .filter(|(k, v)| k.eq_ignore_ascii_case("authorization") && v.as_str().is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("bearer ")))
+            .map(|(k, _)| k.to_string())
+            .collect();
+        for k in &bearer {
+            h.remove(k);
+            diff.push(file, format!("[model_providers.{id}] - http_headers.{k}"), false);
+            changed = true;
+        }
+        emptied = !bearer.is_empty() && h.is_empty();
+    }
+    if emptied {
+        t.remove("http_headers");
+    }
+    Ok(changed)
+}
+
 /// Applies `ops` in memory, records the diff, and writes files unless `dry_run`.
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     if crate::official::active() {
@@ -861,6 +1129,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let mut ordered: Vec<&Op> = ops.iter().collect();
     ordered.sort_by_key(|o| rank(o));
     let before = current_provider(&doc, &store);
+    let auth = read_auth(&doc);
     let mut switched: Option<String> = None;
 
     for op in ordered {
@@ -880,15 +1149,25 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     None => unique_id(&slug(&p.name), |c| c == "openai" || c == FIXED_ID || provider_item(&doc, c).is_some()),
                 };
                 let is_new = p.id.is_none();
-                // A default name Codex would skip in .env (id `codex-…`) gets an AGENTPLUS_ prefix.
-                let env_key = provider_str(&doc, &id, "env_key").unwrap_or_else(|| {
-                    let k = format!("{}_API_KEY", id.to_uppercase().replace('-', "_"));
-                    if codex_ignores_in_file(&k) {
-                        format!("AGENTPLUS_{k}")
-                    } else {
-                        k
+                // A key Codex takes from somewhere else (hand edits, other tools) moves to ~/.codex/.env.
+                let moved = if is_new {
+                    None
+                } else {
+                    let found = key_info(&doc, &id, id == before, &auth);
+                    match found.source {
+                        KeySource::Bearer | KeySource::Header | KeySource::SignIn => found.key.map(|k| (k, found.source)),
+                        _ => None,
                     }
-                });
+                };
+                let typed = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
+                let key_coming = typed.is_some() || moved.is_some();
+                let own_env = provider_str(&doc, &id, "env_key").filter(|k| !k.trim().is_empty());
+                // A variable another provider reads too gets no new key: that provider would send
+                // it to its own address. This one moves to a variable of its own instead.
+                let env_key = match own_env.clone() {
+                    Some(k) if !(key_coming && env_shared(&doc, &id, &k, &p.base_url)) => k,
+                    _ => new_env_key(&doc, &env_lines, &id),
+                };
                 if is_new {
                     let mut t = Table::new();
                     t.insert("name", value(p.name.trim()));
@@ -915,7 +1194,13 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             cfg_dirty = true;
                         }
                     }
-                    if provider_str(&doc, &id, "env_key").is_none() {
+                    // Codex fails on an env_key that isn't set rather than use the provider's other
+                    // credentials (headers, its sign-in) or none (a local server), so it is only added
+                    // with a key to put in .env. Except with the official sign-in mix: without an
+                    // env_key Codex would send the ChatGPT sign-in token to this provider, and a
+                    // failing request is the safe outcome.
+                    let mixed = p.official_auth.unwrap_or_else(|| provider_item(&doc, &id).and_then(|t| t.get("requires_openai_auth")).and_then(|v| v.as_bool()).unwrap_or(false));
+                    if (key_coming || mixed) && own_env.as_deref() != Some(env_key.as_str()) {
                         set_key(provider_mut(&mut doc, &id)?, "env_key", value(env_key.as_str()));
                         diff.push(&cfg_file, format!("[model_providers.{id}] env_key = \"{env_key}\""), true);
                         cfg_dirty = true;
@@ -931,16 +1216,27 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                         }
                     }
                 }
-                if let Some(k) = p.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+                if let Some((k, from)) = typed.map(|k| (k, None)).or(moved.as_ref().map(|(k, src)| (k.as_str(), Some(src)))) {
                     if codex_ignores_in_file(&env_key) {
                         return Err(anyhow!(tr!("Codex ignores ~/.codex/.env variables starting with CODEX_: rename env_key, or set {env_key} as a system environment variable", "Codex 不读取 ~/.codex/.env 里以 CODEX_ 开头的变量：请把 env_key 改成别的名字，或在系统环境变量里设置 {env_key}")));
                     }
-                    set_env(&mut env_lines, &env_key, k.trim());
-                    diff.push(&env_file, format!("{env_key} = {}", mask_key(k.trim())), true);
+                    set_env(&mut env_lines, &env_key, k);
+                    let line = match from {
+                        Some(src) => {
+                            let (masked, from) = (mask_key(k), moved_from(src));
+                            tr!("{env_key} = {masked} ({from})", "{env_key} = {masked}（{from}）")
+                        }
+                        None => format!("{env_key} = {}", mask_key(k)),
+                    };
+                    diff.push(&env_file, line, true);
                     env_dirty = true;
+                    // The key in .env takes over from one written into config.toml, which would stay behind in plain text.
+                    if !is_new {
+                        cfg_dirty |= drop_inline_key(&mut doc, &id, &mut diff, &cfg_file)?;
+                    }
                 }
                 // Keep the fixed-id mirror in sync with the provider it copies.
-                if configured_provider(&doc) == FIXED_ID && store::get_str(&store, ID, "fixedSource").as_deref() == Some(id.as_str()) {
+                if configured_provider(&doc) == FIXED_ID && current_provider(&doc, &store) == id {
                     cfg_dirty |= mirror(&mut doc, &id, &mut store, &mut diff, &cfg_file)?;
                     store_dirty = true;
                 }
@@ -962,6 +1258,20 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 }
             }
             Op::SetCurrentProvider { provider } => {
+                // With the official sign-in mix and no key of its own (a config other tools
+                // left), Codex would send this provider its sign-in: the ChatGPT token, or the API
+                // key in auth.json, which belongs to the provider in use now. Not switched to.
+                let mixed_without_key = provider_item(&doc, provider).is_some_and(|t| {
+                    let set = |k: &str| t.get(k).and_then(|v| v.as_str()).is_some_and(|v| !v.trim().is_empty());
+                    t.get("requires_openai_auth").and_then(|v| v.as_bool()).unwrap_or(false) && !set("env_key") && !set("experimental_bearer_token")
+                });
+                if provider != "openai" && provider != &before && mixed_without_key {
+                    let name = provider_str(&doc, provider, "name").unwrap_or_else(|| provider.clone());
+                    return Err(anyhow!(tr!(
+                        "\"{name}\" uses the official sign-in mix but has no API key of its own, so Codex would send it your sign-in (the ChatGPT token, or the API key Codex is signed in with). Add its key first (edit the provider)",
+                        "「{name}」开启了官方登录混用却没有自己的密钥，切换后 Codex 会把你的登录凭据（ChatGPT 凭据，或登录用的 API Key）发给它。请先编辑供应商补充它的密钥"
+                    )));
+                }
                 // Keep the old provider's list, then bring in the new one's.
                 if let Some((_, v, _)) = catalog.as_mut() {
                     if provider != &before {
@@ -1193,6 +1503,12 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         if !targets.is_empty() {
             backup_dir = Some(backup(ID, &targets)?);
         }
+        // Persist the replacement key before config.toml starts referring to it or loses
+        // its inline key. A failed .env write must leave the original config usable.
+        if env_dirty {
+            write_text_atomic(&env_path(), &env_lines.join("\n"), env_meta)?;
+            written.push(env_path());
+        }
         if cfg_dirty {
             write_text_atomic(&config_path(), &doc.to_string(), meta)?;
             written.push(config_path());
@@ -1201,10 +1517,6 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             let (p, v, m) = catalog.as_ref().unwrap();
             write_json(p, v, *m)?;
             written.push(p.clone());
-        }
-        if env_dirty {
-            write_text_atomic(&env_path(), &env_lines.join("\n"), env_meta)?;
-            written.push(env_path());
         }
         if store_dirty {
             store::save(&store)?;
@@ -1240,6 +1552,11 @@ pub fn ui_patches() -> crate::cdp::Patches {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Value of an env_key as Codex reads it (see `env_lookup`); None when unset or empty.
+    fn env_value(name: &str) -> Option<String> {
+        env_lookup(name).map(|(v, _)| v).filter(|v| !v.is_empty())
+    }
 
     #[test]
     fn listed_custom_models_are_filled_in_from_the_catalog() {
@@ -1278,7 +1595,7 @@ env_key = \"RELAY_API_KEY\"
         let text = doc.to_string();
         assert!(text.contains("requires_openai_auth = true"));
         assert!(text.contains("env_key = \"RELAY_API_KEY\""), "the relay key must stay on env_key");
-        assert!(providers(&doc).iter().any(|p| p.id == "relay" && p.official_auth));
+        assert!(providers(&doc, "", &Auth::default()).iter().any(|p| p.id == "relay" && p.official_auth));
         assert!(set_official_auth(&mut doc, "relay", false).unwrap());
         assert!(!doc.to_string().contains("requires_openai_auth"));
         assert!(set_official_auth(&mut doc, "missing", true).is_err());
@@ -1426,7 +1743,7 @@ http_headers = { X = \"1\" }
         let cfg = "[model_providers.old]\nname = \"Old\"\nbase_url = \"https://o/v1\"\nwire_api = \"chat\"\n\n[model_providers.new]\nname = \"New\"\nbase_url = \"https://n/v1\"\n";
         let _h = codex_home_with("codex-wire", cfg, None);
         let doc = cfg.parse::<DocumentMut>().unwrap();
-        let apis: Vec<_> = providers(&doc).into_iter().map(|p| (p.id, p.api, p.compatible)).collect();
+        let apis: Vec<_> = providers(&doc, "", &Auth::default()).into_iter().map(|p| (p.id, p.api, p.compatible)).collect();
         assert_eq!(apis[1..], [("old".into(), "chat".into(), false), ("new".into(), "responses".into(), true)]);
         assert_eq!(provider_endpoint("old").unwrap().2, "chat");
         assert_eq!(provider_endpoint("new").unwrap().2, "responses");
@@ -1676,5 +1993,374 @@ base_url = \"https://r.example.com/v1\"
         assert_eq!(sign_in_from(&json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "sk-x" })), SignIn::ApiKey);
         assert_eq!(sign_in_from(&json!({ "auth_mode": "chatgpt", "OPENAI_API_KEY": null })), SignIn::None);
         assert_eq!(sign_in_from(&json!({})), SignIn::None);
+    }
+
+    /// Codex's config as other tools leave it: a key in each place Codex reads one from.
+    const ELSEWHERE: &str = "model_provider = \"cur\"
+
+[model_providers.cur]
+name = \"Cur\"
+base_url = \"https://cur.example.com/v1\"
+wire_api = \"responses\"
+requires_openai_auth = true
+
+[model_providers.other]
+name = \"Other\"
+base_url = \"https://other.example.com/v1\"
+requires_openai_auth = true
+
+[model_providers.file]
+name = \"File\"
+base_url = \"https://file.example.com/v1\"
+env_key = \"FILE_KEY\"
+
+[model_providers.sys]
+name = \"Sys\"
+base_url = \"https://sys.example.com/v1\"
+env_key = \"SYS_KEY\"
+
+[model_providers.gone]
+name = \"Gone\"
+base_url = \"https://gone.example.com/v1\"
+env_key = \"GONE_KEY\"
+experimental_bearer_token = \"sk-unused\"
+
+[model_providers.bearer]
+name = \"Bearer\"
+base_url = \"https://bearer.example.com/v1\"
+experimental_bearer_token = \"sk-bearer\"
+
+[model_providers.header]
+name = \"Header\"
+base_url = \"https://header.example.com/v1\"
+http_headers = { authorization = \"bearer sk-header\", X-Trace = \"1\" }
+
+[model_providers.xkey]
+name = \"XKey\"
+base_url = \"https://xkey.example.com/v1\"
+http_headers = { x-api-key = \"k\" }
+
+[model_providers.local]
+name = \"Local\"
+base_url = \"http://127.0.0.1:1234/v1\"
+";
+
+    fn api_key_auth() -> Auth {
+        auth_from(&json!({ "auth_mode": "apikey", "OPENAI_API_KEY": " sk-signin " }))
+    }
+
+    /// An edit of provider `id` that keeps its name and address.
+    fn keep(id: &str, key: Option<&str>, official_auth: Option<bool>) -> Op {
+        let doc = load_doc().unwrap().0;
+        Op::UpsertProvider {
+            provider: ProviderInput {
+                id: Some(id.into()),
+                name: provider_str(&doc, id, "name").unwrap(),
+                base_url: provider_str(&doc, id, "base_url").unwrap(),
+                api: "responses".into(),
+                api_key: key.map(String::from),
+                models: vec![],
+                key_from_library: None,
+                key_from_sync: None,
+                official_auth,
+            },
+        }
+    }
+
+    #[test]
+    fn key_sources_follow_codex_order() {
+        let _h = codex_home_with("codex-keysrc", ELSEWHERE, Some("FILE_KEY=sk-file\n"));
+        crate::env::set_test_vars(&[("SYS_KEY", "sk-sys")]);
+        let doc = ELSEWHERE.parse::<DocumentMut>().unwrap();
+        let auth = api_key_auth();
+        let src = |id: &str, current: bool, auth: &Auth| {
+            let i = key_info(&doc, id, current, auth);
+            (i.source, i.key)
+        };
+        assert_eq!(src("file", false, &auth), (KeySource::Env { from_file: true }, Some("sk-file".into())));
+        assert_eq!(src("sys", false, &auth), (KeySource::Env { from_file: false }, Some("sk-sys".into())));
+        // env_key wins even when it isn't set: Codex fails rather than fall back to the token.
+        assert_eq!(src("gone", false, &auth), (KeySource::EnvMissing("GONE_KEY".into()), None));
+        assert_eq!(src("bearer", false, &auth), (KeySource::Bearer, Some("sk-bearer".into())));
+        assert_eq!(src("header", false, &auth), (KeySource::Header, Some("sk-header".into())));
+        assert_eq!(src("xkey", false, &auth), (KeySource::OtherHeader, None));
+        // The sign-in's key only counts for the provider Codex is using now.
+        assert_eq!(src("cur", true, &auth), (KeySource::SignIn, Some("sk-signin".into())));
+        assert_eq!(src("other", false, &auth), (KeySource::None, None));
+        let tokens = json!({ "tokens": { "access_token": "a", "refresh_token": "r" } });
+        assert_eq!(src("cur", true, &auth_from(&tokens)), (KeySource::ChatGptToken, None));
+        assert_eq!(src("cur", true, &Auth { sign_in: SignIn::Unknown, api_key: None }), (KeySource::Keyring, None));
+        assert_eq!(src("cur", true, &Auth::default()), (KeySource::None, None));
+        assert_eq!(src("local", false, &auth), (KeySource::None, None));
+        assert_eq!(src("missing", true, &auth), (KeySource::None, None));
+        // What the cards say: a key read from anywhere counts, a missing one doesn't.
+        let has: Vec<_> = providers(&doc, "cur", &auth).into_iter().filter(|p| p.has_key).map(|p| p.id).collect();
+        assert_eq!(has, ["openai", "cur", "file", "sys", "bearer", "header", "xkey"]);
+    }
+
+    #[test]
+    fn issues_list_keys_kept_elsewhere_and_missing() {
+        let _h = codex_home_with("codex-issues", ELSEWHERE, Some("FILE_KEY=sk-file\n"));
+        crate::env::set_test_vars(&[("SYS_KEY", "sk-sys")]);
+        let doc = ELSEWHERE.parse::<DocumentMut>().unwrap();
+        let auth = api_key_auth();
+        let list = issues(&doc, &providers(&doc, "cur", &auth), "cur", &auth);
+        let kinds: Vec<_> = list.iter().map(|i| (i.kind.as_str(), i.provider.as_deref().unwrap_or_default())).collect();
+        // Keys to move first, then the sign-in, then keys to add; a local server needs none.
+        assert_eq!(kinds, [
+            ("key-elsewhere", "cur"),
+            ("key-elsewhere", "bearer"),
+            ("key-elsewhere", "header"),
+            ("api-key-sign-in", "cur"),
+            ("key-missing", "other"),
+            ("key-missing", "gone"),
+        ]);
+        // Signing out would take the current provider's only key with it.
+        assert!(list[3].text.contains("退出前先同步它的密钥"), "{}", list[3].text);
+        assert!(list[5].text.contains("GONE_KEY"));
+        // Signed in with ChatGPT: the mix works, but the relay gets the account token.
+        let chatgpt = auth_from(&json!({ "tokens": { "access_token": "a" } }));
+        let list = issues(&doc, &providers(&doc, "cur", &chatgpt), "cur", &chatgpt);
+        let cur: Vec<_> = list.iter().filter(|i| i.provider.as_deref() == Some("cur")).collect();
+        assert_eq!(cur.len(), 1);
+        assert_eq!(cur[0].kind, "key-missing");
+        assert!(cur[0].text.contains("ChatGPT 登录凭据"), "{}", cur[0].text);
+        // Not signed in at all.
+        let list = issues(&doc, &providers(&doc, "cur", &Auth::default()), "cur", &Auth::default());
+        assert!(list.iter().any(|i| i.kind == "not-signed-in"));
+        assert!(!list.iter().any(|i| i.kind == "api-key-sign-in"));
+    }
+
+    #[test]
+    fn moving_keys_with_colliding_provider_ids_keeps_both_credentials() {
+        let cfg = "[model_providers.foo-bar]\nname = \"First\"\nbase_url = \"https://first.example/v1\"\nexperimental_bearer_token = \"sk-first\"\n\n[model_providers.foo_bar]\nname = \"Second\"\nbase_url = \"https://second.example/v1\"\nhttp_headers = { Authorization = \"Bearer sk-second\" }\n";
+        for ids in [["foo-bar", "foo_bar"], ["foo_bar", "foo-bar"]] {
+            let _h = codex_home_with("codex-key-collision", cfg, None);
+            let ops = ids.map(|id| keep(id, None, None));
+            plan(&ops, true).unwrap();
+            assert_eq!(std::fs::read_to_string(config_path()).unwrap(), cfg);
+            assert!(!env_path().exists(), "preview must not move keys");
+            plan(&ops, false).unwrap();
+            let doc = load_doc().unwrap().0;
+            assert_ne!(provider_str(&doc, "foo-bar", "env_key"), provider_str(&doc, "foo_bar", "env_key"));
+            assert_eq!(provider_endpoint("foo-bar").unwrap().1.as_deref(), Some("sk-first"));
+            assert_eq!(provider_endpoint("foo_bar").unwrap().1.as_deref(), Some("sk-second"));
+            assert!(plan(&ops, false).unwrap().0.groups.is_empty(), "repeating the migration is a no-op");
+        }
+    }
+
+    #[test]
+    fn moving_a_key_preserves_occupied_variables_and_references() {
+        let cfg = format!("{ELSEWHERE}\n[model_providers.reserved]\nenv_key = \"BEARER_API_KEY_4\"\nenv_http_headers = {{ Authorization = \"BEARER_API_KEY_5\" }}\n");
+        let env = "export bearer_api_key=sk-unrelated\nBEARER_API_KEY_2=\n";
+        let _h = codex_home_with("codex-key-reserved", &cfg, Some(env));
+        crate::env::set_test_vars(&[("BEARER_API_KEY_3", "sk-inherited")]);
+        plan(&[keep("bearer", None, None)], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "bearer", "env_key").as_deref(), Some("BEARER_API_KEY_6"));
+        assert_eq!(provider_endpoint("bearer").unwrap().1.as_deref(), Some("sk-bearer"));
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), format!("{env}BEARER_API_KEY_6=sk-bearer\n"));
+        assert_eq!(env_value("BEARER_API_KEY_3").as_deref(), Some("sk-inherited"));
+        assert_eq!(provider_str(&doc, "reserved", "env_key").as_deref(), Some("BEARER_API_KEY_4"));
+        assert_eq!(provider_item(&doc, "reserved").unwrap()["env_http_headers"]["Authorization"].as_str(), Some("BEARER_API_KEY_5"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_env_write_keeps_the_original_inline_credentials() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let _h = codex_home_with("codex-key-write-failure", ELSEWHERE, Some("UNRELATED=1\n"));
+        let ops = [keep("bearer", None, None), keep("header", None, None)];
+        // An editor can allow reads (including the backup) while denying replacement.
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(env_path()).unwrap();
+        let result = plan(&ops, false);
+        drop(locked);
+        assert!(result.err().expect("the locked .env must reject replacement").to_string().contains(".env"));
+        assert_eq!(std::fs::read_to_string(config_path()).unwrap(), ELSEWHERE);
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "UNRELATED=1\n");
+        assert_eq!(provider_endpoint("bearer").unwrap().1.as_deref(), Some("sk-bearer"));
+        assert_eq!(provider_endpoint("header").unwrap().1.as_deref(), Some("sk-header"));
+        // Retrying after the lock is released migrates both keys without changing them.
+        plan(&ops, false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "bearer", "experimental_bearer_token"), None);
+        assert_eq!(header_bearer(provider_item(&doc, "header").unwrap()), None);
+        assert_eq!(provider_endpoint("bearer").unwrap().1.as_deref(), Some("sk-bearer"));
+        assert_eq!(provider_endpoint("header").unwrap().1.as_deref(), Some("sk-header"));
+    }
+
+    #[test]
+    fn editing_moves_a_key_from_config_toml_into_env() {
+        let h = codex_home_with("codex-move", ELSEWHERE, Some("A=1\n"));
+        let (diff, _, backup) = plan(&[keep("bearer", None, None)], false).unwrap();
+        assert!(backup.is_some());
+        assert_eq!(diff_lines(&diff), [
+            ("~/.codex/config.toml".to_string(), "[model_providers.bearer] env_key = \"BEARER_API_KEY\"".to_string()),
+            ("~/.codex/config.toml".to_string(), "[model_providers.bearer] - experimental_bearer_token".to_string()),
+            ("~/.codex/.env".to_string(), format!("BEARER_API_KEY = {}（来自 config.toml 的 experimental_bearer_token）", mask_key("sk-bearer"))),
+        ]);
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "bearer", "experimental_bearer_token"), None);
+        assert_eq!(key_info(&doc, "bearer", false, &Auth::default()).source, KeySource::Env { from_file: true });
+        assert_eq!(env_value("BEARER_API_KEY").as_deref(), Some("sk-bearer"));
+
+        // Only the bearer header goes; other headers stay. A typed key wins over the old one.
+        plan(&[keep("header", Some("sk-typed"), None)], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        let headers = provider_item(&doc, "header").unwrap().get("http_headers").unwrap().as_table_like().unwrap();
+        assert_eq!(headers.iter().map(|(k, _)| k.to_string()).collect::<Vec<_>>(), ["X-Trace"]);
+        assert_eq!(env_value("HEADER_API_KEY").as_deref(), Some("sk-typed"));
+        // A provider whose key is already in .env is left alone.
+        assert!(plan(&[keep("bearer", None, None)], false).unwrap().0.groups.is_empty());
+        // An env_key that isn't set isn't filled from a token Codex never used.
+        assert!(plan(&[keep("gone", None, None)], false).unwrap().0.groups.is_empty());
+        assert_eq!(std::fs::read_to_string(h.0.join(".codex").join(".env")).unwrap(), "A=1\nBEARER_API_KEY=sk-bearer\nHEADER_API_KEY=sk-typed\n");
+    }
+
+    /// Two providers reading one variable: a key typed for one must not reach the other's address.
+    #[test]
+    fn a_key_for_a_shared_variable_gets_a_variable_of_its_own() {
+        let cfg = "[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nenv_key = \"RELAY_KEY\"\n\n[model_providers.b]\nname = \"B\"\nbase_url = \"https://b.example/v1\"\nenv_key = \"relay_key\"\n";
+        let _h = codex_home_with("codex-shared-env", cfg, Some("RELAY_KEY=sk-a\n"));
+        plan(&[keep("b", Some("sk-b"), None)], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "b", "env_key").as_deref(), Some("B_API_KEY"));
+        assert_eq!(provider_endpoint("a").unwrap().1.as_deref(), Some("sk-a"), "a keeps its key");
+        assert_eq!(provider_endpoint("b").unwrap().1.as_deref(), Some("sk-b"));
+        // A variable of its own is written in place.
+        plan(&[keep("b", Some("sk-b2"), None)], false).unwrap();
+        assert_eq!(provider_str(&load_doc().unwrap().0, "b", "env_key").as_deref(), Some("B_API_KEY"));
+        assert_eq!(provider_endpoint("b").unwrap().1.as_deref(), Some("sk-b2"));
+        assert_eq!(provider_endpoint("a").unwrap().1.as_deref(), Some("sk-a"));
+    }
+
+    /// Providers of one relay (same host) sharing a variable keep sharing it.
+    #[test]
+    fn a_variable_shared_at_one_host_stays_shared() {
+        let cfg = "[model_providers.a]\nname = \"A\"\nbase_url = \"https://r.example/v1\"\nenv_key = \"RELAY_KEY\"\n\n[model_providers.b]\nname = \"B\"\nbase_url = \"https://r.example/beta/v1\"\nenv_key = \"RELAY_KEY\"\n";
+        let _h = codex_home_with("codex-shared-host", cfg, Some("RELAY_KEY=sk-old\n"));
+        plan(&[keep("b", Some("sk-new"), None)], false).unwrap();
+        assert_eq!(provider_str(&load_doc().unwrap().0, "b", "env_key").as_deref(), Some("RELAY_KEY"));
+        assert_eq!(provider_endpoint("a").unwrap().1.as_deref(), Some("sk-new"));
+    }
+
+    /// Switching to a mixed provider without a key would hand it the ChatGPT token: refused.
+    #[test]
+    fn no_switch_to_a_provider_that_would_get_the_chatgpt_token() {
+        let h = codex_home_with("codex-switch-token", ELSEWHERE, None);
+        std::fs::write(h.0.join(".codex").join("auth.json"), json!({ "tokens": { "access_token": "a", "refresh_token": "r" } }).to_string()).unwrap();
+        let err = plan(&[Op::SetCurrentProvider { provider: "other".into() }], true).err().expect("refused").to_string();
+        assert!(err.contains("登录凭据"), "{err}");
+        // Signed in with an API key (the current provider's): refused too, as when not signed in.
+        std::fs::write(h.0.join(".codex").join("auth.json"), json!({ "OPENAI_API_KEY": "sk-cur" }).to_string()).unwrap();
+        assert!(plan(&[Op::SetCurrentProvider { provider: "other".into() }], true).is_err());
+        std::fs::remove_file(h.0.join(".codex").join("auth.json")).unwrap();
+        assert!(plan(&[Op::SetCurrentProvider { provider: "other".into() }], true).is_err());
+        // The provider in use already: nothing changes, nothing refused.
+        assert!(plan(&[Op::SetCurrentProvider { provider: "cur".into() }], true).is_ok());
+        // With its key added in the same apply, it's fine.
+        assert!(plan(&[keep("other", Some("sk-other"), None), Op::SetCurrentProvider { provider: "other".into() }], true).is_ok());
+        // Providers with a key of their own switch as before.
+        assert!(plan(&[Op::SetCurrentProvider { provider: "bearer".into() }], true).is_ok());
+    }
+
+    #[test]
+    fn editing_without_a_key_adds_no_env_key() {
+        let _h = codex_home_with("codex-no-env-key", ELSEWHERE, None);
+        let renamed = |id: &str, mix: Option<bool>| {
+            let mut op = keep(id, None, mix);
+            if let Op::UpsertProvider { provider } = &mut op {
+                provider.name = format!("{id} renamed");
+            }
+            plan(&[op], false).unwrap();
+            let doc = load_doc().unwrap().0;
+            assert_eq!(provider_str(&doc, id, "name").as_deref(), Some(format!("{id} renamed").as_str()));
+            provider_str(&doc, id, "env_key")
+        };
+        // A custom credential header, a local server: an unset env_key would take over and fail every request.
+        assert_eq!(renamed("xkey", None), None);
+        assert_eq!(renamed("local", None), None);
+        // With the official sign-in mix Codex would send the ChatGPT token to the provider
+        // instead: an env_key (failing until its key is added) is the safe side.
+        assert_eq!(renamed("other", None).as_deref(), Some("OTHER_API_KEY"));
+        assert_eq!(renamed("xkey", Some(true)).as_deref(), Some("XKEY_API_KEY"));
+        let doc = load_doc().unwrap().0;
+        assert_eq!(key_info(&doc, "xkey", true, &auth_from(&json!({ "tokens": { "access_token": "a" } }))).source, KeySource::EnvMissing("XKEY_API_KEY".into()));
+        // A key typed in goes to .env as usual.
+        plan(&[keep("local", Some("sk-local"), None)], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "local", "env_key").as_deref(), Some("LOCAL_API_KEY"));
+        assert_eq!(provider_endpoint("local").unwrap().1.as_deref(), Some("sk-local"));
+    }
+
+    #[test]
+    fn a_bearer_only_header_table_is_dropped() {
+        let cfg = "[model_providers.h]\nname = \"H\"\nbase_url = \"https://h/v1\"\n\n[model_providers.h.http_headers]\nAuthorization = \"Bearer sk-h\"\n";
+        let mut doc = cfg.parse::<DocumentMut>().unwrap();
+        let mut diff = Diff::default();
+        assert!(drop_inline_key(&mut doc, "h", &mut diff, "c").unwrap());
+        assert_eq!(diff_lines(&diff), [("c".to_string(), "[model_providers.h] - http_headers.Authorization".to_string())]);
+        assert!(provider_item(&doc, "h").unwrap().get("http_headers").is_none(), "{doc}");
+        assert!(!drop_inline_key(&mut doc, "h", &mut Diff::default(), "c").unwrap(), "nothing left to drop");
+    }
+
+    #[test]
+    fn a_sign_in_key_is_copied_and_the_sign_in_kept() {
+        let cfg = "model_provider = \"cur\"\n\n[model_providers.cur]\nname = \"Cur\"\nbase_url = \"https://cur.example.com/v1\"\nwire_api = \"responses\"\nrequires_openai_auth = true\n";
+        let h = codex_home_with("codex-signin", cfg, None);
+        let auth_file = h.0.join(".codex").join("auth.json");
+        let auth = json!({ "OPENAI_API_KEY": "sk-signin" });
+        std::fs::write(&auth_file, auth.to_string()).unwrap();
+        let st = state(&Install::default());
+        assert_eq!(st.sign_in.as_deref(), Some("apikey"));
+        assert_eq!(st.issues.iter().map(|i| i.kind.as_str()).collect::<Vec<_>>(), ["key-elsewhere", "api-key-sign-in"]);
+        assert!(st.providers.iter().any(|p| p.id == "cur" && p.has_key));
+        assert_eq!(provider_endpoint("cur").unwrap().1.as_deref(), Some("sk-signin"), "fetching models uses the sign-in's key");
+        // Syncing is an edit that changes nothing else: the key moves, the mix and the sign-in stay.
+        plan(&[keep("cur", None, None)], false).unwrap();
+        assert_eq!(env_value("CUR_API_KEY").as_deref(), Some("sk-signin"));
+        assert!(std::fs::read_to_string(config_path()).unwrap().contains("requires_openai_auth = true"));
+        assert_eq!(read_json(&auth_file).unwrap().0, auth);
+        let st = state(&Install::default());
+        assert_eq!(st.issues.iter().map(|i| i.kind.as_str()).collect::<Vec<_>>(), ["api-key-sign-in"]);
+        assert!(!st.issues[0].text.contains("退出前先同步"), "the key is safe now: {}", st.issues[0].text);
+        // Turning the mix off leaves nothing to report; the provider runs on its key in .env.
+        plan(&[keep("cur", None, Some(false))], false).unwrap();
+        let st = state(&Install::default());
+        assert!(st.issues.is_empty(), "{:?}", st.issues);
+        assert_eq!(provider_endpoint("cur").unwrap().1.as_deref(), Some("sk-signin"));
+    }
+
+    #[test]
+    fn turning_the_mix_off_keeps_a_sign_in_key() {
+        let cfg = "model_provider = \"cur\"\n\n[model_providers.cur]\nname = \"Cur\"\nbase_url = \"https://cur.example.com/v1\"\nrequires_openai_auth = true\n";
+        let h = codex_home_with("codex-mix-off", cfg, None);
+        std::fs::write(h.0.join(".codex").join("auth.json"), json!({ "auth_mode": "apikey", "OPENAI_API_KEY": "sk-signin" }).to_string()).unwrap();
+        // Read before the switch goes off: the key the provider ran on moves to .env.
+        plan(&[keep("cur", None, Some(false))], false).unwrap();
+        assert_eq!(env_value("CUR_API_KEY").as_deref(), Some("sk-signin"));
+        assert!(!std::fs::read_to_string(config_path()).unwrap().contains("requires_openai_auth"));
+    }
+
+    #[test]
+    fn local_servers_need_no_key() {
+        for (url, local) in [
+            ("http://localhost:11434/v1", true),
+            ("http://127.0.0.1:1234", true),
+            ("http://[::1]:8080/v1", true),
+            ("http://app.localhost/v1", true),
+            ("https://api.example.com/v1", false),
+            ("not a url", false),
+        ] {
+            assert_eq!(is_local(url), local, "{url}");
+        }
+    }
+
+    #[test]
+    fn sign_in_ids_are_stable() {
+        let ids = [SignIn::ChatGpt, SignIn::ApiKey, SignIn::None, SignIn::Unknown].map(SignIn::id);
+        assert_eq!(ids, ["chatgpt", "apikey", "none", "unknown"]);
+        assert_eq!(api_key_auth().api_key.as_deref(), Some("sk-signin"), "trimmed");
+        assert_eq!(auth_from(&json!({ "auth_mode": "chatgpt", "OPENAI_API_KEY": "sk-x", "tokens": { "access_token": "a" } })).api_key, None, "only an API key sign-in has one");
     }
 }

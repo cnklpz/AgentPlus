@@ -18,6 +18,10 @@ const zh: typeof en = {
   notInstalled: "未检测到安装",
   restarting: "正在重启…",
   starting: "正在启动…",
+  restart: "重启",
+  start: "启动",
+  openWeb: "打开",
+  openWebTitle: "在浏览器中打开 {name} 网页版",
   singleNote: "{name} 同一时间只用一个供应商。",
   singleNoteCodex: "{name} 同一时间只用一个供应商。只提供 Chat 接口的供应商不能直接用于 Codex（可以经本地网关）。",
   singleNoteClaude: "{name} 同一时间只用一个供应商。只支持 Anthropic 协议，其他协议可以经本地网关。",
@@ -68,6 +72,15 @@ const zh: typeof en = {
   exclusiveTurnOn: "开启",
   selectedCount: "已选 {n} / {total}",
   onePerLine: "每行一个",
+  reloadTitle: "重新读取 {name} 的配置",
+  issuesHead: "{name} 的配置有 {n} 处需要处理",
+  issuesSync: "同步为 AgentPlus 格式",
+  issuesSyncTitle: "把这些密钥移到 AgentPlus 存放密钥的位置。改动会先加入待应用，确认后再写入。",
+  issuesSynced: "同步待应用",
+  issuesExpand: "展开",
+  issueAddKey: "补充密钥",
+  issueMixOff: "关闭混用",
+  issuePending: "待应用",
 };
 
 export default zh;

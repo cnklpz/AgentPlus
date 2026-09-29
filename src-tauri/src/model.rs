@@ -43,6 +43,25 @@ pub struct AgentState {
     /// Installed plugins (extensions, bundles); None for agents without plugins. Filled in
     /// adapters::state.
     pub plugins: Option<Vec<PluginInfo>>,
+    /// What in the config isn't the way AgentPlus writes it, or keeps a setting from working.
+    pub issues: Vec<Issue>,
+    /// Codex: how it is signed in ("chatgpt" | "apikey" | "none" | "unknown").
+    pub sign_in: Option<String>,
+}
+
+/// Something in an agent's config that differs from how AgentPlus writes it (edited by hand
+/// or by another tool), or that keeps a setting from working.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Issue {
+    /// Stable kind for the UI to act on: "key-elsewhere" (editing the provider moves its key to
+    /// where AgentPlus keeps keys), "key-missing" (the user has to add one), "api-key-sign-in"
+    /// (sign out in the agent, or turn the official sign-in mix off), "not-signed-in".
+    pub kind: String,
+    /// The provider it is about.
+    pub provider: Option<String>,
+    /// What is wrong and what to do, in the current language.
+    pub text: String,
 }
 
 /// An installed plugin of an agent. Installing and removing happen in the agent itself;
@@ -187,6 +206,12 @@ pub struct Setting {
     pub hints: Vec<String>,
     /// Switches turned off when this one is turned on (mutually exclusive), by key.
     pub excludes: Vec<String>,
+}
+
+impl Issue {
+    pub fn new(kind: &str, provider: Option<&str>, text: impl Into<String>) -> Self {
+        Issue { kind: kind.into(), provider: provider.map(String::from), text: text.into() }
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]

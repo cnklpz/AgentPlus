@@ -1,5 +1,5 @@
 // Pending edits per agent, keyed so a toggle back to the original drops the op.
-import type { AgentState, ApiKind, McpInput, PluginInfo, McpServer, McpSource, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
+import type { AgentState, ApiKind, Issue, McpInput, PluginInfo, McpServer, McpSource, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
 import { t } from "./i18n";
 
 export type Draft = Record<string, Op>;
@@ -251,6 +251,45 @@ export function mergeExtra(base: Model["extra"], edit: ModelInput["extra"]): Rec
 export function upsertProvider(d: Draft, input: ProviderInput, draftKey?: string): Draft {
   const key = input.id ? keys.upsertProvider(input.id) : draftKey ?? `pu:new-${Date.now()}`;
   return withOp(d, key, { op: "upsert_provider", provider: input });
+}
+
+/**
+ * An edit of existing provider `p` that changes only `patch`, merged into a pending edit of it.
+ * Codex: any edit also moves a key kept elsewhere (config.toml, its sign-in) to ~/.codex/.env.
+ */
+export function editProvider(d: Draft, p: Provider, patch: Partial<ProviderInput> = {}): Draft {
+  const up = d[keys.upsertProvider(p.id)];
+  const base: ProviderInput = up && up.op === "upsert_provider"
+    ? up.provider
+    : { id: p.id, name: p.name, baseUrl: p.baseUrl ?? "", api: p.api, apiKey: null, models: [], officialAuth: null };
+  return withOp(d, keys.upsertProvider(p.id), { op: "upsert_provider", provider: { ...base, ...patch } });
+}
+
+/**
+ * Whether a pending change already deals with a config issue: deleting the provider does; so
+ * does any edit of it for a key kept elsewhere, a new key for a missing one, and turning the
+ * official sign-in mix off for a sign-in that doesn't fit it.
+ */
+export function issueStaged(d: Draft, i: Issue): boolean {
+  if (!i.provider) return false;
+  if (d[keys.deleteProvider(i.provider)]) return true;
+  const up = d[keys.upsertProvider(i.provider)];
+  if (!up || up.op !== "upsert_provider") return false;
+  const p = up.provider;
+  switch (i.kind) {
+    case "key-elsewhere": return true;
+    case "key-missing": return !!(p.apiKey || p.keyFromLibrary || p.keyFromSync);
+    default: return p.officialAuth === false;
+  }
+}
+
+/** Stages an edit of every provider whose key is kept elsewhere; the edit moves the key. */
+export function syncKeys(d: Draft, st: AgentState): Draft {
+  for (const i of st.issues ?? []) {
+    const p = i.kind === "key-elsewhere" && !issueStaged(d, i) ? st.providers.find((x) => x.id === i.provider) : undefined;
+    if (p) d = editProvider(d, p);
+  }
+  return d;
 }
 
 export function upsertModel(d: Draft, pid: string, input: ModelInput): Draft {

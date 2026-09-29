@@ -1576,6 +1576,11 @@ export default function App() {
             sessionQuery={sessionQuery}
             onDeclineFixed={declineFixed}
             onReload={() => { api.getAgent(st.id).then(replaceAgent).catch(() => undefined); }}
+            onRefresh={() => api.getAgent(st.id).then(
+              (s) => { replaceAgent(s); flash(t("app.agentReloaded", { name: s.name })); },
+              (e) => flash(errText(e), true),
+            )}
+            onEditProvider={(p) => setDialog({ editing: p })}
             onCreateCatalog={createCodexCatalog}
             head={projSt ? (
               <ProjectHead st={projSt} project={projEntry} projects={projects} onBack={() => setProjPath(null)} onSwitch={openProject}

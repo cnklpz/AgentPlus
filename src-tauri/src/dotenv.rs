@@ -58,7 +58,7 @@ pub fn get(text: &str, key: &str) -> Option<String> {
 
 /// The value of the last assignment of `key`, which may be empty: Codex sets every pair of
 /// its .env in order, so the last one wins and an empty `KEY=` still shadows the process
-/// environment (see `adapters::codex::env_value`). Double-quoted values are unescaped as
+/// environment (see `adapters::codex::env_lookup`). Double-quoted values are unescaped as
 /// dotenvy (Codex's loader) does, so `\$` reads as `$` (see `set_dotenvy`).
 pub fn get_last(text: &str, key: &str) -> Option<String> {
     values(text, key, DOTENVY_ESCAPES).next_back()

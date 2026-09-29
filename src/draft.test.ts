@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { AgentState, McpInput, McpServer, Model, Op, Provider, Setting } from "./api";
+import type { AgentState, Issue, McpInput, McpServer, Model, Op, Provider, Setting } from "./api";
 import {
-  type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
+  type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, editProvider, fmtCtx, guessedModel, importProvider, issueStaged, keys, mergeExtra, opCount, opsToWrite, syncKeys,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp, writeOrder, pluginOn, setPluginEnabled,
 } from "./draft";
@@ -326,6 +326,50 @@ describe("viewProviders", () => {
   it("marks a Codex provider that isn't Responses as incompatible", () => {
     const d = upsertProvider({}, { id: null, name: "n", baseUrl: "https://x/v1", api: "chat", apiKey: null, models: [], keyFromLibrary: null, officialAuth: null }, "k");
     expect(viewProviders(agent({ id: "codex" } as never), d)[0].compatible).toBe(false);
+  });
+});
+
+describe("config issues", () => {
+  const issue = (kind: Issue["kind"], p: string | null): Issue => ({ kind, provider: p, text: "" });
+
+  it("edits a provider with its own values, merged into a pending edit", () => {
+    const p = provider("p", { api: "responses", officialAuth: true });
+    const d = editProvider({}, p, { officialAuth: false });
+    expect(d[keys.upsertProvider("p")]).toEqual({ op: "upsert_provider", provider: { id: "p", name: "p", baseUrl: "https://p.example.com/v1", api: "responses", apiKey: null, models: [], officialAuth: false } });
+    const typed = upsertProvider({}, { id: "p", name: "Renamed", baseUrl: "https://p2/v1", api: "responses", apiKey: "sk-new", models: [], officialAuth: null });
+    const merged = editProvider(typed, p, { officialAuth: false });
+    expect(merged[keys.upsertProvider("p")]).toMatchObject({ provider: { name: "Renamed", baseUrl: "https://p2/v1", apiKey: "sk-new", officialAuth: false } });
+    // A provider without an address is edited with an empty one (the backend then says why it can't).
+    expect(editProvider({}, provider("q", { baseUrl: null }))[keys.upsertProvider("q")]).toMatchObject({ provider: { baseUrl: "" } });
+  });
+
+  it("knows which pending change deals with which issue", () => {
+    const p = provider("p", { api: "responses" });
+    const edit = editProvider({}, p);
+    expect(issueStaged({}, issue("key-elsewhere", "p"))).toBe(false);
+    expect(issueStaged(edit, issue("key-elsewhere", "p"))).toBe(true);
+    expect(issueStaged(edit, issue("key-elsewhere", "other"))).toBe(false);
+    expect(issueStaged(edit, issue("key-missing", "p"))).toBe(false);
+    expect(issueStaged(editProvider({}, p, { apiKey: "sk" }), issue("key-missing", "p"))).toBe(true);
+    expect(issueStaged(editProvider({}, p, { keyFromLibrary: "lib-1" }), issue("key-missing", "p"))).toBe(true);
+    expect(issueStaged(edit, issue("api-key-sign-in", "p"))).toBe(false);
+    expect(issueStaged(editProvider({}, p, { officialAuth: false }), issue("api-key-sign-in", "p"))).toBe(true);
+    expect(issueStaged(deleteProvider({}, "p"), issue("key-missing", "p"))).toBe(true);
+    expect(issueStaged(edit, issue("not-signed-in", null))).toBe(false);
+  });
+
+  it("syncs only the providers whose key is kept elsewhere, once", () => {
+    const st = agent({
+      id: "codex",
+      providers: [provider("a", { api: "responses" }), provider("b", { api: "responses" }), provider("c", { api: "responses" })],
+      issues: [issue("key-elsewhere", "a"), issue("key-missing", "b"), issue("key-elsewhere", "c"), issue("key-elsewhere", "gone")],
+    } as never);
+    const pending = upsertProvider({}, { id: "c", name: "C2", baseUrl: "https://c2/v1", api: "responses", apiKey: null, models: [], officialAuth: null });
+    const d = syncKeys(pending, st);
+    expect(Object.keys(d).sort()).toEqual([keys.upsertProvider("a"), keys.upsertProvider("c")]);
+    expect(d[keys.upsertProvider("c")]).toBe(pending[keys.upsertProvider("c")]);
+    expect(syncKeys(d, st)).toEqual(d);
+    expect(syncKeys({}, agent())).toEqual({});
   });
 });
 
