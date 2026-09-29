@@ -26,10 +26,10 @@ describe("normalizePrefs", () => {
     expect(p.closeAction).toBe("ask");
   });
 
-  it("shows MCP and skills unless told not to", () => {
-    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true });
-    expect(normalizePrefs({ showMcp: false, showSkills: false })).toMatchObject({ showMcp: false, showSkills: false });
-    expect(normalizePrefs({ showMcp: "no", showSkills: 0 })).toMatchObject({ showMcp: true, showSkills: true });
+  it("shows MCP, skills and plugins unless told not to", () => {
+    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true });
+    expect(normalizePrefs({ showMcp: false, showSkills: false, showPlugins: false })).toMatchObject({ showMcp: false, showSkills: false, showPlugins: false });
+    expect(normalizePrefs({ showMcp: "no", showSkills: 0, showPlugins: null })).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true });
   });
 
   it("forgets keys it doesn't know", () => {

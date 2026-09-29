@@ -66,12 +66,15 @@ interface Props {
   mcpTab?: ReactNode;
   /** Body of the Skills tab; agents without skills have none. */
   skillsTab?: ReactNode;
+  /** Whether the Plugins tab is shown (Settings → Interface). */
+  showPlugins: boolean;
 }
 
 export function AgentPage(props: Props) {
   const { st, draft, setDraft, latency, onTestAll, restarting, onRestart, onOpenDir, tab, setTab, railSel, setRailSel } = props;
   const cur = currentProvider(st, draft);
   const providers = viewProviders(st, draft, isProjectId(st.id));
+  const plugins = props.showPlugins ? st.plugins : undefined;
 
   /** Agents with nothing to set (Hermes) get no settings tab. */
   const hasSettings = st.settings.length > 0 || !!props.settingsExtra;
@@ -81,13 +84,13 @@ export function AgentPage(props: Props) {
     ["models", t("agentPage.tabModels"), visibleCount(st, draft)],
     ...(props.mcpTab ? ([["mcp", "MCP", null]] as [Tab, string, null][]) : []),
     ...(props.skillsTab ? ([["skills", t("agentPage.tabSkills"), null]] as [Tab, string, null][]) : []),
-    ...(st.plugins ? ([["plugins", t("agentPage.tabPlugins"), st.plugins.filter((p) => pluginOn(p, draft)).length || null]] as [Tab, string, number | null][]) : []),
+    ...(plugins ? ([["plugins", t("agentPage.tabPlugins"), plugins.filter((p) => pluginOn(p, draft)).length || null]] as [Tab, string, number | null][]) : []),
     ...(st.id === "codex" ? ([["sessions", t("agentPage.tabSessions"), null], ["maint", t("agentPage.tabMaint"), null]] as [Tab, string, null][]) : []),
     ...(props.projectsTab ? ([["projects", t("agentPage.tabProjects"), props.projectsTab.count || null]] as [Tab, string, number | null][]) : []),
     ...(hasSettings ? ([["set", t("agentPage.tabSettings"), null]] as [Tab, string, null][]) : []),
   ];
   // Coming from another agent's settings tab: this one has none.
-  useEffect(() => { if ((tab === "set" && !hasSettings) || (tab === "mcp" && !props.mcpTab) || (tab === "skills" && !props.skillsTab) || (tab === "plugins" && !st.plugins)) setTab("prov"); }, [tab, hasSettings, !!props.mcpTab, !!props.skillsTab, !!st.plugins]);
+  useEffect(() => { if ((tab === "set" && !hasSettings) || (tab === "mcp" && !props.mcpTab) || (tab === "skills" && !props.skillsTab) || (tab === "plugins" && !plugins)) setTab("prov"); }, [tab, hasSettings, !!props.mcpTab, !!props.skillsTab, !!plugins]);
   const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
@@ -267,13 +270,13 @@ export function AgentPage(props: Props) {
         {tab === "projects" && <Fragment key={reads}>{props.projectsTab?.body}</Fragment>}
         {tab === "mcp" && <Fragment key={reads}>{props.mcpTab}</Fragment>}
         {tab === "skills" && <Fragment key={reads}>{props.skillsTab}</Fragment>}
-        {tab === "plugins" && st.plugins && (
+        {tab === "plugins" && plugins && (
           <div className="stack12">
             <span className="muted small hint">{t("agentPage.pluginsHint", { name: st.name })}</span>
-            {st.plugins.length === 0 && <div className="empty">{t("agentPage.pluginsEmpty", { name: st.name })}</div>}
-            {st.plugins.length > 0 && (
+            {plugins.length === 0 && <div className="empty">{t("agentPage.pluginsEmpty", { name: st.name })}</div>}
+            {plugins.length > 0 && (
               <div className="stable">
-                {st.plugins.map((p) => {
+                {plugins.map((p) => {
                   const on = pluginOn(p, draft);
                   const pending = on !== p.enabled;
                   return (

@@ -36,10 +36,12 @@ export interface Prefs {
   showMcp: boolean;
   /** Show the skills page and the skills tab of each agent. Display only. */
   showSkills: boolean;
+  /** Show the plugins tab of each agent. Display only. */
+  showPlugins: boolean;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true, showPlugins: true };
 
 export function loadPrefs(): Prefs {
   try {
@@ -73,6 +75,7 @@ export function normalizePrefs(v: unknown): Prefs {
     hints: oneOf(o.hints, ["full", "brief"], DEFAULTS.hints),
     showMcp: bool(o.showMcp, DEFAULTS.showMcp),
     showSkills: bool(o.showSkills, DEFAULTS.showSkills),
+    showPlugins: bool(o.showPlugins, DEFAULTS.showPlugins),
   };
 }
 

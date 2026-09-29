@@ -1676,7 +1676,8 @@ export default function App() {
             onCopyProvider={projSt ? () => setCopyOpen(true) : undefined}
             settingsExtra={st.id === "codex" && gateway
               ? <CodexTimezone zone={gateway.timezone} setStatus={setGateway} flash={flash} /> : undefined}
-            mcpTab={prefs.showMcp && !projSt && !NO_MCP.includes(st.id) ? (
+            showPlugins={prefs.showPlugins}
+            mcpTab={prefs.showMcp &&!projSt && !NO_MCP.includes(st.id) ? (
               <AgentMcpTab agent={st.id} agents={listed} drafts={drafts} setDraftFor={setDraftFor} flash={flash} onOpenPage={() => setPage("mcp")} />
             ) : undefined}
             skillsTab={prefs.showSkills && !projSt && st.id !== "trae" ? (

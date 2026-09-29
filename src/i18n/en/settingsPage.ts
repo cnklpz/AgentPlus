@@ -47,6 +47,8 @@ export default {
   showMcpHint: "Off: hides the MCP page and each agent's MCP tab. Configs are not changed",
   showSkills: "Show skills",
   showSkillsHint: "Off: hides the skills page and each agent's skills tab. Skills are not changed",
+  showPlugins: "Show plugins",
+  showPluginsHint: "Off: hides each agent's plugins tab. Plugins are not changed",
   closeAction: "When closing the window",
   closeActionHint: "The × button and Alt+F4: {hint}",
   closeActionHintMac: "The red close button and ⌘W (⌘Q always quits): {hint}",

@@ -161,6 +161,9 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         <SettingRow label={t("settingsPage.showSkills")} desc={t("settingsPage.showSkillsHint")}>
           <Switch on={prefs.showSkills} onChange={(v) => setPrefs({ ...prefs, showSkills: v })} label={t("settingsPage.showSkills")} />
         </SettingRow>
+        <SettingRow label={t("settingsPage.showPlugins")} desc={t("settingsPage.showPluginsHint")}>
+          <Switch on={prefs.showPlugins} onChange={(v) => setPrefs({ ...prefs, showPlugins: v })} label={t("settingsPage.showPlugins")} />
+        </SettingRow>
         <SettingRow label={t("settingsPage.closeAction")}
           desc={t(isMac ? "settingsPage.closeActionHintMac" : "settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}>
           <Seg value={prefs.closeAction} onChange={(v) => setPrefs({ ...prefs, closeAction: v })} label={t("settingsPage.closeAction")}
