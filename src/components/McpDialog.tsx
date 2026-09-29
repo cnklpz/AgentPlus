@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { type McpInput, type McpLink, type McpServer, type McpSource, type McpTransport, api } from "../api";
 import { t, tn } from "../i18n";
 import { errText } from "../util";
+import { hostKey, movedHost } from "../services";
+import { askKeepKey } from "./Confirm";
 import { ErrorBox, Seg } from "./controls";
 import { Modal } from "./Modal";
 import { AgentIcon, Icon } from "./icons";
@@ -58,6 +60,14 @@ function pairs(text: string, sep: string): { key: string; value: string }[] {
 
 const joinPairs = (kv: { key: string; value: string }[], sep: string) => kv.map((p) => `${p.key}${sep}${p.value}`).join("\n");
 
+/** The environment variables these texts refer to, in every syntax a Test fills in. */
+export function envRefs(texts: string[]): string[] {
+  const re = /\$\{([A-Za-z_]\w*)(?::-[^}]*)?\}|\{env:([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)|%([A-Za-z_]\w*)%/g;
+  const out = new Set<string>();
+  for (const s of texts) for (const m of s.matchAll(re)) out.add(m[1] ?? m[2] ?? m[3] ?? m[4]);
+  return [...out];
+}
+
 export function McpDialog({ edit, targets, link, defaultTo, onSave, onClose }: Props) {
   const s: McpServer | McpInput | undefined = edit?.s ?? link?.servers[0];
   const [name, setName] = useState(s?.name ?? "");
@@ -75,9 +85,14 @@ export function McpDialog({ edit, targets, link, defaultTo, onSave, onClose }: P
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const first = useRef<HTMLInputElement>(null);
+  const headersRef = useRef<HTMLTextAreaElement>(null);
 
   const stdio = transport === "stdio";
   const trimmed = name.trim();
+  // From a link (anyone's web page): what the form doesn't show, and this computer's
+  // variables its values read (a Test fills them in and sends them to the server).
+  const linkExtra = link ? Object.keys(extra.extra ?? {}) : [];
+  const linkVars = link ? envRefs([command, args, cwd, url, env, headers]) : [];
   const fill = (i: McpInput) => {
     setName(i.name || name);
     setTransport(i.transport);
@@ -108,6 +123,15 @@ export function McpDialog({ edit, targets, link, defaultTo, onSave, onClose }: P
   const canSave = !missing && !saving && (chosen.length > 0 || removed.length > 0);
 
   const save = async () => {
+    // A remote server moved to another host while saved secrets ("••••abcd") stay in its
+    // headers or address: they would go to the new host, so ask first.
+    // (Also in fields the form doesn't show, like an OAuth client secret.)
+    const kept = [headers, url, JSON.stringify(edit?.s.extra ?? {})].some((v) => v.includes("••••"));
+    const moved = edit?.from && !stdio && kept ? movedHost(edit.s.url, url) : null;
+    if (moved && !(await askKeepKey(moved))) {
+      headersRef.current?.focus();
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
@@ -142,6 +166,19 @@ export function McpDialog({ edit, targets, link, defaultTo, onSave, onClose }: P
     <Modal label={edit ? t("mcpDialog.editTitle", { name: edit.s.name }) : t("mcpDialog.addTitle")} title={edit ? t("mcpDialog.editTitle", { name: edit.s.name }) : t("mcpDialog.addTitle")}
       wide onClose={onClose} busy={saving} foot={foot}>
       {link && <span className="tiny muted">{tn("mcpDialog.fromLink", link.servers.length)}</span>}
+      {link && (linkExtra.length > 0 || linkVars.length > 0) && (
+        <div className="link-warn small">
+          <Icon.warn size={14} />
+          <span className="minw0">
+            {linkExtra.length > 0 && <span className="block">{t("mcpDialog.linkExtra", { fields: linkExtra.join(t("common.listSep")) })}</span>}
+            {linkVars.length > 0 && (
+              <span className="block">
+                {stdio ? t("mcpDialog.linkVarsLocal", { vars: linkVars.join(t("common.listSep")) }) : t("mcpDialog.linkVarsRemote", { vars: linkVars.join(t("common.listSep")), host: hostKey(url) })}
+              </span>
+            )}
+          </span>
+        </div>
+      )}
       {link && parsed.length > 1 && paste === null && (
         <div className="row gap6 mcp-parsed">
           <span className="tiny muted">{t("mcpDialog.pickParsed")}</span>
@@ -213,7 +250,7 @@ export function McpDialog({ edit, targets, link, defaultTo, onSave, onClose }: P
           </label>
           <label className="field">
             <span>{t("mcpDialog.headers")} <em className="muted tiny">Name: value</em></span>
-            <textarea className="input mono mcp-text sensitive" rows={3} value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder={"Authorization: Bearer ${API_TOKEN}"} />
+            <textarea ref={headersRef} className="input mono mcp-text sensitive" rows={3} value={headers} onChange={(e) => setHeaders(e.target.value)} placeholder={"Authorization: Bearer ${API_TOKEN}"} />
           </label>
         </div>
       )}

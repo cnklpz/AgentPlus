@@ -106,7 +106,10 @@ pub fn export(root: &Value, fp: &mut dyn FnMut(&str) -> String) -> Vec<Value> {
             let mut v = json!({ "name": i.name, "transport": i.transport, "command": i.command, "args": args, "cwd": i.cwd, "env": kv(&i.env, fp), "headers": kv(&i.headers, fp) });
             if let Some(u) = &i.url {
                 let masked = mask::url(u);
-                v["url"] = json!(masked);
+                // Not even the last characters the page shows: the file may be read by others,
+                // and part of a short password narrows it down.
+                static HINT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+                v["url"] = json!(HINT.get_or_init(|| regex::Regex::new("••••[^&@/#:]*").unwrap()).replace_all(&masked, "••••"));
                 if masked != *u {
                     v["urlFp"] = json!(fp(u));
                 }

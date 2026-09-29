@@ -37,13 +37,26 @@ pub(crate) fn client_with(timeout: Duration) -> Result<reqwest::blocking::Client
         .map_err(|e| e.to_string())
 }
 
+/// A client for a stream that stays open (no overall timeout), with the same redirect rule.
+pub(crate) fn stream_client(connect_timeout: Duration) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .connect_timeout(connect_timeout)
+        .redirect(same_host_redirects())
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// Whether two URLs share scheme, host and port: credentials for one may go to the other.
+pub(crate) fn same_origin(a: &url::Url, b: &url::Url) -> bool {
+    (a.scheme(), a.host_str(), a.port_or_known_default()) == (b.scheme(), b.host_str(), b.port_or_known_default())
+}
+
 /// Follows redirects only within one origin (an added slash, a moved path). reqwest drops
 /// `Authorization` when the host or port changes but keeps custom API-key headers, so a key must
 /// never be replayed to wherever a provider points; anything else comes back as the 3xx.
 fn same_host_redirects() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|a| {
-        let origin = |u: &url::Url| (u.scheme().to_string(), u.host_str().map(String::from), u.port_or_known_default());
-        let same = a.previous().first().map(|u| origin(u) == origin(a.url())).unwrap_or(false);
+        let same = a.previous().first().is_some_and(|u| same_origin(u, a.url()));
         if a.previous().len() > 5 {
             a.error(crate::i18n::l("Too many redirects", "重定向次数过多"))
         } else if same {

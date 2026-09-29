@@ -499,8 +499,25 @@ impl Doc {
         }
     }
 
+    fn save_stash(&self, stash: &Map<String, Value>) -> Result<()> {
+        let mut root = store::load();
+        store::set_value(&mut root, &self.agent, STASH_KEY, if stash.is_empty() { Value::Null } else { Value::Object(stash.clone()) });
+        store::save(&root)
+    }
+
     fn write(&mut self) -> Result<()> {
         let config_changed = !self.changed.is_empty() || self.lists_changed;
+        // A server moves between the config and the stash. Whichever write fails, it must stay
+        // in one of them: the stash first gains what it takes in, and only loses what went
+        // back to the config once the config is written.
+        if self.stash_changed && config_changed && self.readonly.is_none() {
+            let mut both = store::get_obj(&store::load(), &self.agent, STASH_KEY);
+            let before = both.clone();
+            both.extend(self.stash.iter().map(|(k, v)| (k.clone(), v.clone())));
+            if both != before {
+                self.save_stash(&both)?;
+            }
+        }
         if config_changed {
             if let Some(why) = &self.readonly {
                 bail!("{why}");
@@ -524,9 +541,7 @@ impl Doc {
             }
         }
         if self.stash_changed {
-            let mut root = store::load();
-            store::set_value(&mut root, &self.agent, STASH_KEY, if self.stash.is_empty() { Value::Null } else { Value::Object(self.stash.clone()) });
-            store::save(&root)?;
+            self.save_stash(&self.stash)?;
         }
         Ok(())
     }
@@ -796,6 +811,38 @@ mod tests {
         assert!(!fs::read_to_string(h.0.join(".factory/mcp.json")).unwrap().contains("disabled"));
         // Nothing to do: no diff, no write.
         assert!(run(codex::ID, vec![json!({ "op": "set_mcp_enabled", "name": "s", "enabled": true })]).unwrap().is_empty());
+    }
+
+    /// A config that can't be replaced (read-only on Windows) never costs a stashed server.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_config_write_keeps_the_server_somewhere() {
+        let h = TestHome::new("mcp-write-stash-order");
+        let cfg = h.0.join(".claude.json");
+        let set_ro = |on: bool| {
+            let mut p = fs::metadata(&cfg).unwrap().permissions();
+            p.set_readonly(on);
+            fs::set_permissions(&cfg, p).unwrap();
+        };
+        let stashed = || store::get_obj(&store::load(), claude::ID, STASH_KEY).contains_key("s");
+        let in_config = || fs::read_to_string(&cfg).unwrap().contains("\"s\"");
+        run(claude::ID, vec![upsert(json!({ "name": "s", "transport": "stdio", "command": "x" }))]).unwrap();
+        let off = || run(claude::ID, vec![json!({ "op": "set_mcp_enabled", "name": "s", "enabled": false })]);
+        let on = || run(claude::ID, vec![json!({ "op": "set_mcp_enabled", "name": "s", "enabled": true })]);
+        // Off: the stash takes it before the config lets go.
+        set_ro(true);
+        assert!(off().is_err());
+        set_ro(false);
+        assert!(in_config() && stashed());
+        off().unwrap();
+        assert!(!in_config() && stashed());
+        // On: the stash lets go only once the config has it.
+        set_ro(true);
+        assert!(on().is_err());
+        set_ro(false);
+        assert!(!in_config() && stashed());
+        on().unwrap();
+        assert!(in_config() && !stashed());
     }
 
     #[test]

@@ -214,6 +214,9 @@ fn stdio(raw: &Raw) -> Result<Probe> {
         fill(&mut p, &init, &tools);
         Ok(p)
     })();
+    // The whole tree: `npx.cmd` / `uvx` start the server as a grandchild, which would keep
+    // running (and keep the pipes above open) after only the launcher ends.
+    crate::process::kill_tree(child.id());
     let _ = child.kill();
     let _ = child.wait();
     run
@@ -315,12 +318,28 @@ fn http(raw: &Raw) -> Result<Probe> {
     Ok(p)
 }
 
+/// Where the server says to POST (legacy SSE `endpoint` event). Only on its own origin: the
+/// POSTs carry the configured headers (API keys), which another host must not get (the MCP
+/// SDKs refuse such an endpoint too).
+fn endpoint_of(base: &url::Url, data: &str) -> Result<String> {
+    let to = base.join(data)?;
+    if !crate::net::same_origin(base, &to) {
+        bail!("{}", tr!(
+            "The server told AgentPlus to send its messages to another address ({}); not done, to protect the request headers",
+            "服务器要求把消息发到另一个地址（{}），为保护请求头没有照做",
+            super::mask::url(to.as_str())
+        ));
+    }
+    Ok(to.to_string())
+}
+
 /// Legacy SSE: a GET stream first names the endpoint to POST to; answers come on the stream.
 fn sse(raw: &Raw) -> Result<Probe> {
     let url = url_of(raw)?;
     let headers: Vec<(String, String)> = raw.headers.iter().map(|(k, v)| (k.clone(), expand(v))).collect();
-    // The stream stays open: no overall timeout on it, the waits below have their own.
-    let stream_client = reqwest::blocking::Client::builder().connect_timeout(REMOTE_TIMEOUT).build()?;
+    // The stream stays open: no overall timeout on it, the waits below have their own. Its
+    // headers (API keys) must not follow a redirect to another host either.
+    let stream_client = crate::net::stream_client(REMOTE_TIMEOUT).map_err(|e| anyhow!(e))?;
     let mut req = stream_client.get(&url).header("Accept", "text/event-stream");
     for (k, v) in &headers {
         req = req.header(k, v);
@@ -339,10 +358,11 @@ fn sse(raw: &Raw) -> Result<Probe> {
     });
     let until = Instant::now() + REMOTE_TIMEOUT;
     let next = |until: Instant| rx.recv_timeout(until.saturating_duration_since(Instant::now())).map_err(|_| anyhow!(l("The server didn't answer in time", "服务器没有及时响应")));
+    let base = url::Url::parse(&url)?;
     let endpoint = loop {
         let (event, data) = next(until)?;
         if event == "endpoint" {
-            break url::Url::parse(&url)?.join(data.trim())?.to_string();
+            break endpoint_of(&base, data.trim())?;
         }
     };
     let c = client()?;
@@ -423,6 +443,36 @@ mod tests {
         let p = probe(&raw).unwrap();
         assert_eq!(p.server.as_deref(), Some("demo 1.2"));
         assert_eq!(p.tools, [Tool { name: "search".into(), description: "Find things".into() }, Tool { name: "fetch".into(), description: String::new() }]);
+    }
+
+    #[test]
+    fn the_sse_endpoint_stays_on_the_servers_origin() {
+        let base = url::Url::parse("https://mcp.example.com/sse").unwrap();
+        assert_eq!(endpoint_of(&base, "/messages?s=1").unwrap(), "https://mcp.example.com/messages?s=1");
+        assert_eq!(endpoint_of(&base, "https://mcp.example.com:443/m").unwrap(), "https://mcp.example.com/m");
+        for other in ["https://evil.example/collect", "//evil.example/collect", "http://mcp.example.com/m", "https://mcp.example.com:8443/m"] {
+            assert!(endpoint_of(&base, other).is_err(), "{other}");
+        }
+    }
+
+    /// The SSE stream's headers (API keys) don't follow a redirect to another host.
+    #[test]
+    fn sse_headers_never_follow_a_redirect_elsewhere() {
+        let other = TcpListener::bind("127.0.0.1:0").unwrap();
+        let other_url = format!("http://{}/sse", other.local_addr().unwrap());
+        other.set_nonblocking(true).unwrap();
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/sse", first.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut s, _) = first.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let _ = s.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {other_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes());
+        });
+        let raw = Raw { transport: "sse", url: Some(url), headers: vec![("X-API-Key".into(), "secret".into())], ..Default::default() };
+        assert!(probe(&raw).is_err());
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(other.accept().is_err(), "the redirect target was contacted");
     }
 
     #[test]
