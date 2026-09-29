@@ -279,14 +279,20 @@ fn openclaw_list() -> Vec<PluginInfo> {
     ids.iter().map(|id| from_manifest(id, &Value::Null, entries.get(id).and_then(|e| e["enabled"].as_bool()).unwrap_or(true))).collect()
 }
 
+/// `name@version` split in two; a scoped name keeps its leading @. The first character is
+/// skipped whole: it can take several bytes, and slicing inside it would panic.
+fn npm_spec(s: &str) -> (&str, Option<String>) {
+    let first = s.chars().next().map_or(0, char::len_utf8);
+    match s[first..].rfind('@') {
+        Some(i) => (&s[..first + i], Some(s[first + i + 1..].to_string())),
+        None => (s, None),
+    }
+}
+
 fn oc_list(agent: &str) -> Vec<PluginInfo> {
     let cfg = json_at(&oc_config(agent));
     let spec = |s: &str, on: bool| {
-        // `name@version` (a scoped name keeps its leading @).
-        let (name, version) = match s[1..].rfind('@') {
-            Some(i) => (&s[..i + 1], Some(s[i + 2..].to_string())),
-            None => (s, None),
-        };
+        let (name, version) = npm_spec(s);
         PluginInfo { id: s.into(), name: name.into(), version, source: Some("npm".into()), enabled: on, ..Default::default() }
     };
     let mut out: Vec<PluginInfo> = cfg["plugin"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).filter(|s| !s.is_empty()).map(|s| spec(s, true)).collect();
@@ -523,6 +529,15 @@ mod tests {
 
     fn state(agent: &str, id: &str) -> Option<bool> {
         list(agent).unwrap().into_iter().find(|p| p.id == id).map(|p| p.enabled)
+    }
+
+    #[test]
+    fn npm_specs_split_at_the_version() {
+        assert_eq!(npm_spec("opencode-x@1.2.3"), ("opencode-x", Some("1.2.3".into())));
+        assert_eq!(npm_spec("@scope/pkg@latest"), ("@scope/pkg", Some("latest".into())));
+        assert_eq!(npm_spec("@scope/pkg"), ("@scope/pkg", None));
+        assert_eq!(npm_spec("插件@2"), ("插件", Some("2".into())));
+        assert_eq!(npm_spec("插件"), ("插件", None));
     }
 
     #[test]

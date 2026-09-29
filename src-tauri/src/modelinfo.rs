@@ -129,7 +129,9 @@ fn in_family(n: &str, k: &str) -> bool {
         if before && after {
             return true;
         }
-        from = p + 1;
+        // Past the match's first character, which may take more than one byte (a catalog id is
+        // outside data): slicing inside it would panic.
+        from = p + k.chars().next().map_or(1, char::len_utf8);
     }
     false
 }
@@ -318,6 +320,9 @@ mod tests {
         assert!(!in_family("gpt-5.4", "gpt-5"));
         assert!(!in_family("chatgpt-5", "gpt-5"));
         assert!(!in_family("glm-4.61", "glm-4.6"));
+        // An id starting with a character of several bytes, found but not as a whole name.
+        assert!(!in_family("通义千问x 通义千问y", "通义千问"));
+        assert!(in_family("x 通义千问", "通义千问"));
     }
 
     fn cat() -> Catalog {
