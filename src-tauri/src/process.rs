@@ -1446,6 +1446,12 @@ const SERVER_AGENTS: &[&str] = &[crate::adapters::dsh::ID];
 /// On quit: ends the servers AgentPlus started unless they are independent. On Windows the
 /// ones this AgentPlus started are ended by their job (also when it crashes or is killed).
 pub fn end_own_servers() {
+    // No server started by this AgentPlus or an earlier one: nothing to end, and no detection
+    // (PowerShell, `--version`) to wait for while quitting.
+    let launched = crate::store::load().get("launched").cloned().unwrap_or_default();
+    if own_servers().is_empty() && SERVER_AGENTS.iter().all(|a| launched.get(*a).is_none()) {
+        return;
+    }
     if !cfg!(windows) && !INDEPENDENT.load(Ordering::SeqCst) {
         let roots: Vec<Pid> = own_servers().iter().map(|p| Pid::from_u32(*p)).collect();
         if !roots.is_empty() {
