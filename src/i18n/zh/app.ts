@@ -16,6 +16,7 @@ const zh: typeof en = {
   nameMsg: "{name}：{msg}",
   restarting: "正在重启 {name}…",
   restartFailed: "{name} 重启失败：{err}",
+  restartBusy: "还有一个重启在进行中，等它结束后再试。",
   starting: "正在启动 {name}…",
   startFailed: "{name} 启动失败：{err}",
   cancelling: "正在取消…",

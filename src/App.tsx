@@ -91,6 +91,8 @@ export default function App() {
   const [latency, setLatency] = useState<Record<string, Latency>>({});
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState<AgentId | null>(null);
+  /** The agent being restarted, read by handlers that may run before a re-render. */
+  const restartingRef = useRef<AgentId | null>(null);
   const [stopping, setStopping] = useState<AgentId | null>(null);
   /** The restart shown in the progress dialog; null when closed or sent to the background. */
   const [run, setRun] = useState<RestartRun | null>(null);
@@ -491,6 +493,13 @@ export default function App() {
 
   /** Restarts an agent, or starts it when it isn't running; progress as chosen in Settings › Interface. */
   const restartAgent = async (a: AgentState) => {
+    // One at a time (the backend refuses a second): a second would replace the running one's
+    // progress and cancel button, and clear `restarting` while the first still runs.
+    if (restartingRef.current) {
+      flash(t("app.restartBusy"), true);
+      return;
+    }
+    restartingRef.current = a.id;
     const starting = !a.running;
     const showDialog = prefs.restartProgress === "dialog";
     setRestarting(a.id);
@@ -509,6 +518,7 @@ export default function App() {
       if (runCancelled.current) flash(t(starting ? "app.startCancelled" : "app.restartCancelled", { name: a.name }));
       else if (runHidden.current) flash(t(starting ? "app.startFailed" : "app.restartFailed", { name: a.name, err: errText(e) }), true, 8000);
     } finally {
+      restartingRef.current = null;
       setRestarting(null);
     }
   };
@@ -1581,6 +1591,7 @@ export default function App() {
             onTestAll={() => testAll(true)}
             onTestOne={testOne}
             restarting={restarting === st.id}
+            restartBlocked={!!restarting}
             onRestart={restart}
             onOpenDir={() => attempt(isProjectId(st.id) ? api.openPath(st.configDir) : api.openConfigDir(st.id))}
             tab={tabs[st.id] ?? "prov"}

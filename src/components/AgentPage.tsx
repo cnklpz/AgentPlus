@@ -30,6 +30,8 @@ interface Props {
   onTestAll: () => void;
   onTestOne: (url: string) => void;
   restarting: boolean;
+  /** Another agent is restarting (one restart runs at a time). */
+  restartBlocked: boolean;
   onRestart: () => void;
   onOpenDir: () => void;
   tab: Tab;
@@ -130,7 +132,7 @@ export function AgentPage(props: Props) {
           )}
           {st.restartable && (
             // The page already names the agent: the button says only what it does.
-            <button className="btn strong" onClick={onRestart} disabled={!st.installed || restarting} title={t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name })}>
+            <button className="btn strong" onClick={onRestart} disabled={!st.installed || restarting || props.restartBlocked} title={t(st.running ? "common.restartAgent" : "common.startAgent", { name: st.name })}>
               {st.running ? <Icon.refresh /> : <Icon.play />}
               {restarting
                 ? t(st.running ? "agentPage.restarting" : "agentPage.starting")

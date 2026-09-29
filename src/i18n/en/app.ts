@@ -14,6 +14,7 @@ export default {
   nameMsg: "{name}: {msg}",
   restarting: "Restarting {name}…",
   restartFailed: "Couldn't restart {name}: {err}",
+  restartBusy: "Another restart is still running. Try again when it finishes.",
   starting: "Starting {name}…",
   startFailed: "Couldn't start {name}: {err}",
   cancelling: "Cancelling…",
