@@ -49,15 +49,21 @@ export function SyncPage({ flash, onAdopt, tick }: Props) {
   const importRef = useRef<HTMLElement>(null);
   const lang = useLang();
 
+  /** The saved folder the field last showed. */
+  const shownFolder = useRef("");
   const load = async () => {
     try {
       const [s, h] = await Promise.all([api.syncStatus(), api.syncHistory()]);
       setStatus(s);
-      setPath(s.folder ?? "");
+      // Keep what is being typed: only a field still showing the saved folder follows it.
+      const folder = s.folder ?? "";
+      setPath((p) => (p === shownFolder.current ? folder : p));
+      shownFolder.current = folder;
       setHistory(h);
     } catch (e) { flash(errText(e), true); }
   };
-  useEffect(() => { load(); }, [tick]);
+  // The status carries backend text (a password error): re-read it in the new language.
+  useEffect(() => { load(); }, [tick, lang]);
   // The suggestions' titles are rendered by the backend: re-fetch them in the new language.
   useEffect(() => { if (sugs) api.syncPreview(source?.id).then(setSugs).catch(() => undefined); }, [lang]);
 
