@@ -1173,7 +1173,11 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     t.insert("name", value(p.name.trim()));
                     t.insert("base_url", value(p.base_url.trim()));
                     t.insert("wire_api", value("responses"));
-                    t.insert("env_key", value(env_key.as_str()));
+                    // As for an edit (below): an env_key only with a key for it, or with the official
+                    // sign-in mix. A keyless local server would fail on an unset variable.
+                    if key_coming || p.official_auth == Some(true) {
+                        t.insert("env_key", value(env_key.as_str()));
+                    }
                     put_provider(&mut doc, &id, Item::Table(t))?;
                     diff.push(&cfg_file, format!("+ [model_providers.{id}] name = \"{}\", base_url = \"{}\"", p.name.trim(), p.base_url.trim()), true);
                     cfg_dirty = true;
@@ -2262,6 +2266,19 @@ base_url = \"http://127.0.0.1:1234/v1\"
         assert!(plan(&[keep("other", Some("sk-other"), None), Op::SetCurrentProvider { provider: "other".into() }], true).is_ok());
         // Providers with a key of their own switch as before.
         assert!(plan(&[Op::SetCurrentProvider { provider: "bearer".into() }], true).is_ok());
+    }
+
+    #[test]
+    fn a_new_provider_gets_an_env_key_only_with_a_key_or_the_mix() {
+        let _h = codex_home_with("codex-new-no-key", "", None);
+        let add = |name: &str, key: Option<&str>, mix: Option<bool>| Op::UpsertProvider {
+            provider: ProviderInput { id: None, name: name.into(), base_url: "http://127.0.0.1:11434/v1".into(), api: "responses".into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: mix },
+        };
+        plan(&[add("Local", None, None), add("Keyed", Some("sk-k"), None), add("Mixed", None, Some(true))], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "local", "env_key"), None, "a keyless local server works without one");
+        assert_eq!(provider_str(&doc, "keyed", "env_key").as_deref(), Some("KEYED_API_KEY"));
+        assert!(provider_str(&doc, "mixed", "env_key").is_some(), "the mix would send the ChatGPT token instead");
     }
 
     #[test]
