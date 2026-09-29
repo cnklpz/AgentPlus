@@ -608,13 +608,15 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             backup_dir = Some(b);
             std::fs::create_dir_all(dir())?;
         }
-        if cfg_dirty {
-            write_json(&settings_path(), &cfg, meta)?;
-            written.push(settings_path());
-        }
+        // The key first: a failed .env write must not leave settings.json on API-key sign-in
+        // (or pointing at a relay) with no key for it.
         if env_dirty {
             write_text_atomic(&env_path(), &env, env_meta)?;
             written.push(env_path());
+        }
+        if cfg_dirty {
+            write_json(&settings_path(), &cfg, meta)?;
+            written.push(settings_path());
         }
         if store_dirty {
             profiles::save(&mut root, ID, profs);
