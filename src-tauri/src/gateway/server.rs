@@ -899,8 +899,10 @@ fn head(status: u16, content_type: &str, framing: &str) -> String {
 }
 
 fn write_full(s: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
-    let _ = s.write_all(head(status, content_type, &format!("Content-Length: {}\r\n", body.len())).as_bytes());
-    let _ = s.write_all(body);
+    // One write: the head and the body in separate packets make the client wait for both.
+    let mut out = head(status, content_type, &format!("Content-Length: {}\r\n", body.len())).into_bytes();
+    out.extend_from_slice(body);
+    let _ = s.write_all(&out);
     let _ = s.flush();
 }
 
@@ -923,9 +925,11 @@ impl<'a> Chunked<'a> {
         if data.is_empty() {
             return Ok(());
         }
-        write!(self.0, "{:x}\r\n", data.len())?;
-        self.0.write_all(data)?;
-        self.0.write_all(b"\r\n")?;
+        // The chunk's size line, data and end in one write (one packet for a small chunk).
+        let mut out = format!("{:x}\r\n", data.len()).into_bytes();
+        out.extend_from_slice(data);
+        out.extend_from_slice(b"\r\n");
+        self.0.write_all(&out)?;
         self.0.flush()
     }
     /// Sends the pieces in order, stopping at the first that fails; false when the client is gone.
@@ -1025,6 +1029,9 @@ fn handle(mut s: TcpStream) {
     CORS.with(|c| c.borrow_mut().clear());
     // A client that stops reading must not hold the thread forever.
     let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
+    // Each streamed piece goes out at once: Nagle's algorithm would hold it back until the
+    // client's (delayed) ACK of the last one, a stall of up to ~200 ms per token.
+    let _ = s.set_nodelay(true);
     let req = match read_request(&s) {
         Ok(r) => r,
         Err(e) => {
