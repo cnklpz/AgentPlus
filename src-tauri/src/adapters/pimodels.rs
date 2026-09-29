@@ -18,6 +18,7 @@ use crate::util::*;
 use crate::i18n::l;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -496,13 +497,31 @@ impl Fmt {
 
     /// DeepSeek Harness: stores the key under the provider's reference in `.credentials.yaml`,
     /// naming the reference first when it has none. True when `def` changed.
-    fn set_ref_key(&self, def: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<bool> {
+    /// `others`: the references other providers use (see `refs_of_others`). A shared reference
+    /// isn't overwritten (its other providers would send the new key to their own address), and
+    /// a new one takes no name already in the file or set in the environment (which would win).
+    #[allow(clippy::too_many_arguments)]
+    fn set_ref_key(&self, def: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, others: &HashSet<String>, diff: &mut Diff, dirty: &mut Dirty) -> Result<bool> {
         let (Some((creds, _)), Some(path)) = (auth.as_mut(), self.auth.as_ref()) else {
             return Err(anyhow!(l("The credentials file can't be read, so the key can't be saved", "凭据文件读取失败，无法保存密钥")));
         };
         let named = s(def, "apiKeyEnv").map(str::trim).filter(|n| !n.is_empty()).map(String::from);
-        let name = named.clone().unwrap_or_else(|| dsh_key_ref(id));
-        if named.is_none() {
+        let shared = |n: &str| others.contains(&n.to_ascii_uppercase());
+        let name = match named.clone() {
+            Some(n) if !shared(&n) => n,
+            _ => {
+                let taken = |n: &str| shared(n) || creds.get("refs").and_then(|r| r.get(n)).is_some() || crate::env::agent_var(n).is_some();
+                let base = dsh_key_ref(id);
+                let mut n = base.clone();
+                let mut i = 2;
+                while taken(&n) {
+                    n = format!("{base}_{i}");
+                    i += 1;
+                }
+                n
+            }
+        };
+        if named.as_deref() != Some(name.as_str()) {
             def["apiKeyEnv"] = json!(name);
             diff.push(&self.file(), format!("{}.{id}.apiKeyEnv = {name}", self.cfg_prefix()), true);
         }
@@ -513,7 +532,20 @@ impl Fmt {
             diff.push(&file, tr!("(environment variable {name} is set and takes precedence over this key)", "（环境变量 {name} 已设置，会优先于这里的密钥）"), false);
         }
         dirty.auth = true;
-        Ok(named.is_none())
+        Ok(named.as_deref() != Some(name.as_str()))
+    }
+
+    /// The credential references (upper case) providers other than `id` use, enabled or
+    /// parked, at another host than `base` (the protocols of one relay may share theirs).
+    fn refs_of_others(&self, cfg: &Value, root: &Value, id: &str, base: &str) -> HashSet<String> {
+        let host = super::codex::host_of_url(base);
+        [self.providers_of(cfg), self.stash(root, "disabledProviders")]
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|(k, d)| k.as_str() != id && s(d, self.f_url()).and_then(super::codex::host_of_url) != host)
+            .filter_map(|(_, d)| s(d, "apiKeyEnv").map(|n| n.trim().to_ascii_uppercase()))
+            .collect()
     }
 
     /// DeepSeek Harness, deleting provider `id` (definition `def`): its key goes too when the
@@ -539,10 +571,13 @@ impl Fmt {
         }
     }
 
-    fn set_key(&self, cfg: &mut Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<()> {
+    #[allow(clippy::too_many_arguments)]
+    fn set_key(&self, cfg: &mut Value, root: &Value, auth: &mut Option<(Value, TextMeta)>, id: &str, key: &str, diff: &mut Diff, dirty: &mut Dirty) -> Result<()> {
         if self.flavor == Flavor::Dsh {
+            let base = self.providers_of(cfg).and_then(|p| p.get(id)).and_then(|d| s(d, self.f_url())).unwrap_or_default().to_string();
+            let others = self.refs_of_others(cfg, root, id, &base);
             let def = self.providers_mut(cfg)?.get_mut(id).ok_or_else(|| msg::no_provider(id))?;
-            dirty.cfg |= self.set_ref_key(def, auth, id, key, diff, dirty)?;
+            dirty.cfg |= self.set_ref_key(def, auth, id, key, &others, diff, dirty)?;
             return Ok(());
         }
         // Keep the key where it already is: pi's auth.json entry, else inline apiKey.
@@ -629,7 +664,7 @@ impl Fmt {
                             dirty.store = true;
                         }
                         match key {
-                            Some(k) => self.set_key(cfg, auth, &id, k, diff, dirty)?,
+                            Some(k) => self.set_key(cfg, root, auth, &id, k, diff, dirty)?,
                             None if self.flavor == Flavor::Pi => diff.push(&ef, tr!("({id} has no API key: its models won't work in pi. You can enter $ENV_VAR_NAME.)", "（{id} 没填密钥：pi 里它的模型用不了，可以填 $环境变量名）"), false),
                             None if dsh => diff.push(&ef, tr!("({id} has no API key: its models won't work in DeepSeek Harness)", "（{id} 没填密钥：DeepSeek Harness 里它的模型用不了）"), false),
                             None => {}
@@ -647,6 +682,35 @@ impl Fmt {
                             if name == id { names.remove(id) } else { names.insert(id.clone(), json!(name)) };
                             diff.push(l("AgentPlus · display names", "AgentPlus · 显示名称"), tr!("{id} → \"{name}\"", "{id} → 「{name}」"), true);
                             dirty.store = true;
+                        }
+                        // pi: an entry under a sign-in's id (OAuth in auth.json, which wins over any key)
+                        // or a built-in's id with no key of its own (pi falls back to the built-in's
+                        // environment variable) would send that credential to a new address.
+                        // OpenClaw: a built-in's id may have a sign-in in its auth profiles (which
+                        // AgentPlus can't see and which can win over the entry's key): not moved at all.
+                        let old = self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id));
+                        let moves = old.and_then(|d| s(d, self.f_url())).map(str::trim) != Some(base_url);
+                        if flavor == Flavor::OpenClaw && moves && BUILTIN_PROVIDERS.contains(&id.as_str()) {
+                            return Err(anyhow!(tr!(
+                                "{id} is a provider OpenClaw ships, which may be signed in through its auth profiles: at another address that sign-in would go there. Add the relay as a separate provider instead",
+                                "{id} 是 OpenClaw 自带的供应商，可能在它的 auth profiles 里登录过：改到别的地址会把登录凭据发过去。请把中转添加为单独的供应商"
+                            )));
+                        }
+                        if flavor == Flavor::Pi {
+                            let login = auth.as_ref().and_then(|(a, _)| a.get(id)).and_then(|e| s(e, "type")).filter(|t| *t != "api_key").map(String::from);
+                            // A key written out: `$VAR` / `${VAR}`, a bare variable name and `!command`
+                            // are pi's ways of taking it from elsewhere (the official one, maybe).
+                            let literal = |k: &str| {
+                                let k = k.trim();
+                                !k.is_empty() && !k.starts_with(['$', '!']) && !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                            };
+                            let own_key = key.is_some() || Self::auth_key(auth.as_ref().map(|a| &a.0), id).is_some() || old.and_then(|d| s(d, "apiKey")).is_some_and(literal);
+                            if moves && (login.is_some() || (BUILTIN_PROVIDERS.contains(&id.as_str()) && !own_key)) {
+                                return Err(anyhow!(tr!(
+                                    "{id} is one of pi's own providers or sign-ins: at another address it would send that credential there. Add the relay as a separate provider instead",
+                                    "{id} 是 pi 自带的供应商或登录凭据：改到别的地址会把这份凭据发过去。请把中转添加为单独的供应商"
+                                )));
+                            }
                         }
                         let def = if in_cfg {
                             self.providers_mut(cfg)?.get_mut(id).unwrap()
@@ -681,11 +745,12 @@ impl Fmt {
                         }
                         if let Some(k) = key {
                             if in_cfg {
-                                self.set_key(cfg, auth, id, k, diff, dirty)?;
+                                self.set_key(cfg, root, auth, id, k, diff, dirty)?;
                             } else if flavor == Flavor::Dsh {
                                 // Disabled: the key goes to the credentials file, its reference into the parked definition.
+                                let others = self.refs_of_others(cfg, root, id, base_url);
                                 let def = store::section(root, agent, "disabledProviders").get_mut(id).ok_or_else(|| msg::no_provider(id))?;
-                                dirty.store |= self.set_ref_key(def, auth, id, k, diff, dirty)?;
+                                dirty.store |= self.set_ref_key(def, auth, id, k, &others, diff, dirty)?;
                             } else if !self.set_auth_key(auth, id, k, diff, dirty) {
                                 // Disabled, key inline: it goes back into the parked definition.
                                 if let Some(def) = store::section(root, agent, "disabledProviders").get_mut(id) {

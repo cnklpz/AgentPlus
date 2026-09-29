@@ -356,6 +356,27 @@ struct Target {
     model: Option<String>,
 }
 
+/// Gemini CLI doesn't let ~/.gemini/.env override the system environment: a system
+/// `GEMINI_API_KEY` other than the relay's (often the official key) would be sent to the relay,
+/// and a system `GOOGLE_GEMINI_BASE_URL` would send the relay's key elsewhere. Refused then.
+fn relay_env_conflict(base: &str, key: Option<&str>) -> Result<()> {
+    let sys = |var: &str| crate::env::agent_var(var).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    if sys(KEY).is_some_and(|k| Some(k.as_str()) != key) {
+        return Err(anyhow!(tr!(
+            "The system environment variable {KEY} is set, and Gemini CLI would send it to this relay instead of the relay's own key. Remove it from the system environment first, then switch",
+            "系统环境变量 {KEY} 已设置，Gemini CLI 会把它而不是这个中转自己的密钥发给中转。请先从系统环境变量里删除它，再切换"
+        )));
+    }
+    let norm = |u: &str| u.trim().trim_end_matches('/').to_ascii_lowercase();
+    if sys(BASE).is_some_and(|b| norm(&b) != norm(base)) {
+        return Err(anyhow!(tr!(
+            "The system environment variable {BASE} is set to another address, and Gemini CLI would send this relay's key there. Remove it from the system environment first, then switch",
+            "系统环境变量 {BASE} 指向另一个地址，Gemini CLI 会把这个中转的密钥发到那里。请先从系统环境变量里删除它，再切换"
+        )));
+    }
+    Ok(())
+}
+
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let (mut cfg, meta, had_comments) = load()?;
     let cfg0 = cfg.clone();
@@ -521,6 +542,9 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
         }),
         _ => None,
     };
+    if let Some(Target { base: Some(b), key, auth: API_KEY_AUTH, .. }) = &target {
+        relay_env_conflict(b, key.as_deref())?;
+    }
     if let Some(Target { base, key, auth, model }) = target {
         for (var, v) in [(BASE, &base), (KEY, &key)] {
             if dotenv::get(&env, var) != *v {
@@ -675,6 +699,23 @@ mod tests {
         assert_eq!(str_field(&profiles::load(&store::load(), ID)["r"], "defaultModel"), "old");
         apply(vec![Op::UpsertModel { provider: "r".into(), model: crate::model::ModelInput { id: "extra".into(), ..Default::default() } }]).unwrap();
         assert_eq!(settings(&t).pointer("/model/name").and_then(|x| x.as_str()), Some("old"));
+    }
+
+    /// A system key other than the relay's would be what Gemini CLI sends it: refused.
+    #[test]
+    fn a_system_key_never_goes_to_a_relay() {
+        let t = setup(Some(SETTINGS), None);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "R", "https://r/", Some("sk-x-1234"), &["m"]) }]).unwrap();
+        crate::env::set_test_vars(&[(KEY, "official-key-9999")]);
+        let err = apply(vec![Op::SetCurrentProvider { provider: "r".into() }]).err().expect("refused").to_string();
+        assert!(err.contains("GEMINI_API_KEY"), "{err}");
+        assert!(!t.0.join(".env").exists() || !envtext(&t).contains("sk-x-1234"), "nothing written");
+        // The same key in both places, or a matching base URL, is fine.
+        crate::env::set_test_vars(&[(KEY, "sk-x-1234"), (BASE, "https://r")]);
+        apply(vec![Op::SetCurrentProvider { provider: "r".into() }]).unwrap();
+        crate::env::set_test_vars(&[(BASE, "https://elsewhere")]);
+        assert!(relay_env_conflict("https://r", Some("sk-x-1234")).is_err());
+        crate::env::set_test_vars(&[]);
     }
 
     #[test]

@@ -89,6 +89,22 @@ fn provider_ids(cfg: &Value) -> Vec<String> {
     cfg.get("provider").and_then(|p| p.as_object()).map(|o| o.keys().cloned().collect()).unwrap_or_default()
 }
 
+/// Provider ids in the known projects' configs, except `skip`'s. OpenCode looks keys up in
+/// the one global auth.json by id, so a new provider (global or another project's) taking
+/// one of these ids would hand its key to that project's address.
+pub(crate) fn project_provider_ids(skip: Option<&Path>) -> Vec<String> {
+    let norm = |d: &Path| d.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let skip = skip.map(norm);
+    crate::projects::list()
+        .into_iter()
+        .map(|p| crate::env::resolve_path(&p.path))
+        .filter(|d| skip.as_deref() != Some(norm(d).as_str()))
+        .filter_map(|d| read_text(&config_path(&d)).ok())
+        .filter_map(|(t, _)| serde_json::from_str::<Value>(&strip_jsonc(&t).0).ok())
+        .flat_map(|cfg| provider_ids(&cfg))
+        .collect()
+}
+
 pub fn state(agent: &str) -> Result<AgentState> {
     let dir = dir_of(agent)?;
     let f = fmt(agent, &dir);
@@ -186,8 +202,10 @@ pub fn plan(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     // Checks below need the global ids: never write a project against an unknown global config.
     let gcfg = global_cfg()?;
     let mut f = fmt(agent, &dir);
-    // New project providers stay clear of global ids (Fmt also skips ids already in auth.json).
+    // New project providers stay clear of global ids and other projects' (Fmt also skips ids
+    // already in auth.json).
     f.reserved = provider_ids(&gcfg);
+    f.reserved.extend(project_provider_ids(Some(&dir)));
     let (mut cfg, cfg_meta, had_comments) = f.load(true)?;
     let mut auth = f.load_auth();
     let mut root = store::load();
@@ -325,6 +343,19 @@ mod tests {
         assert_eq!(status("relay"), (false, vec!["已停用（disabled_providers）"]));
         assert_eq!(status("g1"), (true, vec!["已启用"]));
         assert_eq!(status("g2"), (false, vec!["已停用（disabled_providers）"]));
+    }
+
+    /// A new global provider never takes an id a known project uses: its key (auth.json, by id)
+    /// would go to that project's address.
+    #[test]
+    fn new_ids_stay_clear_of_known_projects() {
+        let (h, _) = setup("ocp-reserve", "{}", Some(r#"{ "provider": { "local": { "options": { "baseURL": "http://127.0.0.1:1234/v1" } } } }"#));
+        crate::projects::open(&h.0.join("proj").to_string_lossy()).unwrap();
+        let add: Vec<Op> = serde_json::from_value(json!([{ "op": "upsert_provider", "provider": { "id": null, "name": "Local", "baseUrl": "https://x2.example.com/v1", "api": "chat", "apiKey": "sk-x2", "models": [] } }])).unwrap();
+        crate::adapters::plan("opencode", &add, false).unwrap();
+        let g: Value = serde_json::from_str(&std::fs::read_to_string(h.0.join(".config/opencode/opencode.json")).unwrap()).unwrap();
+        assert!(g["provider"].get("local").is_none(), "{g}");
+        assert!(g["provider"].get("local-2").is_some(), "{g}");
     }
 
     #[test]

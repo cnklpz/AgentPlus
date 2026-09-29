@@ -49,12 +49,59 @@ export function hostKey(url: string | null): string {
   }
 }
 
+/**
+ * The new address's host when an edit moves a provider to another origin (scheme, host or
+ * port), else null: a key kept across such an edit is sent to a party it wasn't given to.
+ * No old address (an official default, like Gemini's key-only entry) counts as moved; a new
+ * address that doesn't parse can't be saved anyway (null).
+ */
+export function movedHost(from: string | null | undefined, to: string): string | null {
+  let b: URL;
+  try {
+    b = new URL(to.trim());
+  } catch {
+    return null;
+  }
+  try {
+    return new URL(from ?? "").origin.toLowerCase() === b.origin.toLowerCase() ? null : b.host;
+  } catch {
+    return b.host;
+  }
+}
+
+/**
+ * The agent provider a group's key is adopted from (the backend reads its applied key). One
+ * without a pending edit first: an edited one is grouped by its new address, while its
+ * applied key belongs to the old one (the backend also refuses a key for another host).
+ */
+export function keySource(uses: Use[]): Use | undefined {
+  const ok = (u: Use) => !!u.p && u.p.editable && !u.p.isNew;
+  return uses.find((u) => ok(u) && !u.p!.isEdited) ?? uses.find(ok);
+}
+
 function normUrl(url: string): string {
-  return url.trim().replace(/\/+$/, "").toLowerCase();
+  try {
+    const u = new URL(url.trim());
+    // Split the serialized URL so even empty query/fragment markers remain intact.
+    const end = u.href.search(/[?#]/);
+    const base = end < 0 ? u.href : u.href.slice(0, end);
+    return base.replace(/\/+$/, "") + (end < 0 ? "" : u.href.slice(end));
+  } catch {
+    return url.trim();
+  }
 }
 
 export function groupKey(baseUrl: string, api: string, keyFp: string | null): string {
   return `${normUrl(baseUrl)}|${api}|${keyFp ?? ""}`;
+}
+
+/** Groups an import link meets: the one it already is (same address, protocol and key), else those at its address and protocol with another key. */
+export function importMatches(stations: Station[], baseUrl: string, api: string, keyFp: string | null): { same: Group | null; others: Group[] } {
+  // A group only being removed doesn't count.
+  const all = stations.flatMap((s) => s.groups).filter((g) => g.lib || liveUses(g).length);
+  const same = all.find((g) => g.key === groupKey(baseUrl, api, keyFp)) ?? null;
+  const addr = groupKey(baseUrl, api, null);
+  return { same, others: same ? [] : all.filter((g) => g.key.startsWith(addr)) };
 }
 
 /** "OpenCode Zen — Responses" → "OpenCode Zen" */

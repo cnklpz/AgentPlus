@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api } from "../api";
 import { type Draft, type ViewProvider, codexDefaultModels, isVisible, keys, settingValue, viewModels } from "../draft";
-import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, tripped } from "../services";
+import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, movedHost, tripped } from "../services";
+import { askKeepKey } from "./Confirm";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { ImportNote } from "./ImportLink";
@@ -115,6 +116,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const poolBase = gatewayPoolBase(gateway?.port ?? DEFAULT_GATEWAY_PORT, pool);
   const [err, setErr] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
+  const keyRef = useRef<HTMLInputElement>(null);
   const [tpl, setTpl] = useState<Template | null>(null);
   /** Template without the agent's only protocol: reached through a gateway forward. */
   const tplForward = !!tpl && !!only && !tpl.endpoints[only];
@@ -304,7 +306,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     }
   };
 
-  const save = () => {
+  const save = async () => {
     if (!canSave) return;
     if (multi) {
       const each = apis.map((k) => ({
@@ -326,6 +328,13 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       return;
     }
     const url = onUnified ? poolBase : baseUrl.trim();
+    // Moved to another host with the saved key kept: ask first (the gateway's own switches
+    // take the key from the provider library instead, so they don't count).
+    const moved = !isNew && editing?.hasKey && !key.trim() && !gw && !viaGateway && !onUnified ? movedHost(editing.baseUrl, url) : null;
+    if (moved && !(await askKeepKey(moved))) {
+      keyRef.current?.focus();
+      return;
+    }
     const authChanged = codex && officialAuth !== (editing?.officialAuth ?? false);
     const changed = isNew || unmanaged || name.trim() !== editing!.name || (!gw && (url !== (editing!.baseUrl ?? "") || kind !== editing!.api)) || !!key.trim() || authChanged;
     const auth = codex ? { officialAuth } : {};
@@ -378,7 +387,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />
       </div>
       {isNew && gatewayCapable(st.id) && !tpl && (
-        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("common.useGateway")} keepHint={unifiedNew}
+        <ToggleRow on={unifiedNew} icon={<Icon.gateway size={16} />} title={t("providerDialog.useForwards")} keepHint={unifiedNew}
           hint={unifiedNew
             ? pool.length
               ? tn("providerDialog.newPoolPicked", pool.length, { url: poolBase })
@@ -391,33 +400,6 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
           }} />
       )}
 
-      {!isNew && editing?.baseUrl && !onUnified && gatewayCapable(st.id) && (
-        <ToggleRow on={gw} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
-          hint={gw
-            ? viaGateway && gatewayRoute
-              ? t("providerDialog.gwOnRoute", { url: gatewayRoute.upstreamUrl ?? "", api: API_LABEL[gatewayRoute.upstreamApi] })
-              : t("providerDialog.gwOnNew")
-            : viaGateway
-              ? t("providerDialog.gwOffWas")
-              : t("providerDialog.gwOff")}
-          onChange={() => {
-            if (gw) {
-              setConnect("direct");
-              // Leaving the gateway: show the upstream it forwarded to, not the local address.
-              if (viaGateway && gatewayRoute?.upstreamUrl && baseUrl === (editing.baseUrl ?? "")) {
-                setBaseUrl(gatewayRoute.upstreamUrl);
-                if (!only) setKind(gatewayRoute.upstreamApi);
-              }
-            } else setConnect("gateway");
-          }} />
-      )}
-      {!isNew && onUnified && (
-        <>
-          <ToggleRow on icon={<Icon.gateway size={16} />} title={pool.length ? t("providerDialog.unifiedHeadPicked") : t("providerDialog.unifiedHeadAll")}
-            hint={t("providerDialog.unifiedDesc")} />
-          <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />
-        </>
-      )}
       {unifiedNew && <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />}
 
       {unifiedNew && !only && (
@@ -446,7 +428,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
             </div>
             <div className="field">
               <label htmlFor="pd-key">{t("common.apiKeyLabel")}</label>
-              <input id="pd-key" className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
+              <input id="pd-key" ref={keyRef} className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
                 placeholder={!isNew && editing?.hasKey ? t("common.keyKeepPlaceholder") : "sk-..."} />
               {(viaFwd || tpl) && (
                 <em className={`muted tiny${tpl ? "" : " hint"}`}>
@@ -462,6 +444,10 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       {codex && (
         <ToggleRow on={officialAuth} onChange={setOfficialAuth} icon={<Icon.key size={16} />} title={t("providerDialog.officialAuth")}
           hint={officialAuth ? t("providerDialog.officialAuthOn") : t("providerDialog.officialAuthOff")} />
+      )}
+      {/* The mix needs a ChatGPT sign-in: say so while it is being turned on, not after it didn't work. */}
+      {codex && officialAuth && (st.signIn === "apikey" || st.signIn === "none") && (
+        <div className="mix-warn small"><Icon.warn size={14} />{t(st.signIn === "apikey" ? "providerDialog.mixApiKeySignIn" : "providerDialog.mixNotSignedIn")}</div>
       )}
       {officialAuth && mixOff.length > 0 && (
         <label className="check-row mix-sync">
@@ -489,6 +475,33 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                   more: <button type="button" className="link" onClick={() => api.openUrl(tpl.session!).catch(() => undefined)}>{t("providerDialog.learnMore")}</button>,
                 })
                 : t("providerDialog.fwdOff")} />
+      )}
+      {!isNew && editing?.baseUrl && !onUnified && gatewayCapable(st.id) && (
+        <ToggleRow on={gw} icon={<Icon.gateway size={16} />} title={t("providerDialog.fwdTitle")}
+          hint={gw
+            ? viaGateway && gatewayRoute
+              ? t("providerDialog.gwOnRoute", { url: gatewayRoute.upstreamUrl ?? "", api: API_LABEL[gatewayRoute.upstreamApi] })
+              : t("providerDialog.gwOnNew")
+            : viaGateway
+              ? t("providerDialog.gwOffWas")
+              : t("providerDialog.gwOff")}
+          onChange={() => {
+            if (gw) {
+              setConnect("direct");
+              // Leaving the gateway: show the upstream it forwarded to, not the local address.
+              if (viaGateway && gatewayRoute?.upstreamUrl && baseUrl === (editing.baseUrl ?? "")) {
+                setBaseUrl(gatewayRoute.upstreamUrl);
+                if (!only) setKind(gatewayRoute.upstreamApi);
+              }
+            } else setConnect("gateway");
+          }} />
+      )}
+      {!isNew && onUnified && (
+        <>
+          <ToggleRow on icon={<Icon.gateway size={16} />} title={pool.length ? t("providerDialog.unifiedHeadPicked") : t("providerDialog.unifiedHeadAll")}
+            hint={t("providerDialog.unifiedDesc")} />
+          <ForwardPicker routes={gateway?.routes ?? []} value={pool} onChange={setPool} />
+        </>
       )}
       <div className="field">
         <div className="row between">

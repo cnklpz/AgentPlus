@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentState, GatewayRouteView, SyncSuggestion } from "./api";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayPoolBase, gatewayPoolIds,
-  gatewayRouteId, groupKey, hostKey, importKey, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute, splitStations, syncSuggestionId,
+  gatewayRouteId, groupKey, hostKey, importKey, importMatches, keySource, movedHost, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute, splitStations, syncSuggestionId,
   syncSuggestionIds, tripped, useKey,
 } from "./services";
 
@@ -19,12 +19,81 @@ describe("hostKey", () => {
 });
 
 describe("groupKey", () => {
-  it("ignores trailing slashes, case and surrounding spaces", () => {
-    expect(groupKey(" https://X.com/v1/// ", "chat", null)).toBe(groupKey("https://x.com/v1", "chat", null));
+  it("ignores trailing path slashes, origin case, default ports and surrounding spaces", () => {
+    expect(groupKey(" HTTPS://X.com:443/v1/// ", "chat", null)).toBe(groupKey("https://x.com/v1", "chat", null));
+    expect(groupKey("https://X.com:443/v1///?team=A/", "chat", null)).toBe(groupKey("https://x.com/v1?team=A/", "chat", null));
+  });
+  it.each([
+    ["https://x.com/TeamA/v1", "https://x.com/teama/v1"],
+    ["https://x.com/v1?team=A", "https://x.com/v1?team=a"],
+    ["https://x.com/v1?Team=A", "https://x.com/v1?team=A"],
+    ["https://x.com/v1?team=A/", "https://x.com/v1?team=A"],
+    ["https://User:Pass@x.com/v1", "https://user:Pass@x.com/v1"],
+    ["https://User:Pass@x.com/v1", "https://User:pass@x.com/v1"],
+    ["https://x.com/v1#A", "https://x.com/v1#a"],
+    ["https://x.com/v1?", "https://x.com/v1"],
+    ["https://x.com/v1#", "https://x.com/v1"],
+  ])("keeps distinct endpoints separate: %s and %s", (a, b) => {
+    expect(groupKey(a, "chat", "same-key")).not.toBe(groupKey(b, "chat", "same-key"));
   });
   it("separates protocols and keys", () => {
     expect(groupKey("https://x.com/v1", "chat", "a")).not.toBe(groupKey("https://x.com/v1", "chat", "b"));
     expect(groupKey("https://x.com/v1", "chat", null)).not.toBe(groupKey("https://x.com/v1", "responses", null));
+  });
+});
+
+describe("movedHost", () => {
+  it("names the new host when the origin changes", () => {
+    expect(movedHost("https://relay-a.example/v1", "https://relay-b.example/v1")).toBe("relay-b.example");
+    expect(movedHost("https://r.example/v1", "http://r.example/v1")).toBe("r.example");
+    expect(movedHost("https://r.example/v1", "https://r.example:8443/v1")).toBe("r.example:8443");
+  });
+  it("counts a key with no address of its own (an official default) as moved", () => {
+    expect(movedHost(null, "https://r.example")).toBe("r.example");
+    expect(movedHost("", "https://r.example/v1")).toBe("r.example");
+  });
+  it("is null for the same origin, or a new address that can't be saved", () => {
+    expect(movedHost("https://R.example/v1", " https://r.example:443/v2/ ")).toBeNull();
+    expect(movedHost("https://r.example", "not a url")).toBeNull();
+  });
+});
+
+describe("keySource", () => {
+  const use = (id: string, over: Record<string, unknown> = {}) => ({ agent: { id: "claude" }, p: { id, editable: true, isNew: false, ...over } }) as unknown as Use;
+  it("prefers a provider without a pending edit (its applied key belongs to its applied address)", () => {
+    expect(keySource([use("edited", { isEdited: true }), use("plain")])?.p?.id).toBe("plain");
+    expect(keySource([use("edited", { isEdited: true })])?.p?.id).toBe("edited");
+    expect(keySource([use("new", { isNew: true }), use("ro", { editable: false })])).toBeUndefined();
+  });
+});
+
+describe("importMatches", () => {
+  const g = (url: string, api: string, fp: string | null, over: Partial<Group> = {}) =>
+    ({ key: groupKey(url, api, fp), name: fp ?? "none", baseUrl: url, api, keyFp: fp, keyHint: null, lib: { id: "l" }, uses: [], ...over }) as Group;
+  const stations = (...groups: Group[]) => [{ key: "s", name: "", host: "", baseUrl: null, builtin: false, groups }] as never;
+  const url = "https://relay.example.com/v1";
+
+  it("finds the group with the same address, protocol and key", () => {
+    const same = g(url, "responses", "a");
+    expect(importMatches(stations(g(url, "responses", "b"), same), "https://Relay.example.com/v1/", "responses", "a")).toEqual({ same, others: [] });
+  });
+  it("lists the groups at the address with another key, not other protocols or addresses", () => {
+    const b = g(url, "responses", "b");
+    const none = g(url, "responses", null);
+    const r = importMatches(stations(b, none, g(url, "chat", "a"), g(`${url}/x`, "responses", "c")), url, "responses", "a");
+    expect(r).toEqual({ same: null, others: [b, none] });
+  });
+  it("skips groups that are only being removed", () => {
+    const gone = g(url, "responses", "a", { lib: null, uses: [{ state: "removing" } as Use] });
+    expect(importMatches(stations(gone), url, "responses", "a")).toEqual({ same: null, others: [] });
+  });
+  it("does not match a different case-sensitive endpoint", () => {
+    const original = g("https://relay.example/TeamA/v1", "responses", "a");
+    const queried = g("https://relay.example/v1?team=A", "responses", "a");
+    const all = stations(original, queried);
+    expect(importMatches(all, "https://relay.example/teama/v1", "responses", "a")).toEqual({ same: null, others: [] });
+    expect(importMatches(all, "https://relay.example/v1?team=a", "responses", "a")).toEqual({ same: null, others: [] });
+    expect(importMatches(all, "https://RELAY.example:443/TeamA/v1/", "responses", "a")).toEqual({ same: original, others: [] });
   });
 });
 

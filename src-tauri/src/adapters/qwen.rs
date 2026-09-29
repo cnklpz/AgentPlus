@@ -802,7 +802,14 @@ impl Ctx {
         let openai = proto_of(&self.cfg, &new_key).as_deref() == Some("openai");
         let base = p.base_url.trim().to_string();
         let key = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty()).map(String::from);
-        let new_env = (key.is_some() && g.env_key.is_none()).then(|| agentplus_var(id));
+        // A variable of its own for a new key: no envKey (the protocol's default variable), or
+        // one a group on another host reads too (it would send the key there). Groups of one
+        // relay (its protocols at the same host) keep sharing theirs.
+        let host = |u: Option<&str>| u.and_then(super::codex::host_of_url);
+        let shared = g.env_key.as_deref().is_some_and(|v| {
+            self.groups().iter().any(|o| !o.same(&g) && o.key_var().is_some_and(|x| x.eq_ignore_ascii_case(v)) && host(o.base.as_deref()) != host(Some(&base)))
+        });
+        let new_env = (key.is_some() && (g.env_key.is_none() || shared)).then(|| agentplus_var(id)).filter(|v| g.env_key.as_deref() != Some(v.as_str()));
         let base_changed = norm(g.base.as_deref()) != norm(Some(&base));
         let api_changed = g.api() != api;
         let n = g.live.len() + g.hidden.len();
@@ -1308,6 +1315,25 @@ mod tests {
         assert!(backup.unwrap().join("settings.json").exists());
     }
 
+    /// Two groups reading one variable: a key for one goes to a variable of its own.
+    #[test]
+    fn a_key_for_a_shared_variable_gets_a_variable_of_its_own() {
+        let cfg = r#"{ "$version": 4, "env": { "RELAY_KEY": "sk-a" }, "modelProviders": { "openai": [
+            { "id": "m1", "baseUrl": "https://a.example/v1", "envKey": "RELAY_KEY" },
+            { "id": "m2", "baseUrl": "https://b.example/v1", "envKey": "RELAY_KEY" } ] } }"#;
+        let _home = setup("shared-env", Some(cfg));
+        let ids: Vec<String> = st().providers.iter().map(|p| p.id.clone()).collect();
+        assert_eq!(ids.len(), 2);
+        let b = st().providers.into_iter().find(|p| p.base_url.as_deref() == Some("https://b.example/v1")).unwrap();
+        apply(vec![Op::UpsertProvider { provider: input(Some(&b.id), "B", "https://b.example/v1", "chat", Some(SECRET), &[]) }]);
+        let cfg = cfg_now();
+        assert_eq!(cfg["env"]["RELAY_KEY"], "sk-a", "the other group keeps its key");
+        let e = cfg["modelProviders"]["openai"].as_array().unwrap().iter().find(|e| e["baseUrl"] == "https://b.example/v1").unwrap().clone();
+        let var = e["envKey"].as_str().unwrap();
+        assert_ne!(var, "RELAY_KEY");
+        assert_eq!(cfg["env"][var], SECRET);
+    }
+
     #[test]
     fn edit_provider_keeps_id_and_moves_protocol() {
         let _home = setup("edit", Some(SAMPLE));
@@ -1317,13 +1343,15 @@ mod tests {
         let e = &cfg["modelProviders"]["openai"][2];
         assert_eq!(e["baseUrl"], "https://relay2.example.com/v1");
         assert_eq!(e["wireApi"], "chat-completions");
-        assert_eq!(cfg["env"]["RELAY_KEY"], SECRET);
-        // The anthropic group with the same key var is untouched.
+        // Moved to another host: the anthropic group still at relay.example.com reads RELAY_KEY
+        // too, so the new key gets a variable of its own rather than going there as well.
+        assert_eq!(e["envKey"], "AGENTPLUS_RELAY_API_KEY");
+        assert_eq!(cfg["env"]["AGENTPLUS_RELAY_API_KEY"], SECRET);
+        assert!(cfg["env"].get("RELAY_KEY").is_none_or(|v| v != SECRET));
         assert_eq!(cfg["modelProviders"]["anthropic"][0]["baseUrl"], "https://relay.example.com");
         let s = st();
         let p = prov(&s, "relay");
         assert_eq!((p.name.as_str(), p.api.as_str()), ("Relay", "chat"));
-        assert!(prov(&s, "relay-anthropic").has_key, "shares RELAY_KEY");
         // Switch the dashscope group to Anthropic: entries move to modelProviders.anthropic.
         apply(vec![Op::UpsertProvider { provider: input(Some("dashscope"), "DashScope", "https://dashscope.aliyuncs.com/apps/anthropic", "anthropic", None, &[]) }]);
         let cfg = cfg_now();

@@ -39,6 +39,8 @@ pub struct ImportRequest {
     /// responses | chat | anthropic | gemini
     pub api: String,
     pub api_key: String,
+    /// Fingerprint of `api_key` (as `Provider.key_fp`): finds a provider the user already has.
+    pub key_fp: Option<String>,
     pub models: Vec<String>,
     /// The AgentPlus agent the link was made for (CC Switch's `app`), when AgentPlus has it.
     pub agent: Option<String>,
@@ -232,7 +234,8 @@ fn provider(url: &url::Url, source: String) -> Result<ImportRequest> {
         }
     }
     let homepage = q("homepage").filter(|h| h.starts_with("https://") || h.starts_with("http://"));
-    Ok(ImportRequest { name, base_url, api, api_key, models, agent, homepage, source })
+    let key_fp = (!api_key.is_empty()).then(|| crate::model::key_fingerprint(&api_key));
+    Ok(ImportRequest { name, base_url, api, api_key, key_fp, models, agent, homepage, source })
 }
 
 /// What a link's `config` says (CC Switch's own config format for the app).
@@ -510,6 +513,7 @@ mod tests {
         assert_eq!(r.base_url, "https://relay.example.com");
         assert_eq!((r.api.as_str(), r.agent.as_deref()), ("anthropic", Some("claude")));
         assert_eq!(r.api_key, "sk-abc123");
+        assert_eq!(r.key_fp, Some(crate::model::key_fingerprint("sk-abc123")), "finds a provider with the same key");
         assert_eq!(r.homepage.as_deref(), Some("https://relay.example.com"));
         assert_eq!(r.source, "ccswitch");
         assert!(r.models.is_empty());

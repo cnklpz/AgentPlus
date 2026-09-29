@@ -353,6 +353,35 @@ mod tests {
         assert_eq!(key_desc(), "明文保存在 models.json");
     }
 
+    /// An entry under a sign-in's id, or a built-in's without a key of its own, keeps its address.
+    #[test]
+    fn sign_ins_and_built_ins_are_not_moved_to_another_address() {
+        let _g = setup("signin", Some(r#"{ "providers": { "anthropic": { "baseUrl": "https://api.anthropic.com", "models": [] }, "google": { "baseUrl": "https://generativelanguage.googleapis.com", "models": [] } } }"#));
+        let edit = |id: &str, base: &str, key: Option<&str>| Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: id.into(), base_url: base.into(), api: "anthropic".into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
+        // OAuth in auth.json wins over any key: its token would go to the relay.
+        assert!(plan(&[edit("anthropic", "https://relay.example.com", Some("sk-relay"))], true).is_err());
+        // A built-in without a key of its own would use its environment variable there.
+        let google = |base: &str, key| Op::UpsertProvider { provider: ProviderInput { api: "gemini".into(), ..match edit("google", base, key) { Op::UpsertProvider { provider } => provider, _ => unreachable!() } } };
+        assert!(plan(&[google("https://relay.example.com", None)], true).is_err());
+        // With its own key it may move; an edit that keeps the address is fine either way.
+        assert!(plan(&[google("https://relay.example.com", Some("sk-relay"))], true).is_ok());
+        assert!(plan(&[edit("anthropic", "https://api.anthropic.com", None)], true).is_ok());
+    }
+
+    /// A built-in whose key is a reference (to the official variable, maybe) isn't moved either.
+    #[test]
+    fn a_referenced_key_is_not_a_key_of_its_own() {
+        let _g = setup("signin-ref", Some(r#"{ "providers": { "google": { "baseUrl": "https://g.example", "apiKey": "$GEMINI_API_KEY", "models": [] }, "xai": { "baseUrl": "https://x.example", "apiKey": "XAI_API_KEY", "models": [] }, "groq": { "baseUrl": "https://q.example", "apiKey": "gsk-literal", "models": [] } } }"#));
+        let edit = |id: &str, base: &str| Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: id.into(), base_url: base.into(), api: "chat".into(), api_key: None, models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
+        // Each would be accepted at its own address; only the move is refused.
+        assert!(plan(&[edit("xai", "https://x.example")], true).is_ok());
+        assert!(plan(&[edit("xai", "https://relay.example.com")], true).is_err());
+        assert!(plan(&[edit("groq", "https://relay.example.com")], true).is_ok());
+        let google = |base: &str| Op::UpsertProvider { provider: ProviderInput { api: "gemini".into(), ..match edit("google", base) { Op::UpsertProvider { provider } => provider, _ => unreachable!() } } };
+        assert!(plan(&[google("https://g.example")], true).is_ok());
+        assert!(plan(&[google("https://relay.example.com")], true).is_err());
+    }
+
     #[test]
     fn create_edit_delete_provider() {
         let _g = setup("crud", Some(MODELS));

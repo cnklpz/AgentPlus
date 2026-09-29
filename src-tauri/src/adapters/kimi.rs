@@ -380,6 +380,16 @@ fn edit_provider_in(doc: &mut DocumentMut, pid: &str, p: &ProviderInput, legacy:
         .ok_or_else(|| msg::no_provider(pid))?;
     let mut lines = vec![];
     let base = p.base_url.trim();
+    // Signed in with /login (an `oauth` reference): kimi-cli sends that token to whatever
+    // address and protocol the entry names, so those stay.
+    let signed_in = t.get("oauth").is_some_and(|v| !v.as_str().is_some_and(str::is_empty));
+    let old_ty = t.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if signed_in && (t.get("base_url").and_then(|v| v.as_str()) != Some(base) || api_of(old_ty) != p.api) {
+        return Err(anyhow!(tr!(
+            "\"{pid}\" is signed in with /login: at another address its sign-in would go there. Add the relay as a separate provider instead",
+            "「{pid}」是用 /login 登录的：改到别的地址会把登录凭据发过去。请把中转添加为单独的供应商"
+        )));
+    }
     if t.get("base_url").and_then(|v| v.as_str()) != Some(base) {
         set_val(t, "base_url", base.into());
         lines.push(format!("[providers.{pid}] base_url = \"{base}\""));
@@ -1029,6 +1039,17 @@ max_steps_per_run = 100 # keep
         assert_eq!(doc["providers"]["gem"]["type"].as_str(), Some("gemini"));
         assert_eq!(doc["models"]["m1"]["provider"].as_str(), Some("chat"));
         assert!(text().find("[providers.chat]").unwrap() < text().find("[models.m1]").unwrap());
+    }
+
+    /// A provider signed in with /login keeps its address and protocol.
+    #[test]
+    fn a_login_provider_is_not_moved() {
+        let cfg = "[providers.kimi-code]\ntype = \"kimi\"\nbase_url = \"https://api.kimi.com/coding/v1\"\napi_key = \"\"\noauth = { storage = \"file\", key = \"oauth/kimi-code\" }\n";
+        let _home = setup("login", false, Some(cfg));
+        let moved = plan(&[Op::UpsertProvider { provider: input(Some("kimi-code"), "Kimi", "https://relay.example.com/v1", "chat", None, &[]) }], true);
+        assert!(moved.err().expect("refused").to_string().contains("/login"));
+        assert!(plan(&[Op::UpsertProvider { provider: input(Some("kimi-code"), "Kimi", "https://api.kimi.com/coding/v1", "anthropic", None, &[]) }], true).is_err(), "nor its protocol");
+        assert!(plan(&[Op::UpsertProvider { provider: input(Some("kimi-code"), "Kimi Code", "https://api.kimi.com/coding/v1", "chat", None, &[]) }], true).is_ok());
     }
 
     #[test]

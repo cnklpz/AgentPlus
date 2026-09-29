@@ -7,6 +7,10 @@ export interface ConfirmOptions {
   title: string;
   message?: ReactNode;
   confirmText?: string;
+  /** The dismiss button's text (default Cancel). */
+  cancelText?: string;
+  /** Replaces the default icon (trash when `danger`, else a check). */
+  icon?: ReactNode;
   danger?: boolean;
   /** An on/off option shown in the dialog; its value is returned by askCheck(). */
   check?: { label: string; hint?: ReactNode; value: boolean };
@@ -20,6 +24,21 @@ export function ask(opts: ConfirmOptions): Promise<boolean> {
   return new Promise((resolve) => {
     if (!show) return resolve(window.confirm(opts.title));
     show({ ...opts, resolve });
+  });
+}
+
+/**
+ * An edit moved a provider with a saved key to another host (see `movedHost`): true to keep
+ * the key anyway, false to go back and enter the new address's key (the safe default).
+ */
+export function askKeepKey(host: string): Promise<boolean> {
+  return ask({
+    title: t("common.keyHostChangedTitle"),
+    message: t("common.keyHostChangedMsg", { host }),
+    confirmText: t("common.keyHostKeep"),
+    cancelText: t("common.keyHostEnter"),
+    icon: <Icon.key size={16} />,
+    danger: true,
   });
 }
 
@@ -67,14 +86,14 @@ function ConfirmDialog({ p, onDone }: { p: Pending; onDone: (ok: boolean, checke
   return (
     <ConfirmFrame
       title={p.title}
-      icon={p.danger ? <Icon.trash size={16} /> : <Icon.check size={16} />}
+      icon={p.icon ?? (p.danger ? <Icon.trash size={16} /> : <Icon.check size={16} />)}
       danger={p.danger}
       message={p.message}
       check={p.check && { label: p.check.label, hint: p.check.hint, on: checked, onChange: setChecked }}
       onClose={() => onDone(false, checked)}
       foot={<>
         <span className="grow" />
-        <button ref={cancelRef} className="btn" onClick={() => onDone(false, checked)}>{t("common.cancel")}</button>
+        <button ref={cancelRef} className="btn" onClick={() => onDone(false, checked)}>{p.cancelText ?? t("common.cancel")}</button>
         <button ref={okRef} className={`btn ${p.danger ? "danger-solid" : "primary"}`} onClick={() => onDone(true, checked)}>{p.confirmText ?? (p.danger ? t("common.delete") : t("common.confirm"))}</button>
       </>}
     />

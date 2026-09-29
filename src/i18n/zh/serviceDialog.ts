@@ -25,6 +25,10 @@ const zh: typeof en = {
   usesAltUrl: "· 用 {api} 地址",
   noneRequired: "都不勾也可以，只保存到供应商库，之后随时添加。",
   footNote: "供应商库立即保存；写入 Agent 的部分会先进入「待写入的改动」。",
+  importSame: "你已经添加过这个供应商（地址、协议和 API Key 都相同）。保存会更新它，而不是再添加一份。",
+  importReplace: "保存后，这个分组的 API Key 会换成链接里的；「同步到这个分组已接入的 Agent」里勾选的 Agent 也会换成新 Key。",
+  importOthers: "这个地址已经用另一个 API Key 添加过。保存会新建一个分组；如果想把原来的 Key 换成链接里的，请选择要替换的分组：",
+  replaceKey: "替换「{name}」的 Key",
 };
 
 export default zh;

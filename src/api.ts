@@ -868,6 +868,8 @@ export interface ImportRequest {
   baseUrl: string;
   api: ApiKind;
   apiKey: string;
+  /** Fingerprint of `apiKey` (as `Provider.keyFp`): finds a provider the user already has. */
+  keyFp: string | null;
   models: string[];
   /** The agent the link was made for, when AgentPlus has it. */
   agent: AgentId | null;
@@ -1403,8 +1405,9 @@ const demo: typeof real = {
     const endpoint = q("endpoint")?.split(",")[0].replace(/\/+$/, "");
     if (!/^(agentplus|ccswitch):$/i.test(u.protocol) || !endpoint) throw new Error("（演示）这不是导入链接");
     const agent = (["claude", "codex", "gemini", "opencode", "openclaw", "hermes"].includes(app ?? "") ? app : null) as AgentId | null;
+    const apiKey = q("apiKey") ?? "";
     return { mcp: null, error: null, request: {
-      name: q("name") ?? new URL(endpoint).host, baseUrl: endpoint, apiKey: q("apiKey") ?? "",
+      name: q("name") ?? new URL(endpoint).host, baseUrl: endpoint, apiKey, keyFp: apiKey ? "fp-" + apiKey.slice(-6) : null,
       api: agent === "claude" ? "anthropic" : agent === "codex" ? "responses" : agent === "gemini" ? "gemini" : "chat",
       models: [...new Set(["model", "sonnetModel", "opusModel", "haikuModel"].map(q).filter((m): m is string => !!m))],
       agent, homepage: q("homepage"), source: u.protocol.toLowerCase().startsWith("ccswitch") ? "ccswitch" : "agentplus",

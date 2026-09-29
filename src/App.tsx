@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportItem, type ImportRequest, type LibEntry, type McpLink, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
 import {
-  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount, writeOrder,
+  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, editProvider, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount, writeOrder,
   opsToWrite, pendingTotal, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
@@ -30,7 +30,7 @@ import { type Prefs, applyPrefs, loadPrefs, savePrefs } from "./prefs";
 import { t, tn, useLang } from "./i18n";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
-  hostKey, importKey, importOp, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
+  hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, plainRoute,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
@@ -76,8 +76,9 @@ const NO_MCP: AgentId[] = ["pi", "trae"];
 
 /** `imported`: a new provider filled in from an import link; `n` tells one import from the next. */
 type Dialog = { editing: ViewProvider | null; imported?: ImportRequest; n?: number } | null;
-/** Hub dialog: undefined = closed; group null = add (optionally inside a station, or from an import link). */
-type HubDialog = { group: Group | null; prefill?: { name: string; baseUrl: string; station: string }; imported?: ImportRequest; n?: number } | undefined;
+/** Hub dialog: undefined = closed; group null = add (optionally inside a station, or from an import link).
+ *  `others`: an import link's address already in use with another key. */
+type HubDialog = { group: Group | null; prefill?: { name: string; baseUrl: string; station: string }; imported?: ImportRequest; others?: Group[]; n?: number } | undefined;
 
 export default function App() {
   const [agents, setAgents] = useState<AgentState[]>([]);
@@ -777,7 +778,7 @@ export default function App() {
   useEffect(() => { hubSaved.current = { main: null, alt: {} }; }, [hubDialog]);
   const hubSave = async (v: ServiceSave) => {
     const s = hubDialog?.group ?? null;
-    const src = s?.uses.find((u) => u.p && u.p.editable && !u.p.isNew);
+    const src = s ? keySource(s.uses) : undefined;
     // Entries saved by an earlier attempt of this dialog are updated, not added again.
     const saved = hubSaved.current;
     const entry = await api.librarySave({
@@ -808,7 +809,8 @@ export default function App() {
       const next = { ...all };
       for (const u of v.sync) {
         // The whole group moves to the new protocol, except in agents that speak only one (ONLY_API): they keep theirs.
-        next[u.agent.id] = upsertProvider(next[u.agent.id] ?? {}, { id: u.p!.id, name: u.p!.name, baseUrl: v.baseUrl, api: apiFor(u.agent.id, v.api), apiKey: v.apiKey, models: [] });
+        // Merged into a pending edit of it, so a key typed there and not here isn't dropped.
+        next[u.agent.id] = editProvider(next[u.agent.id] ?? {}, u.p!, { baseUrl: v.baseUrl, api: apiFor(u.agent.id, v.api), ...(v.apiKey ? { apiKey: v.apiKey } : {}) });
       }
       for (const a of v.addTo) {
         next[a] = route
@@ -838,7 +840,7 @@ export default function App() {
   /** Library id for a group, adopting it (with its key) when it only lives in an agent. */
   const ensureLibrary = async (g: Group): Promise<string> => {
     if (g.lib) return g.lib.id;
-    const src = g.uses.find((u) => u.p && u.p.editable && !u.p.isNew);
+    const src = keySource(g.uses);
     if (!src) throw new Error(t("app.groupNoSource"));
     const e = await api.librarySave({ id: null, name: g.name, baseUrl: g.baseUrl, api: g.api, apiKey: null, models: null, adoptFrom: [src.agent.id, src.p!.id] });
     await reloadLib();
@@ -1075,7 +1077,9 @@ export default function App() {
     }
     setDialog(null);
     setPage("providers");
-    setHubDialog({ group: null, imported: r, n });
+    // A provider the user already has is edited, not added again.
+    const m = importMatches(stations, r.baseUrl, r.api, r.keyFp);
+    setHubDialog({ group: m.same, imported: r, others: m.others, n });
   };
   useEffect(() => {
     if (!inTauri || !agentsReady) return;
@@ -1657,7 +1661,11 @@ export default function App() {
       {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onSave={saveProvider} onClose={() => setDialog(null)} />}
       {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
-      {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} onSave={hubSave} onClose={() => setHubDialog(undefined)} />}
+      {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} others={hubDialog.others}
+        onReplace={(g) => {
+          const n = ++importSeq.current;
+          setHubDialog((d) => d && { group: g, imported: d.imported, n });
+        }} onSave={hubSave} onClose={() => setHubDialog(undefined)} />}
       {attr && attrBank && attrBank !== "failed" && (
         <AttributionDialog key={attr.n} agent={attr.agent} provider={attr.provider} model={attr.model} match={attr.match} bank={attrBank}
           names={attr.names} pending={attr.pending} onClose={() => setAttr(null)} />

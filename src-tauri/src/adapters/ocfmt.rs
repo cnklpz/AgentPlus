@@ -88,6 +88,11 @@ pub(super) fn cfg_key(def: &Value) -> Option<&str> {
     def.pointer("/options/apiKey")?.as_str().filter(|k| !k.trim().is_empty())
 }
 
+/// A key written out, not taken from somewhere (`{env:…}`, `{file:…}`) that may hold another's.
+fn literal_key(k: &str) -> bool {
+    !key_ref_re().is_match(k)
+}
+
 static KEY_REF: OnceLock<regex::Regex> = OnceLock::new();
 
 /// OpenCode's config substitutions: `{env:NAME}` and `{file:path}`.
@@ -142,13 +147,20 @@ pub(crate) fn auth_cards(auth: Option<&Value>, known: &[Provider], login: &str, 
         .collect()
 }
 
-/// Writes a credentials file in place (not tmp + rename) so it keeps its owner-only permissions.
+/// Writes a credentials file in place (not tmp + rename) so it keeps its owner-only permissions;
+/// one AgentPlus creates is owner-only from the start (Unix), not world-readable by the umask.
 pub(crate) fn write_auth(path: &Path, auth: &Value) -> Result<()> {
+    use std::io::Write;
     let failed = || tr!("Failed to write {}", "写入 {} 失败", display_path(path));
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d).with_context(failed)?;
     }
-    std::fs::write(path, serde_json::to_string_pretty(auth)? + "\n").with_context(failed)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut f = options.open(path).with_context(failed)?;
+    f.write_all((serde_json::to_string_pretty(auth)? + "\n").as_bytes()).with_context(failed)?;
     Ok(())
 }
 
@@ -475,6 +487,34 @@ impl Fmt {
                     }
                     Some(id) => {
                         let in_cfg = cfg.pointer(&jptr(&["provider", id])).is_some();
+                        // A sign-in (OAuth) in auth.json under this id: OpenCode sends it to whatever
+                        // address the entry names, and a key would replace the sign-in.
+                        if let Some(kind) = auth.as_ref().and_then(|(a, _)| a.get(id)).and_then(|e| e.get("type")).and_then(|t| t.as_str()).filter(|t| *t != "api") {
+                            let cur = cfg.pointer(&jptr(&["provider", id, "options", "baseURL"])).and_then(|x| x.as_str()).map(str::trim);
+                            let typed = p.api_key.as_deref().is_some_and(|k| !k.trim().is_empty());
+                            if cur != Some(p.base_url.trim()) || typed {
+                                return Err(anyhow!(tr!(
+                                    "{id} is signed in ({kind}) in auth.json: changing its address would send that sign-in to the new address, and a key would replace it. Add the relay as a separate provider instead",
+                                    "{id} 在 auth.json 里是登录凭据（{kind}）：改它的地址会把登录凭据发到新地址，填密钥会覆盖登录。请把中转添加为单独的供应商"
+                                )));
+                            }
+                        }
+                        // A built-in's id without a key of its own: OpenCode takes its key from the
+                        // environment (ANTHROPIC_API_KEY…), which would go to the new address.
+                        {
+                            let old = cfg.pointer(&jptr(&["provider", id])).or_else(|| store::agent_get(root, &self.agent, "disabledProviders").and_then(|d| d.get(id)));
+                            let moves = old.and_then(|d| d.pointer("/options/baseURL")).and_then(|x| x.as_str()).map(str::trim) != Some(p.base_url.trim());
+                            let has_api_auth = auth.as_ref().and_then(|(a, _)| a.get(id)).is_some_and(|e| e.get("type").and_then(|t| t.as_str()) == Some("api"));
+                            let own_key = p.api_key.as_deref().is_some_and(|k| !k.trim().is_empty()) || has_api_auth || old.and_then(cfg_key).is_some_and(literal_key);
+                            let env_var = format!("{}_API_KEY", id.to_ascii_uppercase().replace('-', "_"));
+                            let builtin = super::pimodels::BUILTIN_PROVIDERS.contains(&id.as_str()) || crate::env::agent_var(&env_var).is_some();
+                            if moves && builtin && !own_key {
+                                return Err(anyhow!(tr!(
+                                    "{id} is a built-in provider without a key of its own here: at another address it would send the key from the environment ({env_var}) there. Add the relay as a separate provider, or enter its key",
+                                    "{id} 是内置供应商，这里没有它自己的密钥：改到别的地址会把环境变量里的密钥（{env_var}）发过去。请把中转添加为单独的供应商，或填写它的密钥"
+                                )));
+                            }
+                        }
                         let def = if in_cfg {
                             cfg.pointer_mut(&jptr(&["provider", id])).unwrap()
                         } else {
@@ -719,6 +759,58 @@ mod tests {
         assert_eq!(note("rel"), "API Key · 读取文件 ../cfg-key.txt");
         assert_eq!(note("plain"), "API Key · 明文保存在 opencode.json");
         assert!(ps.iter().all(|p| p.has_key));
+    }
+
+    /// A credentials file AgentPlus creates is owner-only; one that exists keeps its permissions.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_auth_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let h = TestHome::new("ocfmt-auth-perm");
+        let p = h.0.join("share/auth.json");
+        write_auth(&p, &json!({ "x": { "type": "api", "key": "k" } })).unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_auth(&p, &json!({})).unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o640);
+    }
+
+    /// A provider signed in through auth.json keeps its address, and a key doesn't replace the sign-in.
+    #[test]
+    fn a_signed_in_provider_is_not_moved_or_overwritten() {
+        let h = TestHome::new("ocfmt-signin");
+        std::fs::write(h.0.join("auth.json"), r#"{"anthropic":{"type":"oauth","access":"a"},"relay":{"type":"api","key":"sk-r"}}"#).unwrap();
+        let prov = |url: &str| json!({ "npm": "@ai-sdk/anthropic", "options": { "baseURL": url } });
+        let f = write_cfg(&h, json!({ "provider": { "anthropic": prov("https://api.anthropic.com/v1"), "relay": prov("https://r.example.com/v1") } }));
+        let (mut cfg, _, _) = f.load(true).unwrap();
+        let mut auth = f.load_auth();
+        let edit = |id: &str, url: &str, key: Option<&str>| Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: id.into(), base_url: url.into(), api: "anthropic".into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
+        let mut run = |op: Op| f.apply(&op, &mut cfg, &mut json!({}), &mut auth, &mut Diff::default(), &mut Dirty::default());
+        assert!(run(edit("anthropic", "https://relay.example.com/v1", None)).is_err());
+        assert!(run(edit("anthropic", "https://api.anthropic.com/v1", Some("sk-x"))).is_err());
+        assert!(run(edit("anthropic", "https://api.anthropic.com/v1", None)).is_ok(), "a rename is fine");
+        assert!(run(edit("relay", "https://r2.example.com/v1", Some("sk-r2"))).is_ok(), "an API key entry may move");
+    }
+
+    /// A built-in's id with no key of its own would take the environment's key along.
+    #[test]
+    fn a_built_in_without_its_own_key_keeps_its_address() {
+        let h = TestHome::new("ocfmt-builtin");
+        crate::env::set_test_vars(&[("DEEPSEEK_API_KEY", "sk-official")]);
+        let prov = |key: Option<&str>| match key {
+            Some(k) => json!({ "npm": "@ai-sdk/anthropic", "options": { "baseURL": "https://api.x.com/v1", "apiKey": k } }),
+            None => json!({ "npm": "@ai-sdk/anthropic", "options": { "baseURL": "https://api.x.com/v1" } }),
+        };
+        let f = write_cfg(&h, json!({ "provider": { "anthropic": prov(None), "deepseek": prov(Some("{env:DEEPSEEK_API_KEY}")), "groq": prov(Some("sk-literal")), "myrelay": prov(None) } }));
+        let (mut cfg, _, _) = f.load(true).unwrap();
+        let mut auth = f.load_auth();
+        let edit = |id: &str, key: Option<&str>| Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: id.into(), base_url: "https://relay.example.com/v1".into(), api: "anthropic".into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } };
+        let mut run = |op: Op| f.apply(&op, &mut cfg, &mut json!({}), &mut auth, &mut Diff::default(), &mut Dirty::default());
+        assert!(run(edit("anthropic", None)).is_err());
+        assert!(run(edit("deepseek", None)).is_err(), "a reference isn't a key of its own");
+        assert!(run(edit("groq", None)).is_ok(), "a literal key is");
+        assert!(run(edit("anthropic", Some("sk-relay"))).is_ok(), "so is a typed one");
+        assert!(run(edit("myrelay", None)).is_ok(), "not a built-in");
     }
 
     #[test]

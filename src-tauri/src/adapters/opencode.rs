@@ -88,7 +88,9 @@ pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
 }
 
 pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
-    let f = fmt();
+    let mut f = fmt();
+    // New providers stay clear of the known projects' ids (keys in auth.json go by id).
+    f.reserved = super::ocproject::project_provider_ids(None);
     let (mut cfg, cfg_meta, had_comments) = f.load(true)?;
     let mut auth = f.load_auth();
     let mut root = store::load();

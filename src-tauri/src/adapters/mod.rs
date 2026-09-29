@@ -23,7 +23,7 @@ pub mod zcode;
 use crate::i18n::l;
 use crate::model::{bool_setting, AgentState, Diff, Op, ProviderInput, Setting};
 use crate::{process, store};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use std::path::{Path, PathBuf};
 
 /// Messages the adapters share, worded once per language.
@@ -589,7 +589,17 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
         .map(|o| match o {
             Op::ImportProvider { from_agent, provider, api, name } => resolve_import(agent, from_agent, provider, api.as_deref(), name.as_deref()),
             Op::UpsertProvider { provider: p } if p.key_from_library.is_some() => {
-                let key = crate::library::endpoint(p.key_from_library.as_deref().unwrap())?.key;
+                let e = crate::library::endpoint(p.key_from_library.as_deref().unwrap())?;
+                // The address came with the op (queued earlier); the key is read now. Should the
+                // entry have moved to another host since, its key isn't for this address.
+                if codex::host_of_url(&e.base_url) != codex::host_of_url(&p.base_url) {
+                    bail!("{}", tr!(
+                        "The provider library entry now points to {}, not {}: its key isn't written there. Queue the change again",
+                        "供应商库里的这一项已改为 {}，不是 {}：不会把它的密钥写到这里。请重新操作一次",
+                        e.base_url, p.base_url
+                    ));
+                }
+                let key = e.key;
                 let mut p = p.clone();
                 p.api_key = key;
                 p.key_from_library = None;

@@ -1223,6 +1223,16 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             continue;
                         }
                         let place = src.place();
+                        // A key variable another entry reads too: its entries would send a new key to
+                        // their own address. This entry then keeps its key inline instead.
+                        // (Entries of one relay, at the same host, keep sharing theirs.)
+                        let host = super::codex::host_of_url(base);
+                        let shared_env = def_of(&cfg, &src).and_then(key_env_of).filter(|v| {
+                            entries(&cfg).iter().any(|(_, s)| {
+                                s != &src
+                                    && def_of(&cfg, s).is_some_and(|d| key_env_of(d).is_some_and(|o| o.eq_ignore_ascii_case(v)) && ystr(d, url_key(d)).as_deref().and_then(super::codex::host_of_url) != host)
+                            })
+                        });
                         let was_current = current(&cfg).0 == *id;
                         let def = def_mut(&mut cfg, &src).and_then(|d| d.as_mapping_mut()).ok_or_else(|| msg::no_provider(id))?;
                         let dv = Y::Mapping(def.clone());
@@ -1238,7 +1248,14 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                             cx.diff.push(&cx.file, format!("{place}.{mk} = {mode}"), true);
                         }
                         if let Some(k) = key {
-                            match key_env_of(&dv) {
+                            if let Some(var) = &shared_env {
+                                for f in ["key_env", "api_key_env", "keyEnv", "apiKeyEnv"] {
+                                    if def.remove(f).is_some() {
+                                        cx.diff.push(&cx.file, tr!("{place}.{f} removed ({var} is shared with other providers)", "删除 {place}.{f}（{var} 还被其他供应商使用）"), false);
+                                    }
+                                }
+                            }
+                            match key_env_of(&Y::Mapping(def.clone())) {
                                 Some(var) => {
                                     if dotenv::get(&env, &var).as_deref() != Some(k) {
                                         env = dotenv::set(&env, &var, Some(k));
@@ -2092,6 +2109,18 @@ hooks:
         // Deleting the provider forgets them.
         apply(vec![Op::DeleteProvider { provider: "relay".into() }]).unwrap();
         assert!(hidden("relay").is_empty());
+        drop(t);
+    }
+
+    /// Two entries reading one variable: a key for one is kept inline, the other keeps its key.
+    #[test]
+    fn a_key_for_a_shared_variable_stays_with_its_entry() {
+        let t = setup("model:\n  provider: custom:a\n  default: m\nproviders:\n  a:\n    base_url: https://a/v1\n    key_env: RELAY_KEY\n    models: [m]\n  b:\n    base_url: https://b/v1\n    key_env: RELAY_KEY\n    models: [m]\n");
+        fs::write(t.0.join(".env"), "RELAY_KEY=sk-a\n").unwrap();
+        apply(vec![Op::UpsertProvider { provider: pi(Some("b"), "b", "https://b/v1", "chat", Some("sk-b"), &["m"]) }]).unwrap();
+        assert_eq!(fs::read_to_string(t.0.join(".env")).unwrap(), "RELAY_KEY=sk-a\n");
+        assert_eq!(provider_endpoint("a").unwrap().1.as_deref(), Some("sk-a"));
+        assert_eq!(provider_endpoint("b").unwrap().1.as_deref(), Some("sk-b"));
         drop(t);
     }
 

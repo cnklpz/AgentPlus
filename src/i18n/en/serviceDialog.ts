@@ -23,4 +23,8 @@ export default {
   usesAltUrl: "· uses {api} URL",
   noneRequired: "You can leave them all unchecked: it's saved to the provider library only, and you can add it anytime.",
   footNote: "The provider library is saved right away; changes to agents go to \"Pending changes\" first.",
+  importSame: "You already have this provider (same URL, protocol and API key). Saving updates it instead of adding a copy.",
+  importReplace: "Saving replaces this group's API key with the link's; the agents checked under \"Sync to agents already using this group\" get the new key too.",
+  importOthers: "This URL is already added with another API key. Saving adds a separate group; to swap that key for the link's instead, pick the group:",
+  replaceKey: "Replace the key of \"{name}\"",
 };

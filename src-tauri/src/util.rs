@@ -410,9 +410,13 @@ pub fn host_of(url: &str) -> String {
     }
 }
 
-/// A base URL in comparable form: trimmed, without trailing slashes, lowercase.
-pub fn norm_url(u: &str) -> String {
-    u.trim().trim_end_matches('/').to_lowercase()
+/// A comparable endpoint: normalize the origin and trailing path slashes while preserving
+/// case in paths, credentials, queries and fragments (including empty query markers).
+pub fn norm_url(address: &str) -> String {
+    match url::Url::parse(address.trim()) {
+        Ok(u) => format!("{}{}{}", &u[..url::Position::BeforePath], u.path().trim_end_matches('/'), &u[url::Position::AfterPath..]),
+        Err(_) => address.trim().to_string(),
+    }
 }
 
 /// `v[k]` as an owned string; empty when it is missing or not a string.
@@ -602,6 +606,24 @@ pub fn write_json(path: &Path, v: &serde_json::Value, meta: TextMeta) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_identity_normalizes_only_the_origin_and_trailing_path_slashes() {
+        assert_eq!(norm_url(" HTTPS://Relay.example:443/TeamA/v1///?team=A/ "), "https://relay.example/TeamA/v1?team=A/");
+        assert_eq!(norm_url("http://RELAY.example:80/"), "http://relay.example");
+        for (a, b) in [
+            ("https://relay.example/TeamA/v1", "https://relay.example/teama/v1"),
+            ("https://relay.example/v1?team=A", "https://relay.example/v1?team=a"),
+            ("https://relay.example/v1?team=A/", "https://relay.example/v1?team=A"),
+            ("https://User:Pass@relay.example/v1", "https://user:Pass@relay.example/v1"),
+            ("https://relay.example/v1#A", "https://relay.example/v1#a"),
+            ("https://relay.example/v1?", "https://relay.example/v1"),
+            ("https://relay.example/v1#", "https://relay.example/v1"),
+        ] {
+            assert_ne!(norm_url(a), norm_url(b), "{a}, {b}");
+        }
+        assert_eq!(norm_url(" Not a URL "), "Not a URL");
+    }
 
     #[test]
     fn test_homes_with_the_same_tag_and_timestamp_are_isolated() {

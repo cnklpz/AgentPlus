@@ -433,6 +433,14 @@ mod tests {
         Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: name.into(), base_url: url.into(), api: api.into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } }
     }
 
+    /// A built-in's id may be signed in through auth profiles AgentPlus can't read: never moved.
+    #[test]
+    fn a_built_in_id_keeps_its_address() {
+        let _g = setup("builtin", Some(r#"{ "models": { "providers": { "anthropic": { "baseUrl": "https://api.anthropic.com", "api": "anthropic-messages", "models": [] } } } }"#));
+        assert!(plan(&[edit("anthropic", "anthropic", "https://relay.example.com", "anthropic", Some("sk-relay"))], true).is_err());
+        assert!(plan(&[edit("anthropic", "anthropic", "https://api.anthropic.com", "anthropic", None)], true).is_ok());
+    }
+
     #[test]
     fn json5_is_readonly_but_readable() {
         let _g = setup("json5", Some(JSON5));

@@ -31,6 +31,8 @@ const UNMANAGED: &str = "settings-env";
 const BASE: &str = "ANTHROPIC_BASE_URL";
 const TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
 const API_KEY: &str = "ANTHROPIC_API_KEY";
+/// Written for a profile without a key (see `desired_env`); never a key itself.
+const NO_KEY: &str = "agentplus-no-key";
 /// (role, env var, (label en, label zh))
 const ROLES: [(&str, &str, (&str, &str)); 5] = [
     ("default", "ANTHROPIC_MODEL", ("Default", "默认")),
@@ -69,8 +71,9 @@ fn env_of(cfg: &Value) -> Map<String, Value> {
     cfg.get("env").and_then(|e| e.as_object()).cloned().unwrap_or_default()
 }
 
+/// A value in settings.json's `env`; empty and the no-key placeholder read as unset.
 fn env_str(env: &Map<String, Value>, k: &str) -> Option<String> {
-    env.get(k).and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty())
+    env.get(k).and_then(|v| v.as_str()).map(String::from).filter(|s| !s.is_empty() && s != NO_KEY)
 }
 
 /// Claude Code appends /v1/messages itself, so a stored base never ends in /v1.
@@ -136,8 +139,14 @@ fn desired_env(p: Option<&Value>) -> Vec<(&'static str, Option<String>)> {
             let key_env = if str_field(p, "keyEnv") == API_KEY { API_KEY } else { TOKEN };
             let other = if key_env == TOKEN { API_KEY } else { TOKEN };
             out.push((BASE, Some(str_field(p, "baseUrl"))));
-            out.push((key_env, Some(str_field(p, "apiKey")).filter(|k| !k.is_empty())));
-            out.push((other, None));
+            // Without a key of its own, Claude Code would send this address whatever it finds
+            // next: a key in the process environment, or its claude.ai sign-in. A placeholder
+            // takes the key's place, so a relay that wants a key refuses instead (a keyless
+            // local proxy still works).
+            let key = str_field(p, "apiKey");
+            out.push((key_env, Some(if key.is_empty() { NO_KEY.to_string() } else { key })));
+            // A key of the other kind set in the environment would go along too: blanked here.
+            out.push((other, crate::env::agent_var(other).is_some().then(String::new)));
             let roles = roles_of(p);
             for (role, k, _) in ROLES {
                 out.push((k, roles.get(role).cloned()));
@@ -525,6 +534,24 @@ mod tests {
         assert!(settings().get("env").is_none(), "our variables removed, empty env dropped");
         apply(vec![Op::DeleteProvider { provider: "my-relay".into() }]).unwrap();
         assert!(profiles::load(&store::load(), ID).is_empty());
+    }
+
+    /// A profile without a key never lets Claude Code fall back to another credential (the
+    /// environment's key, its claude.ai sign-in) and send it to the relay.
+    #[test]
+    fn a_keyless_profile_sends_no_other_credential() {
+        let _h = setup(Some("{}"));
+        crate::env::set_test_vars(&[("ANTHROPIC_API_KEY", "sk-ant-official-1234")]);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "Relay", "https://r", None, &["m"]) }, Op::SetCurrentProvider { provider: "relay".into() }]).unwrap();
+        let v = settings();
+        assert_eq!(v.pointer("/env/ANTHROPIC_AUTH_TOKEN").and_then(|x| x.as_str()), Some(NO_KEY));
+        assert_eq!(v.pointer("/env/ANTHROPIC_API_KEY").and_then(|x| x.as_str()), Some(""), "the environment's key is blanked");
+        let st = state(&Install::default());
+        assert_eq!(st.current_provider.as_deref(), Some("relay"));
+        assert!(!st.providers.iter().find(|p| p.id == "relay").unwrap().has_key, "the placeholder isn't a key");
+        // Back to the official account: nothing of ours stays.
+        apply(vec![Op::SetCurrentProvider { provider: OFFICIAL.into() }]).unwrap();
+        assert!(settings().get("env").is_none());
     }
 
     #[test]

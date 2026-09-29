@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type ApiKind, type ImportRequest, api } from "../api";
-import { AGENT_NAME, API_LABEL, type Group, ONLY_API, PROTOCOLS, type Protocol, URL_PLACEHOLDER, type Use, freeAgents, gatewayCapable, useKey } from "../services";
+import { AGENT_NAME, API_LABEL, type Group, ONLY_API, PROTOCOLS, type Protocol, URL_PLACEHOLDER, type Use, freeAgents, gatewayCapable, movedHost, useKey } from "../services";
+import { askKeepKey } from "./Confirm";
 import { AgentIcon, Icon } from "./icons";
 import { ImportNote } from "./ImportLink";
 import { Modal } from "./Modal";
@@ -33,8 +34,13 @@ interface Props {
   group: Group | null;
   /** New group inside an existing station: suggested name and address. */
   prefill?: { name: string; baseUrl: string; station: string } | null;
-  /** New provider from an import link: the fields it fills in (and the agent it was made for). */
+  /** From an import link: the fields it fills in (and the agent it was made for). With a
+   *  group, the link is that group (same key) or replaces its key (another key). */
   imported?: ImportRequest | null;
+  /** New provider from an import link: groups at its address and protocol with another key. */
+  others?: Group[];
+  /** Edit one of `others` with the link's key instead. */
+  onReplace?: (g: Group) => void;
   onSave: (v: ServiceSave) => Promise<void>;
   onClose: () => void;
 }
@@ -45,18 +51,33 @@ const API_HINT: Record<Protocol, TKey> = {
   anthropic: "common.apiHintAnthropic",
 };
 
-export function ServiceDialog({ agents, group, prefill, imported, onSave, onClose }: Props) {
+/** Reuse a stored key only at the group's unchanged endpoint; a typed key takes precedence. */
+export function fetchServiceModels(group: Group | null, url: string, kind: ApiKind, key: string): Promise<string[]> {
+  const typed = key.trim();
+  if (!typed && group && url === group.baseUrl.trim().replace(/\/+$/, "") && kind === group.api) {
+    if (group.lib) return api.fetchModelsLib(group.lib.id);
+    const src = group.uses.find((u) => u.p && u.p.editable && !u.p.isNew && u.state !== "removing");
+    if (src) return api.fetchModels(src.agent.id, src.p!.id);
+  }
+  return api.fetchModelsUrl(url, typed || null, kind);
+}
+
+export function ServiceDialog({ agents, group, prefill, imported, others = [], onReplace, onSave, onClose }: Props) {
   const isNew = !group;
+  // An import link for a group the user already has: its key is already there.
+  const sameKey = !!group && !!imported && (group.keyFp ?? null) === (imported.keyFp ?? null);
+  const startModels = group && imported ? [...new Set([...(group.lib?.models ?? []), ...imported.models])] : group?.lib?.models ?? imported?.models ?? [];
   const [name, setName] = useState(group?.name ?? prefill?.name ?? imported?.name ?? "");
   const [baseUrl, setBaseUrl] = useState(group?.baseUrl ?? prefill?.baseUrl ?? imported?.baseUrl ?? "");
   const [kind, setKind] = useState<ApiKind>(group?.api ?? imported?.api ?? "responses");
-  const [key, setKey] = useState(imported?.apiKey ?? "");
-  const [models, setModels] = useState<string[]>(group?.lib?.models ?? imported?.models ?? []);
-  const [pool, addToPool, resetPool] = useModelPool(() => group?.lib?.models ?? imported?.models ?? []);
+  const [key, setKey] = useState(sameKey ? "" : imported?.apiKey ?? "");
+  const [models, setModels] = useState<string[]>(startModels);
+  const [pool, addToPool, resetPool] = useModelPool(() => startModels);
   const [fetching, setFetching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
+  const keyRef = useRef<HTMLInputElement>(null);
 
   const editable = (group?.uses ?? []).filter((u) => u.p && u.p.editable && !u.p.isNew && u.state !== "removing");
   const [sync, setSync] = useState<Set<string>>(new Set(editable.map(useKey)));
@@ -108,10 +129,7 @@ export function ServiceDialog({ agents, group, prefill, imported, onSave, onClos
     setErr(null);
     setFetching(true);
     try {
-      const src = editable[0];
-      const list = !key.trim() && src && !changedAddr
-        ? await api.fetchModels(src.agent.id, src.p!.id)
-        : await api.fetchModelsUrl(url, key.trim() || null, kind);
+      const list = await fetchServiceModels(group, url, kind, key);
       addToPool(list);
       if (models.length === 0) setModels(list.slice(0, 20));
     } catch (e) {
@@ -136,6 +154,14 @@ export function ServiceDialog({ agents, group, prefill, imported, onSave, onClos
 
   const save = async () => {
     if (!canSave) return;
+    // Moved to another host with the saved key kept: ask first. (Some keys have no fingerprint,
+    // e.g. a Codex header key: `hasKey` says there is one.)
+    const hasKey = !!group && (!!group.keyFp || !!group.lib?.hasKey || group.uses.some((u) => u.p?.hasKey));
+    const moved = hasKey && !key.trim() ? movedHost(group!.baseUrl, url) : null;
+    if (moved && !(await askKeepKey(moved))) {
+      keyRef.current?.focus();
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
@@ -165,6 +191,20 @@ export function ServiceDialog({ agents, group, prefill, imported, onSave, onClos
     <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide dirty={!!imported} onClose={onClose}
       title={isNew ? (prefill ? t("serviceDialog.addGroupTo", { station: prefill.station }) : t("common.addProvider")) : t("serviceDialog.editGroup", { name: group!.name })} foot={foot}>
       {imported && <ImportNote req={imported} />}
+      {imported && group && <div className="note-line small">{t(sameKey ? "serviceDialog.importSame" : "serviceDialog.importReplace")}</div>}
+      {imported && isNew && others.length > 0 && (
+        <div className="note-line small">
+          {t("serviceDialog.importOthers")}
+          <div className="row import-others">
+            {others.map((g) => (
+              <button key={g.key} type="button" className="btn small" onClick={() => onReplace?.(g)}>
+                <Icon.key size={12} />{t("serviceDialog.replaceKey", { name: g.name })}
+                {g.keyHint && <span className="muted mono">{g.keyHint}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {isNew && !prefill && !imported && <TemplatePicker value={tpl} onPick={pickTpl} />}
       <div className="form2">
         <label className="field">
@@ -193,7 +233,7 @@ export function ServiceDialog({ agents, group, prefill, imported, onSave, onClos
         </div>
         <label className="field">
           <span>{t("common.apiKeyLabel")}</span>
-          <input className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
+          <input ref={keyRef} className="input mono" type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)}
             placeholder={group?.lib?.hasKey || editable.some((u) => u.p!.hasKey) ? t("common.keyKeepPlaceholder") : "sk-..."} />
           <em className={`muted tiny${tpl ? "" : " hint"}`}>
             {t("serviceDialog.keyStorage")}
