@@ -138,11 +138,26 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
             applog::error("restart", format!("{agent}: {e:#}"));
             e
         };
-        let port = cdp::pick_port();
-        let args = if inject { format!("--remote-debugging-port={port}") } else { String::new() };
-        let r = process::restart(&agent, &args, &report).map_err(logged)?;
-        let mut msg = if inject {
-            cdp::inject(port, patches, &report).map_err(logged)?
+        // The port can be taken between picking it and Codex binding it (or be unusable
+        // for a reason the check can't see): retry once with another one, quicker to give up.
+        let mut tried: Vec<u16> = vec![];
+        let (r, injected) = loop {
+            let port = cdp::pick_port(&tried);
+            tried.push(port);
+            let args = if inject { format!("--remote-debugging-port={port}") } else { String::new() };
+            let r = process::restart(&agent, &args, &report).map_err(logged)?;
+            if !inject {
+                break (r, None);
+            }
+            let last = tried.len() >= 2;
+            let wait = std::time::Duration::from_secs(if last { 60 } else { 25 });
+            match cdp::inject(port, wait, patches, &report) {
+                Err(e) if !last && e.is::<cdp::PortTimeout>() => applog::warn("restart", format!("{agent}: {e:#}; retrying with another port")),
+                res => break (r, Some(res.map_err(logged)?)),
+            }
+        };
+        let mut msg = if let Some(m) = injected {
+            m
         } else if r.was_running {
             i18n::l("Restarted", "已重启").into()
         } else {

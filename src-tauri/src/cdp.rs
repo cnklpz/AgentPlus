@@ -424,27 +424,43 @@ fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, first: Dur
 }
 
 /// The DevTools port to start Codex with: [`PORT`] when it can be bound, otherwise a free
-/// one picked by the OS.
-pub fn pick_port() -> u16 {
-    pick_port_from(PORT)
+/// one picked by the OS. Ports in `avoid` (ones that already failed) are skipped.
+pub fn pick_port(avoid: &[u16]) -> u16 {
+    pick_port_from(PORT, avoid)
 }
 
-fn pick_port_from(preferred: u16) -> u16 {
+fn pick_port_from(preferred: u16, avoid: &[u16]) -> u16 {
     use std::net::{Ipv4Addr, TcpListener};
     let free = |p: u16| TcpListener::bind((Ipv4Addr::LOCALHOST, p)).and_then(|l| l.local_addr()).map(|a| a.port());
-    match free(preferred).or_else(|_| free(0)) {
-        Ok(p) => {
+    let usable = |r: std::io::Result<u16>| r.ok().filter(|p| !avoid.contains(p));
+    let picked = usable(free(preferred)).or_else(|| (0..5).find_map(|_| usable(free(0))));
+    match picked {
+        Some(p) => {
             if p != preferred {
-                crate::applog::warn("inject", format!("debug port {preferred} can't be bound, using {p}"));
+                crate::applog::warn("inject", format!("debug port {preferred} can't be used, using {p}"));
             }
             p
         }
-        Err(_) => preferred,
+        None => preferred,
     }
 }
 
+/// The debug port never came up: another program may hold it (Docker, WSL and Hyper-V
+/// reserve port blocks), so the caller can retry with another port.
+#[derive(Debug)]
+pub struct PortTimeout(pub u16, pub Duration);
+
+impl std::fmt::Display for PortTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (port, secs) = (self.0, self.1.as_secs());
+        f.write_str(&tr!("Couldn't connect to Codex's debug port {port} within {secs} seconds", "{secs} 秒内没有连上 Codex 的调试端口 {port}"))
+    }
+}
+
+impl std::error::Error for PortTimeout {}
+
 /// Waits for Codex windows on the debug port and patches each one.
-pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String> {
+pub fn inject(port: u16, port_wait: Duration, want: Patches, on: &dyn Fn(Progress)) -> Result<String> {
     on(Progress::step("port", "active", Some(port.to_string())));
     let t0 = Instant::now();
     let pages = loop {
@@ -453,8 +469,8 @@ pub fn inject(port: u16, want: Patches, on: &dyn Fn(Progress)) -> Result<String>
                 break p;
             }
         }
-        if t0.elapsed() > Duration::from_secs(60) {
-            return Err(anyhow!(tr!("Couldn't connect to Codex's debug port {port} within 60 seconds", "60 秒内没有连上 Codex 的调试端口 {port}")));
+        if t0.elapsed() > port_wait {
+            return Err(PortTimeout(port, port_wait).into());
         }
         crate::process::pause(Duration::from_millis(500))?;
     };
@@ -542,16 +558,33 @@ mod tests {
         let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let free = probe.local_addr().unwrap().port();
         drop(probe);
-        assert_eq!(pick_port_from(free), free);
+        assert_eq!(pick_port_from(free, &[]), free);
     }
 
     #[test]
     fn pick_port_falls_back_when_the_preferred_port_is_taken() {
         let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let taken = held.local_addr().unwrap().port();
-        let picked = pick_port_from(taken);
+        let picked = pick_port_from(taken, &[]);
         assert_ne!(picked, taken);
         assert_ne!(picked, 0);
+    }
+
+    #[test]
+    fn pick_port_skips_ports_that_already_failed() {
+        let probe = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let free = probe.local_addr().unwrap().port();
+        drop(probe);
+        let picked = pick_port_from(free, &[free]);
+        assert_ne!(picked, free);
+        assert_ne!(picked, 0);
+    }
+
+    #[test]
+    fn port_timeout_names_the_port_and_wait() {
+        let e = anyhow::Error::from(PortTimeout(39229, Duration::from_secs(25)));
+        assert!(e.to_string().contains("39229") && e.to_string().contains("25"));
+        assert!(e.downcast_ref::<PortTimeout>().is_some());
     }
 
     const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
