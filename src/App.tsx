@@ -31,7 +31,7 @@ import { mergeOrder, sortByOrder } from "./order";
 import { t, tn, tSaved, useLang } from "./i18n";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
-  hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, stationDeletePlan,
+  hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, routesOnLibs, stationDeletePlan,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
@@ -778,6 +778,12 @@ export default function App() {
   const confirmList = (items: string[]) => <ul className="confirm-list">{items.map((x, i) => <li key={i}>{x}</li>)}</ul>;
   const useLine = (u: Use) => t("app.hubDeleteUse", { agent: u.agent.name, name: u.p?.name ?? "" });
   const importLine = (u: Use) => t("app.hubDeleteImport", { agent: u.agent.name });
+  /** Lines for the gateway forwards that lose their upstream with these library entries (read fresh: the gateway page may not have been opened). */
+  const routeLines = async (libs: LibEntry[]): Promise<string[]> => {
+    if (!libs.length) return [];
+    const routes = await api.gatewayStatus().then((s) => s.routes, () => gateway?.routes ?? []);
+    return routesOnLibs(routes, libs.map((e) => e.id)).map((r) => t("app.hubDeleteRoute", { name: r.name }));
+  };
   /** Carries out a confirmed hub deletion: queues the agent removals, cancels the pending adds, deletes the library entries. */
   const runHubDelete = async (uses: Use[], imports: Use[], libs: LibEntry[]) => {
     setDrafts((all) => {
@@ -808,14 +814,14 @@ export default function App() {
     const libs = fromLib && g.lib ? [g.lib] : [];
     // Pending adds that copy from what is deleted would fail on apply.
     const imports = orphanImports([g], drafts, uses, libs.map((e) => e.id));
-    const parts = [...uses.map(useLine), ...imports.map(importLine), ...(libs.length ? [t("app.hubDeleteLib")] : [])];
+    const parts = [...uses.map(useLine), ...imports.map(importLine), ...(libs.length ? [t("app.hubDeleteLib")] : []), ...(await routeLines(libs))];
     if (!(await ask({ title: t("app.deleteGroupTitle", { name: g.name }), message: confirmList(parts), danger: true }))) return;
     await runHubDelete(uses, imports, libs);
   };
   /** Hub: delete a whole provider (station) — every group, from every agent that can let it go, and the library. */
   const askDeleteStation = async (s: Station) => {
     const plan = stationDeletePlan(s);
-    const parts = [...plan.uses.map(useLine), ...plan.imports.map(importLine), ...plan.libs.map((e) => t("app.hubDeleteLibNamed", { name: e.name }))];
+    const parts = [...plan.uses.map(useLine), ...plan.imports.map(importLine), ...plan.libs.map((e) => t("app.hubDeleteLibNamed", { name: e.name })), ...(await routeLines(plan.libs))];
     if (!parts.length) return;
     const kept = plan.kept.map(({ u, why }) => t("app.hubDeleteKept", { agent: u.agent.name, name: u.p?.name ?? "", why }));
     const message = <>

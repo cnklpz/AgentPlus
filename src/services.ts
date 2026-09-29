@@ -189,6 +189,11 @@ export function orphanImports(groups: Group[], drafts: Record<string, Draft>, re
   });
 }
 
+/** Gateway forwards whose upstream is one of these library entries: deleting the entries leaves them without one. */
+export function routesOnLibs<R extends GatewayRoute>(routes: readonly R[], libIds: readonly string[]): R[] {
+  return routes.filter((r) => libIds.includes(r.library));
+}
+
 /** Stable React key / set member for a use: its agent and provider. */
 export function useKey(u: Use): string {
   return `${u.agent.id}:${u.p?.id}`;

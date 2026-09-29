@@ -84,6 +84,7 @@ const zh: typeof en = {
   deleteStationTitle: "删除供应商「{name}」？",
   hubDeleteImport: "待添加到 {agent} 的改动（取消）",
   hubDeleteLibNamed: "供应商库里的「{name}」：地址和密钥（立即删除）",
+  hubDeleteRoute: "网关转发「{name}」会失去上游，不能再用",
   hubDeleteKeptLabel: "保留：",
   hubDeleteKept: "{agent} 里的「{name}」：{why}",
   nothingToDelete: "这里没有可以删除的内容",

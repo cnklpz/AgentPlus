@@ -82,6 +82,7 @@ export default {
   deleteStationTitle: "Delete provider \"{name}\"?",
   hubDeleteImport: "Pending add to {agent} (cancelled)",
   hubDeleteLibNamed: "\"{name}\" in the provider library: base URL and API key (deleted right away)",
+  hubDeleteRoute: "Gateway forward \"{name}\" loses its upstream and stops working",
   hubDeleteKeptLabel: "Kept:",
   hubDeleteKept: "\"{name}\" in {agent}: {why}",
   nothingToDelete: "Nothing here can be deleted",

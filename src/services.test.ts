@@ -3,7 +3,7 @@ import type { AgentState, GatewayRouteView, LibEntry, SyncSuggestion } from "./a
 import type { Draft } from "./draft";
 import {
   API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayPoolBase, gatewayPoolIds,
-  gatewayRouteId, groupKey, hostKey, importKey, importMatches, keySource, movedHost, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, removable, splitStations, stationDeletePlan, syncSuggestionId,
+  gatewayRouteId, groupKey, hostKey, importKey, importMatches, keySource, movedHost, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, removable, routesOnLibs, splitStations, stationDeletePlan, syncSuggestionId,
   syncSuggestionIds, tripped, useKey,
 } from "./services";
 
@@ -313,6 +313,14 @@ describe("syncSuggestionId for MCP", () => {
   it("uses the MCP change's key", () => {
     const s: SyncSuggestion = { agent: "library", title: "t", detail: "", ops: [], lib: null, mcp: { key: "mcp:gh", name: "gh", server: {} }, skill: null };
     expect(syncSuggestionId(s)).toBe("library\nmcp:gh");
+  });
+});
+
+describe("routesOnLibs", () => {
+  it("picks the forwards whose upstream is one of the library entries", () => {
+    const r = (id: string, library: string) => ({ id, library }) as never;
+    expect(routesOnLibs([r("a", "l1"), r("b", "l2"), r("c", "l1")], ["l1"]).map((x: { id: string }) => x.id)).toEqual(["a", "c"]);
+    expect(routesOnLibs([r("a", "l1")], [])).toEqual([]);
   });
 });
 
