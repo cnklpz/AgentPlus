@@ -277,7 +277,13 @@ fn rules() -> &'static Rules {
         });
         Rules {
             // key=value, "key": "value", Header: value for anything that names a secret.
-            kv: Regex::new(r#"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password|passwd|authorization|x-api-key|x-goog-api-key|cookie|session[_-]?token|token)["']?\s*[:=]\s*["']?)(?:Bearer\s+)?[^\s"',;&}]{3,}"#).unwrap(),
+            // Also inside longer names (`OPENAI_API_KEY=`, `experimental_bearer_token =`), and
+            // as a flag followed by its value (`--api-key VALUE`); an auth scheme goes with it.
+            kv: Regex::new(&{
+                let names = r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|secret|password|passwd|authorization|x-api-key|x-goog-api-key|cookie|session[_-]?token|token)";
+                format!(r#"(?i)(\b\w*?{names}["']?\s*[:=]\s*["']?|--{names}\s+)(?:(?:Bearer|Basic|Token)\s+)?[^\s"',;&}}]{{3,}}"#)
+            })
+            .unwrap(),
             key: Regex::new(r"\b(?:(?:sk|ak|pk|rk)-[A-Za-z0-9_-]{6,}|AIza[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9._-]+)|(\bBearer\s+)[A-Za-z0-9._~+/=-]{8,}").unwrap(),
             url: Regex::new(r"(?i)\b((?:https?|wss?)://)(?:[^\s/?#@]*@)?(\[[0-9a-f:]+\]|[^\s/?#:\x22'<>()，。）\]]+)").unwrap(),
             query: Regex::new(r"(\?[^\s#\x22'<>]*)").unwrap(),
@@ -355,6 +361,13 @@ mod tests {
         assert_eq!(scrub("signed in as a.b@example.org"), "signed in as ***");
         assert_eq!(scrub(r#"{"apiKey": "k-123456"}"#), r#"{"apiKey": "***"}"#);
         assert_eq!(scrub("x-api-key: abcdefgh"), "x-api-key: ***");
+        // Inside longer names, as a flag's value, after an auth scheme; prose stays readable.
+        assert_eq!(scrub("OPENAI_API_KEY=plainvalue1 BRAVE_API_KEY: other-value"), "OPENAI_API_KEY=*** BRAVE_API_KEY: ***");
+        assert_eq!(scrub("experimental_bearer_token = \"abc-def-ghi\""), "experimental_bearer_token = \"***\"");
+        assert_eq!(scrub("npx server --api-key abcd1234 --port 8080"), "npx server --api-key *** --port 8080");
+        assert_eq!(scrub("Authorization: Basic dXNlcjpwYXNz"), "Authorization: ***");
+        assert_eq!(scrub("refresh token expired; authorization failed"), "refresh token expired; authorization failed");
+        assert_eq!(scrub("authToken=abc123 clientSecret: \"s3cr3t\" dbPassword=hunter2"), "authToken=*** clientSecret: \"***\" dbPassword=***");
         assert_eq!(scrub("token 3f9a0c7be21d44aa9e0d1c2b3a4f5e6d7c8b"), "token ***");
         // Ordinary words, versions and short ids stay.
         assert_eq!(scrub("Codex 26.924.2738.0 gpt-5.5 took 1.2s"), "Codex 26.924.2738.0 gpt-5.5 took 1.2s");
