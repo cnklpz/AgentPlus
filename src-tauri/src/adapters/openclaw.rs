@@ -433,12 +433,22 @@ mod tests {
         Op::UpsertProvider { provider: ProviderInput { id: Some(id.into()), name: name.into(), base_url: url.into(), api: api.into(), api_key: key.map(String::from), models: vec![], key_from_library: None, key_from_sync: None, official_auth: None } }
     }
 
-    /// A built-in's id may be signed in through auth profiles AgentPlus can't read: never moved.
+    /// A built-in's id may be signed in through auth profiles AgentPlus can't read: not moved off
+    /// the vendor's own address.
     #[test]
     fn a_built_in_id_keeps_its_address() {
         let _g = setup("builtin", Some(r#"{ "models": { "providers": { "anthropic": { "baseUrl": "https://api.anthropic.com", "api": "anthropic-messages", "models": [] } } } }"#));
         assert!(plan(&[edit("anthropic", "anthropic", "https://relay.example.com", "anthropic", Some("sk-relay"))], true).is_err());
         assert!(plan(&[edit("anthropic", "anthropic", "https://api.anthropic.com", "anthropic", None)], true).is_ok());
+    }
+
+    /// One already pointing at a relay may move to another with a key of its own, not without.
+    #[test]
+    fn a_built_in_at_a_relay_moves_with_its_own_key() {
+        let _g = setup("builtin-relay", Some(r#"{ "models": { "providers": { "anthropic": { "baseUrl": "https://relay-a.example.com", "apiKey": "sk-a", "api": "anthropic-messages", "models": [] }, "xai": { "baseUrl": "https://relay-x.example.com", "api": "openai-completions", "models": [] } } } }"#));
+        assert!(plan(&[edit("anthropic", "anthropic", "https://relay-b.example.com", "anthropic", Some("sk-b"))], true).is_ok(), "a typed key");
+        assert!(plan(&[edit("anthropic", "anthropic", "https://relay-b.example.com", "anthropic", None)], true).is_ok(), "its literal key");
+        assert!(plan(&[edit("xai", "xai", "https://relay-y.example.com", "chat", None)], true).is_err(), "no key of its own");
     }
 
     #[test]

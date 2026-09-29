@@ -687,23 +687,34 @@ impl Fmt {
                         // or a built-in's id with no key of its own (pi falls back to the built-in's
                         // environment variable) would send that credential to a new address.
                         // OpenClaw: a built-in's id may have a sign-in in its auth profiles (which
-                        // AgentPlus can't see and which can win over the entry's key): not moved at all.
+                        // AgentPlus can't see and which can win over the entry's key). It isn't moved off
+                        // the vendor's own address (or one AgentPlus can't place), nor anywhere without a
+                        // key of its own; one already at a relay may move to another with its key.
                         let old = self.providers_of(cfg).and_then(|p| p.get(id)).or_else(|| self.parked(root, id));
-                        let moves = old.and_then(|d| s(d, self.f_url())).map(str::trim) != Some(base_url);
+                        let old_url = old.and_then(|d| s(d, self.f_url())).map(str::trim);
+                        let moves = old_url != Some(base_url);
+                        // A key written out: `$VAR` / `${VAR}`, a bare variable name and `!command`
+                        // are pi's ways of taking it from elsewhere (the official one, maybe).
+                        let literal = |k: &str| {
+                            let k = k.trim();
+                            !k.is_empty() && !k.starts_with(['$', '!']) && !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                        };
                         if flavor == Flavor::OpenClaw && moves && BUILTIN_PROVIDERS.contains(&id.as_str()) {
-                            return Err(anyhow!(tr!(
-                                "{id} is a provider OpenClaw ships, which may be signed in through its auth profiles: at another address that sign-in would go there. Add the relay as a separate provider instead",
-                                "{id} 是 OpenClaw 自带的供应商，可能在它的 auth profiles 里登录过：改到别的地址会把登录凭据发过去。请把中转添加为单独的供应商"
-                            )));
+                            let host = super::codex::host_of_url;
+                            let at_vendor = match (old_url, super::official_probe(agent, id)) {
+                                (Some(u), Some(official)) => host(u) == host(official),
+                                _ => true,
+                            };
+                            let own_key = key.is_some() || old.and_then(|d| s(d, "apiKey")).is_some_and(literal);
+                            if at_vendor || !own_key {
+                                return Err(anyhow!(tr!(
+                                    "{id} is a provider OpenClaw ships, which may be signed in through its auth profiles: at another address that sign-in would go there. Add the relay as a separate provider instead",
+                                    "{id} 是 OpenClaw 自带的供应商，可能在它的 auth profiles 里登录过：改到别的地址会把登录凭据发过去。请把中转添加为单独的供应商"
+                                )));
+                            }
                         }
                         if flavor == Flavor::Pi {
                             let login = auth.as_ref().and_then(|(a, _)| a.get(id)).and_then(|e| s(e, "type")).filter(|t| *t != "api_key").map(String::from);
-                            // A key written out: `$VAR` / `${VAR}`, a bare variable name and `!command`
-                            // are pi's ways of taking it from elsewhere (the official one, maybe).
-                            let literal = |k: &str| {
-                                let k = k.trim();
-                                !k.is_empty() && !k.starts_with(['$', '!']) && !k.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-                            };
                             let own_key = key.is_some() || Self::auth_key(auth.as_ref().map(|a| &a.0), id).is_some() || old.and_then(|d| s(d, "apiKey")).is_some_and(literal);
                             if moves && (login.is_some() || (BUILTIN_PROVIDERS.contains(&id.as_str()) && !own_key)) {
                                 return Err(anyhow!(tr!(
