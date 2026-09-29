@@ -1284,6 +1284,11 @@ export default function App() {
             } },
           ] : []),
           "sep",
+          { label: t("app.hideAgent", { name: a.name }), icon: <Icon.eyeOff size={13} />, action: () => {
+            setPrefs({ ...prefs, hiddenAgents: [...new Set([...prefs.hiddenAgents, a.id])] });
+            flash(t("app.agentHidden", { name: a.name }));
+          } },
+          "sep",
         ];
       }
       case "provider": {

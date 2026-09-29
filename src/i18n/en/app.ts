@@ -98,6 +98,8 @@ export default {
   // Right-click menu
   openAgent: "Open {name}",
   openAgentConfigDir: "Open {name} config folder",
+  hideAgent: "Hide {name}",
+  agentHidden: "Hid {name}. Show it again in Settings › Agent detection",
   applyAgentChanges: "Apply {n} change to {name}|Apply {n} changes to {name}",
   discardAgentChanges: "Discard changes to {name}",
   viewDetails: "View details",

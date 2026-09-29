@@ -124,6 +124,7 @@ export const Icon = {
   edit: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></>, sw),
   trash: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" /></>, sw),
   copy: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>, sw),
+  eyeOff: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M3 3l18 18" /><path d="M10.6 6.1A9.8 9.8 0 0 1 12 6c5 0 8.5 4 9.5 6-.4.8-1.1 1.8-2.1 2.8M6.5 7.6C4.5 9 3.2 10.8 2.5 12c1 2 4.5 6 9.5 6 1.5 0 2.8-.3 4-.9" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>, sw),
   key: ({ size = 13, color = "currentColor", sw = 2 }: P) => svg(size, color, <><circle cx="7.5" cy="15.5" r="4.5" /><path d="m10.7 12.3 9.8-9.8M17 6l3 3M15 8l2 2" /></>, sw),
   gateway: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><rect x="3" y="4" width="18" height="6" rx="2" /><rect x="3" y="14" width="18" height="6" rx="2" /><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6" /></>, sw),
   back: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M19 12H5M11 18l-6-6 6-6" />, sw),

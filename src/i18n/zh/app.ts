@@ -100,6 +100,8 @@ const zh: typeof en = {
   // Right-click menu
   openAgent: "打开 {name}",
   openAgentConfigDir: "打开 {name} 配置目录",
+  hideAgent: "隐藏 {name}",
+  agentHidden: "已隐藏 {name}，可在「设置 › Agent 识别」中重新显示",
   applyAgentChanges: "应用 {name} 的 {n} 项改动",
   discardAgentChanges: "放弃 {name} 的改动",
   viewDetails: "查看详情",
