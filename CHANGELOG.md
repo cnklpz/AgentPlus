@@ -2,6 +2,36 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.3.0
+
+新增 MCP 服务器、技能和插件管理，支持 DeepSeek Harness，多设备同步可以选择同步的内容，供应商可以整个删除。
+
+- MCP：新增「MCP 服务器」页和各 Agent 页里的 MCP 标签，可以查看、编辑、开关和在 Agent 之间复制服务器，测试连接，从 ccswitch 链接导入；删除最后一份前会先确认，环境变量和请求头里的密钥会被遮盖
+- 技能：新增「技能」页和各 Agent 页里的技能标签，可以复制、删除、开关技能，也可以导入到技能库
+- 插件：在 Agent 页里直接开关该 Agent 的插件
+- DeepSeek Harness：管理它的供应商、MCP 服务器和插件（桌面版的插件从它的 app.asar 里读取），并且能从 AgentPlus 启动、打开和停止它的网页界面
+- 多设备同步：可以选择同步哪些内容，新增同步 MCP 库和技能库；密钥不再以明文写进同步文件
+- 供应商：在供应商页的右键菜单和右侧面板里可以删除整个供应商；Agent 页的右键菜单可以撤销待添加或待删除，不能删除时会写明原因
+- 侧栏：可以拖动 Agent 图标或按 Alt+方向键调整顺序，右键可以隐藏 Agent；macOS 上窗口隐藏后 AgentPlus 会留在菜单栏
+- 网关：流量图每秒刷新，悬停可以在调用次数和 token 之间切换；流式响应逐块直接发出，按转发映射后的模型统计 token，出错状态会按熔断器的标准换线路
+- Codex：调试端口改用随机端口，只连本机；检测到放在 .env 之外的密钥会提示，切走登录密钥时移到 .env
+- 安全：保存的密钥不会发往另一个主机；诊断日志、历史对比和同步预览里的密钥遮盖得更彻底；写配置前先落盘再替换，读不了的 store 不会被覆盖
+- 修复很多细节：同时只允许一次重启、确认框之后的编辑不再丢失、渲染出错后可以恢复、跨盘符移动技能时不再跟随链接等
+
+Adds MCP server, skill and plugin management and DeepSeek Harness support; multi-device sync lets you choose what to sync; a provider can now be deleted as a whole.
+
+- MCP: a new "MCP servers" page and an MCP tab on each agent page to view, edit, switch and copy servers across agents, test a connection and import from ccswitch links; removing the last copy asks first, and secrets in env values and headers are masked
+- Skills: a new "Skills" page and a Skills tab on each agent page to copy, delete and switch skills, or import them into a skill library
+- Plugins: switch an agent's plugins right from its page
+- DeepSeek Harness: manage its providers, MCP servers and plugins (the desktop app's plugins are read from its app.asar), and start, open and stop its web UI from AgentPlus
+- Multi-device sync: choose what to sync; the MCP library and the skill library are synced too; keys are no longer written to the sync file in clear text
+- Providers: delete a whole provider from its context menu or the panel on the right; the agent page menu can undo a pending add or delete, and says why an item can't be deleted
+- Sidebar: reorder agents by dragging their icon or with Alt+arrows, and hide one from its context menu; on macOS AgentPlus stays in the menu bar while its window is hidden
+- Gateway: charts refresh every second and flip between calls and tokens on hover; streamed chunks go out in one write, tokens are counted for the model a forward maps to, and failover follows the statuses the breaker counts as faults
+- Codex: the DevTools port is random and kept on this machine; keys kept outside .env are reported, and a sign-in key moves to .env when you switch away from it
+- Security: stored keys never reach another host; keys are masked more thoroughly in the diagnostic log, history diffs and sync previews; files are flushed before being renamed over the original, and an unreadable store is never overwritten
+- Many smaller fixes: one restart at a time, edits made after a confirm dialog are no longer lost, recovery after a render error, moving a skill across drives no longer follows its links, and more
+
 ## 0.2.8
 
 使用 Codex 内置模型列表时，不再默认勾选 Codex 自己隐藏的模型。
