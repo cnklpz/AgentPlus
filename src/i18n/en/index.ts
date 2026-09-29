@@ -43,6 +43,7 @@ import providerTest from "./providerTest";
 import attributionDialog from "./attributionDialog";
 import restartDialog from "./restartDialog";
 import format from "./format";
+import errorBoundary from "./errorBoundary";
 
 export default {
   common,
@@ -89,4 +90,5 @@ export default {
   attributionDialog,
   restartDialog,
   format,
+  errorBoundary,
 };

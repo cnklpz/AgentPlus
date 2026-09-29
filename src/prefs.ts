@@ -40,10 +40,34 @@ const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], a
 export function loadPrefs(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : DEFAULTS;
+    return raw ? normalizePrefs(JSON.parse(raw)) : DEFAULTS;
   } catch {
     return DEFAULTS;
   }
+}
+
+/**
+ * Stored prefs with every field checked: a value of the wrong type (an older version's, or
+ * one edited by hand) falls back to its default instead of breaking the first render.
+ */
+export function normalizePrefs(v: unknown): Prefs {
+  const o = v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const oneOf = <T extends string>(x: unknown, ok: readonly T[], d: T): T => (ok.includes(x as T) ? (x as T) : d);
+  const bool = (x: unknown, d: boolean) => (typeof x === "boolean" ? x : d);
+  const strings = (x: unknown) => (Array.isArray(x) ? x.filter((s): s is string => typeof s === "string") : []);
+  return {
+    motion: oneOf(o.motion, ["rich", "full", "reduced", "off"], DEFAULTS.motion),
+    autoLatency: bool(o.autoLatency, DEFAULTS.autoLatency),
+    hiddenAgents: strings(o.hiddenAgents),
+    agentOrder: strings(o.agentOrder),
+    lang: oneOf(o.lang, ["auto", "en", "zh"], DEFAULTS.lang),
+    theme: oneOf(o.theme, ["auto", "light", "dark"], DEFAULTS.theme),
+    restartProgress: oneOf(o.restartProgress, ["dialog", "toast"], DEFAULTS.restartProgress),
+    closeAction: oneOf(o.closeAction, ["ask", "tray", "quit"], DEFAULTS.closeAction),
+    privacy: bool(o.privacy, DEFAULTS.privacy),
+    autoUpdate: bool(o.autoUpdate, DEFAULTS.autoUpdate),
+    hints: oneOf(o.hints, ["full", "brief"], DEFAULTS.hints),
+  };
 }
 
 export function savePrefs(p: Prefs): void {

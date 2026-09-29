@@ -44,6 +44,7 @@ import providerTest from "./providerTest";
 import attributionDialog from "./attributionDialog";
 import restartDialog from "./restartDialog";
 import format from "./format";
+import errorBoundary from "./errorBoundary";
 
 const zh: typeof en = {
   common,
@@ -90,6 +91,7 @@ const zh: typeof en = {
   attributionDialog,
   restartDialog,
   format,
+  errorBoundary,
 };
 
 export default zh;
