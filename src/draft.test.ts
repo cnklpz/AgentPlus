@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { AgentState, Model, Op, Provider, Setting } from "./api";
+import type { AgentState, McpInput, McpServer, Model, Op, Provider, Setting } from "./api";
 import {
   type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, fmtCtx, guessedModel, importProvider, keys, mergeExtra, opCount, opsToWrite,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
-  visibleCount, visibleModelCount, withOp,
+  visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, setMcpEnabled, undoMcp, upsertMcp, writeOrder,
 } from "./draft";
 
 const model = (id: string, over: Partial<Model> = {}): Model =>
@@ -417,5 +417,68 @@ describe("draftAfterWrite", () => {
   it("handles an empty draft", () => {
     expect(draftAfterWrite({}, {})).toEqual({});
     expect(draftAfterWrite({ c }, {})).toEqual({ c });
+  });
+});
+
+describe("MCP drafts", () => {
+  const srv = (name: string, over: Partial<McpServer> = {}): McpServer => ({
+    name, transport: "stdio", command: "npx", args: ["-y", name], cwd: null, url: null, env: [], headers: [], enabled: true, stashed: false, extra: {}, sig: `s-${name}`, ...over,
+  });
+  const input = (name: string, over: Partial<McpInput> = {}): McpInput => ({
+    name, transport: "stdio", command: "npx", args: ["-y", name], cwd: null, url: null, env: [], headers: [], enabled: true, ...over,
+  });
+  const none = () => undefined;
+
+  it("toggling back to the config's state drops the change", () => {
+    let d = setMcpEnabled({}, "fs", false, true);
+    expect(d[keys.mcpEnabled("fs")]).toEqual({ op: "set_mcp_enabled", name: "fs", enabled: false });
+    d = setMcpEnabled(d, "fs", true, true);
+    expect(d).toEqual({});
+  });
+
+  it("a pending server carries its own switch and just goes away when removed", () => {
+    let d = upsertMcp({}, input("new"));
+    d = setMcpEnabled(d, "new", false, null);
+    expect(Object.keys(d)).toEqual([keys.mcpUpsert("new")]);
+    const op = d[keys.mcpUpsert("new")];
+    expect(op.op === "upsert_mcp" && op.server.enabled).toBe(false);
+    expect(deleteMcp(d, "new", false)).toEqual({});
+  });
+
+  it("removing a pending rename removes the old name", () => {
+    const d = upsertMcp(setMcpEnabled({}, "old", false, true), input("new", { replaces: "old", from: ["claude", "old"] }));
+    expect(Object.keys(d)).toEqual([keys.mcpUpsert("new")]);
+    expect(deleteMcp(d, "new", false)).toEqual({ [keys.mcpDelete("old")]: { op: "delete_mcp", name: "old" } });
+    expect(undoMcp(d, "new")).toEqual({});
+  });
+
+  it("the view shows pending changes and keeps a copy with its source", () => {
+    const servers = [srv("a"), srv("b"), srv("c"), srv("old")];
+    const src = srv("x", { sig: "s-src" });
+    let d = deleteMcp({}, "a", true);
+    d = setMcpEnabled(d, "b", false, true);
+    d = upsertMcp(d, input("x", { from: ["codex", "x"] }));
+    d = upsertMcp(d, input("renamed", { replaces: "old", command: "uvx" }));
+    const v = mcpView(servers, d, (from) => (from[0] === "codex" ? src : undefined));
+    const by = Object.fromEntries(v.map((x) => [x.s.name, x]));
+    expect(by.a.pending).toBe("deleted");
+    expect([by.b.pending, by.b.s.enabled]).toEqual(["toggled", false]);
+    expect(by.c.pending).toBeNull();
+    expect(by.old).toBeUndefined();
+    expect([by.renamed.pending, by.renamed.exists]).toEqual(["edited", false]);
+    // Copied unchanged: groups with the server it came from.
+    expect([by.x.pending, by.x.s.sig]).toEqual(["new", "s-src"]);
+    expect(mcpView([], upsertMcp({}, input("y", { command: "other" })), none)[0].s.sig).toMatch(/^draft:/);
+  });
+});
+
+describe("writeOrder", () => {
+  it("writes agents that remove MCP servers last", () => {
+    const a = [{ id: "codex" }, { id: "claude" }, { id: "zcode" }];
+    const drafts: Record<string, Draft> = {
+      codex: deleteMcp({}, "fs", true),
+      zcode: upsertMcp({}, { name: "fs", transport: "stdio", command: "x", args: [], cwd: null, url: null, env: [], headers: [], enabled: true, from: ["codex", "fs"] }),
+    };
+    expect(writeOrder(a, drafts).map((x) => x.id)).toEqual(["claude", "zcode", "codex"]);
   });
 });

@@ -275,6 +275,17 @@ pub enum Op {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Add or replace a global MCP server (see `mcp::write`).
+    UpsertMcp { server: crate::mcp::McpInput },
+    DeleteMcp { name: String },
+    SetMcpEnabled { name: String, enabled: bool },
+}
+
+impl Op {
+    /// MCP server ops: planned by `mcp::write`, never by the agent's adapter.
+    pub fn is_mcp(&self) -> bool {
+        matches!(self, Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. })
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]

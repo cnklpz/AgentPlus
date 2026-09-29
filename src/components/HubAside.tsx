@@ -23,10 +23,6 @@ interface Props {
 
 /** Hub page right column: service details on top, every agent's pending changes below. */
 export function HubAside({ agents, pending, drafts, stations, detail, busy, onDiscard, onApplyAll }: Props) {
-  const withOps = agentsWithOps(pending, drafts);
-  const total = withOps.reduce((n, a) => n + opCount(drafts[a.id]), 0);
-  const diffs = usePreviews(pending, drafts);
-
   const { relays } = splitStations(stations);
   const groups = relays.reduce((n, s) => n + s.groups.length, 0);
   const usable = writableAgents(agents).length;
@@ -48,6 +44,25 @@ export function HubAside({ agents, pending, drafts, stations, detail, busy, onDi
         </section>
       )}
 
+      <PendingPanel pending={pending} drafts={drafts} busy={busy} onDiscard={onDiscard} onApplyAll={onApplyAll} emptyHint={t("hubAside.emptyHint")} />
+    </aside>
+  );
+}
+
+/** Every agent's pending changes with their diffs, and Apply / Discard all (also on the MCP page). */
+export function PendingPanel({ pending, drafts, busy, onDiscard, onApplyAll, emptyHint }: {
+  pending: AgentState[];
+  drafts: Record<string, Draft>;
+  busy: boolean;
+  onDiscard: (agent: AgentId | null) => void;
+  onApplyAll: () => void;
+  emptyHint: string;
+}) {
+  const withOps = agentsWithOps(pending, drafts);
+  const total = withOps.reduce((n, a) => n + opCount(drafts[a.id]), 0);
+  const diffs = usePreviews(pending, drafts);
+  return (
+    <>
       <section className="aside-diff">
         <div className="row between">
           <h2>{t("common.pendingChanges")}</h2>
@@ -68,7 +83,7 @@ export function HubAside({ agents, pending, drafts, stations, detail, busy, onDi
             </div>
           );
         })}
-        {total === 0 && <UpToDate hint={t("hubAside.emptyHint")} />}
+        {total === 0 && <UpToDate hint={emptyHint} />}
       </section>
 
       <div className="aside-foot">
@@ -78,6 +93,6 @@ export function HubAside({ agents, pending, drafts, stations, detail, busy, onDi
         </div>
         <span className="muted tiny center hint">{t("hubAside.backupNote")}</span>
       </div>
-    </aside>
+    </>
   );
 }

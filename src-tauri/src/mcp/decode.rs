@@ -7,7 +7,7 @@ use super::Family;
 use serde_json::{Map, Value};
 
 /// A definition before masking.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, Clone)]
 pub struct Raw {
     pub transport: &'static str,
     pub command: Option<String>,
@@ -46,7 +46,7 @@ fn pairs(v: Option<&Value>) -> Vec<(String, String)> {
     v.and_then(Value::as_object).map(|o| o.iter().filter_map(|(k, v)| text(v).map(|v| (k.clone(), v))).collect()).unwrap_or_default()
 }
 
-fn transport(kind: &str) -> Option<&'static str> {
+pub fn transport(kind: &str) -> Option<&'static str> {
     Some(match kind.to_ascii_lowercase().replace(['-', '_'], "").as_str() {
         "stdio" | "local" => "stdio",
         "http" | "streamablehttp" | "streamable" => "http",
@@ -87,16 +87,34 @@ pub fn decode(fam: Family, def: &Value) -> Raw {
     headers.extend(pairs(o.get("http_headers")));
     let flag = |k: &str| o.get(k).and_then(Value::as_bool);
     let off = flag("enabled") == Some(false) || flag("enable") == Some(false) || flag("disabled") == Some(true);
-    Raw {
-        transport,
-        command,
-        args,
-        cwd: s("cwd"),
-        url,
-        env,
-        headers,
-        off,
-        extra: o.iter().filter(|(k, _)| !KNOWN.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect(),
+    let mut extra: Map<String, Value> = o.iter().filter(|(k, _)| !KNOWN.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+    if fam == Family::Codex {
+        codex_refs(&mut extra, &mut env, &mut headers);
+    }
+    Raw { transport, command, args, cwd: s("cwd"), url, env, headers, off, extra }
+}
+
+/// Codex has no `${VAR}` expansion: it passes variables by name instead. Those read as
+/// references here, so a server reads the same as in the agents that expand them.
+/// `env_vars = ["K"]` is `K = ${K}`; `bearer_token_env_var = "T"` is
+/// `Authorization: Bearer ${T}`; `env_http_headers = { H = "V" }` is `H: ${V}`.
+fn codex_refs(extra: &mut Map<String, Value>, env: &mut Vec<(String, String)>, headers: &mut Vec<(String, String)>) {
+    // `{ name, source }` entries (remote variables) have no reference form: left as they are.
+    if let Some(Value::Array(a)) = extra.get("env_vars") {
+        if a.iter().all(Value::is_string) {
+            env.extend(a.iter().filter_map(Value::as_str).map(|k| (k.to_string(), format!("${{{k}}}"))));
+            extra.remove("env_vars");
+        }
+    }
+    if let Some(Value::String(t)) = extra.get("bearer_token_env_var") {
+        headers.push(("Authorization".into(), format!("Bearer ${{{t}}}")));
+        extra.remove("bearer_token_env_var");
+    }
+    if let Some(Value::Object(m)) = extra.get("env_http_headers") {
+        if m.values().all(Value::is_string) {
+            headers.extend(m.iter().filter_map(|(h, v)| v.as_str().map(|v| (h.clone(), format!("${{{v}}}")))));
+            extra.remove("env_http_headers");
+        }
     }
 }
 
@@ -138,9 +156,16 @@ mod tests {
 
     #[test]
     fn codex_hermes_openclaw_zcode() {
-        let r = decode(Family::Codex, &json!({ "url": "https://h", "http_headers": { "X": "y" }, "bearer_token_env_var": "T", "enabled": false }));
-        assert_eq!((r.transport, r.headers.len(), r.off), ("http", 1, true));
-        assert!(r.extra.contains_key("bearer_token_env_var"));
+        let r = decode(Family::Codex, &json!({ "url": "https://h", "http_headers": { "X": "y" }, "bearer_token_env_var": "T", "env_http_headers": { "K": "KV" }, "enabled": false }));
+        assert_eq!((r.transport, r.off), ("http", true));
+        let h = |k: &str, v: &str| (k.to_string(), v.to_string());
+        assert_eq!(r.headers, [h("X", "y"), h("Authorization", "Bearer ${T}"), h("K", "${KV}")]);
+        assert!(r.extra.is_empty());
+        let r = decode(Family::Codex, &json!({ "command": "x", "env": { "A": "1" }, "env_vars": ["B"] }));
+        assert_eq!(r.env, [h("A", "1"), h("B", "${B}")]);
+        // Remote variables stay as they are.
+        let r = decode(Family::Codex, &json!({ "command": "x", "env_vars": ["B", { "name": "C", "source": "remote" }] }));
+        assert!(r.env.is_empty() && r.extra.contains_key("env_vars"));
         // Hermes: a single string argument.
         assert_eq!(decode(Family::Hermes, &json!({ "command": "python", "args": "server.py" })).args, vec!["server.py"]);
         assert_eq!(decode(Family::OpenClaw, &json!({ "url": "https://h", "transport": "streamable-http" })).transport, "http");

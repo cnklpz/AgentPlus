@@ -413,6 +413,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Claude Code uses one provider at a time; use \"Set as current\"", "Claude Code 同时只用一个供应商，请用「设为当前」"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
         }
     }
 

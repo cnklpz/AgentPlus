@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportRequest, type LibEntry, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
 import {
-  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount,
+  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount, writeOrder,
   opsToWrite, pendingTotal, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
@@ -609,7 +609,7 @@ export default function App() {
     const done: string[] = [];
     try {
       // Every agent with a draft, also one that no longer reads as installed: the pending count includes it.
-      for (const a of [...agents, ...Object.values(projStates)]) {
+      for (const a of writeOrder([...agents, ...Object.values(projStates)], drafts)) {
         if (!ids.includes(a.id) || !opCount(drafts[a.id])) continue;
         await writeAgent(a, drafts[a.id], undefined, autoRestart)
           .catch((e) => { throw new Error(t("app.nameMsg", { name: a.name, msg: errText(e) })); });
@@ -1493,7 +1493,10 @@ export default function App() {
           />
         )}
         {page === "gateway" && gateway?.running && <GatewayAside status={gateway} agents={shown} />}
-        {page === "mcp" && <McpPage agents={listed} />}
+        {page === "mcp" && (
+          <McpPage agents={listed} pending={allStates} drafts={drafts} setDraftFor={setDraftFor} busy={busy} flash={flash}
+            onApplyAll={applyAll} onDiscard={(a) => (a ? setDraftFor(a, {}) : setDrafts({}))} />
+        )}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "settings" && (

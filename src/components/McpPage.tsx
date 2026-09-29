@@ -1,20 +1,22 @@
 import { useMemo, useState } from "react";
-import { type AgentId, type AgentMcp, type AgentState, type McpKv, type McpServer, type McpTransport, api } from "../api";
+import { type AgentId, type AgentState, type McpInput, type McpKv, type McpServer, type McpSource, api } from "../api";
+import { type Draft, type McpView, deleteMcp, keys, mcpView, setMcpEnabled, undoMcp, upsertMcp } from "../draft";
 import { t, tn, useLang } from "../i18n";
 import { AgentIcon, Icon } from "./icons";
-import { ErrorBox } from "./controls";
+import { ErrorBox, Switch } from "./controls";
+import { PendingPanel } from "./HubAside";
+import { MCP_TRANSPORT, type McpEdit, McpDialog, type McpTarget } from "./McpDialog";
 import { useLoad } from "../hooks";
 import { scrub } from "../privacy";
 import { agentLabel } from "../services";
-import { onActivateKey } from "../util";
+import { errText, type Flash, onActivateKey } from "../util";
 
-/** Protocol names: not translated. */
-const TRANSPORT: Record<McpTransport, string> = { stdio: "stdio", http: "HTTP", sse: "SSE", ws: "WebSocket", remote: "HTTP / SSE" };
+const LIBRARY = "library" as const;
 
-/** One agent's copy of a server. */
+/** One agent's (or the library's) copy of a server, with its pending change. */
 interface Entry {
-  agent: AgentId;
-  s: McpServer;
+  at: McpSource;
+  v: McpView;
 }
 
 /** A server name across agents; `variants` groups the copies by what they run. */
@@ -24,15 +26,15 @@ interface Group {
   variants: Entry[][];
 }
 
-function groups(list: AgentMcp[]): Group[] {
+function groups(entries: Entry[]): Group[] {
   const by = new Map<string, Entry[]>();
-  for (const a of list) for (const s of a.servers) by.set(s.name, [...(by.get(s.name) ?? []), { agent: a.agent, s }]);
+  for (const e of entries) by.set(e.v.s.name, [...(by.get(e.v.s.name) ?? []), e]);
   return [...by.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, entries]) => {
+    .map(([name, list]) => {
       const v = new Map<string, Entry[]>();
-      for (const e of entries) v.set(e.s.sig, [...(v.get(e.s.sig) ?? []), e]);
-      return { name, entries, variants: [...v.values()] };
+      for (const e of list) v.set(e.v.s.sig, [...(v.get(e.v.s.sig) ?? []), e]);
+      return { name, entries: list, variants: [...v.values()] };
     });
 }
 
@@ -43,19 +45,93 @@ function summary(s: McpServer): string {
   return s.transport === "stdio" ? [s.command ?? "", ...s.args].map(quote).join(" ") : s.url ?? "";
 }
 
-function stateText(s: McpServer): string {
-  return t(s.enabled ? "mcpPage.on" : s.stashed ? "mcpPage.stashed" : "mcpPage.off");
+const sourceName = (at: McpSource) => (at === LIBRARY ? t("mcpPage.library") : agentLabel(at));
+
+function SourceIcon({ at, size }: { at: McpSource; size: number }) {
+  return at === LIBRARY ? <span className="mcp-lib-icon"><Icon.layers size={size - 4} /></span> : <AgentIcon id={at} size={size} />;
 }
 
-export function McpPage({ agents }: { agents: AgentState[] }) {
+function stateText(e: Entry): string {
+  if (e.at === LIBRARY) return t("mcpPage.inLibrary");
+  const { s, pending } = e.v;
+  if (pending === "deleted") return t("mcpPage.pendingDelete");
+  if (pending === "new") return t("mcpPage.pendingNew");
+  const state = t(s.enabled ? "mcpPage.on" : s.stashed ? "mcpPage.stashed" : "mcpPage.off");
+  return pending ? `${state} · ${t("mcpPage.pending")}` : state;
+}
+
+interface Props {
+  /** The agents in the sidebar. */
+  agents: AgentState[];
+  /** Everything "Apply" writes (agents and open project configs). */
+  pending: AgentState[];
+  drafts: Record<string, Draft>;
+  setDraftFor: (agent: string, d: Draft) => void;
+  busy: boolean;
+  onApplyAll: () => void;
+  onDiscard: (agent: AgentId | null) => void;
+  flash: Flash;
+}
+
+export function McpPage({ agents, pending, drafts, setDraftFor, busy, onApplyAll, onDiscard, flash }: Props) {
   const lang = useLang();
   const ids = useMemo(() => agents.map((a) => a.id).filter((id) => !id.includes("@")), [agents]);
-  // Errors come from the backend in the UI language: reload on switch.
-  const { data, error, reload } = useLoad(() => api.mcpList(ids), [lang, ids.join(",")]);
+  // Errors come from the backend in the UI language; `agents` changes after every apply.
+  const { data, error, reload } = useLoad(() => api.mcpList(ids), [lang, agents]);
   const [sel, setSel] = useState<string | null>(null);
-  const list = useMemo(() => (data ? groups(data) : []), [data]);
+  const [dialog, setDialog] = useState<McpEdit | null | undefined>(undefined);
+
+  const source = (from: [McpSource, string]) => from[0] === LIBRARY
+    ? data?.library.find((s) => s.name === from[1])
+    : data?.agents.find((a) => a.agent === from[0])?.servers.find((s) => s.name === from[1]);
+  const views = useMemo(() => {
+    const out = new Map<McpSource, McpView[]>();
+    for (const a of data?.agents ?? []) if (a.supported) out.set(a.agent, mcpView(a.servers, drafts[a.agent] ?? {}, source));
+    if (data) out.set(LIBRARY, data.library.map((s) => ({ s, pending: null, exists: true })));
+    return out;
+  }, [data, drafts]);
+  const list = useMemo(() => groups([...views].flatMap(([at, vs]) => vs.map((v) => ({ at, v })))), [views]);
   const picked = list.find((g) => g.name === sel) ?? null;
   const differ = list.filter((g) => g.variants.length > 1).length;
+  const targets: McpTarget[] = [...views].map(([id, vs]) => ({ id, name: sourceName(id), names: new Set(vs.map((v) => v.s.name)) }));
+
+  const edit = (agent: McpSource, f: (d: Draft) => Draft) => { if (agent !== LIBRARY) setDraftFor(agent, f(drafts[agent] ?? {})); };
+  const attempt = async (p: Promise<unknown>) => {
+    try {
+      await p;
+      await reload();
+    } catch (e) {
+      flash(errText(e), true);
+    }
+  };
+
+  /** Where the values an entry shows are read from (a pending copy: its own source). */
+  const fromOf = (e: Entry): [McpSource, string] | undefined => {
+    if (e.at === LIBRARY || (e.v.exists && e.v.pending !== "edited")) return [e.at, e.v.s.name];
+    const op = drafts[e.at]?.[keys.mcpUpsert(e.v.s.name)];
+    return op?.op === "upsert_mcp" ? op.server.from : undefined;
+  };
+  const openEdit = (variant: Entry[]) => {
+    // A copy is read from a holder that keeps the server (see `writeOrder`).
+    const e = variant.find((x) => x.v.exists && !x.v.pending) ?? variant.find((x) => x.v.exists && x.v.pending === "toggled") ?? variant[0];
+    setDialog({ s: e.v.s, from: fromOf(e), holders: variant.filter((x) => x.v.pending !== "deleted").map((x) => x.at) });
+  };
+
+  const save = async (input: McpInput, to: McpSource[], removeFrom: McpSource[]) => {
+    const old = dialog?.s.name ?? input.name;
+    const viewIn = (at: McpSource) => views.get(at)?.find((v) => v.s.name === old);
+    for (const at of to) {
+      if (at === LIBRARY) continue;
+      const v = viewIn(at);
+      const renames = !!v && input.replaces !== undefined;
+      edit(at, (d) => upsertMcp(d, { ...input, enabled: v ? v.s.enabled : true, replaces: renames ? input.replaces : undefined }));
+    }
+    for (const at of removeFrom) if (at !== LIBRARY) edit(at, (d) => deleteMcp(d, old, !!viewIn(at)?.exists));
+    if (to.includes(LIBRARY)) await api.mcpLibrarySave({ ...input, replaces: dialog?.holders.includes(LIBRARY) ? input.replaces : undefined });
+    if (removeFrom.includes(LIBRARY)) await api.mcpLibraryDelete(old);
+    if (to.includes(LIBRARY) || removeFrom.includes(LIBRARY)) await reload();
+    if (input.name !== sel && sel === old) setSel(input.name);
+  };
 
   return (
     <>
@@ -66,33 +142,38 @@ export function McpPage({ agents }: { agents: AgentState[] }) {
               <h1>{t("mcpPage.title")}</h1>
               <span className="muted small hint">{t("mcpPage.subtitle")}</span>
             </div>
-            <button className="btn" onClick={() => void reload()}>{t("common.refresh")}</button>
+            <div className="row gap6">
+              <button className="btn" onClick={() => void reload()}>{t("common.refresh")}</button>
+              <button className="btn primary" disabled={!data} onClick={() => setDialog(null)}><Icon.plus size={12} />{t("mcpPage.add")}</button>
+            </div>
           </div>
         </div>
         <div className="page-body">
           {error && (data ? <ErrorBox text={error} /> : <div className="empty">{scrub(error)}</div>)}
           {!data && !error && <div className="empty">{t("common.reading")}</div>}
-          {data?.filter((a) => a.error).map((a) => <ErrorBox key={a.agent} text={t("mcpPage.agentError", { agent: agentLabel(a.agent), error: a.error! })} />)}
+          {data?.agents.filter((a) => a.error).map((a) => <ErrorBox key={a.agent} text={t("mcpPage.agentError", { agent: agentLabel(a.agent), error: a.error! })} />)}
           {data && list.length === 0 && <div className="empty">{t("mcpPage.empty")}</div>}
           {list.length > 0 && (
             <div className="stable">
               {list.map((g) => {
                 const on = sel === g.name;
                 const toggle = () => setSel(on ? null : g.name);
+                const shown = g.entries.find((e) => e.v.pending !== "deleted") ?? g.entries[0];
                 return (
                   <div key={g.name} className={`hrow pick${on ? " on" : ""}`} role="button" tabIndex={0} aria-pressed={on} onClick={toggle} onKeyDown={onActivateKey(toggle)}>
                     <div className="minw0">
                       <div className="row gap6">
                         <span className="strong small">{g.name}</span>
-                        <span className="ptag tag-soft">{TRANSPORT[g.entries[0].s.transport]}</span>
+                        <span className="ptag tag-soft">{MCP_TRANSPORT[shown.v.s.transport]}</span>
                         {g.variants.length > 1 && <span className="ptag tag-warn" title={t("mcpPage.differsTitle")}>{t("mcpPage.differs")}</span>}
+                        {g.entries.some((e) => e.v.pending) && <span className="ptag tag-new">{t("mcpPage.pending")}</span>}
                       </div>
-                      <div className="mono tiny muted ellipsis">{scrub(summary(g.entries[0].s))}</div>
+                      <div className="mono tiny muted ellipsis">{scrub(summary(shown.v.s))}</div>
                     </div>
                     <div className="mcp-agents">
-                      {g.entries.map(({ agent, s }) => (
-                        <span key={agent} className={`mcp-agent${s.enabled ? "" : " off"}`} title={`${agentLabel(agent)} · ${stateText(s)}`}>
-                          <AgentIcon id={agent} size={20} />
+                      {g.entries.map((e) => (
+                        <span key={e.at} className={`mcp-agent${e.v.s.enabled && e.v.pending !== "deleted" ? "" : " off"}${e.v.pending ? " dirty" : ""}`} title={`${sourceName(e.at)} · ${stateText(e)}`}>
+                          <SourceIcon at={e.at} size={20} />
                         </span>
                       ))}
                     </div>
@@ -105,7 +186,10 @@ export function McpPage({ agents }: { agents: AgentState[] }) {
       </main>
       <aside className="aside" aria-label={t("mcpPage.detailTitle")}>
         {picked ? (
-          <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} />
+          <McpDetail key={picked.name} g={picked} onClose={() => setSel(null)} onEdit={openEdit}
+            onToggle={(e, on) => edit(e.at, (d) => setMcpEnabled(d, e.v.s.name, on, e.v.exists ? data?.agents.find((a) => a.agent === e.at)?.servers.find((s) => s.name === e.v.s.name)?.enabled ?? null : null))}
+            onRemove={(e) => (e.at === LIBRARY ? attempt(api.mcpLibraryDelete(e.v.s.name)) : edit(e.at, (d) => deleteMcp(d, e.v.s.name, e.v.exists)))}
+            onUndo={(e) => edit(e.at, (d) => undoMcp(d, e.v.s.name))} />
         ) : (
           <section className="aside-cur mcp-scroll">
             <h2>{t("mcpPage.overview")}</h2>
@@ -114,11 +198,11 @@ export function McpPage({ agents }: { agents: AgentState[] }) {
               <>
                 <div className="hub-stats">
                   <div><b>{list.length}</b><span>{t("mcpPage.statServers")}</span></div>
-                  <div><b>{data.filter((a) => a.servers.length > 0).length}</b><span>{t("mcpPage.statAgents")}</span></div>
+                  <div><b>{data.agents.filter((a) => a.servers.length > 0).length}</b><span>{t("mcpPage.statAgents")}</span></div>
                   <div><b>{differ}</b><span>{t("mcpPage.statDiffer")}</span></div>
                 </div>
                 <div className="kv">
-                  {data.map((a) => (
+                  {data.agents.map((a) => (
                     <div key={a.agent} className="kv-row">
                       <span className="tiny row gap6"><AgentIcon id={a.agent} size={16} />{agentLabel(a.agent)}</span>
                       <span className="minw0">
@@ -129,12 +213,21 @@ export function McpPage({ agents }: { agents: AgentState[] }) {
                       </span>
                     </div>
                   ))}
+                  <div className="kv-row">
+                    <span className="tiny row gap6"><SourceIcon at={LIBRARY} size={16} />{t("mcpPage.library")}</span>
+                    <span className="minw0">
+                      <span className="tiny block">{tn("mcpPage.serverCount", data.library.length)}</span>
+                      <span className="tiny muted block">{t("mcpPage.libraryHint")}</span>
+                    </span>
+                  </div>
                 </div>
               </>
             )}
           </section>
         )}
+        <PendingPanel pending={pending} drafts={drafts} busy={busy} onDiscard={onDiscard} onApplyAll={onApplyAll} emptyHint={t("mcpPage.pendingHint")} />
       </aside>
+      {dialog !== undefined && <McpDialog edit={dialog} targets={targets} onSave={save} onClose={() => setDialog(undefined)} />}
     </>
   );
 }
@@ -152,7 +245,14 @@ function Pairs({ items }: { items: McpKv[] }) {
   );
 }
 
-function McpDetail({ g, onClose }: { g: Group; onClose: () => void }) {
+function McpDetail({ g, onClose, onEdit, onToggle, onRemove, onUndo }: {
+  g: Group;
+  onClose: () => void;
+  onEdit: (variant: Entry[]) => void;
+  onToggle: (e: Entry, on: boolean) => void;
+  onRemove: (e: Entry) => void;
+  onUndo: (e: Entry) => void;
+}) {
   return (
     <section className="aside-cur mcp-scroll">
       <div className="row between">
@@ -164,22 +264,31 @@ function McpDetail({ g, onClose }: { g: Group; onClose: () => void }) {
       </div>
       {g.variants.length > 1 && <span className="tiny warn-text">{t("mcpPage.differsHint")}</span>}
       {g.variants.map((v, i) => {
-        const s = v[0].s;
-        const extras = v.filter((e) => Object.keys(e.s.extra).length > 0);
+        const s = (v.find((e) => e.v.pending !== "deleted") ?? v[0]).v.s;
+        const extras = v.filter((e) => Object.keys(e.v.s.extra).length > 0);
         return (
           <div key={s.sig} className="mcp-variant">
-            {g.variants.length > 1 && <span className="tiny strong">{t("mcpPage.variant", { i: i + 1, n: g.variants.length })}</span>}
-            <div className="mcp-states">
-              {v.map(({ agent, s: x }) => (
-                <span key={agent} className={`mcp-state${x.enabled ? "" : " off"}`}>
-                  <AgentIcon id={agent} size={16} />
-                  <span className="tiny">{agentLabel(agent)}</span>
-                  <span className="tiny muted">{stateText(x)}</span>
-                </span>
+            <div className="row between">
+              <span className="tiny strong">{g.variants.length > 1 ? t("mcpPage.variant", { i: i + 1, n: g.variants.length }) : t("mcpPage.definition")}</span>
+              <button className="btn small" onClick={() => onEdit(v)}><Icon.edit size={12} />{t("mcpPage.editOrCopy")}</button>
+            </div>
+            <div className="mcp-holders">
+              {v.map((e) => (
+                <div key={e.at} className={`mcp-holder${e.v.s.enabled && e.v.pending !== "deleted" ? "" : " off"}`}>
+                  <SourceIcon at={e.at} size={16} />
+                  <span className="tiny grow minw0 ellipsis">{sourceName(e.at)} <span className="muted">· {stateText(e)}</span></span>
+                  {e.v.pending && e.at !== LIBRARY && <button className="link tiny" onClick={() => onUndo(e)}>{t("common.undo")}</button>}
+                  {e.at !== LIBRARY && e.v.pending !== "deleted" && (
+                    <Switch on={e.v.s.enabled} onChange={(on) => onToggle(e, on)} label={t("mcpPage.toggleIn", { agent: sourceName(e.at) })} />
+                  )}
+                  {e.v.pending !== "deleted" && (
+                    <button className="icon-btn sm" aria-label={t("mcpPage.removeFrom", { agent: sourceName(e.at) })} title={t("mcpPage.removeFrom", { agent: sourceName(e.at) })} onClick={() => onRemove(e)}><Icon.trash size={12} /></button>
+                  )}
+                </div>
               ))}
             </div>
             <div className="kv">
-              <div className="kv-row"><span className="tiny muted">{t("mcpPage.transport")}</span><span className="tiny">{TRANSPORT[s.transport]}</span></div>
+              <div className="kv-row"><span className="tiny muted">{t("mcpPage.transport")}</span><span className="tiny">{MCP_TRANSPORT[s.transport]}</span></div>
               {s.transport === "stdio" ? (
                 <div className="kv-row"><span className="tiny muted">{t("mcpPage.command")}</span><span className="mono tiny mcp-wrap">{scrub(summary(s))}</span></div>
               ) : (
@@ -188,11 +297,11 @@ function McpDetail({ g, onClose }: { g: Group; onClose: () => void }) {
               {s.cwd && <div className="kv-row"><span className="tiny muted">{t("mcpPage.cwd")}</span><span className="mono tiny mcp-wrap">{scrub(s.cwd)}</span></div>}
               {s.env.length > 0 && <div className="kv-row"><span className="tiny muted">{t("mcpPage.env")}</span><Pairs items={s.env} /></div>}
               {s.headers.length > 0 && <div className="kv-row"><span className="tiny muted">{t("mcpPage.headers")}</span><Pairs items={s.headers} /></div>}
-              {extras.map(({ agent, s: x }) => (
-                <div key={agent} className="kv-row">
-                  <span className="tiny muted">{t("mcpPage.otherFields", { agent: agentLabel(agent) })}</span>
+              {extras.map((e) => (
+                <div key={e.at} className="kv-row">
+                  <span className="tiny muted">{t("mcpPage.otherFields", { agent: sourceName(e.at) })}</span>
                   <span className="minw0">
-                    {Object.entries(x.extra).map(([k, val]) => (
+                    {Object.entries(e.v.s.extra).map(([k, val]) => (
                       <span key={k} className="mono tiny block mcp-pair">{k}={scrub(typeof val === "string" ? val : JSON.stringify(val))}</span>
                     ))}
                   </span>

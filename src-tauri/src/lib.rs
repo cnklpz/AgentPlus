@@ -298,10 +298,26 @@ async fn gateway_models(routes: Vec<String>) -> Result<Vec<String>, String> {
     blocking(move || gateway::server::list_models(&routes)).await
 }
 
-/// Global MCP servers of these agents, secrets masked.
+/// Global MCP servers of these agents and the MCP library, secrets masked.
 #[tauri::command]
-async fn mcp_list(agents: Vec<String>) -> Result<Vec<mcp::AgentMcp>, String> {
-    blocking(move || Ok(mcp::list(&agents))).await
+async fn mcp_list(agents: Vec<String>) -> Result<mcp::Overview, String> {
+    blocking(move || Ok(mcp::overview(&agents))).await
+}
+
+#[tauri::command]
+async fn mcp_library_save(server: mcp::McpInput) -> Result<(), String> {
+    blocking(move || mcp::library::save(server)).await
+}
+
+#[tauri::command]
+async fn mcp_library_delete(name: String) -> Result<(), String> {
+    blocking(move || mcp::library::delete(&name)).await
+}
+
+/// MCP servers in pasted text (a README snippet or a piece of any agent's config).
+#[tauri::command]
+async fn mcp_parse(text: String) -> Result<Vec<mcp::McpInput>, String> {
+    blocking(move || mcp::parse::parse(&text)).await
 }
 
 #[tauri::command]
@@ -828,6 +844,9 @@ pub fn run() {
             fetch_models_lib,
             guess_models,
             mcp_list,
+            mcp_library_save,
+            mcp_library_delete,
+            mcp_parse,
             list_backups,
             backup_detail,
             restore_backup,

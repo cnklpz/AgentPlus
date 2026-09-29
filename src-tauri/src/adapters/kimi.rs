@@ -848,6 +848,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("Kimi Code can have several providers at once; switch the default model with /model in Kimi", "Kimi Code 可以同时配置多个供应商，默认模型在 Kimi 里用 /model 切换"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
         }
     }
 

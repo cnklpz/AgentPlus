@@ -1161,6 +1161,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Codex can only use one provider at a time", "Codex 同时只能使用一个供应商"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
         }
     }
 

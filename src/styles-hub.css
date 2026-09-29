@@ -664,11 +664,19 @@ button, input, textarea, select { font-family: inherit; }
 .mcp-agents { display: flex; gap: 4px; flex-shrink: 0; }
 .mcp-agent { display: inline-flex; }
 .mcp-agent.off { opacity: .35; filter: grayscale(1); }
-.mcp-scroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+.mcp-scroll { flex: 0 1 auto; max-height: 62%; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+.mcp-agent { position: relative; }
+.mcp-agent.dirty::after { content: ""; position: absolute; right: -2px; top: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px var(--surface); }
+.mcp-lib-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); flex-shrink: 0; }
+.mcp-holders { display: flex; flex-direction: column; border: 1px solid var(--line2); border-radius: 10px; overflow: hidden; }
+.mcp-holder { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 10px; border-bottom: 1px solid var(--line2); }
+.mcp-holder:last-child { border-bottom: 0; }
+.mcp-holder .link { white-space: nowrap; }
+.mcp-holder.off > :first-child { opacity: .4; filter: grayscale(1); }
+.mcp-text { height: auto; padding: 7px 10px; resize: vertical; line-height: 1.5; }
+.mcp-paste-btn { align-self: flex-start; }
+.mcp-parsed { flex-wrap: wrap; }
 .mcp-variant { display: flex; flex-direction: column; gap: 8px; }
 .mcp-variant + .mcp-variant { padding-top: 12px; border-top: 1px dashed var(--line2); }
-.mcp-states { display: flex; flex-wrap: wrap; gap: 6px; }
-.mcp-state { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px 3px 4px; border: 1px solid var(--line2); border-radius: 999px; background: var(--surface-2); }
-.mcp-state.off > :first-child { opacity: .4; filter: grayscale(1); }
 .mcp-wrap, .mcp-pair { overflow-wrap: anywhere; }
 .mcp-pair svg { vertical-align: -1px; margin-left: 4px; color: var(--muted); }

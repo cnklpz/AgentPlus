@@ -584,6 +584,7 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
                 p.key_from_library = None;
                 Ok(Op::UpsertProvider { provider: p })
             }
+            Op::UpsertMcp { server } => Ok(Op::UpsertMcp { server: crate::mcp::write::resolve(server.clone())? }),
             Op::UpsertProvider { provider: p } if p.key_from_sync.is_some() => {
                 let mut p = p.clone();
                 p.api_key = Some(crate::sync::key(p.key_from_sync.as_deref().unwrap())?);
@@ -599,6 +600,8 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
 pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
     // AgentPlus's own settings (auto-restart, desktop copy) are handled here; the adapters never see them.
     let (own, rest): (Vec<&Op>, Vec<&Op>) = ops.iter().partition(|o| matches!(o, Op::SetSetting { key, .. } if key == AUTO_RESTART_SETTING || key == DESKTOP_EXE_SETTING));
+    // MCP servers live in their own part of the config (sometimes their own file).
+    let (mcp, rest): (Vec<&Op>, Vec<&Op>) = rest.into_iter().partition(|o| o.is_mcp());
     // Entries pointing at the local gateway carry the placeholder (or, copied, another
     // agent's key): every agent gets its own, so the gateway can check and count its calls.
     let rest: Vec<Op> = rest
@@ -612,11 +615,25 @@ pub fn plan_resolved(agent: &str, ops: &[Op], dry_run: bool) -> Result<Plan> {
             other => Ok(other),
         })
         .collect::<Result<_>>()?;
-    let (mut diff, written, backup) = if ocproject::is_project(agent) {
+    let (mut diff, mut written, mut backup) = if rest.is_empty() && !mcp.is_empty() {
+        (Diff::default(), vec![], None)
+    } else if ocproject::is_project(agent) {
         ocproject::plan(agent, &rest, dry_run)?
     } else {
         (adapter(agent)?.plan)(&rest, dry_run)?
     };
+    if !mcp.is_empty() {
+        // After the adapter: when both edit one file, this reads what the adapter wrote.
+        let mcp: Vec<Op> = mcp.into_iter().cloned().collect();
+        let (d, files, b) = crate::mcp::write::plan(agent, &mcp, dry_run)?;
+        for g in d.groups {
+            for line in g.lines {
+                diff.push(&g.file, line.text, line.add);
+            }
+        }
+        written.extend(files.into_iter().filter(|f| !written.contains(f)).collect::<Vec<_>>());
+        backup = backup.or(b);
+    }
     for op in own {
         if let Op::SetSetting { key, value } = op {
             if key == DESKTOP_EXE_SETTING {

@@ -1,5 +1,5 @@
 // Pending edits per agent, keyed so a toggle back to the original drops the op.
-import type { AgentState, ApiKind, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
+import type { AgentState, ApiKind, McpInput, McpServer, McpSource, Model, ModelFieldValue, ModelGuess, ModelInput, Op, Provider, ProviderInput, Setting, SettingValue } from "./api";
 import { t } from "./i18n";
 
 export type Draft = Record<string, Op>;
@@ -19,6 +19,9 @@ export const keys = {
   importProvider: (from: string, pid: string) => `pi:${from}:${pid}`,
   /** A new entry pointing at gateway forward `routeId`. */
   gatewayProvider: (routeId: string) => `pu:gw-${routeId}`,
+  mcpUpsert: (name: string) => `mcpu:${name}`,
+  mcpDelete: (name: string) => `mcpd:${name}`,
+  mcpEnabled: (name: string) => `mcpe:${name}`,
 };
 
 /** Codex has one global catalog; its models use provider "*". */
@@ -368,4 +371,109 @@ export function opsToWrite(st: AgentState | undefined, d: Draft): Op[] {
   const switching = cur?.op === "set_current_provider" && cur.provider !== "openai";
   if (!st || st.id !== "codex" || !st.fixedPrompt || !switching || d[keys.setting("fixed_id")]) return ops;
   return [...ops, { op: "set_setting", key: "fixed_id", value: true }];
+}
+
+// ---------------------------------------------------------------- MCP servers
+
+const mcpKeys = (name: string) => [keys.mcpUpsert(name), keys.mcpDelete(name), keys.mcpEnabled(name)];
+
+function dropMcp(d: Draft, name: string): Draft {
+  return mcpKeys(name).reduce((x, k) => withOp(x, k, null), d);
+}
+
+function pendingUpsert(d: Draft, name: string): McpInput | null {
+  const op = d[keys.mcpUpsert(name)];
+  return op?.op === "upsert_mcp" ? op.server : null;
+}
+
+/** Adds or replaces a server; a rename also drops the pending changes of the old name. */
+export function upsertMcp(d: Draft, input: McpInput): Draft {
+  let next = dropMcp(d, input.name);
+  if (input.replaces && input.replaces !== input.name) next = dropMcp(next, input.replaces);
+  return withOp(next, keys.mcpUpsert(input.name), { op: "upsert_mcp", server: input });
+}
+
+/**
+ * Removes a server. One that only exists as a pending change just goes away; removing a
+ * pending rename removes the server under its old name. `exists`: it is in the config.
+ */
+export function deleteMcp(d: Draft, name: string, exists: boolean): Draft {
+  const old = pendingUpsert(d, name)?.replaces;
+  const next = dropMcp(d, name);
+  if (old && old !== name) return withOp(dropMcp(next, old), keys.mcpDelete(old), { op: "delete_mcp", name: old });
+  return exists ? withOp(next, keys.mcpDelete(name), { op: "delete_mcp", name }) : next;
+}
+
+/** Turns a server on or off; back to `actual` (the config's state) drops the change. */
+export function setMcpEnabled(d: Draft, name: string, enabled: boolean, actual: boolean | null): Draft {
+  const up = pendingUpsert(d, name);
+  if (up) return withOp(d, keys.mcpUpsert(name), { op: "upsert_mcp", server: { ...up, enabled } });
+  return withOp(d, keys.mcpEnabled(name), enabled === actual ? null : { op: "set_mcp_enabled", name, enabled });
+}
+
+/** Drops every pending change to a server (and to the one a pending rename replaces). */
+export function undoMcp(d: Draft, name: string): Draft {
+  const old = pendingUpsert(d, name)?.replaces;
+  return old ? dropMcp(dropMcp(d, name), old) : dropMcp(d, name);
+}
+
+/**
+ * The order to write agents in: those that remove or rename MCP servers last, so a copy made
+ * from one of them still finds the server (and its hidden values) when it is written.
+ */
+export function writeOrder<T extends { id: string }>(agents: T[], drafts: Record<string, Draft>): T[] {
+  const removes = (a: T) => Object.values(drafts[a.id] ?? {}).some((op) => op.op === "delete_mcp" || (op.op === "upsert_mcp" && !!op.server.replaces && op.server.replaces !== op.server.name));
+  return [...agents.filter((a) => !removes(a)), ...agents.filter(removes)];
+}
+
+export type McpPending = "new" | "edited" | "deleted" | "toggled";
+
+/** A server as it will be once the agent's pending changes are written. */
+export interface McpView {
+  s: McpServer;
+  pending: McpPending | null;
+  /** In the config now (not only a pending addition). */
+  exists: boolean;
+}
+
+/** What runs, compared on the values the page shows (masked the same way on both sides). */
+function sameCore(i: McpInput, s: McpServer): boolean {
+  const kv = (a: { key: string; value: string }[]) => JSON.stringify(a.map((p) => [p.key, p.value]));
+  return i.transport === s.transport && (i.command ?? null) === s.command && JSON.stringify(i.args) === JSON.stringify(s.args)
+    && (i.cwd ?? null) === s.cwd && (i.url ?? null) === s.url && kv(i.env) === kv(s.env) && kv(i.headers) === kv(s.headers);
+}
+
+/**
+ * A pending server, shown like a read one. It keeps the source's `sig` when it runs the same
+ * thing as the server it was copied or edited from, so it still groups with it.
+ */
+export function mcpFromInput(i: McpInput, source: McpServer | undefined): McpServer {
+  const kv = (a: { key: string; value: string }[]) => a.map((p) => ({ ...p, secret: p.value.includes("•") }));
+  return {
+    name: i.name, transport: i.transport, command: i.command, args: i.args, cwd: i.cwd, url: i.url,
+    env: kv(i.env), headers: kv(i.headers), enabled: i.enabled, stashed: false, extra: source?.extra ?? {},
+    sig: source && sameCore(i, source) ? source.sig : `draft:${JSON.stringify([i.transport, i.command, i.args, i.cwd, i.url, i.env, i.headers])}`,
+  };
+}
+
+/** An agent's servers with its pending MCP changes; `source` finds the server a copy came from. */
+export function mcpView(servers: McpServer[], d: Draft, source: (from: [McpSource, string]) => McpServer | undefined): McpView[] {
+  const ups = Object.values(d).flatMap((op) => (op.op === "upsert_mcp" ? [op.server] : []));
+  const renamed = new Set(ups.flatMap((i) => (i.replaces && i.replaces !== i.name ? [i.replaces] : [])));
+  const out: McpView[] = [];
+  for (const s of servers) {
+    if (renamed.has(s.name)) continue;
+    const up = pendingUpsert(d, s.name);
+    const tog = d[keys.mcpEnabled(s.name)];
+    if (d[keys.mcpDelete(s.name)]) out.push({ s, pending: "deleted", exists: true });
+    else if (up) out.push({ s: mcpFromInput(up, up.from ? source(up.from) ?? s : s), pending: "edited", exists: true });
+    else if (tog?.op === "set_mcp_enabled") out.push({ s: { ...s, enabled: tog.enabled }, pending: "toggled", exists: true });
+    else out.push({ s, pending: null, exists: true });
+  }
+  for (const i of ups) {
+    if (servers.some((s) => s.name === i.name)) continue;
+    const was = i.replaces ? servers.find((s) => s.name === i.replaces) : undefined;
+    out.push({ s: mcpFromInput(i, i.from ? source(i.from) : was), pending: was ? "edited" : "new", exists: false });
+  }
+  return out;
 }

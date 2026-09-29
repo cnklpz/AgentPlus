@@ -189,6 +189,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("MiMo Desktop manages providers by enabling and disabling them", "MiMo Desktop 按启用/停用管理供应商"))),
             Op::UpsertProvider { .. } | Op::DeleteProvider { .. } | Op::SetProviderEnabled { .. } | Op::SetModelVisible { .. } | Op::UpsertModel { .. } | Op::DeleteModel { .. } => unreachable!("handled by ocfmt"),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
         }

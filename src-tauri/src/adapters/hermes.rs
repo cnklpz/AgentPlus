@@ -287,7 +287,7 @@ fn has_comment(l: &str) -> bool {
 }
 
 /// Replaces (Some) or removes (None) top-level blocks, leaving every other line as it was.
-fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<String> {
+pub(crate) fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<String> {
     let lines: Vec<&str> = if text.is_empty() { vec![] } else { text.split('\n').collect() };
     let all = blocks(&lines);
     let mut edits: Vec<(usize, usize, Vec<String>)> = vec![];
@@ -1533,6 +1533,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             Op::SetProviderEnabled { .. } => return Err(anyhow!(l("Hermes uses one provider at a time; use \"Set as current\"", "Hermes 同时只用一个供应商，请用「设为当前」"))),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
         }
     }
 

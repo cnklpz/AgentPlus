@@ -15,19 +15,23 @@
 //! Secrets never reach the UI (see `mask`); servers are compared across agents by `sig`.
 
 mod decode;
+pub mod library;
 mod mask;
+pub mod parse;
+pub mod write;
 
 use crate::adapters::{self, claude, codebuddy, codex, droid, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, qwen, zcode};
 use crate::model::key_fingerprint;
 use crate::store;
 use crate::util::{display_path, home, read_text, strip_jsonc};
 use anyhow::{anyhow, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 /// How an agent's config file is laid out.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Family {
     /// `mcpServers` with `type` (Claude Code, CodeBuddy, Droid, Kimi Code).
     Claude,
@@ -44,6 +48,55 @@ pub enum Family {
 /// Store key (per agent) of definitions AgentPlus turned off by taking them out of a config
 /// that has no per-server switch.
 pub const STASH_KEY: &str = "disabledMcp";
+
+/// `from` value of a copy that reads from the MCP library.
+pub const LIBRARY: &str = "library";
+
+/// An env var or header as the page sends it back (masked values are restored in `resolve`).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct KvIn {
+    pub key: String,
+    pub value: String,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A server to write: from the MCP page (op `upsert_mcp`), or a library entry as stored.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpInput {
+    pub name: String,
+    /// The server this one replaces (a rename); it is removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<String>,
+    /// "stdio" | "http" | "sse" | "ws" | "remote"
+    pub transport: String,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub env: Vec<KvIn>,
+    #[serde(default)]
+    pub headers: Vec<KvIn>,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// (agent or "library", server name): where the masked values the page shows come from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<(String, String)>,
+    /// Fields the page doesn't cover, filled in the backend (from `from`, or pasted text).
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub extra: Map<String, Value>,
+    /// The format `extra` belongs to: only an agent of the same format gets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_family: Option<Family>,
+}
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct McpKv {
@@ -250,7 +303,10 @@ fn kvs(pairs: &[(String, String)]) -> Vec<McpKv> {
 }
 
 fn server(fam: Family, name: &str, def: &Value, enabled: bool, stashed: bool) -> McpServer {
-    let r = decode::decode(fam, def);
+    from_raw(name, decode::decode(fam, def), enabled, stashed)
+}
+
+fn from_raw(name: &str, r: decode::Raw, enabled: bool, stashed: bool) -> McpServer {
     McpServer {
         name: name.to_string(),
         transport: r.transport.to_string(),
@@ -299,6 +355,16 @@ pub fn read(agent: &str) -> AgentMcp {
 /// `read` for each of `agents` (ids the UI lists; OpenCode project configs are left out).
 pub fn list(agents: &[String]) -> Vec<AgentMcp> {
     agents.iter().filter(|a| adapters::ext(a).is_some()).map(|a| read(a)).collect()
+}
+
+#[derive(Serialize)]
+pub struct Overview {
+    pub agents: Vec<AgentMcp>,
+    pub library: Vec<McpServer>,
+}
+
+pub fn overview(agents: &[String]) -> Overview {
+    Overview { agents: list(agents), library: library::list() }
 }
 
 #[cfg(test)]

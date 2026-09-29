@@ -490,6 +490,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
             }
             Op::SetCurrentProvider { .. } => return Err(anyhow!(l("ZCode manages providers by enabling/disabling them", "ZCode 按启用/停用管理供应商"))),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
+            Op::UpsertMcp { .. } | Op::DeleteMcp { .. } | Op::SetMcpEnabled { .. } => unreachable!("planned in mcp::write"),
             Op::SetProviderModels { .. } => return Err(msg::models_per_provider()),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
         }
