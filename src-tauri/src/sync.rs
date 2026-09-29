@@ -1076,11 +1076,6 @@ pub fn preview_import(snapshot: Option<&str>) -> Result<Vec<Suggestion>> {
         Some(id) => (read_snapshot(id)?, None),
         None => read_payload_at()?,
     };
-    // What was read, not what the file holds by now: a newer export that landed in between
-    // stays pending instead of being marked as seen.
-    if let Some(at) = seen {
-        ack(&at);
-    }
     let keys = &payload["keys"];
     let content = options_in(&store::load()).content;
     let list = |k: &str| payload[k].as_array().map(Vec::as_slice).unwrap_or_default().to_vec();
@@ -1098,6 +1093,12 @@ pub fn preview_import(snapshot: Option<&str>) -> Result<Vec<Suggestion>> {
         let Some(remote) = payload["agents"].get(a) else { continue };
         let Ok(local) = adapters::state(a) else { continue };
         out.extend(agent_suggestions(a, remote, &local, keys));
+    }
+    // Seen once compared, not before (a comparison that fails leaves the file pending), and
+    // what was read, not what the file holds by now: a newer export that landed in between
+    // stays pending instead of being marked as seen.
+    if let Some(at) = seen {
+        ack(&at);
     }
     Ok(out)
 }
