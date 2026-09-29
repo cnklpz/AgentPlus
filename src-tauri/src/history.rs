@@ -532,12 +532,17 @@ fn mask_secrets(line: &str) -> String {
     let word = WORD.get_or_init(|| regex::Regex::new(r#"[A-Za-z0-9_\-.]{16,}"#).unwrap());
     // An upper-case word is a variable's name (`env_key = "RELAY_KEY"`), not its value.
     let var_name = |v: &str| v.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    // Not a secret whatever the name: a flag, a number, the start of a table or list.
+    let plain = |v: &str| matches!(v, "true" | "false" | "null") || v.parse::<f64>().is_ok() || v.starts_with(['{', '[']);
     let line = kv.replace_all(line, |c: &regex::Captures| {
         let (name, v) = (&c[1], &c[4]);
-        if secret_name(name) && !is_ref(v) && !var_name(v) {
-            format!("{name}{}{}{}", &c[2], c.get(3).map_or("", |m| m.as_str()), mask_key(v))
+        let scheme = c.get(3).map_or("", |m| m.as_str());
+        if secret_name(name) && !is_ref(v) && !var_name(v) && !plain(v) {
+            format!("{name}{}{scheme}{}", &c[2], mask_key(v))
         } else {
-            c[0].to_string()
+            // The value may be a URL with a key in its query or a password (`url = "…?api_key=…"`):
+            // this match took the whole of it, so the key isn't seen as a name of its own.
+            format!("{name}{}{scheme}{}", &c[2], crate::mcp::mask::url(v))
         }
     });
     word.replace_all(&line, |c: &regex::Captures| if looks_secret(&c[0]) { mask_key(&c[0]) } else { c[0].to_string() }).into_owned()
@@ -712,5 +717,12 @@ description: d
         assert_eq!(mask_secrets("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOjF9.abcdef"), "token ••••cdef");
         assert_eq!(mask_secrets(r#"env_key = "RELAY_KEY""#), r#"env_key = "RELAY_KEY""#);
         assert_eq!(mask_secrets(r#""apiKey": "{env:OPENAI_API_KEY}""#), r#""apiKey": "{env:OPENAI_API_KEY}""#);
+        // A key in a URL's query or password, whatever the URL's field is called.
+        assert_eq!(mask_secrets(r#"url = "https://h/sse?api_key=abcdef1234567890&region=eu""#), r#"url = "https://h/sse?api_key=••••7890&region=eu""#);
+        assert_eq!(mask_secrets(r#""baseURL": "https://user:hunter22pass@relay/v1""#), r#""baseURL": "https://user:••••pass@relay/v1""#);
+        // Flags, numbers and nested tables under names that sound secret stay readable.
+        assert_eq!(mask_secrets("requires_openai_auth = true"), "requires_openai_auth = true");
+        assert_eq!(mask_secrets(r#""auth": {"#), r#""auth": {"#);
+        assert_eq!(mask_secrets("token_limit = 4096"), "token_limit = 4096");
     }
 }
