@@ -442,7 +442,8 @@ fn server(profile: &str) -> Option<crate::process::Server> {
     let node = crate::process::on_path(&["node.exe"])?;
     bin.is_file().then(|| crate::process::Server {
         program: node,
-        args: vec![bin.to_string_lossy().to_string(), "--profile".into(), profile.into()],
+        // No browser from the server itself: AgentPlus opens the page (see `process::restart`).
+        args: vec![bin.to_string_lossy().to_string(), "--profile".into(), profile.into(), "--no-open".into()],
         serves: served_profile,
         name: profile.into(),
         log: crate::applog::dir().join(format!("dsh-{profile}.log")),
@@ -1260,6 +1261,8 @@ mod tests {
         assert_eq!(served_profile(&argv(&format!("node {npm} web"))).as_deref(), Some("web"));
         assert_eq!(served_profile(&argv(&format!("D:\\nodejs\\node.exe {npm} web --no-open --port 8080"))).as_deref(), Some("web"));
         assert_eq!(served_profile(&argv("node /home/me/.npm/_npx/1a/node_modules/@deepseek-ai/dsh/lib/bin.js --profile rescue")).as_deref(), Some("rescue"));
+        // As AgentPlus starts it.
+        assert_eq!(served_profile(&argv(&format!("node {npm} --profile web --no-open"))).as_deref(), Some("web"));
         assert_eq!(served_profile(&argv(&format!("node {npm} --patch x.yml --profile=mine"))).as_deref(), Some("mine"));
         assert_eq!(served_profile(&argv(&format!("node {npm} --patch x.yml web --resume abc"))).as_deref(), Some("web"));
         // Not a server: a config dump, plugin management, the bare launcher, another program.
@@ -1297,7 +1300,7 @@ mod tests {
         // The package and node are looked up on this machine: checked only where they are.
         if install_dir().is_some() && crate::process::on_path(&["node.exe"]).is_some() {
             let s = server("web").unwrap();
-            assert_eq!(s.args[1..], ["--profile", "web"]);
+            assert_eq!(s.args[1..], ["--profile", "web", "--no-open"]);
             assert_eq!((s.serves)(&[s.program.to_string_lossy().to_string()].into_iter().chain(s.args.clone()).collect::<Vec<_>>()).as_deref(), Some("web"));
             assert!(s.log.ends_with("dsh-web.log"));
             assert!(!s.independent);

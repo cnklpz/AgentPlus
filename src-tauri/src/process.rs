@@ -1243,6 +1243,17 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
     if let Some(s) = &inst.server {
         let url = wait_served(s, on)?;
         remember_launch(agent, &inst);
+        // The server is started without opening a browser (a browser it started would be its
+        // child, in AgentPlus's job, and closed with AgentPlus): the page is opened from here, on
+        // a first start (a restart leaves the page already open to reconnect).
+        if url.is_some() && running == 0 {
+            let log = std::fs::read(&s.log).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+            if let Some(link) = served_link(&log) {
+                if let Err(e) = open_url(link) {
+                    crate::applog::warn("restart", format!("{}: couldn't open the browser: {e}", s.name));
+                }
+            }
+        }
         on(match url {
             Some(url) => Progress::step("start", "done", Some(url)),
             None => Progress::step("start", "warn", Some(tr!("No address seen within {}s; it may still be starting", "{} 秒内没有看到服务地址，可能还在启动", SERVE_WAIT.as_secs()))),
