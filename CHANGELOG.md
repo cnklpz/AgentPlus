@@ -2,6 +2,28 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.3.3
+
+支持 WorkBuddy 和 WorkBuddy AI；添加供应商时可以直接从供应商库挑选，粘贴带接口路径的地址会自动去掉路径。
+
+- WorkBuddy：国内版和海外版 WorkBuddy AI 分成两个 Agent 管理自定义模型（改动约 1 秒后生效）。WorkBuddy 没有隐藏开关，隐藏模型会把条目移出 models.json、暂存在 AgentPlus，重新显示时放回；和 CodeBuddy 共用同一个 models.json 时只在一处管理
+- 添加供应商：厂商下拉框里新增「从供应商库选择」，可以一次勾选多个，地址和密钥直接取自供应商库；Gemini CLI 也能用
+- 地址：粘贴 …/v1/chat/completions、/responses、/messages、/models 或 Gemini 的 :generateContent 这类完整接口地址时，自动去掉接口路径（连同它的参数），不再请求到重复的路径
+- 供应商页：Agent 经本地网关转发接入的供应商会显示网关标记，悬停可以看到是哪些 Agent；只统计已启用的转发
+- Agent 页的提示默认收成一行，点击展开全部
+- 在供应商页添加供应商时，模型列表新增全选和筛选；需要会话 ID 的厂商（OpenCode Zen）会提示开启本地网关
+- 名称被截断时悬停显示完整内容；供应商页和历史页的说明文字单独占一行
+
+Adds WorkBuddy and WorkBuddy AI; the add-provider dialog can pick from the provider library, and pasted endpoint URLs lose their endpoint path.
+
+- WorkBuddy: the China edition and WorkBuddy AI (international) are two agents managing custom models, applied in about a second. WorkBuddy has no hide switch, so hiding a model moves its entry out of models.json into AgentPlus and showing it puts it back; a models.json shared with CodeBuddy is managed in one place only
+- Add provider: "From provider library" in the vendor dropdown lets you tick several library entries at once, with their address and key taken from the library; Gemini CLI can use it too
+- Base URLs: a pasted endpoint URL such as …/v1/chat/completions, /responses, /messages, /models or Gemini's :generateContent loses the endpoint path (and its query), so requests no longer go to the path twice
+- Providers page: providers that agents reach through a local gateway forward show a gateway mark, listing those agents on hover; only enabled forwards count
+- The notes on an agent page take one line until clicked
+- Adding a provider on the Providers page: the model list gets select all and a filter; vendors that need a session ID (OpenCode Zen) suggest turning on the local gateway
+- Truncated names show in full on hover; the intros on the Providers and History pages get a line of their own
+
 ## 0.3.2
 
 托盘新增单色图标和右键快捷操作；拖动调整 Agent 顺序时，松手后的落位动画更顺滑。
