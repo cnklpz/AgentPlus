@@ -161,7 +161,7 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
             }
             let last = tried.len() >= 2;
             let wait = std::time::Duration::from_secs(if last { 60 } else { 25 });
-            match cdp::inject(port, wait, patches, &report) {
+            match cdp::inject(port, wait, patches.for_codex(r.version.as_deref()), &report) {
                 Err(e) if !last && e.is::<cdp::PortTimeout>() => applog::warn("restart", format!("{agent}: {e:#}; retrying with another port")),
                 res => break (r, Some(res.map_err(logged)?)),
             }

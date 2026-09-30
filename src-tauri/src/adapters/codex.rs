@@ -1565,7 +1565,7 @@ pub fn dismiss_fixed_prompt() -> Result<()> {
 /// UI patches to apply when AgentPlus restarts Codex.
 pub fn ui_patches() -> crate::cdp::Patches {
     let [fast, full_names, quota, usage_banner, short_names, smooth_scroll] = injections_on(&store::load());
-    crate::cdp::Patches { fast, full_names, quota, usage_banner, short_names, smooth_scroll }
+    crate::cdp::Patches { fast, full_names, quota, usage_banner, short_names, smooth_scroll, version: None }
 }
 
 #[cfg(test)]

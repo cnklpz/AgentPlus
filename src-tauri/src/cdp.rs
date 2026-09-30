@@ -70,9 +70,23 @@ pub struct Patches {
     pub usage_banner: bool,
     pub short_names: bool,
     pub smooth_scroll: bool,
+    /// The running Codex release (`[26, 928]` for 26.928.1915.0): picks the shape of a patch
+    /// made for it (see `by_version`). None = unknown, every shape is tried, oldest first.
+    pub version: Option<[u32; 2]>,
+}
+
+/// The release part of a Codex version, `26.928.1915.0` → `[26, 928]`.
+pub fn codex_version(v: &str) -> Option<[u32; 2]> {
+    let mut parts = v.trim().split('.').map(|p| p.parse::<u32>().ok());
+    Some([parts.next()??, parts.next()??])
 }
 
 impl Patches {
+    /// These patches for the Codex release `version` (as `detect` reports it).
+    pub fn for_codex(self, version: Option<&str>) -> Self {
+        Self { version: version.and_then(codex_version), ..self }
+    }
+
     pub fn any(self) -> bool {
         self.flags().contains(&true)
     }
@@ -109,6 +123,17 @@ fn replace_once(src: &str, re: &Regex, rep: impl regex::Replacer) -> Option<Stri
     match re.replacen(src, 1, rep) {
         Cow::Borrowed(_) => None,
         Cow::Owned(s) => Some(s),
+    }
+}
+
+/// Adapting a patch to a new Codex release adds a shape and keeps the older ones, each with
+/// the first release it is for (oldest first): a release uses the newest shape that is not
+/// newer than it, until the next shape. Only when the version is unknown is every shape
+/// tried, oldest first.
+fn by_version<T>(version: Option<[u32; 2]>, shapes: &[([u32; 2], T)], apply: impl Fn(&T) -> Option<String>) -> Option<String> {
+    match version {
+        Some(v) => shapes.iter().rev().find(|(since, _)| *since <= v).and_then(|(_, s)| apply(s)),
+        None => shapes.iter().find_map(|(_, s)| apply(s)),
     }
 }
 
@@ -149,15 +174,25 @@ fn patch_quota(src: &str) -> Option<String> {
 ///   E=T?.rate_limit_upsell?.banner_type===`image_generation_limit_reached`,D=J(Jy,f);if(!n)return c;let O;…
 /// The early return already exists (for `canShowUsageBanners` off), so every hook before
 /// it still runs as usual.
-fn patch_banner(src: &str) -> Option<String> {
-    static OLD: OnceLock<Regex> = OnceLock::new();
-    static NEW: OnceLock<Regex> = OnceLock::new();
-    let new = cached(&NEW, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
-    if let Some(s) = replace_once(src, new, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};")) {
-        return Some(s);
+fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
+    static SLOT: OnceLock<Regex> = OnceLock::new();
+    static COMPONENT: OnceLock<Regex> = OnceLock::new();
+    enum Shape {
+        /// Up to 26.924: the slot's early return, then the helper call (memoized since 26.924).
+        Slot,
+        /// Since 26.928: one component, its early return right after the image-limit check.
+        Component,
     }
-    let old = cached(&OLD, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
-    replace_once(src, old, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
+    by_version(version, &[([0, 0], Shape::Slot), ([26, 928], Shape::Component)], |shape| match shape {
+        Shape::Slot => {
+            let re = cached(&SLOT, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
+            replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
+        }
+        Shape::Component => {
+            let re = cached(&COMPONENT, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
+            replace_once(src, re, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};"))
+        }
+    })
 }
 
 /// Turns every read of the "keep the GPT- prefix" Statsig gate into false, keeping the
@@ -187,14 +222,14 @@ fn patch_smooth(src: &str) -> Option<String> {
 /// Applies the wanted patches that aren't in `src` yet. Returns the patched source
 /// (`None` when nothing changed) and the patches whose code couldn't be found.
 pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static str>) {
-    type Patch = (&'static str, fn(&str) -> Option<String>);
+    type Patch = (&'static str, fn(&str, Option<[u32; 2]>) -> Option<String>);
     let patches: [Patch; 6] = [
-        (FAST_MARK, patch_fast),
-        (NAMES_MARK, patch_names),
-        (QUOTA_MARK, patch_quota),
+        (FAST_MARK, |s, _| patch_fast(s)),
+        (NAMES_MARK, |s, _| patch_names(s)),
+        (QUOTA_MARK, |s, _| patch_quota(s)),
         (BANNER_MARK, patch_banner),
-        (SHORT_MARK, patch_short),
-        (SMOOTH_MARK, patch_smooth),
+        (SHORT_MARK, |s, _| patch_short(s)),
+        (SMOOTH_MARK, |s, _| patch_smooth(s)),
     ];
     let mut out: Option<String> = None;
     let mut missing = vec![];
@@ -203,7 +238,7 @@ pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static s
         if !on || cur.contains(mark) {
             continue;
         }
-        match f(cur) {
+        match f(cur, want.version) {
             Some(s) => out = Some(s),
             None => missing.push(Patches::names()[i]),
         }
@@ -635,14 +670,14 @@ mod tests {
         assert!(e.downcast_ref::<PortTimeout>().is_some());
     }
 
-    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
-    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
-    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false, short_names: false, smooth_scroll: false };
-    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true, short_names: false, smooth_scroll: false };
-    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false };
-    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false, short_names: false, smooth_scroll: false };
-    const SHORT: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: true, smooth_scroll: false };
-    const SMOOTH: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: true };
+    const FAST: Patches = Patches { fast: true, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: false, version: None };
+    const NAMES: Patches = Patches { fast: false, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false, version: None };
+    const QUOTA: Patches = Patches { fast: false, full_names: false, quota: true, usage_banner: false, short_names: false, smooth_scroll: false, version: None };
+    const BANNER: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: true, short_names: false, smooth_scroll: false, version: None };
+    const BOTH: Patches = Patches { fast: true, full_names: true, quota: false, usage_banner: false, short_names: false, smooth_scroll: false, version: None };
+    const ALL: Patches = Patches { fast: true, full_names: true, quota: true, usage_banner: false, short_names: false, smooth_scroll: false, version: None };
+    const SHORT: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: true, smooth_scroll: false, version: None };
+    const SMOOTH: Patches = Patches { fast: false, full_names: false, quota: false, usage_banner: false, short_names: false, smooth_scroll: true, version: None };
     const GATE: &str = "let x=1;d=a&&!u&&c!=null&&c?.requirements?.featureRequirements?.fast_mode!==!1,f;";
     const STRIP: &str = "join(``);return t?r.replace(/^GPT-/iu,``):r}function Cpa(){";
     // Codex 26.917 app-primary bundle.
@@ -750,12 +785,54 @@ mod tests {
         assert!(missing.is_empty());
         assert_eq!(out, comp.replacen("D=J(Jy,f);if(!n)return c;", "D=J(Jy,f);if(!0)return c/*agentplus-banner*/;", 1));
         assert_eq!(patch_source(&out, BANNER), (None, vec![]));
+        // With the version known, each release gets only the shape made for it.
+        let on = |v: &str| Patches { version: codex_version(v), ..BANNER };
+        let both = format!("x=`image_generation_limit_reached`,y=1;if(!a)return b;{slot}");
+        let old = patch_source(&both, on("26.924.2738.0")).0.unwrap();
+        assert!(old.starts_with("x=`image_generation_limit_reached`,y=1;if(!a)return b;"), "{old}");
+        assert!(old.contains("if(!0)return u/*agentplus-banner*/;let P=i!=null"));
+        for v in ["26.928.1915.0", "26.1001.1.0"] {
+            let new = patch_source(&both, on(v)).0.unwrap();
+            assert!(new.starts_with("x=`image_generation_limit_reached`,y=1;if(!0)return b/*agentplus-banner*/;"), "{v}: {new}");
+            assert!(new.contains("if(!n)return u;let P=i!=null"), "{v}: the old slot is left alone");
+        }
+        assert_eq!(patch_source(slot, on("26.928.1915.0")).1.len(), 1, "26.928 doesn't fall back to the old shape");
+        assert_eq!(patch_source(comp, on("26.924.2738.0")).1.len(), 1, "26.924 doesn't try the new shape");
+        // Version unknown: every shape, oldest first.
+        let out = patch_source(&both, BANNER).0.unwrap();
+        assert!(out.contains("if(!0)return u/*agentplus-banner*/;let P=i!=null"), "{out}");
         // An unrelated early return farther away (a block in between) is not taken.
         let far = "if(!a)return b;let c=()=>{x()};let P=dCt({hasImageGenerationLimit:P})";
         assert_eq!(patch_source(far, BANNER).0, None);
         // The helper that picks the banner kind has the same key but isn't touched.
         let helper = "function pYe({hasImageGenerationLimit:e,showModelLimit:t}){return t}";
         assert_eq!(patch_source(helper, BANNER).0, None);
+    }
+
+    #[test]
+    fn codex_versions_pick_shapes() {
+        assert_eq!(codex_version("26.928.1915.0"), Some([26, 928]));
+        assert_eq!(codex_version(" 26.1001 "), Some([26, 1001]));
+        assert_eq!(codex_version("26"), None);
+        assert_eq!(codex_version("v26.928"), None);
+        assert_eq!(Patches::default().for_codex(Some("26.924.2738.0")).version, Some([26, 924]));
+        assert_eq!(Patches::default().for_codex(None).version, None);
+        // Shapes since 0 / 26.924 / 26.928: the newest one not newer than the release.
+        let shapes = [([0, 0], "a"), ([26, 924], "b"), ([26, 928], "c")];
+        let picked = |v: Option<[u32; 2]>| {
+            let seen = std::cell::RefCell::new(vec![]);
+            by_version(v, &shapes, |s| {
+                seen.borrow_mut().push(*s);
+                None
+            });
+            seen.into_inner()
+        };
+        assert_eq!(picked(Some([26, 917])), ["a"]);
+        assert_eq!(picked(Some([26, 924])), ["b"]);
+        assert_eq!(picked(Some([26, 927])), ["b"]);
+        assert_eq!(picked(Some([26, 928])), ["c"]);
+        assert_eq!(picked(Some([27, 1])), ["c"]);
+        assert_eq!(picked(None), ["a", "b", "c"]);
     }
 
     /// Checks a new Codex release: point `CODEX_ASSETS` at `webview/assets` of an extracted
@@ -772,8 +849,10 @@ mod tests {
             eprintln!("node not found: patched bundles aren't syntax-checked");
         }
         // Full and short names are exclusive: check each set on its own.
-        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true, short_names: false, smooth_scroll: true };
-        let short = Patches { short_names: true, ..Patches::default() };
+        // CODEX_VERSION (e.g. 26.928.1915.0) picks the shapes as a restart would; unset tries all of them.
+        let version = std::env::var("CODEX_VERSION").ok().as_deref().and_then(codex_version);
+        let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true, short_names: false, smooth_scroll: true, version };
+        let short = Patches { short_names: true, version, ..Patches::default() };
         for (set, want) in [all, short].into_iter().enumerate() {
             let mut missing = None;
             for e in std::fs::read_dir(&dir).unwrap() {
