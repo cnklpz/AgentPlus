@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { type AgentState, type ApiKind, type FetchedModel, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api } from "../api";
 import { type Draft, type ViewProvider, codexDefaultModels, isVisible, keys, settingValue, viewModels } from "../draft";
-import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, movedHost, tripped } from "../services";
+import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, type Group, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, movedHost, tripped } from "../services";
 import { askKeepKey } from "./Confirm";
 import { Dropdown } from "./Dropdown";
 import { Icon } from "./icons";
 import { ImportNote } from "./ImportLink";
+import { LibraryPicker } from "./LibraryPicker";
 import { Modal } from "./Modal";
 import { ErrorBox, Seg, SegMulti, ToggleRow } from "./controls";
 import { ModelPicker, useModelPool } from "./ModelPicker";
@@ -13,7 +14,7 @@ import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import { type Template, modelsAfter, modelsFor, modelsOn } from "../templates";
 import { type TKey, t, tn, tSaved, tx } from "../i18n";
 import { scrub } from "../privacy";
-import { type Flash, apiBase, errText, isHttpUrl, toggledIn } from "../util";
+import { type Flash, apiBase, errText, isHttpUrl, toggled, toggledIn } from "../util";
 
 /** What the dialog asks the app to do; every part is optional. */
 export interface ProviderSave {
@@ -62,6 +63,8 @@ interface Props {
   flash: Flash;
   /** New provider from an import link: the fields it fills in. */
   imported?: ImportRequest | null;
+  /** New provider: the provider library to pick entries from instead (`onAdd` queues them). */
+  library?: { groups: Group[]; onAdd: (groups: Group[]) => void };
 }
 
 const API_HINT: Record<ApiKind, TKey> = {
@@ -87,7 +90,7 @@ const ROLES: { role: string; label: TKey; hint: TKey }[] = [
 ];
 const HERMES_ROLES: typeof ROLES = [{ role: "default", label: "providerDialog.roleDefault", hint: "providerDialog.hermesDefaultHint" }];
 
-export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, onCreateCatalog, onCommitCatalog, flash, imported }: Props) {
+export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, onCreateCatalog, onCommitCatalog, flash, imported, library }: Props) {
   const isNew = !editing || !!editing.isNew;
   const codex = st.id === "codex";
   const claude = st.id === "claude";
@@ -114,6 +117,9 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const onUnified = !isNew && gatewayPoolIds(editing?.baseUrl) !== null;
   /** New provider: use the gateway's unified entry instead of an address. */
   const [unifiedNew, setUnifiedNew] = useState(false);
+  // "From provider library" picked in the template dropdown, and the entries ticked there.
+  const [fromLib, setFromLib] = useState(false);
+  const [libPick, setLibPick] = useState<Set<string>>(new Set());
   /** Forwards the unified provider may use; empty = all of them. */
   const [pool, setPool] = useState<string[]>(() => (isNew ? [] : gatewayPoolIds(editing?.baseUrl) ?? []));
   const poolBase = gatewayPoolBase(gateway?.port ?? DEFAULT_GATEWAY_PORT, pool);
@@ -419,11 +425,39 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       <button className="btn primary" disabled={!canSave} onClick={save}>{saving ? t("common.saving") : isNew ? t("common.add") : t("common.save")}</button>
     </>
   );
+  const tplPicker = isNew && (gatewayCapable(st.id) || !!library) && !unifiedNew && !imported && (
+    <TemplatePicker value={tpl} onPick={pickTpl} vendors={gatewayCapable(st.id)} library={library && {
+      on: fromLib,
+      onChange: (on) => {
+        if (on && tpl) pickTpl(null);
+        setFromLib(on);
+      },
+    }} />
+  );
+  if (fromLib && library) {
+    const chosen = library.groups.filter((g) => libPick.has(g.key));
+    return (
+      <Modal label={t("common.addProvider")} wide onClose={onClose} title={t("providerDialog.addHead", { agent: st.name })} foot={
+        <>
+          <span className="grow" />
+          <button className="btn" onClick={onClose}>{t("common.cancel")}</button>
+          <button className="btn primary" disabled={!chosen.length} onClick={() => library.onAdd(chosen)}>
+            {chosen.length ? tn("providerDialog.addFromLibrary", chosen.length) : t("common.add")}
+          </button>
+        </>
+      }>
+        {/* The same children as the form up to the picker, so switching keeps it mounted. */}
+        {imported && <ImportNote req={imported} />}
+        {tplPicker}
+        <LibraryPicker agent={st.id} groups={library.groups} picked={libPick} onToggle={(k) => setLibPick((p) => toggled(p, k))} />
+      </Modal>
+    );
+  }
   return (
     <Modal label={isNew ? t("common.addProvider") : t("common.editProvider")} wide dirty={!!imported} onClose={onClose}
       title={isNew ? t("providerDialog.addHead", { agent: st.name }) : t("providerDialog.editHead", { name: editing!.name })} foot={foot}>
       {imported && <ImportNote req={imported} />}
-      {isNew && gatewayCapable(st.id) && !unifiedNew && !imported && <TemplatePicker value={tpl} onPick={pickTpl} />}
+      {tplPicker}
       <div className="field">
         <label htmlFor="pd-name">{t("common.name")}</label>
         <input id="pd-name" ref={first} className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("common.providerNamePlaceholder")} />

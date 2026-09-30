@@ -702,6 +702,15 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .copy-row input { width: 15px; height: 15px; accent-color: var(--accent); margin: 0; flex-shrink: 0; }
 .pavatar.sm { width: 28px; height: 28px; border-radius: 8px; font-size: 10.5px; }
 .copy-meta { width: 92px; text-align: right; flex-shrink: 0; }
+/* Add provider › from the provider library: two cards per row. */
+.lib-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 640px) { .lib-grid { grid-template-columns: minmax(0, 1fr); } }
+.lib-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; }
+.lib-card:hover { background: var(--row-hover); }
+.lib-card.on { background: var(--accent-soft); border-color: var(--accent-line); }
+.lib-card.dim { opacity: .55; cursor: default; }
+.lib-card.dim:hover { background: var(--surface); }
+.lib-card input { width: 15px; height: 15px; accent-color: var(--accent); margin: 0; flex-shrink: 0; }
 .nowrap { white-space: nowrap; flex-shrink: 0; }
 
 /* Brief hints (Settings → Interface): explanations go, option names stay. */

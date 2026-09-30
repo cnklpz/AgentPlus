@@ -14,6 +14,7 @@ export default {
   roleSubagentHint: "CLAUDE_CODE_SUBAGENT_MODEL: the model subagents use",
   hermesDefaultHint: "This provider's default model; written to model.default when you switch to it",
   addHead: "Add a provider to {agent}",
+  addFromLibrary: "Add {n} provider|Add {n} providers",
   editHead: "Edit \"{name}\"",
   viaGatewayDesc: "{vendor} has no {only} API, and {agent} only supports that one. After saving, the gateway is turned on and converts {api} to {only}. The base URL and API key are kept in the provider library.",
   sessionHint: "{vendor} requires the agent to send a session ID (x-opencode-session) with each request and refuses requests without one. If it doesn't work, turn on local gateway forwarding and the gateway adds it for you. {more}",

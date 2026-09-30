@@ -31,6 +31,7 @@ export default {
   switchedTo: "Switched to {env}",
   switchFailed: "Couldn't switch: {err}",
   pickFolderFailed: "Couldn't choose a folder: {err}",
+  libraryQueued: "Queued: add {n} provider from the library. Click \"Apply\" to write it|Queued: add {n} providers from the library. Click \"Apply\" to write them",
   copyQueued: "Queued: copy {n} provider. Click \"Apply\" to write the project config|Queued: copy {n} providers. Click \"Apply\" to write the project config",
   cannotAdd: "Can't add",
   queuedDeletes: "Queued {n} removal|Queued {n} removals",

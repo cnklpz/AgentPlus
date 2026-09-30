@@ -273,6 +273,13 @@ export default function App() {
   /** Every agent shown here plus the open project configs: what "apply all" / "discard all" act on. */
   const allStates = useMemo(() => [...shown, ...Object.values(projStates)], [shown, projStates]);
   const stations = useMemo(() => buildStations(shown, drafts, lib, gatewayHosts), [shown, drafts, lib, gatewayHosts, lang]);
+  /** Add-provider dialog: the provider library's groups (a project config isn't among the
+   * hub's agents, so its own entries are grouped for it). Built only while the dialog is open. */
+  const libOpen = !!dialog && !dialog.editing;
+  const libGroups = useMemo(() => {
+    if (!libOpen || !st) return [];
+    return (isProjectId(st.id) ? buildStations([st], drafts, lib, gatewayHosts) : stations).flatMap((x) => x.groups).filter((g) => g.lib);
+  }, [libOpen, st, drafts, lib, gatewayHosts, stations, lang]);
 
   /** Drafts with every agent address at one of `from` (gateway ports) moved to `port`, and how many moved. */
   const moveGatewayPort = (all: Record<string, Draft>, from: number[], port: number) => {
@@ -763,6 +770,26 @@ export default function App() {
     setDraftFor(st.id, d);
     setCopyOpen(false);
     flash(tn("app.copyQueued", picks.length));
+  };
+  /** Add-provider dialog → library entries queued as imports (the backend resolves address and key). */
+  const addFromLibrary = (gs: Group[]) => {
+    if (!st) return;
+    let d = drafts[st.id] ?? {};
+    let n = 0;
+    for (const g of gs) {
+      const op = importOp(g, st.id);
+      if (!op) continue;
+      d = withOp(d, importKey(g), op);
+      n++;
+    }
+    // None could be queued (the library changed meanwhile): keep the dialog open.
+    if (!n) {
+      flash(t("app.cannotAdd"), true);
+      return;
+    }
+    setDraftFor(st.id, d);
+    setDialog(null);
+    flash(tn("app.libraryQueued", n));
   };
   // ------------------------------------------------------------ hub actions
   const hubAdd = (g: Group, to: AgentId) => {
@@ -1743,7 +1770,7 @@ export default function App() {
         )}
       </div>
 
-      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onCommitCatalog={commitCodexCatalog} flash={flash} onSave={saveProvider} onClose={() => setDialog(null)} />}
+      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} library={libOpen ? { groups: libGroups, onAdd: addFromLibrary } : undefined} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onCommitCatalog={commitCodexCatalog} flash={flash} onSave={saveProvider} onClose={() => setDialog(null)} />}
       {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} others={hubDialog.others}

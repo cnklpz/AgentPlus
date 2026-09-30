@@ -15,6 +15,7 @@ import agentPage from "./agentPage";
 import providerDialog from "./providerDialog";
 import modelDialog from "./modelDialog";
 import templatePicker from "./templatePicker";
+import libraryPicker from "./libraryPicker";
 import modelPicker from "./modelPicker";
 import envSwitch from "./envSwitch";
 import comboBox from "./comboBox";
@@ -62,6 +63,7 @@ const zh: typeof en = {
   providerDialog,
   modelDialog,
   templatePicker,
+  libraryPicker,
   modelPicker,
   envSwitch,
   comboBox,

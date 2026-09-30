@@ -16,6 +16,7 @@ const zh: typeof en = {
   roleSubagentHint: "CLAUDE_CODE_SUBAGENT_MODEL：子代理用的模型",
   hermesDefaultHint: "这个供应商的默认模型；切换到它时写入 model.default",
   addHead: "添加供应商到 {agent}",
+  addFromLibrary: "添加 {n} 个供应商",
   editHead: "编辑「{name}」",
   viaGatewayDesc: "{vendor} 没有 {only} 接口，{agent} 只支持这种：保存后自动开启网关，把 {api} 转换成 {only}。地址和密钥存在供应商库。",
   sessionHint: "{vendor} 要求 Agent 自己在请求里带会话 ID（x-opencode-session），不带会被拒绝。如果无法使用，请开启本地网关转发，网关会自动补上。{more}",

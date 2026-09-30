@@ -33,6 +33,7 @@ const zh: typeof en = {
   switchedTo: "已切换到 {env}",
   switchFailed: "切换失败：{err}",
   pickFolderFailed: "选择文件夹失败：{err}",
+  libraryQueued: "已加入待写入：从供应商库添加 {n} 个供应商，点「应用」写入",
   copyQueued: "已加入待写入：复制 {n} 个供应商，点「应用」写入项目配置",
   cannotAdd: "不能添加",
   queuedDeletes: "已把 {n} 处删除加入待写入",
