@@ -1024,6 +1024,10 @@ const real = {
   officialAuto: () => invoke<FetchedModel[]>("codex_official_auto"),
   /** Codex's catalog from the model list built into the installed Codex. */
   codexBuiltinCatalog: () => invoke<FetchedModel[]>("codex_builtin_catalog"),
+  /** Reads Codex's built-in list into a temporary file; the catalog is written by `codexBuiltinCommit`. */
+  codexBuiltinPreview: () => invoke<FetchedModel[]>("codex_builtin_preview"),
+  codexBuiltinCommit: () => invoke<FetchedModel[]>("codex_builtin_commit"),
+  codexBuiltinDiscard: () => invoke<void>("codex_builtin_discard"),
   officialCancel: () => invoke<void>("codex_official_cancel"),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
@@ -1477,6 +1481,9 @@ const demo: typeof real = {
   officialCancel: async () => { demoOfficial.active = false; },
   officialAuto: async () => { await sleep(900); return ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "codex-auto-review"].map((slug, i) => ({ slug, name: slug.toUpperCase(), visible: i !== 6 })); },
   codexBuiltinCatalog: async () => { await sleep(400); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
+  codexBuiltinPreview: async () => { await sleep(400); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
+  codexBuiltinCommit: async () => { await sleep(200); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
+  codexBuiltinDiscard: async () => undefined,
   gatewayStatus: async () => demoGw(),
   gatewaySet: async (enabled, port) => { demoGateway.enabled = enabled; if (port) demoGateway.port = port; return demoGw(); },
   gatewaySaveRoute: async (route, oldId) => { demoGateway.routes = [...demoGateway.routes.filter((r) => r.id !== (oldId ?? route.id)), route]; return demoGw(); },

@@ -642,6 +642,24 @@ async fn codex_builtin_catalog() -> Result<Vec<official::FetchModel>, String> {
     blocking(official::from_codex).await
 }
 
+/// The provider dialog's refetch: reads Codex's built-in list into a temporary file only.
+#[tauri::command]
+async fn codex_builtin_preview() -> Result<Vec<official::FetchModel>, String> {
+    blocking(official::builtin_preview).await
+}
+
+/// The provider dialog was saved: the list `codex_builtin_preview` read becomes the catalog.
+#[tauri::command]
+async fn codex_builtin_commit() -> Result<Vec<official::FetchModel>, String> {
+    blocking(official::builtin_commit).await
+}
+
+/// The provider dialog was closed without saving: drops the list it read.
+#[tauri::command]
+fn codex_builtin_discard() {
+    official::builtin_discard();
+}
+
 #[tauri::command]
 fn library_list() -> Vec<library::LibEntry> {
     library::list()
@@ -995,6 +1013,9 @@ pub fn run() {
             codex_official_cancel,
             codex_official_auto,
             codex_builtin_catalog,
+            codex_builtin_preview,
+            codex_builtin_commit,
+            codex_builtin_discard,
             gateway_status,
             gateway_set,
             gateway_save_route,

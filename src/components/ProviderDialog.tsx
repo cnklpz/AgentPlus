@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { type AgentState, type ApiKind, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api } from "../api";
+import { type AgentState, type ApiKind, type FetchedModel, type GatewayRouteView, type GatewayStatus, type ImportRequest, type ProviderInput, api } from "../api";
 import { type Draft, type ViewProvider, codexDefaultModels, isVisible, keys, settingValue, viewModels } from "../draft";
 import { API_LABEL, DEFAULT_GATEWAY_PORT, GATEWAY_KEY, ONLY_API, PROTOCOLS, URL_PLACEHOLDER, gatewayCapable, gatewayPoolBase, gatewayPoolIds, movedHost, tripped } from "../services";
 import { askKeepKey } from "./Confirm";
@@ -13,7 +13,7 @@ import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import { type Template, modelsAfter, modelsFor, modelsOn } from "../templates";
 import { type TKey, t, tn, tSaved, tx } from "../i18n";
 import { scrub } from "../privacy";
-import { errText, isHttpUrl, toggledIn } from "../util";
+import { type Flash, errText, isHttpUrl, toggledIn } from "../util";
 
 /** What the dialog asks the app to do; every part is optional. */
 export interface ProviderSave {
@@ -57,6 +57,9 @@ interface Props {
   ensureGateway: () => Promise<GatewayStatus>;
   /** Codex without a catalog: create one from the model list built into Codex. */
   onCreateCatalog: () => Promise<void>;
+  /** Codex: writes the built-in list the dialog read (`api.codexBuiltinPreview`) as the catalog. */
+  onCommitCatalog: () => Promise<void>;
+  flash: Flash;
   /** New provider from an import link: the fields it fills in. */
   imported?: ImportRequest | null;
 }
@@ -84,7 +87,7 @@ const ROLES: { role: string; label: TKey; hint: TKey }[] = [
 ];
 const HERMES_ROLES: typeof ROLES = [{ role: "default", label: "providerDialog.roleDefault", hint: "providerDialog.hermesDefaultHint" }];
 
-export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, onCreateCatalog, imported }: Props) {
+export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClose, gateway, ensureGateway, onCreateCatalog, onCommitCatalog, flash, imported }: Props) {
   const isNew = !editing || !!editing.isNew;
   const codex = st.id === "codex";
   const claude = st.id === "claude";
@@ -138,8 +141,14 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const perModels = editing && !isNew && !listMode ? viewModels(editing.id, editing.models, draft).filter((m) => !m.isDeleted) : [];
   /** Codex: the models Codex itself ships (its catalog, minus the ones AgentPlus added). */
   const catalogIds = (custom: boolean) => (codex ? (st.catalog ?? []) : []).filter((m) => m.tags.some((g) => g.id === "custom") === custom).map((m) => m.id);
-  const builtinIds = catalogIds(false);
-  const builtinDefault = codex ? codexDefaultModels(st.catalog ?? []) : [];
+  /** Codex: the built-in list read again, kept in a temporary file until the dialog is saved. */
+  const [preview, setPreview] = useState<FetchedModel[] | null>(null);
+  const previewIds = preview?.map((m) => m.slug).filter((id) => !catalogIds(true).includes(id)) ?? null;
+  const builtinIds = previewIds ?? catalogIds(false);
+  /** Catalog models the read list no longer has (they go when the dialog is saved). */
+  const previewDrops = previewIds ? catalogIds(false).filter((id) => !previewIds.includes(id)) : [];
+  const previewShown = preview?.filter((m) => m.visible && previewIds!.includes(m.slug)).map((m) => m.slug) ?? [];
+  const builtinDefault = !codex ? [] : previewIds ? (previewShown.length ? previewShown : previewIds) : codexDefaultModels(st.catalog ?? []);
   /** Codex, with the built-in list off: the models AgentPlus added (an existing provider lists the whole catalog). */
   const ownPool = () => (isNew ? catalogIds(true) : [...catalogIds(true), ...builtinIds]);
   const startChecked = isNew ? editing?.models.map((m) => m.id) ?? imported?.models ?? null : listMode ? codexStart : perModels.filter((m) => isVisible(editing!.id, m, draft)).map((m) => m.id);
@@ -220,6 +229,23 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     pickBuiltin(true);
   }, [builtinIds.length]);
   const [creating, setCreating] = useState(false);
+  /** A read list not written yet: dropped when the dialog closes without saving. */
+  const previewPending = useRef(false);
+  useEffect(() => () => { if (previewPending.current) void api.codexBuiltinDiscard(); }, []);
+  const refetchBuiltin = async () => {
+    setErr(null);
+    setCreating(true);
+    try {
+      const list = await api.codexBuiltinPreview();
+      previewPending.current = true;
+      setPreview(list);
+      flash(tn("providerDialog.codexRefetched", list.filter((m) => !catalogIds(true).includes(m.slug)).length));
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setCreating(false);
+    }
+  };
   const createCatalog = async () => {
     setErr(null);
     setCreating(true);
@@ -306,6 +332,10 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
   const submit = async (out: ProviderSave) => {
     setSaving(true);
     try {
+      if (previewPending.current) {
+        await onCommitCatalog();
+        previewPending.current = false;
+      }
       await onSave(mixOn.length ? { ...out, settingsOn: mixOn } : out);
     } catch (e) {
       setErr(errText(e));
@@ -520,7 +550,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
             </button>
           )}
           {codex && builtin && builtinIds.length > 0 && !st.readonly && (
-            <button type="button" className="btn small" disabled={creating} title={t("providerDialog.codexRefetchHint")} onClick={createCatalog}>
+            <button type="button" className="btn small" disabled={creating} title={t("providerDialog.codexRefetchHint")} onClick={refetchBuiltin}>
               <Icon.refresh size={12} />{creating ? t("common.fetching") : t("providerDialog.codexRefetch")}
             </button>
           )}
@@ -535,6 +565,9 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
                 ? t("providerDialog.claudeUnmanagedNote")
                 : t("providerDialog.claudeNote")}
           </em>
+        )}
+        {codex && previewDrops.length > 0 && (
+          <em className="tiny hint warn-text">{t("providerDialog.codexRefetchDrops", { list: previewDrops.join(", ") })}</em>
         )}
         {builtinIds.length > 0 ? (
           <ToggleRow on={builtin} onChange={pickBuiltin} icon={<Icon.layers size={16} />} title={t("providerDialog.codexBuiltin")}

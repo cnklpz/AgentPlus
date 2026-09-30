@@ -283,8 +283,12 @@ fn write_catalog(catalog: &Path, mut new: Value, root: &mut Value) -> Result<Vec
         fs::create_dir_all(dir)?;
     }
     write_json(catalog, &new, meta)?;
-    Ok(new
-        .get("models")
+    Ok(listed(&new))
+}
+
+/// The models a catalog (`{"models": [...]}`) lists.
+fn listed(v: &Value) -> Vec<FetchModel> {
+    v.get("models")
         .and_then(|m| m.as_array())
         .into_iter()
         .flatten()
@@ -295,7 +299,7 @@ fn write_catalog(catalog: &Path, mut new: Value, root: &mut Value) -> Result<Vec
                 visible: m.get("visibility").and_then(|x| x.as_str()) != Some("hide"),
             })
         })
-        .collect())
+        .collect()
 }
 
 /// Makes config.toml read `catalog` when it names no catalog yet.
@@ -322,6 +326,39 @@ pub fn from_codex() -> Result<Vec<FetchModel>> {
     // minute, and every other change to the store (and the window with it) would wait.
     let v = builtin_list()?;
     crate::store::transaction(|| install(v))
+}
+
+/// Where `builtin_preview` keeps the list until the provider dialog is saved.
+fn preview_path() -> PathBuf {
+    crate::util::agentplus_dir().join("codex-builtin-preview.json")
+}
+
+/// Reads the model list built into the installed Codex into a temporary file, without
+/// touching the catalog: the provider dialog writes it with `builtin_commit` when it is saved.
+pub fn builtin_preview() -> Result<Vec<FetchModel>> {
+    let v = builtin_list()?;
+    let path = preview_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    write_json(&path, &v, TextMeta::NEW)?;
+    Ok(listed(&v))
+}
+
+/// Makes the list `builtin_preview` read the catalog, as `from_codex` does, and drops the
+/// temporary file.
+pub fn builtin_commit() -> Result<Vec<FetchModel>> {
+    let path = preview_path();
+    let (v, _) = read_json(&path).map_err(|_| anyhow!(crate::i18n::l("The fetched list is gone; fetch it again", "读取的列表已经不在了，请重新获取")))?;
+    let v = catalog_in(&v).ok_or_else(|| anyhow!(crate::i18n::l("The fetched list is damaged; fetch it again", "读取的列表已损坏，请重新获取")))?;
+    let models = crate::store::transaction(|| install(v))?;
+    let _ = fs::remove_file(&path);
+    Ok(models)
+}
+
+/// Drops a list `builtin_preview` read (the dialog was closed without saving).
+pub fn builtin_discard() {
+    let _ = fs::remove_file(preview_path());
 }
 
 /// The model list built into the installed Codex, found as `from_codex` describes.
@@ -618,6 +655,38 @@ mod tests {
         cancel().unwrap();
         assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), original);
         assert_eq!(fs::read(codex.join("models.json")).unwrap(), before);
+    }
+
+    /// The dialog's refetch: nothing reaches the catalog until the dialog is saved (commit);
+    /// closing it (discard) leaves the catalog as it was.
+    #[test]
+    fn builtin_preview_is_written_only_on_commit() {
+        let h = crate::util::TestHome::new("official-preview");
+        let codex = h.0.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let config = "model_provider = \"relay\"\nmodel_catalog_json = \"~/.codex/models.json\"\n";
+        fs::write(codex.join("config.toml"), config).unwrap();
+        let official = r#"{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1-Sol"},{"slug":"mine","display_name":"Mine"}]}"#;
+        fs::write(codex.join("models.json"), official).unwrap();
+        let mut root = store::load();
+        store::set_value(&mut root, ID, "customModels", json!(["mine"]));
+        store::save(&root).unwrap();
+        let fetched = json!({ "models": [{ "slug": "gpt-6-sol", "display_name": "GPT-6-Sol" }] });
+
+        // What `builtin_preview` leaves behind, then the dialog is closed.
+        fs::create_dir_all(preview_path().parent().unwrap()).unwrap();
+        write_json(&preview_path(), &fetched, TextMeta::NEW).unwrap();
+        builtin_discard();
+        assert!(!preview_path().exists());
+        assert_eq!(fs::read_to_string(codex.join("models.json")).unwrap(), official, "catalog untouched");
+        assert!(builtin_commit().is_err(), "nothing left to commit");
+
+        // Read again, then saved: the list replaces the catalog, custom models stay.
+        write_json(&preview_path(), &fetched, TextMeta::NEW).unwrap();
+        let models = builtin_commit().unwrap();
+        assert_eq!(models.iter().map(|m| m.slug.as_str()).collect::<Vec<_>>(), ["gpt-6-sol", "mine"]);
+        assert!(!preview_path().exists());
+        assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), config);
     }
 
     /// Without a ChatGPT sign-in nothing is touched.

@@ -497,6 +497,11 @@ export default function App() {
     replaceAgent(await api.getAgent("codex"));
     flash(tn("app.builtinCatalogDone", list.length));
   };
+  /** The provider dialog was saved after reading Codex's built-in list again: write it as the catalog. */
+  const commitCodexCatalog = async () => {
+    await api.codexBuiltinCommit();
+    replaceAgent(await api.getAgent("codex"));
+  };
   const replaceAgent = (next: AgentState) => (isProjectId(next.id)
     ? setProjStates((m) => ({ ...m, [next.id]: next }))
     : setAgents((list) => list.map((a) => (a.id === next.id ? next : a))));
@@ -1738,7 +1743,7 @@ export default function App() {
         )}
       </div>
 
-      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onSave={saveProvider} onClose={() => setDialog(null)} />}
+      {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onCommitCatalog={commitCodexCatalog} flash={flash} onSave={saveProvider} onClose={() => setDialog(null)} />}
       {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} others={hubDialog.others}
