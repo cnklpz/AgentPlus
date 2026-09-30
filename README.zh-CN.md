@@ -11,6 +11,7 @@
 [![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
 [![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![Telegram](https://img.shields.io/badge/Telegram-加入群组-26A5E4?logo=telegram&logoColor=white)](https://t.me/AgentPlusGroup)
 
 [English](README.md) | 简体中文
 
