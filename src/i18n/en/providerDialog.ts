@@ -58,6 +58,8 @@ export default {
   codexBuiltin: "Use Codex's built-in model list",
   codexBuiltinOn: "Pick from the models Codex ships with; untick the ones this provider doesn't serve.",
   codexNoCatalog: "Codex has no model catalog yet. Turn this on to create ~/.codex/models.json from the model list built into Codex.",
+  codexRefetch: "Refetch built-in list",
+  codexRefetchHint: "Reads the model list from the installed Codex again and rewrites ~/.codex/models.json right away, keeping the models you added.",
   codexCreatingCatalog: "Creating the catalog from Codex's built-in list…",
   codexBuiltinOff: "This provider's own models: fetch them from its address or add them by hand.",
   claudeUnmanagedNote: "This config was written by hand in settings.json. Save it once to let AgentPlus manage it, then set up its models.",

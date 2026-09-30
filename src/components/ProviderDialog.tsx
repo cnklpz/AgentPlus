@@ -204,8 +204,16 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
     }
   };
 
-  // Codex had no catalog and one was just created from its built-in list: start from it.
   const hadBuiltin = useRef(builtinIds.length > 0);
+  // The built-in list was fetched again: list what it holds now (the ticks stay as they are).
+  const builtinKey = builtinIds.join("\n");
+  const seenBuiltinKey = useRef(builtinKey);
+  useEffect(() => {
+    if (seenBuiltinKey.current === builtinKey) return;
+    seenBuiltinKey.current = builtinKey;
+    if (hadBuiltin.current && builtin) resetPool([...builtinIds, ...checked]);
+  }, [builtinKey]);
+  // Codex had no catalog and one was just created from its built-in list: start from it.
   useEffect(() => {
     if (hadBuiltin.current || builtinIds.length === 0) return;
     hadBuiltin.current = true;
@@ -509,6 +517,11 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
           {!(codex && builtin) && (
             <button type="button" className="btn small" disabled={(!gw && !unifiedNew && !urlOk) || fetching} onClick={fetchList}>
               <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
+            </button>
+          )}
+          {codex && builtin && builtinIds.length > 0 && !st.readonly && (
+            <button type="button" className="btn small" disabled={creating} title={t("providerDialog.codexRefetchHint")} onClick={createCatalog}>
+              <Icon.refresh size={12} />{creating ? t("common.fetching") : t("providerDialog.codexRefetch")}
             </button>
           )}
         </div>
