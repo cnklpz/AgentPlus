@@ -327,6 +327,11 @@ export function deleteModel(d: Draft, pid: string, mid: string): Draft {
   return withOp(d, keys.deleteModel(pid, mid), { op: "delete_model", provider: pid, model: mid });
 }
 
+/** Drops a model added in this draft (not written yet): forgets the add instead of queuing a delete. */
+export function discardNewModel(d: Draft, pid: string, mid: string): Draft {
+  return withOp(d, keys.upsertModel(pid, mid), null);
+}
+
 /** Shows / hides a model in the agent's picker; back to how it is applied = no pending change. */
 export function setModelVisible(d: Draft, pid: string, m: Model, visible: boolean): Draft {
   return withOp(d, keys.visible(pid, m.id), visible === m.visible ? null : { op: "set_model_visible", provider: pid, model: m.id, visible });

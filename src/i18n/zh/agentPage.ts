@@ -61,6 +61,7 @@ const zh: typeof en = {
   editModel: "编辑 {id}",
   deleteModel: "删除 {id}",
   deleteConfirm: "删除模型「{id}」？",
+  deleteNewConfirmMsg: "这个模型还没写入配置，删除只是把它从待写入的改动里去掉。",
   deleteConfirmMsg: "会加入待写入的改动，点「应用」后才从配置里删除；应用前可以撤销。只想让它不出现在选择器里的话，关掉它的开关就行。",
   hideModel: "隐藏 {id}",
   showModel: "显示 {id}",

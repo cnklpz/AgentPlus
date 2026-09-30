@@ -59,6 +59,7 @@ export default {
   editModel: "Edit {id}",
   deleteModel: "Delete {id}",
   deleteConfirm: "Delete model \"{id}\"?",
+  deleteNewConfirmMsg: "This model hasn't been written to the config yet; it is simply dropped from the pending changes.",
   deleteConfirmMsg: "This is added to pending changes and only removed from the config after you click \"Apply\"; you can undo it until then. To just hide it from the picker, turn off its switch instead.",
   hideModel: "Hide {id}",
   showModel: "Show {id}",

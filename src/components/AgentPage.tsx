@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type Issue, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
-  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, editProvider, guessedModel, hasDefaultModel, isEnabled, isVisible, issueStaged, keys, mergeExtra, opCount,
+  CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, discardNewModel, editProvider, guessedModel, hasDefaultModel, isEnabled, isVisible, issueStaged, keys, mergeExtra, opCount,
   pluginOn, providerModelCount, setModelVisible, setPluginEnabled, setSetting, setSettingIn, settingValue, excludedOn, syncKeys, upsertModel, viewModels, viewProviders, visibleCount, visibleModelCount, withOp,
 } from "../draft";
 import { AgentIcon, Icon, OptCheck } from "./icons";
@@ -631,9 +631,8 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                   {(m.deletable || m.isNew) && (
                     <button className="icon-btn sm" aria-label={t("agentPage.deleteModel", { id: m.id })} title={t("common.delete")} disabled={readonly}
                       onClick={async () => {
-                        if (m.isNew) return setDraft(withOp(draft, keys.upsertModel(pid, m.id), null));
-                        if (!(await ask({ title: t("agentPage.deleteConfirm", { id: m.id }), message: t("agentPage.deleteConfirmMsg"), danger: true }))) return;
-                        setDraft((d) => deleteModel(d, pid, m.id));
+                        if (!(await ask({ title: t("agentPage.deleteConfirm", { id: m.id }), message: t(m.isNew ? "agentPage.deleteNewConfirmMsg" : "agentPage.deleteConfirmMsg"), danger: true }))) return;
+                        setDraft((d) => (m.isNew ? discardNewModel(d, pid, m.id) : deleteModel(d, pid, m.id)));
                       }}>
                       <Icon.trash size={12} />
                     </button>

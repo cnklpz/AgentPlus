@@ -4,7 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type AgentId, type AgentState, type ApiKind, type ApplyResult, type DiffGroup, type EnvInfo, type GatewayRouteView, type GatewayStatus, type ImportItem, type ImportRequest, type LibEntry, type McpLink, type ModelGuess, type Op, type ProjectEntry, type ProviderInput, type SyncAutoResult, type SyncSuggestion, api, isProjectId, logClient, sameLaunch } from "./api";
 import {
-  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, draftAfterWrite, editProvider, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount, writeOrder,
+  CATALOG, type Draft, type ViewProvider, currentProvider, defaultModel, deleteModel, deleteProvider, discardNewModel, draftAfterWrite, editProvider, guessedModel, hasDefaultModel, importProvider, isEnabled, isVisible, keys, opCount, writeOrder,
   opsToWrite, pendingTotal, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
@@ -1420,8 +1420,8 @@ export default function App() {
           ...(!m.isDeleted && !m.readonly ? [{ label: t(vis ? "app.hideInPicker" : "app.showInPicker"), disabled: st.readonly, action: () => setDraft(setModelVisible(draft, pid, m, !vis)) }] : []),
           ...attrItems(),
           ...((m.deletable && !m.isDeleted) ? ["sep" as const, { label: t("app.deleteModelMenu"), icon: <Icon.trash size={12} />, danger: true, disabled: st.readonly, action: async () => {
-            if (!(await ask({ title: t("app.deleteModelTitle", { id: mid }), message: t("app.deleteModelMsg"), danger: true }))) return;
-            setDraftFor(st.id, (d) => deleteModel(d, pid, mid));
+            if (!(await ask({ title: t("app.deleteModelTitle", { id: mid }), message: t(m.isNew ? "agentPage.deleteNewConfirmMsg" : "app.deleteModelMsg"), danger: true }))) return;
+            setDraftFor(st.id, (d) => (m.isNew ? discardNewModel(d, pid, mid) : deleteModel(d, pid, mid)));
           } }] : []),
           "sep",
         ];

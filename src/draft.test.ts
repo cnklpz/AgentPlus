@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentState, Issue, McpInput, McpServer, Model, Op, Provider, Setting } from "./api";
 import {
-  type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, draftAfterWrite, editProvider, fmtCtx, guessedModel, importProvider, issueStaged, keys, mergeExtra, opCount, opsToWrite, syncKeys,
+  type Draft, type ViewProvider, agentsWithOps, codexDefaultModels, defaultModel, deleteModel, deleteProvider, discardNewModel, draftAfterWrite, editProvider, fmtCtx, guessedModel, importProvider, issueStaged, keys, mergeExtra, opCount, opsToWrite, syncKeys,
   parseCtx, pendingTotal, providerModelCount, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, setSettingIn, settingOn, excludedOn, settingValue, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   visibleCount, visibleModelCount, withOp, deleteMcp, mcpView, sameCore, setMcpEnabled, undoMcp, upsertMcp, writeOrder, pluginOn, setPluginEnabled,
 } from "./draft";
@@ -229,6 +229,11 @@ describe("op builders", () => {
     expect(deleteProvider({}, "p")).toEqual({ [keys.deleteProvider("p")]: { op: "delete_provider", provider: "p" } });
     expect(deleteModel({}, "p", "m")).toEqual({ [keys.deleteModel("p", "m")]: { op: "delete_model", provider: "p", model: "m" } });
     expect(viewProviders(agent({ providers: [provider("p")] }), deleteProvider({}, "p"))[0].isDeleted).toBe(true);
+  });
+  it("discardNewModel forgets an added model instead of queuing a delete", () => {
+    const d = upsertModel({}, "p", { id: "m" } as never);
+    expect(Object.keys(d)).toEqual([keys.upsertModel("p", "m")]);
+    expect(discardNewModel(d, "p", "m")).toEqual({});
   });
   it("setModelVisible drops the op when back to the applied value", () => {
     const m = model("m", { visible: true });
