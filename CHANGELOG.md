@@ -2,6 +2,30 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.3.1
+
+适配 Codex 26.928；已登录 ChatGPT 账号时，获取官方模型列表不用再重启 Codex。
+
+- Codex 26.928：「隐藏用量提示横幅」重新生效。界面补丁现在按 Codex 版本号选用对应的适配，旧版本继续用原来的
+- 从 OpenAI 官方获取模型列表：检测到 ChatGPT 账号登录时自动下载并写入，不用重启、不用再登录；下载失败时回到原来的手动步骤，手动步骤里的重启也更快了（不开调试端口）
+- 编辑供应商里新增「重新获取内置列表」：Codex 更新后可以重新读取它自带的模型列表。读取的结果保存时才写入 ~/.codex/models.json，取消不会改动；会被移除的模型会列出来并自动取消勾选（以前官方获取的列表可能被较旧的内置列表覆盖掉）
+- 设置 → 界面：新增「显示 MCP」「显示技能」「显示插件」开关，关闭后只隐藏对应的页面和标签页，不改动任何配置
+- 删除供应商库里的条目时，确认框会列出会因此失去上游的网关转发
+- 删除还没应用的模型时先确认，只从待写入的改动里去掉（以前右键菜单会为它排一条删除）
+- 底部提示显示在弹窗上层，出现时弹窗会让出位置，不再挡住按钮；获取官方模型列表的卡片变高时会自动滚到可见
+- 修复撕碎页面的纸片颜色、技能导入框的占位文字溢出；备用的 Codex 内置列表更新到 26.928
+
+Adapts to Codex 26.928; signed in with a ChatGPT account, getting the official model list no longer needs a Codex restart.
+
+- Codex 26.928: "Hide usage banners" works again. UI patches now pick the adaptation made for the running Codex version; older versions keep theirs
+- Get the official model list from OpenAI: with a ChatGPT sign-in, the list is downloaded and written right away, with no restart and no sign-in step; if that fails, the manual steps take over, and their restart is faster (no debug port)
+- "Refetch built-in list" in the provider dialog reads the model list built into Codex again after a Codex update. It is written to ~/.codex/models.json only when you save, and Cancel leaves it alone; models it would remove are listed and unticked (an official list used to be replaced by an older built-in one)
+- Settings → Interface: "Show MCP", "Show skills" and "Show plugins" switches hide those pages and tabs without changing any config
+- Deleting a provider library entry lists the gateway forwards it leaves without an upstream
+- Deleting a model that isn't applied yet asks first and only drops it from the pending changes (the context menu used to queue a delete for it)
+- Toasts show above dialogs, which make room for them instead of having their buttons covered; the official-list card scrolls into view as it grows
+- Fixes the colours of torn-page scraps and the overflowing skill import placeholder; the fallback copy of Codex's built-in list is updated to 26.928
+
 ## 0.3.0
 
 新增 MCP 服务器、技能和插件管理，支持 DeepSeek Harness，多设备同步可以选择同步的内容，供应商可以整个删除。
