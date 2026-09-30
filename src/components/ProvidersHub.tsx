@@ -54,16 +54,14 @@ export function ProvidersHub({ agents, stations, viaGateway, latency, selected, 
     <main className="page">
       <div className="page-top">
         <div className="page-head">
-            <span className="page-icon"><Icon.layers size={20} /></span>
+          <span className="page-icon"><Icon.layers size={20} /></span>
           <div className="page-title">
             <h1>{t("common.providers")}</h1>
-            <span className="muted small hint">
-              {t("providersHub.intro", { env: envLabel })}
-            </span>
           </div>
           <button className="btn" onClick={onTestAll}><Icon.pulse />{t("providersHub.testLatency")}</button>
           <button className="btn" onClick={onImportLink} title={t("providersHub.importLinkHint")}><Icon.link />{t("providersHub.importLink")}</button>
           <button className="btn primary" onClick={onAdd}><Icon.plus />{t("common.addProvider")}</button>
+          <p className="page-intro muted small hint">{t("providersHub.intro", { env: envLabel })}</p>
         </div>
         <div className="toolbar">
           <div className="seg" role="tablist" aria-label={t("common.filter")}>

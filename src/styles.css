@@ -232,6 +232,10 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 /* Below this width the buttons move to the next line rather than squeeze the name. */
 .page-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 240px; }
 .page-title h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.015em; }
+/* A long intro gets its own line under the title and buttons, lined up with the title
+ * (past the 40px icon and the 14px gap) like the intros of other pages. */
+.page-intro { flex-basis: calc(100% - 54px); margin: -4px 0 0 54px; }
+.page-head:has(> .page-intro) .page-title { flex-basis: auto; }
 .chip-ok { font-size: 11.5px; font-weight: 600; color: var(--ok); background: var(--ok-soft); border-radius: 999px; padding: 2px 8px; }
 .chip-muted { font-size: 11.5px; font-weight: 600; color: var(--muted); background: var(--sunken); border-radius: 999px; padding: 2px 8px; }
 /* Name first: when the row is short, the status chip moves under it instead of squeezing it. */
