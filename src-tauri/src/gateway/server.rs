@@ -318,6 +318,19 @@ pub struct Status {
     pub legacy_fp: String,
 }
 
+/// Called after the gateway starts or stops; set once at startup (the tray's switch follows it).
+static ON_CHANGE: OnceLock<fn()> = OnceLock::new();
+
+pub fn on_change(f: fn()) {
+    let _ = ON_CHANGE.set(f);
+}
+
+fn changed() {
+    if let Some(f) = ON_CHANGE.get() {
+        f();
+    }
+}
+
 pub fn running_port() -> Option<u16> {
     lock(&RUNTIME).as_ref().map(|r| r.port)
 }
@@ -381,6 +394,20 @@ pub fn status() -> Status {
 
 pub fn set_enabled(enabled: bool, port: Option<u16>) -> Result<()> {
     let _g = lock(&CONTROL);
+    set_enabled_locked(enabled, port)
+}
+
+/// Starts the gateway when it isn't running, else stops it; returns whether it runs now.
+/// Decided and done under one lock, so two quick toggles flip it twice.
+pub fn toggle() -> Result<bool> {
+    let _g = lock(&CONTROL);
+    let on = running_port().is_none();
+    set_enabled_locked(on, None)?;
+    Ok(on)
+}
+
+/// `set_enabled` with `CONTROL` held.
+fn set_enabled_locked(enabled: bool, port: Option<u16>) -> Result<()> {
     if port.is_some_and(|p| p < 1024) {
         return Err(anyhow!(l("The port must be between 1024 and 65535", "端口需要在 1024–65535 之间")));
     }
@@ -544,6 +571,7 @@ fn run(listener: TcpListener, port: u16) -> Result<()> {
         drop(done_tx);
     })?;
     *lock(&RUNTIME) = Some(Runtime { port, stop, done });
+    changed();
     Ok(())
 }
 
@@ -577,6 +605,7 @@ fn stop() {
         // Wake the accept loop so it sees the flag.
         let _ = TcpStream::connect_timeout(&([127, 0, 0, 1], r.port).into(), Duration::from_millis(300));
         let _ = r.done.recv_timeout(Duration::from_secs(2));
+        changed();
     }
 }
 
@@ -2573,6 +2602,34 @@ mod tests {
         run_on(port).unwrap();
         assert!(lock(&LAST_ERROR).is_none(), "the stale error is cleared");
         stop();
+    }
+
+    /// The tray's switch: each toggle flips the gateway and the saved switch, and every start
+    /// and stop is reported to the `on_change` hook.
+    #[test]
+    fn toggle_flips_and_reports_changes() {
+        static CHANGES: AtomicUsize = AtomicUsize::new(0);
+        let _guard = lock(&TEST_LOCK);
+        let _h = crate::util::TestHome::new("gateway-toggle");
+        on_change(|| {
+            CHANGES.fetch_add(1, Ordering::SeqCst);
+        });
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        update_config(|c| {
+            c.port = port;
+            Ok(())
+        })
+        .unwrap();
+        let before = CHANGES.load(Ordering::SeqCst);
+        assert!(toggle().unwrap(), "stopped: starts");
+        assert_eq!(running_port(), Some(port));
+        assert!(load_config().enabled);
+        assert!(CHANGES.load(Ordering::SeqCst) > before, "the start is reported");
+        let before = CHANGES.load(Ordering::SeqCst);
+        assert!(!toggle().unwrap(), "running: stops");
+        assert_eq!(running_port(), None);
+        assert!(!load_config().enabled);
+        assert!(CHANGES.load(Ordering::SeqCst) > before, "the stop is reported");
     }
 
     #[test]

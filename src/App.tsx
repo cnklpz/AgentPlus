@@ -348,7 +348,7 @@ export default function App() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
-  // macOS menu bar (appmenu.rs): its AgentPlus items arrive as `menu` events.
+  // macOS menu bar and the tray menu (appmenu.rs, tray.rs): their AgentPlus items arrive as `menu` events.
   const menuRef = useRef((_id: string) => {});
   menuRef.current = (id: string) => {
     if (id === "settings") openSettings();
@@ -362,7 +362,7 @@ export default function App() {
     else if (id === "providers" || id === "gateway" || id === "history") setPage(id);
   };
   useEffect(() => {
-    if (!inTauri || !isMac) return;
+    if (!inTauri) return;
     const off = listen<string>("menu", (e) => menuRef.current(e.payload));
     return () => { off.then((f) => f()); };
   }, []);

@@ -701,6 +701,29 @@ fn hide_to_tray(app: tauri::AppHandle) {
     tray::hide_main(&app);
 }
 
+/// Whether the tray (macOS: menu bar) icon is the single-colour one.
+#[tauri::command]
+fn tray_mono() -> bool {
+    tray::mono()
+}
+
+/// Off the main thread, like the other store writes: the store's lock may be held a while.
+#[tauri::command]
+async fn set_tray_mono(app: tauri::AppHandle, on: bool) -> Result<bool, String> {
+    blocking(move || {
+        tray::set_mono(&app, on)?;
+        Ok(tray::mono())
+    })
+    .await
+}
+
+/// The theme the page shows (light or dark), for the single-colour tray icon. Sync, so the
+/// calls are handled in the order they were sent (`set_dark` saves on its own thread).
+#[tauri::command]
+fn set_tray_dark(app: tauri::AppHandle, dark: bool) {
+    tray::set_dark(&app, dark);
+}
+
 #[tauri::command]
 fn log_info() -> applog::LogInfo {
     applog::status()
@@ -1004,6 +1027,9 @@ pub fn run() {
             set_locale,
             quit_app,
             hide_to_tray,
+            tray_mono,
+            set_tray_mono,
+            set_tray_dark,
             detect_agents,
             test_provider,
             attribution_target,

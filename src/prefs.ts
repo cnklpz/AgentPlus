@@ -1,5 +1,6 @@
 // Per-install UI preferences (animations, auto latency, language). Browser storage may be
 // unavailable, so every access is guarded and defaults always work.
+import { api } from "./api";
 import { setHints } from "./hintsFx";
 import { type LangPref, setLang } from "./i18n";
 import { setPrivacy } from "./privacy";
@@ -111,7 +112,19 @@ let theme: Theme = "auto";
 const paintTheme = () => {
   const dark = theme === "dark" || (theme === "auto" && !!systemDark?.matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
+  syncTrayTheme(dark);
 };
+
+let trayDark: boolean | null = null;
+/**
+ * Tells the backend the theme shown, for the single-color tray icon (white on dark, black on
+ * light): once per change, and again on the next paint when the call failed.
+ */
+export function syncTrayTheme(dark: boolean): void {
+  if (trayDark === dark) return;
+  trayDark = dark;
+  api.setTrayDark(dark).catch(() => { if (trayDark === dark) trayDark = null; });
+}
 // "auto" keeps following the system while the app is open.
 systemDark?.addEventListener("change", () => { if (theme === "auto") paintTheme(); });
 

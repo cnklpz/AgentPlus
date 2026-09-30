@@ -5,7 +5,8 @@
 //!
 //! AgentPlus's own items are handled by the page: a click sends the item's id to the main
 //! window as a `menu` event (bringing the window back first if it sits hidden), except the
-//! ones that only open something outside the app.
+//! ones that only open something outside the app. The tray menu (all platforms) reuses
+//! some of these ids and goes through the same [`handle`].
 
 use crate::i18n::l;
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -13,7 +14,7 @@ use tauri::{AppHandle, Emitter, Wry};
 
 pub const GITHUB_URL: &str = "https://github.com/cnklpz/AgentPlus";
 
-/// Item ids the page acts on (App.tsx listens for them).
+/// Item ids the page acts on (App.tsx listens for them), from the menu bar or the tray.
 const PAGE_ITEMS: &[&str] = &["settings", "check-update", "search", "reload", "privacy", "providers", "gateway", "history"];
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
@@ -72,32 +73,34 @@ fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    if !cfg!(target_os = "macos") {
-        return Ok(());
+    // The tray menu shares these items, so the handler is on everywhere; the menu bar is Mac only.
+    app.on_menu_event(|app, e| handle(app, e.id().as_ref()));
+    if cfg!(target_os = "macos") {
+        app.set_menu(build(app)?)?;
     }
-    app.set_menu(build(app)?)?;
-    app.on_menu_event(|app, e| {
-        let id = e.id().as_ref();
-        match id {
-            "data-dir" => {
-                let d = crate::util::agentplus_dir();
-                let _ = std::fs::create_dir_all(&d);
-                let _ = crate::process::open_dir(&d.to_string_lossy());
-            }
-            "github" => {
-                let _ = crate::process::open_dir(GITHUB_URL);
-            }
-            "issue" => {
-                let _ = crate::process::open_dir(&format!("{GITHUB_URL}/issues/new/choose"));
-            }
-            _ if PAGE_ITEMS.contains(&id) => {
-                crate::tray::show_main(app);
-                let _ = app.emit_to("main", "menu", id);
-            }
-            _ => {}
-        }
-    });
     Ok(())
+}
+
+/// Acts on a menu bar or tray item; other ids are left to their menu's own handler.
+pub fn handle(app: &AppHandle, id: &str) {
+    match id {
+        "data-dir" => {
+            let d = crate::util::agentplus_dir();
+            let _ = std::fs::create_dir_all(&d);
+            let _ = crate::process::open_dir(&d.to_string_lossy());
+        }
+        "github" => {
+            let _ = crate::process::open_dir(GITHUB_URL);
+        }
+        "issue" => {
+            let _ = crate::process::open_dir(&format!("{GITHUB_URL}/issues/new/choose"));
+        }
+        _ if PAGE_ITEMS.contains(&id) => {
+            crate::tray::show_main(app);
+            let _ = app.emit_to("main", "menu", id);
+        }
+        _ => {}
+    }
 }
 
 /// After a language switch.

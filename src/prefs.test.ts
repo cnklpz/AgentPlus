@@ -1,5 +1,29 @@
-import { describe, expect, it } from "vitest";
-import { normalizePrefs } from "./prefs";
+import { describe, expect, it, vi } from "vitest";
+import { api } from "./api";
+import { normalizePrefs, syncTrayTheme } from "./prefs";
+
+vi.mock("./api", () => ({ api: { setTrayDark: vi.fn() } }));
+
+describe("syncTrayTheme", () => {
+  it("tells the backend once per change and again after a failed call", async () => {
+    const set = vi.mocked(api.setTrayDark);
+    set.mockResolvedValue(undefined);
+    syncTrayTheme(true);
+    syncTrayTheme(true);
+    expect(set.mock.calls).toEqual([[true]]);
+    syncTrayTheme(false);
+    expect(set.mock.calls).toEqual([[true], [false]]);
+
+    set.mockRejectedValueOnce(new Error("store locked"));
+    syncTrayTheme(true);
+    // Past the failed call's handlers, however many steps they take.
+    await new Promise((r) => setTimeout(r, 0));
+    syncTrayTheme(true);
+    expect(set.mock.calls).toEqual([[true], [false], [true], [true]]);
+    syncTrayTheme(true);
+    expect(set).toHaveBeenCalledTimes(4);
+  });
+});
 
 describe("normalizePrefs", () => {
   it("fills in defaults for nothing stored", () => {

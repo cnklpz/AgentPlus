@@ -1003,6 +1003,11 @@ const real = {
   openLogDir: () => invoke<void>("open_log_dir"),
   quitApp: () => invoke<void>("quit_app"),
   hideToTray: () => invoke<void>("hide_to_tray"),
+  /** Whether the tray (macOS: menu bar) icon is the single-colour one. */
+  trayMono: () => invoke<boolean>("tray_mono"),
+  setTrayMono: (on: boolean) => invoke<boolean>("set_tray_mono", { on }),
+  /** The theme the page shows, so the single-color tray icon is white on dark and black on light. */
+  setTrayDark: (dark: boolean) => invoke<void>("set_tray_dark", { dark }),
   detectAgents: () => invoke<AgentDetect[]>("detect_agents"),
   testProvider: (agent: string, provider: string, model: string) => invoke<TestResult>("test_provider", { agent, provider, model }),
   /** `provider` is the model list's: a provider id, or `CATALOG` for Codex's shared catalog. */
@@ -1132,6 +1137,7 @@ const demoHistory: SyncHistoryEntry[] = [
 const demoLog: LogInfo = { enabled: true, days: 7, files: 3, bytes: 184_320, dir: "~/.agentplus/logs" };
 let demoLib: LibEntry[] = [];
 const demoLinks: LinkHandler = { supported: true, on: false, other: "CC Switch.exe" };
+let demoTrayMono = false;
 const demoOfficial: OfficialFetch = { active: false, startedAt: "15:20:01", backupDir: "C:\\Users\\me\\.agentplus\\backups\\20260923-152001\\codex", cacheReady: false, cacheModels: 0, cachePath: "~/.codex/models_cache.json", catalogPath: "~/.codex/models.json", chatgptLogin: true };
 let demoOfficialAt = 0;
 const demoGateway: { enabled: boolean; port: number; routes: GatewayRoute[]; breaker: GatewayBreaker; timezone: string | null; cleared: string[] } = {
@@ -1439,6 +1445,9 @@ const demo: typeof real = {
   openLogDir: async () => undefined,
   quitApp: async () => undefined,
   hideToTray: async () => undefined,
+  trayMono: async () => demoTrayMono,
+  setTrayMono: async (on) => { demoTrayMono = on; return on; },
+  setTrayDark: async () => undefined,
   detectAgents: async () => (await fixture()).map((a) => ({
     id: a.id, name: a.name, appFound: a.installed, version: a.version, running: a.running,
     defaultDir: a.configDir, customDir: null, configDir: a.configDir, configFound: true, enabled: a.installed, note: null,

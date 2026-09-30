@@ -169,6 +169,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
           <Seg value={prefs.closeAction} onChange={(v) => setPrefs({ ...prefs, closeAction: v })} label={t("settingsPage.closeAction")}
             options={CLOSE_ACTIONS.map((m) => ({ value: m.v, label: t(m.label) }))} />
         </SettingRow>
+        <TrayIconRow flash={flash} />
       </section>
 
       <section className="sgroup">
@@ -192,6 +193,30 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         </SettingRow>
       </section>
     </div>
+  );
+}
+
+/** The tray (macOS: menu bar) icon: the app's own, or single-color like the system's. Kept by the backend, which draws it before the page loads. */
+function TrayIconRow({ flash }: { flash: Flash }) {
+  const [mono, setMono] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.trayMono().then((m) => { if (alive) setMono(m); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, []);
+  if (mono === null) return null;
+  const label = t(isMac ? "settingsPage.trayIconMac" : "settingsPage.trayIcon");
+  // One change at a time: two in flight could be applied in either order.
+  const set = (on: boolean) => {
+    setBusy(true);
+    api.setTrayMono(on).then(setMono).catch((e) => flash(errText(e), true)).finally(() => setBusy(false));
+  };
+  return (
+    <SettingRow label={label} desc={t(isMac ? "settingsPage.trayIconHintMac" : "settingsPage.trayIconHint")}>
+      <Seg value={mono ? "mono" : "color"} onChange={(v) => set(v === "mono")} label={label}
+        options={[{ value: "color", label: t("settingsPage.trayColor"), disabled: busy }, { value: "mono", label: t("settingsPage.trayMono"), disabled: busy }]} />
+    </SettingRow>
   );
 }
 
