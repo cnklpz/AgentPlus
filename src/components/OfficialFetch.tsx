@@ -81,10 +81,17 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
       onReload();
       flash(tn("officialFetch.finishedFlash", list.length));
     } catch (e) {
-      setSt(await api.officialStart());
-      setStep("wait");
-      onReload();
       flash(t("officialFetch.autoFailed", { err: errText(e) }), true);
+      try {
+        setSt(await api.officialStart());
+        setStep("wait");
+      } catch (e2) {
+        // Couldn't switch for the manual steps either: show where things stand instead of the spinner.
+        flash(errText(e2), true);
+        setStep("idle");
+        await load();
+      }
+      onReload();
     }
   });
   const cancel = () => run(async () => {
