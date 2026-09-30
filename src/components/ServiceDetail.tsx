@@ -48,7 +48,7 @@ export function ServiceDetail(props: Props) {
       <div className="pdetail-head">
         <Avatar name={s.name} color={stationColor(s)} />
         <span className="pcard-title">
-          <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
+          <span className="pcard-name"><span className="ellipsis" title={scrubHost(s.name)}>{scrubHost(s.name)}</span></span>
           <span className="pcard-host mono ellipsis">{s.builtin ? t("serviceDetail.accountLogin") : tn("serviceDetail.hostGroups", s.groups.length, { host: s.host })}</span>
         </span>
         <button className="icon-btn" aria-label={t("common.closeDetails")} onClick={props.onClose}><Icon.close /></button>
@@ -105,7 +105,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
     <div className={`gpanel${open ? " open" : ""}`}>
       <button className="gpanel-head" onClick={onToggle} aria-expanded={open}>
         <span className={`api-chip api-${g.api}`}>{API_LABEL[g.api]}</span>
-        <span className="grow minw0 ellipsis small strong">{g.name}</span>
+        <span className="grow minw0 ellipsis small strong" title={g.name}>{g.name}</span>
         {gw.length > 0 && (
           <span className="row" title={t("serviceDetail.throughGateway", { agents: joinList([...new Set(gw.map((u) => u.agent.name))]) })}>
             <GatewayTile size={14} />
@@ -177,7 +177,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
               <div key={u.importKey ?? useKey(u)} className={`use ${u.state}`}>
                 <AgentIcon id={u.agent.id} size={22} />
                 <span className="grow minw0">
-                  <span className="block small strong ellipsis">{u.agent.name} · {u.p?.name ?? g.name}</span>
+                  <span className="block small strong ellipsis" title={`${u.agent.name} · ${u.p?.name ?? g.name}`}>{u.agent.name} · {u.p?.name ?? g.name}</span>
                   <span className="block tiny muted ellipsis">
                     <span className={`ustate ${u.state}`}>{USE_LABEL[u.state]}</span>
                     {u.p && ` · ${u.agent.catalog ? tn("serviceDetail.catalogModels", u.models) : tn("common.modelCount", u.models)}`}
@@ -197,12 +197,13 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
               const gw = !gatewayRouteId(g.baseUrl, props.gatewayHost) && !!importSource(g) && gatewayCapable(a.id) && g.api !== "gemini";
               const only = ONLY_API[a.id];
               const protoOnly = !!why && !!only && only !== "gemini" && g.api !== only && g.api !== "gemini";
+              const status = protoOnly ? t("serviceDetail.needsProto", { need: API_LABEL[only!], api: API_LABEL[g.api] }) : why ?? t("serviceDetail.notAdded");
               return (
                 <div key={a.id} className="use none" title={why ?? undefined}>
                   <AgentIcon id={a.id} size={22} />
                   <span className="grow minw0">
-                    <span className="block small strong ellipsis">{a.name}</span>
-                    <span className="block tiny muted ellipsis">{protoOnly ? t("serviceDetail.needsProto", { need: API_LABEL[only!], api: API_LABEL[g.api] }) : why ?? t("serviceDetail.notAdded")}</span>
+                    <span className="block small strong ellipsis" title={a.name}>{a.name}</span>
+                    <span className="block tiny muted ellipsis" title={status}>{status}</span>
                   </span>
                   {protoOnly && gw ? (
                     <button className="btn xs restore" onClick={() => props.onViaGateway(g, a.id)} title={t("serviceDetail.addViaGatewayTitle")}>

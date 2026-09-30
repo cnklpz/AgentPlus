@@ -101,8 +101,8 @@ export function ProvidersHub({ agents, stations, viaGateway, latency, selected, 
                 <div className="hcard-head">
                   <Avatar name={s.name} color={stationColor(s)} />
                   <span className="pcard-title">
-                    <span className="pcard-name"><span className="ellipsis">{scrubHost(s.name)}</span></span>
-                    <span className="pcard-host mono ellipsis">{scrubHost(s.host)}</span>
+                    <span className="pcard-name"><span className="ellipsis" title={scrubHost(s.name)}>{scrubHost(s.name)}</span></span>
+                    <span className="pcard-host mono ellipsis" title={scrubHost(s.host)}>{scrubHost(s.host)}</span>
                   </span>
                   {s.baseUrl && (
                     <button className={`hlat lat-btn${lat.level ? ` ${latencyTone(lat.level)}` : ""}`} title={t("common.retestHint")}
@@ -119,7 +119,7 @@ export function ProvidersHub({ agents, stations, viaGateway, latency, selected, 
                     return (
                       <div key={g.key} className={`hgroup${uses.length || gw.length ? "" : " idle"}`}>
                         <span className={`api-chip api-${g.api}`}>{API_LABEL[g.api]}</span>
-                        <span className="grow minw0 ellipsis small">{g.name}</span>
+                        <span className="grow minw0 ellipsis small" title={g.name}>{g.name}</span>
                         <span className="hgroup-agents">
                           {uses.length === 0 && gw.length === 0 && <span className="tiny faint">{t("providersHub.notAdded")}</span>}
                           {[...new Map(uses.map((u) => [u.agent.id, u])).values()].map((u) => (
@@ -169,8 +169,8 @@ export function ProvidersHub({ agents, stations, viaGateway, latency, selected, 
                   <button key={s.key} className={`acct${selected === s.key ? " selected" : ""}`} onClick={() => onSelect(selected === s.key ? null : s.key)}>
                     <AgentIcon id={u.agent.id} size={22} />
                     <span className="grow minw0">
-                      <span className="block small strong ellipsis">{s.name}</span>
-                      <span className="block tiny muted ellipsis">{u.agent.name} · {USE_LABEL[u.state]}</span>
+                      <span className="block small strong ellipsis" title={s.name}>{s.name}</span>
+                      <span className="block tiny muted ellipsis" title={`${u.agent.name} · ${USE_LABEL[u.state]}`}>{u.agent.name} · {USE_LABEL[u.state]}</span>
                     </span>
                   </button>
                 );

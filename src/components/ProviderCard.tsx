@@ -138,10 +138,10 @@ export function ProviderCard({ p, mode, isCurrent, switching, selected, enabled,
         <Avatar name={p.name} color={colorFor(p)} />
         <span className="pcard-title">
           <span className="pcard-name">
-            <span className="ellipsis">{p.name}</span>
+            <span className="ellipsis" title={p.name}>{p.name}</span>
             {tag && <span className={`ptag ${tag.cls}`}>{tag.text}</span>}
           </span>
-          <span className="pcard-host mono ellipsis">{scrubHost(p.host) || "—"}</span>
+          <span className="pcard-host mono ellipsis" title={scrubHost(p.host) || undefined}>{scrubHost(p.host) || "—"}</span>
         </span>
       </div>
       <div className="pcard-meta">
