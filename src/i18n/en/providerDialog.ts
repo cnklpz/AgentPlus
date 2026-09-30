@@ -18,7 +18,6 @@ export default {
   editHead: "Edit \"{name}\"",
   viaGatewayDesc: "{vendor} has no {only} API, and {agent} only supports that one. After saving, the gateway is turned on and converts {api} to {only}. The base URL and API key are kept in the provider library.",
   sessionHint: "{vendor} requires the agent to send a session ID (x-opencode-session) with each request and refuses requests without one. If it doesn't work, turn on local gateway forwarding and the gateway adds it for you. {more}",
-  learnMore: "Learn more",
   fwdTitle: "Forward through the local gateway",
   fwdOff: "When on, the base URL and API key go to the provider library and the agent only gets the gateway address: any protocol works; the gateway converts it.",
   fwdOn: "After saving, the gateway is turned on and a forward is created; it adds a session ID when needed. Any protocol works; the gateway converts it. The base URL and API key are kept in the provider library.",

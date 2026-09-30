@@ -9,7 +9,7 @@ import { ErrorBox, Seg, ToggleRow } from "./controls";
 import { ModelPicker, useModelPool } from "./ModelPicker";
 import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
-import { type TKey, t } from "../i18n";
+import { type TKey, t, tx } from "../i18n";
 import { apiBase, errText, isHttpUrl, toggled } from "../util";
 
 export interface ServiceSave {
@@ -272,7 +272,14 @@ export function ServiceDialog({ agents, group, prefill, imported, others = [], o
         <div className="field">
           <span>{t("serviceDialog.addTo")}</span>
           <ToggleRow on={viaGw} onChange={setViaGw} icon={<Icon.gateway size={16} />} title={t("common.useGateway")}
-            hint={viaGw ? t("serviceDialog.gatewayOn") : t("serviceDialog.gatewayOff")} />
+            hint={viaGw
+              ? t("serviceDialog.gatewayOn")
+              : tpl?.session
+                ? tx("serviceDialog.sessionHint", {
+                  vendor: tpl.name,
+                  more: <button type="button" className="link" onClick={() => api.openUrl(tpl.session!).catch(() => undefined)}>{t("common.learnMore")}</button>,
+                })
+                : t("serviceDialog.gatewayOff")} />
           <div className="agent-picks">
             {free.map((a) => {
               const why = blockedBy(a.id);

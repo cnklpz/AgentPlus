@@ -20,6 +20,7 @@ const zh: typeof en = {
   addTo: "添加到",
   gatewayOn: "保存后自动开启网关并为它建一条转发，勾选的 Agent 都指向网关地址：协议自动转换（Codex、Claude Code 也能用），密钥只存在供应商库。",
   gatewayOff: "关闭：勾选的 Agent 直接连接上面的地址。",
+  sessionHint: "关闭：勾选的 Agent 直接连接。{vendor} 要求 Agent 自己在请求里带会话 ID（x-opencode-session），不带会被拒绝。如果 Agent 不带，请打开「使用本地网关」，网关会自动补上。{more}",
   needsApi: "· 需 {api}",
   convertsTo: "· 转 {api}",
   usesAltUrl: "· 用 {api} 地址",

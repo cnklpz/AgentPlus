@@ -20,7 +20,6 @@ const zh: typeof en = {
   editHead: "编辑「{name}」",
   viaGatewayDesc: "{vendor} 没有 {only} 接口，{agent} 只支持这种：保存后自动开启网关，把 {api} 转换成 {only}。地址和密钥存在供应商库。",
   sessionHint: "{vendor} 要求 Agent 自己在请求里带会话 ID（x-opencode-session），不带会被拒绝。如果无法使用，请开启本地网关转发，网关会自动补上。{more}",
-  learnMore: "了解详情",
   fwdTitle: "经本地网关转发",
   fwdOff: "开启后地址和密钥存进供应商库，Agent 里只写网关地址：协议不受 Agent 限制，网关负责转换。",
   fwdOn: "保存后自动开启网关并创建转发，需要时自动补上会话 ID。协议不受 Agent 限制，网关负责转换；地址和密钥存在供应商库。",

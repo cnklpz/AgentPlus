@@ -18,6 +18,7 @@ export default {
   addTo: "Add to",
   gatewayOn: "After saving, the gateway starts automatically with a route for this provider, and checked agents point to the gateway: protocols are converted automatically (Codex and Claude Code work too), and the API key stays in the provider library only.",
   gatewayOff: "Off: checked agents connect directly to the URL above.",
+  sessionHint: "Off: checked agents connect directly. {vendor} requires the agent to send a session ID (x-opencode-session) with each request and refuses requests without one. If an agent doesn't send it, turn on \"Use local gateway\" and the gateway adds it for you. {more}",
   needsApi: "· needs {api}",
   convertsTo: "· to {api}",
   usesAltUrl: "· uses {api} URL",

@@ -548,7 +548,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
               : tpl?.session
                 ? tx("providerDialog.sessionHint", {
                   vendor: tpl.name,
-                  more: <button type="button" className="link" onClick={() => api.openUrl(tpl.session!).catch(() => undefined)}>{t("providerDialog.learnMore")}</button>,
+                  more: <button type="button" className="link" onClick={() => api.openUrl(tpl.session!).catch(() => undefined)}>{t("common.learnMore")}</button>,
                 })
                 : t("providerDialog.fwdOff")} />
       )}

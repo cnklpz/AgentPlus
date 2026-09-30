@@ -61,6 +61,7 @@ export default {
   baseUrlLabel: "Base URL",
   apiKeyLabel: "API key",
   useGateway: "Use local gateway",
+  learnMore: "Learn more",
   copyUrl: "Copy URL",
   closeDetails: "Close details",
   modelCount: "{n} model|{n} models",

@@ -63,6 +63,7 @@ const zh: typeof en = {
   baseUrlLabel: "地址（Base URL）",
   apiKeyLabel: "API Key",
   useGateway: "使用本地网关",
+  learnMore: "了解详情",
   copyUrl: "复制地址",
   closeDetails: "关闭详情",
   modelCount: "{n} 个模型",
