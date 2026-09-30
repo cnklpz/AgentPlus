@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { easeFilter, glassMap } from "./glass";
+import { glassMap } from "./glass";
 
 describe("glassMap", () => {
   const [w, h] = [200, 50];
@@ -58,19 +58,5 @@ describe("glassMap", () => {
     const { dx, dy } = at(0, 0);
     expect(Math.abs(dx)).toBeLessThan(0.2);
     expect(Math.abs(dy)).toBeLessThan(0.2);
-  });
-});
-
-describe("easeFilter", () => {
-  const list = 'url("#ap-glass") blur(0.25px) contrast(1.05) brightness(1.01) saturate(1.4)';
-  it("keeps the filter as given at full strength", () => {
-    expect(easeFilter(list, 1)).toBe('url("#ap-glass") blur(0.250px) contrast(1.050) brightness(1.010) saturate(1.400)');
-  });
-  it("eases every function toward doing nothing, keeping the url", () => {
-    expect(easeFilter(list, 0.5)).toBe('url("#ap-glass") blur(0.125px) contrast(1.025) brightness(1.005) saturate(1.200)');
-    expect(easeFilter(list, 0)).toBe('url("#ap-glass") blur(0.000px) contrast(1.000) brightness(1.000) saturate(1.000)');
-  });
-  it("handles the frosted fallback without a url", () => {
-    expect(easeFilter("blur(3px) saturate(1.6)", 0.5)).toBe("blur(1.500px) saturate(1.300)");
   });
 });

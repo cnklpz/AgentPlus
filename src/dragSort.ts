@@ -23,15 +23,77 @@ const SETTLE_MS: Record<Fx, number> = { rich: 420, full: 200, none: 0 };
 const MELT_MS = 450;
 const EASE: Record<Fx, string> = { rich: "var(--ease-spring)", full: "var(--ease-out)", none: "linear" };
 
+/** The accent bar (the row's ::before) coming back in once the row has landed: it slides in
+ *  from the sidebar's edge as it grows, like the bar of a newly selected agent (ap-bar). */
+const BAR_IN: Record<Exclude<Fx, "none">, { from: string; ms: number; ease: string }> = {
+  rich: { from: "translateX(-10px) scaleY(0)", ms: 620, ease: "--ease-spring" },
+  full: { from: "translateX(-4px) scaleY(0)", ms: 340, ease: "--ease-out" },
+};
+
+/**
+ * Plays the bar's entrance on `row`, if it has one. Script animations, not a class: the CSS
+ * animations restarted by the reorder are skipped (markReordered), and these must not be.
+ */
+function barIn(row: HTMLElement, level: Exclude<Fx, "none">) {
+  // Old WebKit ignores the pseudoElement option and would animate the row itself.
+  if (!("pseudoElement" in KeyframeEffect.prototype) || getComputedStyle(row, "::before").content === "none") return;
+  const { from, ms, ease } = BAR_IN[level];
+  const raw = getComputedStyle(document.documentElement).getPropertyValue(ease).trim();
+  const easing = usableEasing(raw, (v) => CSS.supports("transition-timing-function", v));
+  try {
+    row.animate([{ opacity: 0, transform: from }, { opacity: 1, transform: "none" }], { duration: ms, easing, pseudoElement: "::before" });
+  } catch {
+    // No entrance: the bar is simply back.
+  }
+}
+
+/**
+ * `raw` when this engine can parse it, else ease-out. WebKit before Safari 17.2 has no
+ * linear() easing (--ease-spring), and animate() throws on an easing it can't parse.
+ */
+export function usableEasing(raw: string, supports: (easing: string) => boolean): string {
+  return raw && supports(raw) ? raw : "ease-out";
+}
+
+/** Whether these mutations re-inserted any of `rows` (React moving them), not just changed something else. */
+export function movedAny(records: readonly { addedNodes: Iterable<Node> }[], rows: readonly Node[]): boolean {
+  return records.some((r) => [...r.addedNodes].some((n) => rows.includes(n)));
+}
+
+/** How long markReordered waits for React to move the rows. */
+const REORDER_WATCH_MS = 1000;
+
 /** Past the first or last slot the row follows only a little, like a rubber band. */
 const band = (over: number) => 26 * (1 - Math.exp(-over / 60));
 
 /**
  * Rows React moves in the DOM would replay their entrance animation. The mark stays on these
  * elements (clearing it would replay the animation too); rows added later still animate in.
+ * Moving a node also restarts the animations inside it (the active row's accent bar grew
+ * back from nothing and its icon hopped as the row landed): those skip to their end right
+ * after React moves the rows, however late its commit comes, before the frame is painted.
  */
 export function markReordered(rows: Iterable<HTMLElement>): void {
-  for (const r of rows) r.dataset.reordered = "";
+  const list = [...rows];
+  for (const r of list) r.dataset.reordered = "";
+  const host = list[0]?.parentElement;
+  if (!host || typeof MutationObserver !== "function") return;
+  const skip = () => {
+    for (const r of list) {
+      for (const a of r.getAnimations({ subtree: true })) {
+        if (a instanceof CSSAnimation && !a.currentTime && a.effect?.getTiming().iterations !== Infinity) a.finish();
+      }
+    }
+  };
+  // Mutation records are delivered in the microtask after the commit that moved the rows.
+  // Other changes to the list (the selection glider, a row added) leave its animations alone.
+  const watch = new MutationObserver((records) => {
+    if (!movedAny(records, list)) return;
+    watch.disconnect();
+    skip();
+  });
+  watch.observe(host, { childList: true });
+  window.setTimeout(() => watch.disconnect(), REORDER_WATCH_MS);
 }
 
 /** The click that ends a drag (the press and release land on the same row) is not a click. */
@@ -152,11 +214,15 @@ export function dragSort(e: PointerEvent, row: HTMLElement, selector: string, on
         delete r.dataset.sort;
       }
       delete host.dataset.sorting;
-      // Landed: the glass melts back into the row rather than vanishing.
-      unglass?.(MELT_MS);
       void host.offsetWidth;
       for (const r of rows) r.style.removeProperty("transition");
+      // First, so nothing below can leave the list refusing drags.
       busy = false;
+      // Landed: the glass melts back into the row rather than vanishing, the row's own look
+      // coming back through its transitions.
+      unglass?.(MELT_MS);
+      // The accent bar, hidden while the row was held (styles.css), comes back in.
+      if (level !== "none") barIn(row, level);
     }
   };
 

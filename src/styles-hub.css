@@ -85,9 +85,10 @@
   --pop: .985;
   --flip: 90deg; /* card-flip angle; 0 = plain crossfade */
   --fx: none; /* entrance filter; only the "Excessive" level blurs */
+  --bar: 0; /* height the active agent's accent bar grows from; 1 = it only fades in */
 }
-:root[data-motion="reduced"] { --rise: 0px; --slide: 0px; --pop: 1; --flip: 0deg; }
-@media (prefers-reduced-motion: reduce) { :root:not([data-motion="off"]) { --rise: 0px; --slide: 0px; --pop: 1; --flip: 0deg; } }
+:root[data-motion="reduced"] { --rise: 0px; --slide: 0px; --pop: 1; --flip: 0deg; --bar: 1; }
+@media (prefers-reduced-motion: reduce) { :root:not([data-motion="off"]) { --rise: 0px; --slide: 0px; --pop: 1; --flip: 0deg; --bar: 1; } }
 :root[data-motion="off"] *, :root[data-motion="off"] *::before, :root[data-motion="off"] *::after { animation: none !important; transition: none !important; }
 
 /* Only "from" frames: each animation ends on the element's own style, so dimmed items (disabled cards) fade straight to their dim opacity instead of flashing full first. */
@@ -99,7 +100,8 @@
 @keyframes ap-menu { from { opacity: 0; transform: translateY(calc(var(--rise) * -0.7)) scale(var(--pop)); } }
 @keyframes ap-slide { from { opacity: 0; transform: translateX(var(--slide)); filter: var(--fx); } }
 @keyframes ap-toast { from { opacity: 0; transform: translate(-50%, calc(var(--rise) * 1.5)); } }
-@keyframes ap-bar { from { transform: scaleY(0); } }
+/* The accent bar slides in from the sidebar's edge (which clips it) as it grows. */
+@keyframes ap-bar { from { opacity: 0; transform: translateX(calc(var(--slide) * -.35)) scaleY(var(--bar)); } }
 
 /* Entrance */
 .page-top { animation: ap-fade var(--t) var(--ease-out) backwards; }
@@ -119,7 +121,7 @@
 .dd-menu { transform-origin: top; animation: ap-menu var(--t-fast) var(--ease-out) backwards; }
 .env-menu { transform-origin: top right; }
 .toast { animation: ap-toast var(--t) var(--ease-out) backwards; }
-.agent-row.active::before { animation: ap-bar var(--t) var(--ease-out) backwards; }
+.agent-row.active::before { animation: ap-bar var(--t-slow) var(--ease-out) backwards; }
 .dempty { animation: ap-fade var(--t-slow) var(--ease-out) backwards; }
 
 /* Text changing wording in place (Swap in controls.tsx): the new text rises in, the old

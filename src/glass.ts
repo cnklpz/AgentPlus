@@ -102,22 +102,9 @@ function ensureFilter() {
 let melting: (() => void) | null = null;
 
 /**
- * A backdrop filter list eased toward doing nothing: at k = 1 as given, at 0 blur(0) and
- * the colour functions at 1. The url() stays: SVG filters can't be interpolated, so its
- * displacement is scaled down separately.
- */
-export function easeFilter(list: string, k: number): string {
-  return list.replace(/([a-z-]+)\(([\d.]+)(px)?\)/g, (all, fn: string, v: string, px?: string) => {
-    if (fn === "url") return all;
-    const n = parseFloat(v);
-    return fn === "blur" ? `blur(${(n * k).toFixed(3)}px)` : `${fn}(${(1 + (n - 1) * k).toFixed(3)})${px ?? ""}`;
-  });
-}
-
-/**
  * Turns `el` into a slab of glass the shape of its border box. Returns the undo, which
- * melts the glass back into `el`'s own look over `ms` (0: at once); call it once `el` is
- * styled as it should end up, with transitions off.
+ * melts the glass back into `el`'s own look over `ms` (0: at once): `el` gets its own look
+ * back through its own transitions while the slab (drawn on its ::after) fades out.
  */
 export function glass(el: HTMLElement): (ms?: number) => void {
   melting?.();
@@ -142,45 +129,26 @@ export function glass(el: HTMLElement): (ms?: number) => void {
     n.setAttribute("height", String(h));
   }
   f.image.setAttribute("href", map.url);
-  const bend = (k: number) => f.disps.forEach((d, i) => d.setAttribute("scale", (map.scale * DISPERSION[i] * k).toFixed(2)));
-  bend(1);
+  f.disps.forEach((d, i) => d.setAttribute("scale", (map.scale * DISPERSION[i]).toFixed(2)));
   el.dataset.glass = "";
   return (ms = 0) => {
     if (!ms) {
       delete el.dataset.glass;
       return;
     }
-    // Glass and final look, both read with transitions off; the backdrop filter is held
-    // inline and eased by hand, the rest is a plain animation between the two.
-    const cs = getComputedStyle(el);
-    const look = () => ({ backgroundColor: cs.backgroundColor, borderColor: cs.borderColor, boxShadow: cs.boxShadow });
-    // WebKit before Safari 18 (macOS 11-13) knows only the prefixed property.
-    const prefixed = cs.backdropFilter === undefined;
-    const prop = prefixed ? "-webkit-backdrop-filter" : "backdrop-filter";
-    const filter = cs.getPropertyValue(prop) || "";
-    const from = look();
-    el.style.setProperty(prop, filter);
-    delete el.dataset.glass;
-    const anim = el.animate([from, look()], { duration: ms, easing: "cubic-bezier(.2, .7, .3, 1)" });
-    const t0 = performance.now();
-    let frame = 0;
+    // Only the slab's opacity changes, which the compositor animates by itself. Easing the
+    // displacement and the filter list frame by frame instead re-rendered the SVG filter on
+    // the main thread every frame, and the landing stuttered.
+    el.style.setProperty("--glass-melt", `${ms}ms`);
+    el.dataset.glass = "melt";
+    let timer = 0;
     const done = () => {
-      cancelAnimationFrame(frame);
-      anim.cancel();
-      el.style.removeProperty(prop);
+      window.clearTimeout(timer);
+      if (el.dataset.glass === "melt") delete el.dataset.glass;
+      el.style.removeProperty("--glass-melt");
       if (melting === done) melting = null;
     };
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - t0) / ms);
-      if (t >= 1) return done();
-      const k = (1 - t) ** 2;
-      bend(k);
-      if (filter) el.style.setProperty(prop, easeFilter(filter, k));
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
+    timer = window.setTimeout(done, ms + 50);
     melting = done;
-    // A hidden window stops animation frames; the glass must still go.
-    window.setTimeout(() => { if (melting === done) done(); }, ms + 100);
   };
 }

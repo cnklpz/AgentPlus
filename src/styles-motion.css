@@ -86,21 +86,33 @@
 /* A dragged agent row turns into a slab of clear glass, its shape unchanged (glass.ts builds
    the #ap-glass displacement map, after shuding/liquid-glass). Only light tints and a thin
    specular rim: anything opaque would hide what it refracts. The original's contrast(1.2)
-   brightness(1.05) turns the light sidebar pure white, so the slab read as a card. */
-:root[data-motion="rich"] .sidebar > .agent-row[data-glass] {
+   brightness(1.05) turns the light sidebar pure white, so the slab read as a card.
+   The slab is the row's ::after, under its content (the row is a stacking context here), so
+   landing only fades the slab's opacity, which the compositor animates off the main thread;
+   meanwhile the row gets its own look back through its own transitions. */
+:root[data-motion="rich"] .sidebar > .agent-row[data-glass]:not([data-glass="melt"]) { background: transparent; border-color: transparent; box-shadow: none; }
+:root[data-motion="rich"] .sidebar > .agent-row[data-glass]::after {
+  content: ""; position: absolute; inset: -1px; z-index: -1; border-radius: inherit; pointer-events: none;
   background: rgba(255, 255, 255, .06);
-  border-color: rgba(255, 255, 255, .7);
+  border: 1px solid rgba(255, 255, 255, .7);
   box-shadow: 0 4px 8px rgba(0, 0, 0, .18), 0 10px 24px -12px rgba(18, 23, 34, .3),
     inset 0 1px 1px rgba(255, 255, 255, .8), inset 0 -4px 10px rgba(0, 0, 0, .06);
   backdrop-filter: url(#ap-glass) blur(.25px) contrast(1.05) brightness(1.01) saturate(1.4);
+  animation: ap-fade .2s ease-out backwards;
+  transition: opacity var(--glass-melt, 0s) cubic-bezier(.2, .7, .3, 1);
 }
-:root[data-motion="rich"][data-theme="dark"] .sidebar > .agent-row[data-glass] {
+:root[data-motion="rich"] .sidebar > .agent-row[data-glass="melt"]::after { opacity: 0; }
+/* The row's own look comes back at the slab's pace (.agent-row alone only eases its background). */
+:root[data-motion="rich"] .sidebar > .agent-row[data-glass="melt"] {
+  transition: background-color var(--glass-melt) cubic-bezier(.2, .7, .3, 1), border-color var(--glass-melt) cubic-bezier(.2, .7, .3, 1), box-shadow var(--glass-melt) cubic-bezier(.2, .7, .3, 1);
+}
+:root[data-motion="rich"][data-theme="dark"] .sidebar > .agent-row[data-glass]::after {
   background: rgba(255, 255, 255, .03);
   border-color: rgba(255, 255, 255, .18);
   box-shadow: 0 6px 14px rgba(0, 0, 0, .45), inset 0 1px 1px rgba(255, 255, 255, .22), inset 0 -4px 10px rgba(0, 0, 0, .2);
 }
 /* WebKit can't refract through an SVG filter: frosted instead */
-:root[data-motion="rich"][data-os="mac"] .sidebar > .agent-row[data-glass] {
+:root[data-motion="rich"][data-os="mac"] .sidebar > .agent-row[data-glass]::after {
   -webkit-backdrop-filter: blur(3px) saturate(1.6); backdrop-filter: blur(3px) saturate(1.6);
 }
 
@@ -188,6 +200,10 @@
 .seg > .ap-glider { border-radius: 7px; background: var(--seg-on); box-shadow: 0 1px 2px rgba(18, 23, 34, .1), 0 0 0 1px rgba(18, 23, 34, .04); }
 .sidebar > .ap-glider { border-radius: 10px; background: var(--surface); border: 1px solid var(--line-active); box-shadow: 0 1px 2px rgba(18, 23, 34, .06); }
 .ap-glide-to { background: transparent !important; border-color: transparent !important; box-shadow: none !important; transition: none !important; }
+/* The active agent's accent bar rides the glider to the new row; the row's own bar (growing in
+   meanwhile, unseen) shows once it lands. Same geometry as .agent-row.active::before. */
+.sidebar > .ap-glider::before { content: ""; position: absolute; left: -12px; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+.sidebar > .ap-glide-to::before { opacity: 0; }
 
 /* Exit clone of a removed popover */
 .ap-ghost { pointer-events: none !important; }
