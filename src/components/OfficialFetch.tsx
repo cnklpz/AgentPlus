@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type FetchedModel, type OfficialFetch as Status, api } from "../api";
 import { Icon } from "./icons";
 import { t, tn, tx } from "../i18n";
@@ -33,6 +33,14 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
   const [step, setStep] = useState<Step>("idle");
   const [busy, setBusy] = useState(false);
   const [models, setModels] = useState<FetchedModel[]>([]);
+  // Each step makes the card taller: keep all of it in view (after the new step has rendered).
+  // Only once the card has been used: opening the page mid-fetch shouldn't scroll it.
+  const card = useRef<HTMLElement>(null);
+  const used = useRef(false);
+  useEffect(() => {
+    if (step === "idle" || !used.current) return;
+    requestAnimationFrame(() => card.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+  }, [step]);
 
   const load = () => api.officialStatus().then((s) => {
     setSt(s);
@@ -98,7 +106,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
   const at = step === "wait" || step === "auto" ? 1 : step === "ready" ? 2 : step === "done" ? 4 : 0;
 
   return (
-    <section className="card ofetch">
+    <section ref={card} className="card ofetch" onClickCapture={() => { used.current = true; }}>
       <div className="ofetch-head">
         <span className="ofetch-icon"><Icon.cloud size={18} /></span>
         <div className="grow minw0">
