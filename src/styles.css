@@ -644,7 +644,7 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .hrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line2); }
 .hrow:last-child { border-bottom: 0; }
 
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: 70vw; background: var(--toast-bg); color: var(--toast-ink); border-radius: 10px; padding: 10px 16px; font-size: 13px; box-shadow: 0 10px 30px -10px rgba(18,23,34,.5); z-index: 10; overflow-wrap: anywhere; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); max-width: 70vw; background: var(--toast-bg); color: var(--toast-ink); border-radius: 10px; padding: 10px 16px; font-size: 13px; box-shadow: 0 10px 30px -10px rgba(18,23,34,.5); z-index: 200; overflow-wrap: anywhere; }
 .toast.error { background: #7F1D1D; color: #FDECEA; }
 
 /* Projects */
