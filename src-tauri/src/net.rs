@@ -101,7 +101,7 @@ pub fn get_text(url: &str, timeout: Duration, cap: u64) -> Result<String, String
 }
 
 fn models_url(base_url: &str) -> String {
-    format!("{}/models", base_url.trim_end_matches('/'))
+    format!("{}/models", crate::util::api_base(base_url).trim_end_matches('/'))
 }
 
 /// Native Gemini defaults to v1beta, retaining an explicit version and proxy prefix.
@@ -162,7 +162,7 @@ pub fn latency(base_url: &str) -> Result<u64, String> {
 /// Lists model ids from OpenAI, Anthropic or native Gemini endpoints. Gemini pages
 /// share one time/body budget; page tokens can only change the query on this URL.
 pub fn list_models(base_url: &str, key: Option<&str>, api: &str) -> Result<Vec<String>, String> {
-    let base = if api == "gemini" { gemini_url(base_url, None)?.to_string() } else { models_url(base_url) };
+    let base = if api == "gemini" { gemini_url(&crate::util::api_base(base_url), None)?.to_string() } else { models_url(base_url) };
     let client = client()?;
     let deadline = Instant::now() + Duration::from_secs(12);
     let mut url = base.clone();
@@ -339,7 +339,8 @@ pub(crate) fn http_error(status: reqwest::StatusCode, text: &str) -> String {
 /// Sends one tiny real request with the provider's key and model, so the address,
 /// key, protocol and model are all checked (the request uses a few tokens).
 pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> TestResult {
-    let base = base_url.trim_end_matches('/');
+    let base = crate::util::api_base(base_url);
+    let base = base.trim_end_matches('/');
     let url = match api {
         "anthropic" => Ok(format!("{base}/messages")),
         "chat" => Ok(format!("{base}/chat/completions")),

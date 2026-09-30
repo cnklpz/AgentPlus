@@ -36,6 +36,25 @@ export function isHttpUrl(s: string): boolean {
   return /^https?:\/\/\S+$/.test(s.trim());
 }
 
+const ENDPOINT_PATH = /(?:\/models\/[^/]+:(?:stream)?generatecontent|\/chat\/completions|\/completions|\/responses|\/messages|\/models)$/i;
+
+/**
+ * A base URL without the endpoint path people paste along with it: `…/v1/chat/completions`
+ * → `…/v1` (also `/responses`, `/messages`, `/models`, Gemini's `:generateContent`). The
+ * query and fragment go with the endpoint, since paths get appended to the base. Any other
+ * URL comes back as it is (only trimmed). Mirrors `util::api_base`.
+ */
+export function apiBase(url: string): string {
+  const s = url.trim();
+  const cut = s.search(/[?#]/);
+  const trimmed = (cut < 0 ? s : s.slice(0, cut)).replace(/\/+$/, "");
+  const m = ENDPOINT_PATH.exec(trimmed);
+  if (!m) return s;
+  const head = trimmed.slice(0, m.index).replace(/\/+$/, "");
+  const host = head.split("://")[1];
+  return host ? head : s;
+}
+
 /**
  * onKeyDown for an element with role="button": Enter / Space activate it. Only the element
  * itself: on a button inside it, the key belongs to that button.

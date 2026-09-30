@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { copyText, errText, isHttpUrl, onActivateKey, toggled, toggledIn } from "./util";
+import { apiBase, copyText, errText, isHttpUrl, onActivateKey, toggled, toggledIn } from "./util";
 
 describe("errText", () => {
   it("keeps backend rejections (strings) as they are", () => {
@@ -38,6 +38,29 @@ describe("isHttpUrl", () => {
     ["https://a b", false],
     ["", false],
   ])("%s → %s", (s, ok) => expect(isHttpUrl(s)).toBe(ok));
+});
+
+describe("apiBase", () => {
+  it.each([
+    ["https://opencode.ai/zen/go/v1/chat/completions", "https://opencode.ai/zen/go/v1"],
+    [" https://api.deepseek.com/v1/chat/completions/ ", "https://api.deepseek.com/v1"],
+    ["https://x.example/v1/Chat/Completions", "https://x.example/v1"],
+    ["https://x.example/v1/completions", "https://x.example/v1"],
+    ["https://api.openai.com/v1/responses", "https://api.openai.com/v1"],
+    ["https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1"],
+    ["https://x.example/v1/models", "https://x.example/v1"],
+    ["https://x.example/models", "https://x.example"],
+    ["https://g.example/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse", "https://g.example/v1beta"],
+    ["https://az.example/openai/v1/chat/completions?api-version=1", "https://az.example/openai/v1"],
+    ["https://x.example/v1/messages#top", "https://x.example/v1"],
+    ["https://x.example/v1/", "https://x.example/v1/"],
+    ["https://x.example/v1?key=1", "https://x.example/v1?key=1"],
+    ["https://x.example/v1/models-api", "https://x.example/v1/models-api"],
+    ["https://x.example/v1/mymessages", "https://x.example/v1/mymessages"],
+    ["https://x.example/v1/models/gpt-5", "https://x.example/v1/models/gpt-5"],
+    ["https:///models", "https:///models"],
+    ["", ""],
+  ])("%s → %s", (s, out) => expect(apiBase(s)).toBe(out));
 });
 
 describe("onActivateKey", () => {

@@ -12,7 +12,7 @@ import { ErrorBox, Seg, ToggleRow } from "./controls";
 import { TestButton, TestResultView } from "./ProviderTest";
 import { t, tn, tx } from "../i18n";
 import { scrub } from "../privacy";
-import { copyText, errText, type Flash, isHttpUrl, onActivateKey } from "../util";
+import { apiBase, copyText, errText, type Flash, isHttpUrl, onActivateKey } from "../util";
 import { joinList } from "../format";
 
 interface Props {
@@ -393,7 +393,7 @@ function AddForward({ groups, onForward, onClose }: {
           </div>
           <div className="field">
             <label htmlFor="af-url">{t("gatewayPage.upstreamUrl")}</label>
-            <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={URL_PLACEHOLDER[apiKind]} />
+            <input id="af-url" className="input mono sensitive" value={url} onChange={(e) => setUrl(e.target.value)} onBlur={() => setUrl(apiBase)} placeholder={URL_PLACEHOLDER[apiKind]} />
             {url && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
           </div>
           <div className="field">

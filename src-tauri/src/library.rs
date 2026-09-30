@@ -71,7 +71,8 @@ pub fn list_in(root: &Value) -> Vec<LibEntry> {
 
 pub fn save(input: LibInput) -> Result<LibEntry> {
     let name = input.name.trim();
-    let url = input.base_url.trim();
+    let url = crate::util::api_base(&input.base_url);
+    let url = url.as_str();
     if name.is_empty() {
         return Err(msg::name_required());
     }

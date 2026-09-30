@@ -618,6 +618,14 @@ pub fn resolve(agent: &str, ops: &[Op]) -> Result<Vec<Op>> {
             }
             other => Ok(other.clone()),
         })
+        .map(|o| match o {
+            // An endpoint URL pasted as the base (`…/v1/chat/completions`): agents append the path themselves.
+            Ok(Op::UpsertProvider { mut provider }) => {
+                provider.base_url = crate::util::api_base(&provider.base_url);
+                Ok(Op::UpsertProvider { provider })
+            }
+            other => other,
+        })
         .collect()
 }
 

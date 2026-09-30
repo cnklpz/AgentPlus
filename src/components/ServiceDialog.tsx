@@ -10,7 +10,7 @@ import { ModelPicker, useModelPool } from "./ModelPicker";
 import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import type { Template } from "../templates";
 import { type TKey, t } from "../i18n";
-import { errText, isHttpUrl, toggled } from "../util";
+import { apiBase, errText, isHttpUrl, toggled } from "../util";
 
 export interface ServiceSave {
   name: string;
@@ -117,7 +117,7 @@ export function ServiceDialog({ agents, group, prefill, imported, others = [], o
   // Focus the first field once, when the dialog opens (not on every parent re-render).
   useEffect(() => { first.current?.focus(); }, []);
 
-  const url = baseUrl.trim().replace(/\/+$/, "");
+  const url = apiBase(baseUrl).replace(/\/+$/, "");
   const urlOk = isHttpUrl(url);
   const changedAddr = !!group && url !== (group.baseUrl ?? "").replace(/\/+$/, "");
   const changedKey = key.trim() !== "";
@@ -213,7 +213,7 @@ export function ServiceDialog({ agents, group, prefill, imported, others = [], o
         </label>
         <label className="field">
           <span>{t("common.baseUrlLabel")}</span>
-          <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={URL_PLACEHOLDER[kind]} />
+          <input className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onBlur={() => setBaseUrl(apiBase)} placeholder={URL_PLACEHOLDER[kind]} />
           {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
         </label>
       </div>

@@ -13,7 +13,7 @@ import { TemplateKeyLink, TemplatePicker } from "./TemplatePicker";
 import { type Template, modelsAfter, modelsFor, modelsOn } from "../templates";
 import { type TKey, t, tn, tSaved, tx } from "../i18n";
 import { scrub } from "../privacy";
-import { type Flash, errText, isHttpUrl, toggledIn } from "../util";
+import { type Flash, apiBase, errText, isHttpUrl, toggledIn } from "../util";
 
 /** What the dialog asks the app to do; every part is optional. */
 export interface ProviderSave {
@@ -355,7 +355,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         api: k,
         name: apis.length > 1 ? tSaved("providerDialog.nameWithApi", { name: name.trim(), api: API_LABEL[k] }) : name.trim(),
         // A template's other protocols live at their own address (unless the address was edited).
-        baseUrl: tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind] ? tpl.endpoints[k]! : baseUrl.trim(),
+        baseUrl: tpl?.endpoints[k] && baseUrl.trim() === tpl.endpoints[kind] ? tpl.endpoints[k]! : apiBase(baseUrl),
         models: modelsOn(tpl, k, checked),
       }));
       if (viaFwd) {
@@ -369,7 +369,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       void submit({ input: head, extra: rest, draftKey: editing?.draftKey });
       return;
     }
-    const url = onUnified ? poolBase : baseUrl.trim();
+    const url = onUnified ? poolBase : apiBase(baseUrl);
     // Moved to another host with the saved key kept: ask first (the gateway's own switches
     // take the key from the provider library instead, so they don't count).
     const moved = !isNew && editing?.hasKey && !key.trim() && !gw && !viaGateway && !onUnified ? movedHost(editing.baseUrl, url) : null;
@@ -457,7 +457,7 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
         <>
           <div className="field">
             <label htmlFor="pd-url">{t("common.baseUrlLabel")}</label>
-            <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={URL_PLACEHOLDER[kind]} />
+            <input id="pd-url" className="input mono sensitive" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} onBlur={() => setBaseUrl(apiBase)} placeholder={URL_PLACEHOLDER[kind]} />
             {baseUrl && !urlOk && <em className="field-err">{t("common.urlInvalid")}</em>}
           </div>
           <div className="form2">

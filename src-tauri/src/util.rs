@@ -473,6 +473,35 @@ pub fn same_dir(a: &Path, b: &Path) -> bool {
     norm(a) == norm(b)
 }
 
+/// A base URL without the endpoint path people paste along with it (from API docs or another
+/// tool's settings): `…/v1/chat/completions` → `…/v1`. Also `/completions`, `/responses`,
+/// `/messages`, `/models` and Gemini's `/models/<model>:generateContent`. The query and
+/// fragment go with the endpoint (`?alt=sse`, `?api-version=…`): callers append paths to
+/// the base, which a query in it would break. Any other URL comes back as it is (only trimmed).
+pub fn api_base(url: &str) -> String {
+    let url = url.trim();
+    let cut = url.find(['?', '#']).unwrap_or(url.len());
+    let path = &url[..cut];
+    let path = path.trim_end_matches('/');
+    let lower = path.to_ascii_lowercase();
+    let gemini = lower.rfind("/models/").filter(|&i| {
+        let m = &lower[i + 8..];
+        !m.contains('/') && (m.ends_with(":generatecontent") || m.ends_with(":streamgeneratecontent"))
+    });
+    let end = gemini.or_else(|| {
+        ["/chat/completions", "/completions", "/responses", "/messages", "/models"]
+            .iter()
+            .find(|s| lower.ends_with(*s))
+            .map(|s| path.len() - s.len())
+    });
+    let head = end.map(|i| path[..i].trim_end_matches('/'));
+    match head {
+        // Never down to a bare scheme ("https:///models").
+        Some(h) if h.split_once("://").is_some_and(|(_, host)| !host.is_empty()) => h.to_string(),
+        _ => url.to_string(),
+    }
+}
+
 /// `v[k]` as an owned string; empty when it is missing or not a string.
 pub fn str_field(v: &serde_json::Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
@@ -718,6 +747,37 @@ mod tests {
         // folder on macOS is the same case).
         assert!(same_dir(&real.join("new"), &link.join("missing").join("..").join("new")));
         assert!(!same_dir(&h.0.join("another"), &link));
+    }
+
+    #[test]
+    fn api_base_drops_a_pasted_endpoint_path() {
+        for (from, to) in [
+            ("https://opencode.ai/zen/go/v1/chat/completions", "https://opencode.ai/zen/go/v1"),
+            (" https://api.deepseek.com/v1/chat/completions/ ", "https://api.deepseek.com/v1"),
+            ("https://open.bigmodel.cn/api/paas/v4/chat/completions", "https://open.bigmodel.cn/api/paas/v4"),
+            ("https://x.example/v1/Chat/Completions", "https://x.example/v1"),
+            ("https://x.example/v1/completions", "https://x.example/v1"),
+            ("https://api.openai.com/v1/responses", "https://api.openai.com/v1"),
+            ("https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1"),
+            ("https://x.example/v1/models", "https://x.example/v1"),
+            ("https://x.example/models", "https://x.example"),
+            ("https://g.example/v1beta/models/gemini-2.5-pro:generateContent", "https://g.example/v1beta"),
+            // The endpoint's query goes with it.
+            ("https://g.example/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse", "https://g.example/v1beta"),
+            ("https://az.example/openai/v1/chat/completions?api-version=1", "https://az.example/openai/v1"),
+            ("https://x.example/v1/messages#top", "https://x.example/v1"),
+            // Nothing to drop: left as it was, trailing slash and query included.
+            ("https://x.example/v1/", "https://x.example/v1/"),
+            ("https://x.example/v1?key=1", "https://x.example/v1?key=1"),
+            ("https://x.example/v1/models-api", "https://x.example/v1/models-api"),
+            ("https://x.example/v1/mymessages", "https://x.example/v1/mymessages"),
+            ("https://x.example/v1/models/gpt-5", "https://x.example/v1/models/gpt-5"),
+            ("https:///models", "https:///models"),
+            ("not a url/models", "not a url/models"),
+            ("", ""),
+        ] {
+            assert_eq!(api_base(from), to, "{from}");
+        }
     }
 
     #[test]
