@@ -33,6 +33,8 @@ interface Props {
   /** Another agent is restarting (one restart runs at a time). */
   restartBlocked: boolean;
   onRestart: () => void;
+  /** Restart without Codex's UI patches (quicker; for the official-list fetch). */
+  onRestartPlain: () => void;
   onOpenDir: () => void;
   tab: Tab;
   setTab: (t: Tab) => void;
@@ -94,7 +96,7 @@ export function AgentPage(props: Props) {
   const slide = useSlideDir(tab, tabs.map((x) => x[0]));
   const project = isProjectId(st.id);
   const official = st.id === "codex" && !st.readonly ? (
-    <OfficialFetch pending={opCount(draft)} running={st.running} restartable={st.restartable} restarting={restarting} onRestart={onRestart} onReload={props.onReload} flash={props.flash} />
+    <OfficialFetch pending={opCount(draft)} running={st.running} restartable={st.restartable} restarting={restarting} onRestart={onRestart} onRestartPlain={props.onRestartPlain} onReload={props.onReload} flash={props.flash} />
   ) : null;
   // Sessions should belong to the fixed id when that mode is on, else the configured provider.
   const fixedSetting = st.settings.find((s) => s.key === "fixed_id");

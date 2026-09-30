@@ -13,18 +13,22 @@ interface Props {
   restartable: boolean;
   restarting: boolean;
   onRestart: () => void;
+  /** Restart without Codex's UI patches (no debug port): quicker, enough to re-read config.toml. */
+  onRestartPlain: () => void;
   /** Re-read Codex after the catalog changed. */
   onReload: () => void;
   flash: Flash;
 }
 
-type Step = "idle" | "confirm" | "wait" | "ready" | "done";
+type Step = "idle" | "confirm" | "auto" | "wait" | "ready" | "done";
 
 /**
  * Fetch the official model list: temporarily point Codex at the ChatGPT login, let it
- * download models_cache.json, copy that into the catalog and restore config.toml.
+ * download models_cache.json, copy that into the catalog and restore config.toml. Already
+ * signed in, the installed Codex downloads it right away (no restart); otherwise, or when
+ * that fails, the user restarts Codex and signs in.
  */
-export function OfficialFetch({ pending, running, restartable, restarting, onRestart, onReload, flash }: Props) {
+export function OfficialFetch({ pending, running, restartable, restarting, onRestart, onRestartPlain, onReload, flash }: Props) {
   const [st, setSt] = useState<Status | null>(null);
   const [step, setStep] = useState<Step>("idle");
   const [busy, setBusy] = useState(false);
@@ -59,6 +63,22 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
     onReload();
     flash(t("officialFetch.startedFlash"));
   });
+  /** Signed in: let Codex download the list now; on failure fall back to the manual steps. */
+  const auto = () => run(async () => {
+    setStep("auto");
+    try {
+      const list = await api.officialAuto();
+      setModels(list);
+      setStep("done");
+      onReload();
+      flash(tn("officialFetch.finishedFlash", list.length));
+    } catch (e) {
+      setSt(await api.officialStart());
+      setStep("wait");
+      onReload();
+      flash(t("officialFetch.autoFailed", { err: errText(e) }), true);
+    }
+  });
   const cancel = () => run(async () => {
     await api.officialCancel();
     setStep("idle");
@@ -73,8 +93,9 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
     flash(tn("officialFetch.finishedFlash", list.length));
   });
 
-  const steps = [t("officialFetch.stepBackup"), t("officialFetch.stepLogin"), t("officialFetch.stepCopy"), t("officialFetch.stepRestore")];
-  const at = step === "wait" ? 1 : step === "ready" ? 2 : step === "done" ? 4 : 0;
+  const signedIn = !!st?.chatgptLogin;
+  const steps = [t("officialFetch.stepBackup"), t(signedIn && step !== "wait" && step !== "ready" ? "officialFetch.stepDownload" : "officialFetch.stepLogin"), t("officialFetch.stepCopy"), t("officialFetch.stepRestore")];
+  const at = step === "wait" || step === "auto" ? 1 : step === "ready" ? 2 : step === "done" ? 4 : 0;
 
   return (
     <section className="card ofetch">
@@ -107,12 +128,21 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
         <div className="ofetch-body">
           <div className="ofetch-note warn">
             <Icon.key size={13} />
-            <span>{tx("officialFetch.confirmNote", { plan: <b>{t("officialFetch.planAll")}</b>, catalog: scrub(st?.catalogPath) ?? "models.json" })}</span>
+            <span>{tx(signedIn ? "officialFetch.confirmAutoNote" : "officialFetch.confirmNote", { plan: <b>{t("officialFetch.planAll")}</b>, catalog: scrub(st?.catalogPath) ?? "models.json" })}</span>
           </div>
           <div className="row gap6">
             <span className="grow" />
             <button className="btn" onClick={() => setStep("idle")}>{t("common.cancel")}</button>
-            <button className="btn primary" disabled={busy} onClick={start}>{busy ? t("officialFetch.processing") : t("officialFetch.backupStart")}</button>
+            <button className="btn primary" disabled={busy} onClick={signedIn ? auto : start}>{busy ? t("officialFetch.processing") : t("officialFetch.backupStart")}</button>
+          </div>
+        </div>
+      )}
+
+      {step === "auto" && (
+        <div className="ofetch-body">
+          <div className="ofetch-wait">
+            <span className="spin">↻</span>
+            <span className="small">{t("officialFetch.autoRunning")}</span>
           </div>
         </div>
       )}
@@ -126,7 +156,7 @@ export function OfficialFetch({ pending, running, restartable, restarting, onRes
               <div className="tiny muted">{tx("officialFetch.restartDesc", { dir: <span className="mono">{scrub(st?.backupDir)}</span> })}</div>
             </div>
             {restartable ? (
-              <button className="btn primary small" disabled={restarting} onClick={onRestart}>
+              <button className="btn primary small" disabled={restarting} onClick={onRestartPlain}>
                 <Icon.refresh size={12} />{restarting ? t("officialFetch.restarting") : running ? t("officialFetch.restartCodex") : t("officialFetch.startCodex")}
               </button>
             ) : <span className="tiny muted">{t("officialFetch.rerunInTerminal")}</span>}

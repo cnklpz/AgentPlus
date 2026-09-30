@@ -161,22 +161,95 @@ fn clear(root: &mut Value) -> Result<()> {
 
 /// Copies the fresh cache over the catalog and restores config.toml.
 pub fn finish() -> Result<Vec<FetchModel>> {
-    let mut root = store::load();
+    let root = store::load();
     let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("No fetch in progress", "没有进行中的获取")))?;
     if cache_models(started_ms(&st)).is_none() {
         anyhow::bail!("{}", tr!("No new {CACHE} yet: make sure Codex has restarted, is signed in with a ChatGPT account, and open the model picker once", "还没有新的 {CACHE}：请确认 Codex 已重启并用 ChatGPT 账号登录，打开一次模型选择"));
     }
+    let (cache, _) = read_json(&cache_path())?;
+    finish_with(cache)
+}
+
+/// Makes `new` (`{"models": [...]}`) the catalog and restores config.toml.
+fn finish_with(new: Value) -> Result<Vec<FetchModel>> {
+    let mut root = store::load();
+    let st = state(&root).ok_or_else(|| anyhow!(crate::i18n::l("No fetch in progress", "没有进行中的获取")))?;
     let catalog = PathBuf::from(st.get("catalogFile").and_then(|x| x.as_str()).ok_or_else(|| anyhow!(crate::i18n::l("Backup info is incomplete", "备份信息不完整")))?);
 
-    // New catalog = the cache file as-is, plus AgentPlus's custom models from the old one.
-    let (cache, _) = read_json(&cache_path())?;
-    let models = write_catalog(&catalog, cache, &mut root)?;
+    // New catalog = the list as-is, plus AgentPlus's custom models from the old one.
+    let models = write_catalog(&catalog, new, &mut root)?;
 
     // Put the user's config back, making sure it reads the catalog we just wrote.
     restore_config(&st)?;
     point_at(&catalog)?;
     clear(&mut root)?;
     Ok(models)
+}
+
+/// Codex keeps the list it downloaded for five minutes; a cache younger than this is what
+/// `codex debug models` just answered from (or just wrote).
+const CACHE_FRESH_SECS: i64 = 600;
+
+/// Whether `cache` (models_cache.json) is a recent download of exactly `list`. That is what
+/// tells a list Codex got from OpenAI apart from the bundled one it falls back to when the
+/// download fails.
+fn cache_matches(cache: &Value, list: &Value, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let fetched = cache.get("fetched_at").and_then(|x| x.as_str()).and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    let slugs = |v: &Value| -> Vec<String> {
+        let mut s: Vec<String> = v.get("models").and_then(|m| m.as_array()).into_iter().flatten().filter_map(|m| m.get("slug").and_then(|s| s.as_str()).map(String::from)).collect();
+        s.sort();
+        s
+    };
+    fetched.is_some_and(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds().abs() <= CACHE_FRESH_SECS) && slugs(cache) == slugs(list) && !slugs(list).is_empty()
+}
+
+/// With a ChatGPT sign-in, gets the official list without restarting Codex: switches
+/// config.toml exactly as `start` does, has the installed Codex download its list
+/// (`codex debug models` refreshes it with the sign-in), writes it as the catalog and restores
+/// config.toml. Any failure puts config.toml back, so the caller can offer the manual steps.
+pub fn fetch_signed_in() -> Result<Vec<FetchModel>> {
+    if !chatgpt_signed_in() {
+        bail!("{}", crate::i18n::l("Not signed in with a ChatGPT account", "没有检测到 ChatGPT 账号登录"));
+    }
+    // The config is switched only for the download itself, and the store isn't locked while
+    // Codex runs (it can take a minute).
+    store::transaction(start)?;
+    match online_list() {
+        Ok(list) => store::transaction(|| finish_with(list)).inspect_err(|_| {
+            let _ = store::transaction(cancel);
+        }),
+        Err(e) => {
+            let _ = store::transaction(cancel);
+            Err(e)
+        }
+    }
+}
+
+/// The list one of the installed Codex programs downloads with the current sign-in.
+fn online_list() -> Result<Value> {
+    let exes = crate::process::codex_clis();
+    if exes.is_empty() {
+        bail!("{}", crate::i18n::l("No Codex program found to run", "没有找到可以运行的 Codex 程序"));
+    }
+    let home = codex_home();
+    let mut last = String::new();
+    for exe in &exes {
+        match run(exe, &["debug", "models"], &home) {
+            Ok(out) => {
+                let cache = read_json(&cache_path()).map(|(v, _)| v).unwrap_or(Value::Null);
+                match parse_models(&out).filter(|v| cache_matches(&cache, v, chrono::Utc::now())) {
+                    Some(v) => {
+                        crate::applog::info("catalog", format!("official model list downloaded by {}", exe.display()));
+                        return Ok(v);
+                    }
+                    None => last = crate::i18n::l("Codex did not download a new list (sign-in expired or OpenAI unreachable)", "Codex 没有下载到新的列表（登录可能已过期，或连不上 OpenAI）").to_string(),
+                }
+            }
+            Err(e) => last = e,
+        }
+        crate::applog::warn("catalog", format!("official list via {} failed: {last}", exe.display()));
+    }
+    bail!("{last}")
 }
 
 /// Writes `new` (`{"models": [...]}`) to `catalog`, keeping AgentPlus's custom models from
@@ -502,6 +575,63 @@ mod tests {
         assert!(!status().active);
         println!("ok: {} models, temp dir {}", models.len(), tmp.display());
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Only a list that Codex just downloaded (a fresh cache holding the same models) counts as
+    /// official; the bundled list, or one read from a configured catalog, doesn't.
+    #[test]
+    fn online_list_needs_a_matching_fresh_cache() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-30T03:50:00Z").unwrap().with_timezone(&chrono::Utc);
+        let list = json!({ "models": [{ "slug": "b" }, { "slug": "a" }] });
+        let cache = |at: &str, slugs: &[&str]| json!({ "fetched_at": at, "models": slugs.iter().map(|s| json!({ "slug": s })).collect::<Vec<_>>() });
+        assert!(cache_matches(&cache("2026-09-30T03:45:43.4832939Z", &["a", "b"]), &list, now), "same models, any order");
+        assert!(!cache_matches(&cache("2026-09-30T03:30:00Z", &["a", "b"]), &list, now), "an old cache wasn't written by this run");
+        assert!(!cache_matches(&cache("2026-09-30T03:45:00Z", &["a"]), &list, now), "other models");
+        assert!(!cache_matches(&json!({ "models": [{ "slug": "a" }, { "slug": "b" }] }), &list, now), "no fetched_at");
+        assert!(!cache_matches(&Value::Null, &list, now), "no cache");
+        assert!(!cache_matches(&cache("2026-09-30T03:45:00Z", &[]), &json!({ "models": [] }), now), "nothing to compare");
+    }
+
+    /// The automatic path's write: config.toml is switched like `start` does, then the list
+    /// becomes the catalog (custom models kept) and the config comes back byte for byte.
+    #[test]
+    fn finish_with_writes_the_list_and_restores_config() {
+        let h = crate::util::TestHome::new("official-auto");
+        let codex = h.0.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let original = "model = \"gpt-6.1-sol\"\nmodel_provider = \"relay\"\nmodel_catalog_json = \"~/.codex/models.json\"\n\n[model_providers.relay]\nbase_url = \"https://r.example.com\"\n";
+        fs::write(codex.join("config.toml"), original).unwrap();
+        fs::write(codex.join("models.json"), r#"{"models":[{"slug":"mine","display_name":"Mine"},{"slug":"old","display_name":"Old"}]}"#).unwrap();
+        let mut root = store::load();
+        store::set_value(&mut root, ID, "customModels", json!(["mine"]));
+        store::save(&root).unwrap();
+
+        start().unwrap();
+        let list = json!({ "models": [{ "slug": "gpt-6.1-sol", "display_name": "GPT-6.1-Sol", "visibility": "list" }, { "slug": "gpt-reserve", "display_name": "Reserve", "visibility": "hide" }] });
+        let models = finish_with(list).unwrap();
+        assert_eq!(models.iter().map(|m| (m.slug.as_str(), m.visible)).collect::<Vec<_>>(), [("gpt-6.1-sol", true), ("gpt-reserve", false), ("mine", true)]);
+        assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), original);
+        assert!(!status().active);
+        // A failed download cancels: config back, catalog as it was.
+        let before = fs::read(codex.join("models.json")).unwrap();
+        start().unwrap();
+        cancel().unwrap();
+        assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), original);
+        assert_eq!(fs::read(codex.join("models.json")).unwrap(), before);
+    }
+
+    /// Without a ChatGPT sign-in nothing is touched.
+    #[test]
+    fn fetch_signed_in_needs_a_chatgpt_login() {
+        let h = crate::util::TestHome::new("official-nologin");
+        let codex = h.0.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let original = "model_provider = \"relay\"\n";
+        fs::write(codex.join("config.toml"), original).unwrap();
+        fs::write(codex.join("auth.json"), r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-x"}"#).unwrap();
+        assert!(fetch_signed_in().is_err());
+        assert_eq!(fs::read_to_string(codex.join("config.toml")).unwrap(), original);
+        assert!(!status().active);
     }
 
     #[test]

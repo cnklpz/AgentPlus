@@ -922,10 +922,10 @@ const real = {
   apply: (agent: AgentId, ops: Op[]) => invoke<ApplyResult>("apply", { agent, ops }),
   testLatency: (url: string) => invoke<number>("test_latency", { url }),
   /** Restarts the agent, or starts it when it isn't running; resolves with a summary. */
-  restart: (agent: AgentId, onProgress?: (p: RestartProgress) => void) => {
+  restart: (agent: AgentId, onProgress?: (p: RestartProgress) => void, plain?: boolean) => {
     const ch = new Channel<RestartProgress>();
     if (onProgress) ch.onmessage = onProgress;
-    return invoke<string>("restart_agent", { agent, onProgress: ch });
+    return invoke<string>("restart_agent", { agent, onProgress: ch, plain });
   },
   /** Stops the running restart at its next wait (it then rejects); an app already started keeps running. */
   cancelRestart: () => invoke<void>("cancel_restart"),
@@ -1020,6 +1020,8 @@ const real = {
   officialStatus: () => invoke<OfficialFetch>("codex_official_status"),
   officialStart: () => invoke<OfficialFetch>("codex_official_start"),
   officialFinish: () => invoke<FetchedModel[]>("codex_official_finish"),
+  /** With a ChatGPT sign-in: downloads the official list without restarting Codex. */
+  officialAuto: () => invoke<FetchedModel[]>("codex_official_auto"),
   /** Codex's catalog from the model list built into the installed Codex. */
   codexBuiltinCatalog: () => invoke<FetchedModel[]>("codex_builtin_catalog"),
   officialCancel: () => invoke<void>("codex_official_cancel"),
@@ -1221,9 +1223,9 @@ const demo: typeof real = {
   preview: async (_agent, ops) => [{ file: "（演示）", lines: ops.map((o) => ({ text: JSON.stringify(o), add: true })) }],
   apply: async (agent) => ({ state: isProjectId(agent) ? await demoProject(agent) : (await fixture()).find((a) => a.id === agent)!, files: [], backupDir: null }),
   testLatency: async () => 120 + Math.round(Math.random() * 300),
-  restart: async (agent, onProgress) => {
+  restart: async (agent, onProgress, plain) => {
     const on = onProgress ?? (() => undefined);
-    const inject = agent === "codex";
+    const inject = agent === "codex" && !plain;
     const steps: RestartStep[] = inject ? ["stop", "start", "port", "patch"] : ["stop", "start"];
     const running = (await fixture()).find((a) => a.id === agent)?.running ?? false;
     demoCancel = false;
@@ -1473,6 +1475,7 @@ const demo: typeof real = {
   officialStart: async () => { demoOfficial.active = true; demoOfficialAt = Date.now(); return { ...demoOfficial }; },
   officialFinish: async () => { demoOfficial.active = false; return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "codex-auto-review"].map((slug, i) => ({ slug, name: slug.toUpperCase(), visible: i !== 5 })); },
   officialCancel: async () => { demoOfficial.active = false; },
+  officialAuto: async () => { await sleep(900); return ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5", "codex-auto-review"].map((slug, i) => ({ slug, name: slug.toUpperCase(), visible: i !== 6 })); },
   codexBuiltinCatalog: async () => { await sleep(400); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
   gatewayStatus: async () => demoGw(),
   gatewaySet: async (enabled, port) => { demoGateway.enabled = enabled; if (port) demoGateway.port = port; return demoGw(); },

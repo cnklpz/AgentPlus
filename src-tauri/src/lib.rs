@@ -121,9 +121,10 @@ async fn test_latency(url: String) -> Result<u64, String> {
 
 /// Restarts an agent (or starts it when it isn't running). For Codex with UI injection on
 /// (Fast, full model names, send after quota, hidden usage banners), starts it with a local DevTools port and patches the UI once
-/// it is up. Each step is reported on `on_progress` while it runs.
+/// it is up. Each step is reported on `on_progress` while it runs. `plain` skips the port and
+/// the patching (faster) for a restart that only has to make Codex re-read its files.
 #[tauri::command]
-async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>) -> Result<String, String> {
+async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::Progress>, plain: Option<bool>) -> Result<String, String> {
     // One at a time: a second one would clear the first's cancel, and the two would stop and
     // start the same processes over each other.
     let Some(_running) = process::RestartGuard::take() else {
@@ -135,7 +136,7 @@ async fn restart_agent(agent: String, on_progress: tauri::ipc::Channel<process::
         let report = |p: process::Progress| {
             let _ = on_progress.send(p);
         };
-        let patches = if agent == adapters::codex::ID { adapters::codex::ui_patches() } else { cdp::Patches::default() };
+        let patches = if agent == adapters::codex::ID && plain != Some(true) { adapters::codex::ui_patches() } else { cdp::Patches::default() };
         let inject = patches.any();
         let mut steps = vec!["stop", "start"];
         if inject {
@@ -629,6 +630,12 @@ async fn codex_official_cancel() -> Result<(), String> {
     blocking_tx(official::cancel).await
 }
 
+/// With a ChatGPT sign-in: the official list, downloaded by the installed Codex without a restart.
+#[tauri::command]
+async fn codex_official_auto() -> Result<Vec<official::FetchModel>, String> {
+    blocking(official::fetch_signed_in).await
+}
+
 /// Codex's model catalog from the list built into the installed Codex (no sign-in needed).
 #[tauri::command]
 async fn codex_builtin_catalog() -> Result<Vec<official::FetchModel>, String> {
@@ -986,6 +993,7 @@ pub fn run() {
             codex_official_start,
             codex_official_finish,
             codex_official_cancel,
+            codex_official_auto,
             codex_builtin_catalog,
             gateway_status,
             gateway_set,

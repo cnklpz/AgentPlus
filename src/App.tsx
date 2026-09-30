@@ -501,8 +501,9 @@ export default function App() {
     ? setProjStates((m) => ({ ...m, [next.id]: next }))
     : setAgents((list) => list.map((a) => (a.id === next.id ? next : a))));
 
-  /** Restarts an agent, or starts it when it isn't running; progress as chosen in Settings › Interface. */
-  const restartAgent = async (a: AgentState) => {
+  /** Restarts an agent, or starts it when it isn't running; progress as chosen in Settings › Interface.
+   *  `plain` skips Codex's UI patches (no debug port), for a quicker restart that only re-reads files. */
+  const restartAgent = async (a: AgentState, plain?: boolean) => {
     // One at a time (the backend refuses a second): a second would replace the running one's
     // progress and cancel button, and clear `restarting` while the first still runs.
     if (restartingRef.current) {
@@ -519,7 +520,7 @@ export default function App() {
     else showSticky(t(starting ? "app.starting" : "app.restarting", { name: a.name }));
     const mine = (f: (r: RestartRun) => RestartRun) => setRun((r) => (r && r.agent === a.id && !r.result ? f(r) : r));
     try {
-      const msg = await api.restart(a.id, showDialog ? (p) => mine((r) => applyProgress(r, p)) : undefined);
+      const msg = await api.restart(a.id, showDialog ? (p) => mine((r) => applyProgress(r, p)) : undefined, plain);
       mine((r) => finishRun(r, true, msg));
       if (runHidden.current) flash(t("app.nameMsg", { name: a.name, msg }), false, 5000);
       replaceAgent(await api.getAgent(a.id));
@@ -533,7 +534,7 @@ export default function App() {
     }
   };
   /** Restart / Start clicked: unapplied changes won't be read, so offer to apply them first. */
-  const restartAsked = async (a: AgentState) => {
+  const restartAsked = async (a: AgentState, plain?: boolean) => {
     const n = opCount(drafts[a.id]);
     if (n) {
       const starting = !a.running;
@@ -546,9 +547,10 @@ export default function App() {
       if (applyFirst === null) return;
       if (applyFirst && !(await applyAgents([a.id], false))) return;
     }
-    await restartAgent(a);
+    await restartAgent(a, plain);
   };
   const restart = () => { if (st) restartAsked(st); };
+  const restartPlain = () => { if (st) restartAsked(st, true); };
   /** Stops the agent's web UI server (dsh web) after asking. */
   const stopAgent = async (a: AgentState) => {
     if (!(await ask({ title: t("app.stopAsk", { name: a.name }), message: t("app.stopAskMsg"), danger: true, confirmText: t("aside.stop") }))) return;
@@ -1650,6 +1652,7 @@ export default function App() {
             restarting={restarting === st.id}
             restartBlocked={!!restarting}
             onRestart={restart}
+            onRestartPlain={restartPlain}
             onOpenDir={() => attempt(isProjectId(st.id) ? api.openPath(st.configDir) : api.openConfigDir(st.id))}
             tab={tabs[st.id] ?? "prov"}
             setTab={(tab) => setTabs((m) => ({ ...m, [st.id]: tab }))}
