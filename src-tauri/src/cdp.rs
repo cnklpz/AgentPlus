@@ -144,12 +144,20 @@ fn patch_quota(src: &str) -> Option<String> {
 ///   → N=F($v,_);if(!0)return u;let P=…
 /// Since 26.924 the React compiler memoizes the call, so there is a cache check in between:
 ///   if(!n)return u;let P=i!=null,F;t[11]!==f||…?(F=dCt({hasImageGenerationLimit:P,…
+/// Since 26.928 the slot and the banner logic are one component, whose `canShowUsageBanners`
+/// prop already has an early return, placed right after the image-limit check:
+///   E=T?.rate_limit_upsell?.banner_type===`image_generation_limit_reached`,D=J(Jy,f);if(!n)return c;let O;…
 /// The early return already exists (for `canShowUsageBanners` off), so every hook before
 /// it still runs as usual.
 fn patch_banner(src: &str) -> Option<String> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = cached(&RE, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
-    replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
+    static OLD: OnceLock<Regex> = OnceLock::new();
+    static NEW: OnceLock<Regex> = OnceLock::new();
+    let new = cached(&NEW, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
+    if let Some(s) = replace_once(src, new, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};")) {
+        return Some(s);
+    }
+    let old = cached(&OLD, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
+    replace_once(src, old, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
 }
 
 /// Turns every read of the "keep the GPT- prefix" Statsig gate into false, keeping the
@@ -734,6 +742,13 @@ mod tests {
         let out = out.unwrap();
         assert!(missing.is_empty());
         assert_eq!(out, slot.replacen("if(!n)return u;", "if(!0)return u/*agentplus-banner*/;", 1));
+        assert_eq!(patch_source(&out, BANNER), (None, vec![]));
+        // Codex 26.928: one component holds the banner logic.
+        let comp = "if(!n)return x;let E=T?.rate_limit_upsell?.banner_type===`image_generation_limit_reached`,D=J(Jy,f);if(!n)return c;let O;t[11]!==c||t[12]!==o?(O=1):O=t[14];";
+        let (out, missing) = patch_source(comp, BANNER);
+        let out = out.unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(out, comp.replacen("D=J(Jy,f);if(!n)return c;", "D=J(Jy,f);if(!0)return c/*agentplus-banner*/;", 1));
         assert_eq!(patch_source(&out, BANNER), (None, vec![]));
         // An unrelated early return farther away (a block in between) is not taken.
         let far = "if(!a)return b;let c=()=>{x()};let P=dCt({hasImageGenerationLimit:P})";
