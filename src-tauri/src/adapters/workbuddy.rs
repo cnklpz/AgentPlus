@@ -316,12 +316,13 @@ mod tests {
     fn tells_the_editions_apart() {
         let cn = json!({ "productName": "WorkBuddy", "dataFolderName": ".workbuddy" });
         let intl = json!({ "productName": "WorkBuddy AI", "dataFolderName": ".workbuddy-ai" });
-        let exe = Path::new(r"D:\x\WorkBuddy.exe");
+        // Joined, not a Windows literal: elsewhere `\` isn't a separator and the file name is lost.
+        let exe = &Path::new("x").join("WorkBuddy.exe");
         assert!(is_edition(&CN, Some(&cn), exe) && !is_edition(&ai::AI, Some(&cn), exe));
         assert!(is_edition(&ai::AI, Some(&intl), exe) && !is_edition(&CN, Some(&intl), exe));
         // No product.json: by the executable.
         assert!(is_edition(&CN, None, exe) && !is_edition(&ai::AI, None, exe));
-        assert!(is_edition(&ai::AI, None, Path::new(r"D:\workbuddy\WorkBuddyAI\workbuddyai.EXE")));
+        assert!(is_edition(&ai::AI, None, &Path::new("workbuddy").join("WorkBuddyAI").join("workbuddyai.EXE")));
     }
 
     #[test]
