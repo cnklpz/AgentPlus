@@ -254,6 +254,26 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 .issues-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--ink2); line-height: 1.5; }
 .issues-list li > span:first-child { flex: 1 1 240px; }
 .notes { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); background: var(--sunken); border-radius: 8px; padding: 8px 12px; }
+/* The agent page's notes: one line until clicked (see Notes in AgentPage.tsx). */
+.notes.fold { flex-direction: row; align-items: flex-start; gap: 8px; line-height: 1.5; padding: 6px 12px; cursor: pointer; }
+.notes.fold:hover { color: var(--ink2); }
+.notes.fold.still { cursor: auto; }
+.notes.fold.still:hover { color: var(--muted); }
+.notes.fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* clip, not hidden: a hidden box can still be scrolled (by a selection drag), which showed
+   the second note in the collapsed line. */
+/* Block, not flex: a flex item can't be a -webkit-box, which the one-line cut needs. */
+.notes-list { flex: 1; min-width: 0; overflow: clip; transition: height var(--t-slow) var(--ease-out); }
+.notes-list > span { display: block; transition: opacity var(--t-slow) var(--ease-out); }
+.notes-list > span + span { margin-top: 4px; }
+.notes.fold:not(.open) .notes-list > span:not(:first-child) { opacity: 0; }
+.notes.fold.shut .notes-list { height: 1.5em; }
+.notes.fold.shut .notes-list > span:first-child { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; }
+.notes-more { flex-shrink: 0; white-space: nowrap; transition: opacity var(--t) var(--ease-out); }
+.notes.fold.open .notes-more { opacity: 0; }
+/* One line tall, so the chevron sits on the first line whatever the font. */
+.notes-chev { flex-shrink: 0; height: 1.5em; display: flex; align-items: center; transition: transform var(--t-slow) var(--ease-out); }
+.notes.fold.open .notes-chev { transform: rotate(180deg); }
 .btn { white-space: nowrap; flex-shrink: 0; height: 32px; padding: 0 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; font-size: 12.5px; color: var(--ink2); display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 .btn:hover:not(:disabled) { background: var(--hover); }
 .btn:disabled { opacity: .5; }

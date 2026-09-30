@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { type AgentId, type AgentState, type Issue, type Model, type ModelField, type ModelFieldValue, type ModelGuess, type ModelInput, type ModelTag, type Setting, type SettingValue, api, isProjectId } from "../api";
 import {
   CATALOG, type Draft, type ViewModel, type ViewProvider, currentProvider, defaultModel, deleteModel, discardNewModel, editProvider, guessedModel, hasDefaultModel, isEnabled, isVisible, issueStaged, keys, mergeExtra, opCount,
@@ -145,9 +145,7 @@ export function AgentPage(props: Props) {
             </button>
           )}
         </div>}
-        {st.notes.length > 0 && (
-          <div className="notes">{st.notes.map((n) => <span key={n}>{scrub(n)}</span>)}</div>
-        )}
+        {st.notes.length > 0 && <Notes key={st.id} notes={st.notes} />}
         <TabBar items={tabs.map(([id, label, n]) => ({ id, label, count: n }))} value={tab} onChange={setTab} />
       </div>
 
@@ -328,6 +326,91 @@ export function AgentPage(props: Props) {
         })()}
       </div>
     </main>
+  );
+}
+
+/** The agent's notes: one line until clicked, then all of them. Every note stays rendered;
+ * the list slides between one line and its full height while the other notes fade. The
+ * first note is cut to one line (with an ellipsis) only once a collapse has finished, and
+ * uncut before an expand starts, so no line jumps during the slide. A single note that fits
+ * on its line has nothing to expand and is shown plainly. */
+function Notes({ notes }: { notes: string[] }) {
+  const [open, setOpen] = useState(false);
+  // The first note is cut to one line and the list is one line tall (the resting collapsed look).
+  const [shut, setShut] = useState(true);
+  const list = useRef<HTMLDivElement>(null);
+  const timer = useRef(0);
+  // Height to slide from once an expand has laid the list out uncut.
+  const expandFrom = useRef<number | null>(null);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  // Whether there is more than the collapsed line shows (measured while it is cut).
+  const [more, setMore] = useState(true);
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (!el || !shut) return;
+    const check = () => {
+      const first = el.firstElementChild as HTMLElement | null;
+      setMore(notes.length > 1 || (!!first && first.scrollHeight > first.clientHeight + 1));
+    };
+    check();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [notes, shut]);
+
+  // Slides the list's height, then hands it back to the stylesheet. A timer, not
+  // transitionend, which never comes while the window is hidden.
+  const slide = (el: HTMLDivElement, from: number, to: number, then?: () => void) => {
+    el.style.height = `${from}px`;
+    void el.offsetHeight;
+    el.style.height = `${to}px`;
+    const ms = parseFloat(getComputedStyle(el).transitionDuration) * 1000 || 0;
+    timer.current = window.setTimeout(() => { el.style.height = ""; then?.(); }, ms + 30);
+  };
+  const flip = () => {
+    const el = list.current;
+    if (!el) return;
+    window.clearTimeout(timer.current);
+    el.scrollTop = 0;
+    const from = el.getBoundingClientRect().height;
+    const m = document.documentElement.dataset.motion;
+    const still = m === "off" || m === "reduced" || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (open) {
+      setOpen(false);
+      if (still) { el.style.height = ""; setShut(true); return; }
+      slide(el, from, parseFloat(getComputedStyle(el).lineHeight), () => setShut(true));
+    } else {
+      expandFrom.current = still ? null : from;
+      el.style.height = "";
+      setShut(false);
+      setOpen(true);
+    }
+  };
+  useLayoutEffect(() => {
+    const el = list.current;
+    const from = expandFrom.current;
+    expandFrom.current = null;
+    if (!el || from === null || !open) return;
+    const to = el.getBoundingClientRect().height;
+    if (to !== from) slide(el, from, to);
+  }, [open]);
+
+  // A click that ends a text selection is for copying, not for folding.
+  const click = () => { if (!window.getSelection()?.toString()) flip(); };
+  // Nothing to fold: shown plainly (same list node, so the size check keeps watching it).
+  const live = more || open;
+  return (
+    <div className={`notes fold${open ? " open" : ""}${shut ? " shut" : ""}${live ? "" : " still"}`}
+      role={live ? "button" : undefined} tabIndex={live ? 0 : undefined} aria-expanded={live ? open : undefined}
+      title={live ? t(open ? "agentPage.notesCollapse" : "agentPage.notesExpand") : undefined}
+      onClick={live ? click : undefined} onKeyDown={live ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } } : undefined}>
+      <div className="notes-list" ref={list}>
+        {notes.map((n, i) => <span key={n} aria-hidden={!open && i > 0}>{scrub(n)}</span>)}
+      </div>
+      {notes.length > 1 && <span className="notes-more">{tn("agentPage.notesMore", notes.length - 1)}</span>}
+      {live && <span className="notes-chev"><Icon.chevron /></span>}
+    </div>
   );
 }
 
