@@ -239,7 +239,11 @@ export function ProviderDialog({ st, draft, editing, gatewayRoute, onSave, onClo
       const list = await api.codexBuiltinPreview();
       previewPending.current = true;
       setPreview(list);
-      flash(tn("providerDialog.codexRefetched", list.filter((m) => !catalogIds(true).includes(m.slug)).length));
+      // Models the new list drops can't stay ticked: saving would add them back as custom ones.
+      const ids = list.map((m) => m.slug).filter((id) => !catalogIds(true).includes(id));
+      const drops = catalogIds(false).filter((id) => !ids.includes(id));
+      setChecked((c) => c.filter((id) => !drops.includes(id)));
+      flash(tn("providerDialog.codexRefetched", ids.length));
     } catch (e) {
       setErr(errText(e));
     } finally {
