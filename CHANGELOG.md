@@ -2,6 +2,20 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.3.2
+
+托盘新增单色图标和右键快捷操作；拖动调整 Agent 顺序时，松手后的落位动画更顺滑。
+
+- 托盘图标：设置 → 界面 里可以换成单色图标。Windows 上随 AgentPlus 的主题显示为白色或黑色，显示缩放改变后自动重画；macOS 菜单栏里由系统按菜单栏深浅着色
+- 托盘右键菜单（macOS 点菜单栏图标）：可以直接开关本地网关，打开供应商、本地网关、历史与回滚、设置、检查更新和数据目录
+- 拖动调整 Agent 顺序：松手后玻璃效果平滑淡出，不再卡顿；拖动的是选中的 Agent 时，它的强调条会重新滑入，图标和强调条不再重播入场动画；切换选中的 Agent 时，强调条跟着选中高亮一起滑过去
+
+Adds a monochrome tray icon and quick actions in the tray menu; a dragged agent lands more smoothly in its new place.
+
+- Tray icon: switch to a monochrome icon under Settings → Interface. On Windows it is white or black to go with AgentPlus's theme and is redrawn when the display scale changes; in the macOS menu bar the system tints it to match
+- Tray menu (right-click; on macOS click the menu bar icon): turn the local gateway on or off, and open Providers, Local gateway, History & rollback, Settings, Check for updates or the data folder
+- Reordering agents: after a drop the glass fades out smoothly instead of stuttering, and a dragged selected agent's accent bar slides back in rather than its icon and bar replaying their entrance; when you select another agent, the bar slides along with the selection highlight
+
 ## 0.3.1
 
 适配 Codex 26.928；已登录 ChatGPT 账号时，获取官方模型列表不用再重启 Codex。
