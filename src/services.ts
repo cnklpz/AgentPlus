@@ -289,6 +289,35 @@ export function gatewayPoolIds(url: string | null | undefined): string[] | null 
   return m ? (m[1] ? m[1].split("+") : []) : null;
 }
 
+/**
+ * Live uses that reach a group through the gateway: agent entries at an enabled forward to its
+ * library entry, at a combined address that includes one, or at the unified entry. The gateway
+ * skips disabled forwards at every address, so they reach nothing. Keyed by group key; groups
+ * nothing reaches this way are left out.
+ */
+export function gatewayUses(stations: readonly Station[], routes: readonly GatewayRoute[], hosts: GatewayHosts): Map<string, Use[]> {
+  const out = new Map<string, Use[]>();
+  if (!routes.length) return out;
+  const gwGroups = stations.flatMap((s) => s.groups).filter((x) => x.baseUrl && isGatewayHost(hostKey(x.baseUrl), hosts));
+  if (!gwGroups.length) return out;
+  for (const s of stations) {
+    for (const g of s.groups) {
+      if (!g.lib) continue;
+      const mine = routes.filter((r) => r.enabled && r.library === g.lib!.id);
+      if (!mine.length) continue;
+      const uses = gwGroups.flatMap((x) => {
+        const one = gatewayRouteId(x.baseUrl, hosts);
+        const pool = one === null ? gatewayPoolIds(x.baseUrl) : [one];
+        if (!pool) return [];
+        // An empty pool is the unified entry: every enabled forward.
+        return !pool.length || mine.some((r) => pool.includes(r.id)) ? liveUses(x) : [];
+      });
+      if (uses.length) out.set(g.key, uses);
+    }
+  }
+  return out;
+}
+
 export function buildStations(agents: AgentState[], drafts: Record<string, Draft>, lib: LibEntry[], gatewayHost: GatewayHosts = null): Station[] {
   const stations = new Map<string, Station>();
   const groups = new Map<string, Group>();

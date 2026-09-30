@@ -24,6 +24,7 @@ const zh: typeof en = {
   addViaGateway: "经网关添加",
   viaGatewayTitle: "经本地网关转发：可以转换协议、统一密钥、查看请求记录",
   viaGateway: "经网关",
+  throughGateway: "经本地网关接入：{agents}",
 };
 
 export default zh;

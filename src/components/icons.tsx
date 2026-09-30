@@ -96,6 +96,11 @@ function TileIcon({ i, size }: { i: Tile; size: number }) {
   );
 }
 
+/** The local gateway as a tile, to sit among agent icons. */
+export function GatewayTile({ size }: { size: number }) {
+  return <TileIcon i={{ bg: "var(--accent)", scale: 68, glyph: Icon.gateway({ size: Math.round(size * 0.68), color: "#FFFFFF", sw: 2.4 }) }} size={size} />;
+}
+
 /** `sw`: stroke width, for the few places that draw an icon heavier or lighter. */
 type P = { size?: number; color?: string; sw?: number };
 const svg = (size: number, color: string, children: React.ReactNode, sw: number) => (

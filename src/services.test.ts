@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentState, GatewayRouteView, LibEntry, SyncSuggestion } from "./api";
 import type { Draft } from "./draft";
 import {
-  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayPoolBase, gatewayPoolIds,
+  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, agentLabel, apiFor, findRoute, freeAgents, gatewayCapable, gatewayEntry, gatewayUses, gatewayPoolBase, gatewayPoolIds,
   gatewayRouteId, groupKey, hostKey, importKey, importMatches, keySource, movedHost, isGatewayHost, liveUses, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, removable, routesOnLibs, splitStations, stationDeletePlan, syncSuggestionId,
   syncSuggestionIds, tripped, useKey,
 } from "./services";
@@ -321,6 +321,47 @@ describe("routesOnLibs", () => {
     const r = (id: string, library: string) => ({ id, library }) as never;
     expect(routesOnLibs([r("a", "l1"), r("b", "l2"), r("c", "l1")], ["l1"]).map((x: { id: string }) => x.id)).toEqual(["a", "c"]);
     expect(routesOnLibs([r("a", "l1")], [])).toEqual([]);
+  });
+});
+
+describe("gatewayUses", () => {
+  const host = "127.0.0.1:18650";
+  const gw = (path: string) => `http://${host}${path}`;
+  const agent = (id: string) => ({ id, name: id }) as AgentState;
+  const use = (id: string, state: Use["state"] = "on"): Use => ({ agent: agent(id), p: { id: "p" } as Use["p"], state, models: 0 });
+  const group = (key: string, baseUrl: string, uses: Use[], lib: string | null = null) =>
+    ({ key, name: key, baseUrl, api: "chat", lib: lib ? ({ id: lib } as LibEntry) : null, uses }) as unknown as Group;
+  const station = (...groups: Group[]) => ({ key: "s", name: "S", host: "s", baseUrl: null, builtin: false, groups }) as Station;
+  const route = (id: string, library: string, enabled = true) => ({ id, library, enabled }) as never;
+  const keysOf = (m: Map<string, Use[]>) => Object.fromEntries([...m].map(([k, us]) => [k, us.map((u) => u.agent.id)]));
+
+  const upstream = station(group("a", "https://a.example/v1", [use("qwen")], "la"), group("b", "https://b.example/v1", [], "lb"), group("c", "https://c.example/v1", []));
+
+  it("maps agents at a forward, a combined address or the unified entry to the forwarded groups", () => {
+    const local = station(
+      group("r-a", gw("/ra/v1"), [use("codex"), use("claude", "removing")]),
+      group("pool", gw("/ra+rb/v1"), [use("gemini", "new")]),
+      group("all", gw("/v1"), [use("opencode")]),
+    );
+    const m = gatewayUses([upstream, local], [route("ra", "la"), route("rb", "lb", false)], [host]);
+    // rb is disabled: the gateway skips it, so nothing reaches b even through the combined address.
+    expect(keysOf(m)).toEqual({ a: ["codex", "gemini", "opencode"] });
+    const on = gatewayUses([upstream, local], [route("ra", "la"), route("rb", "lb")], [host]);
+    expect(keysOf(on)).toEqual({ a: ["codex", "gemini", "opencode"], b: ["gemini", "opencode"] });
+  });
+  it("leaves groups without a forward, or reached by nothing, out", () => {
+    const local = station(group("r-a", gw("/ra/v1"), [use("codex")]));
+    expect(gatewayUses([upstream, local], [], [host]).size).toBe(0);
+    expect(gatewayUses([upstream, local], [route("rb", "lb")], [host]).size).toBe(0);
+    expect(gatewayUses([upstream], [route("ra", "la")], [host]).size).toBe(0);
+  });
+  it("counts only enabled forwards, and only at a gateway host", () => {
+    const all = station(group("all", gw("/v1"), [use("codex")]));
+    expect(gatewayUses([upstream, all], [route("ra", "la", false)], [host]).size).toBe(0);
+    const own = station(group("r-a", gw("/ra/v1"), [use("codex")]));
+    expect(gatewayUses([upstream, own], [route("ra", "la", false)], [host]).size).toBe(0);
+    const elsewhere = station(group("x", "http://127.0.0.1:9999/ra/v1", [use("codex")]));
+    expect(gatewayUses([upstream, elsewhere], [route("ra", "la")], [host]).size).toBe(0);
   });
 });
 

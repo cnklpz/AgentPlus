@@ -22,4 +22,5 @@ export default {
   addViaGateway: "Add via gateway",
   viaGatewayTitle: "Route through the local gateway: convert protocols, share one API key, see request logs",
   viaGateway: "Via gateway",
+  throughGateway: "Through the local gateway: {agents}",
 };

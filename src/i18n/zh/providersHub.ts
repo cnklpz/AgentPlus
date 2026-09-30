@@ -12,6 +12,7 @@ const zh: typeof en = {
   searchPlaceholder: "按名称、地址、分组搜索",
   notAdded: "未接入",
   agentState: "{agent}：{state}",
+  viaGateway: "经本地网关接入：{agents}",
   moreGroups: "还有 {n} 个分组",
   groupCount: "{n} 个分组",
   inLibraryTitle: "已保存在供应商库，可添加到任意 Agent",

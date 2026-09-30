@@ -1,15 +1,18 @@
 import { useMemo, useState } from "react";
 import type { AgentState } from "../api";
-import { API_LABEL, type Station, USE_LABEL, liveUses, splitStations, writableAgents } from "../services";
-import { AgentIcon, Icon } from "./icons";
+import { API_LABEL, type Station, type Use, USE_LABEL, liveUses, splitStations, writableAgents } from "../services";
+import { AgentIcon, GatewayTile, Icon } from "./icons";
 import { Avatar, Bars, type Latency, latencyText, latencyTone, stationColor } from "./ProviderCard";
 import { type TKey, t, tn } from "../i18n";
 import { scrubHost } from "../privacy";
+import { joinList } from "../format";
 import { onActivateKey } from "../util";
 
 interface Props {
   agents: AgentState[];
   stations: Station[];
+  /** Group key → uses that reach the group through a gateway forward. */
+  viaGateway: Map<string, Use[]>;
   latency: Record<string, Latency>;
   selected: string | null;
   onSelect: (key: string | null) => void;
@@ -25,15 +28,15 @@ type Filter = "all" | "used" | "idle";
 
 const FILTERS: [Filter, TKey][] = [["all", "providersHub.filterAll"], ["used", "providersHub.filterUsed"], ["idle", "providersHub.filterIdle"]];
 
-const used = (s: Station) => s.groups.some((g) => liveUses(g).length > 0);
 
 /** Every provider in one place, by station (host) and its groups. Address and key live here; model lists live in each agent. */
-export function ProvidersHub({ agents, stations, latency, selected, onSelect, onAdd, onImportLink, onTestAll, onTestOne, envLabel }: Props) {
+export function ProvidersHub({ agents, stations, viaGateway, latency, selected, onSelect, onAdd, onImportLink, onTestAll, onTestOne, envLabel }: Props) {
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const shown = writableAgents(agents);
 
   const { relays, accounts } = splitStations(stations);
+  const used = (s: Station) => s.groups.some((g) => liveUses(g).length > 0 || viaGateway.has(g.key));
 
   const list = useMemo(() => {
     const k = q.trim().toLowerCase();
@@ -43,7 +46,7 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
       return !k || s.name.toLowerCase().includes(k) || s.host.includes(k)
         || s.groups.some((g) => g.name.toLowerCase().includes(k) || g.baseUrl.toLowerCase().includes(k) || g.uses.some((u) => u.p?.name.toLowerCase().includes(k)));
     });
-  }, [relays, q, filter]);
+  }, [relays, q, filter, viaGateway]);
 
   const counts = { all: relays.length, used: relays.filter(used).length, idle: relays.filter((s) => !used(s)).length };
 
@@ -112,17 +115,24 @@ export function ProvidersHub({ agents, stations, latency, selected, onSelect, on
                 <div className="hgroups">
                   {s.groups.slice(0, 4).map((g) => {
                     const uses = liveUses(g);
+                    const gw = viaGateway.get(g.key) ?? [];
                     return (
-                      <div key={g.key} className={`hgroup${uses.length ? "" : " idle"}`}>
+                      <div key={g.key} className={`hgroup${uses.length || gw.length ? "" : " idle"}`}>
                         <span className={`api-chip api-${g.api}`}>{API_LABEL[g.api]}</span>
                         <span className="grow minw0 ellipsis small">{g.name}</span>
                         <span className="hgroup-agents">
-                          {uses.length === 0 && <span className="tiny faint">{t("providersHub.notAdded")}</span>}
+                          {uses.length === 0 && gw.length === 0 && <span className="tiny faint">{t("providersHub.notAdded")}</span>}
                           {[...new Map(uses.map((u) => [u.agent.id, u])).values()].map((u) => (
                             <span key={u.agent.id} className={`hgroup-agent ${u.state}`} title={t("providersHub.agentState", { agent: u.agent.name, state: USE_LABEL[u.state] })}>
                               <AgentIcon id={u.agent.id} size={16} />
                             </span>
                           ))}
+                          {gw.length > 0 && (
+                            <span className={`hgroup-agent${gw.every((u) => u.state === "new") ? " new" : ""}`}
+                              title={t("providersHub.viaGateway", { agents: joinList([...new Set(gw.map((u) => u.agent.name))]) })}>
+                              <GatewayTile size={16} />
+                            </span>
+                          )}
                         </span>
                       </div>
                     );

@@ -30,7 +30,7 @@ import { type Prefs, applyPrefs, loadPrefs, savePrefs } from "./prefs";
 import { mergeOrder, sortByOrder } from "./order";
 import { t, tn, tSaved, useLang } from "./i18n";
 import {
-  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId,
+  API_LABEL, GATEWAY_KEY, type Group, type Station, type Use, apiFor, buildStations, cannotAdd, findRoute, gatewayEntry, gatewayPoolBase, gatewayPoolIds, gatewayRouteId, gatewayUses,
   hostKey, importKey, importMatches, importOp, keySource, mergeReplaced, movedGatewayUrl, newRouteId, orphanImports, plainRoute, routesOnLibs, stationDeletePlan,
 } from "./services";
 import { type Page, Sidebar } from "./components/Sidebar";
@@ -273,6 +273,8 @@ export default function App() {
   /** Every agent shown here plus the open project configs: what "apply all" / "discard all" act on. */
   const allStates = useMemo(() => [...shown, ...Object.values(projStates)], [shown, projStates]);
   const stations = useMemo(() => buildStations(shown, drafts, lib, gatewayHosts), [shown, drafts, lib, gatewayHosts, lang]);
+  /** Hub groups agents reach through a gateway forward (their entries sit under the gateway station). */
+  const viaGw = useMemo(() => gatewayUses(stations, gateway?.routes ?? [], gatewayHosts), [stations, gateway?.routes, gatewayHosts]);
   /** Add-provider dialog: the provider library's groups (a project config isn't among the
    * hub's agents, so its own entries are grouped for it). Built only while the dialog is open. */
   const libOpen = !!dialog && !dialog.editing;
@@ -1590,6 +1592,7 @@ export default function App() {
           <ProvidersHub
             agents={shown}
             stations={stations}
+            viaGateway={viaGw}
             latency={latency}
             selected={hubSel}
             onSelect={setHubSel}
@@ -1614,6 +1617,7 @@ export default function App() {
                 key={hubStation.key}
                 s={hubStation}
                 agents={shown}
+                viaGateway={viaGw}
                 latency={latency}
                 onClose={() => setHubSel(null)}
                 onTest={testOne}

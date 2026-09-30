@@ -10,6 +10,7 @@ export default {
   searchPlaceholder: "Search by name, URL or group",
   notAdded: "Not added",
   agentState: "{agent}: {state}",
+  viaGateway: "Through the local gateway: {agents}",
   moreGroups: "{n} more group|{n} more groups",
   groupCount: "{n} group|{n} groups",
   inLibraryTitle: "Saved in the provider library; can be added to any agent",

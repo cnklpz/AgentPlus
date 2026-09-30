@@ -1,16 +1,19 @@
 import { useState } from "react";
 import type { AgentId, AgentState } from "../api";
 import { API_LABEL, ONLY_API, type GatewayHosts, type Group, type Station, type Use, USE_LABEL, cannotAdd, freeAgents, gatewayCapable, gatewayRouteId, importSource, liveUses, removable, useKey } from "../services";
-import { AgentIcon, Icon } from "./icons";
+import { AgentIcon, GatewayTile, Icon } from "./icons";
 import { Avatar, Bars, type Latency, latencyText, stationColor } from "./ProviderCard";
 import { ProviderTest } from "./ProviderTest";
 import { t, tn } from "../i18n";
+import { joinList } from "../format";
 import { scrub, scrubHost } from "../privacy";
 import { toggled } from "../util";
 
 interface Props {
   s: Station;
   agents: AgentState[];
+  /** Group key → uses that reach the group through a gateway forward. */
+  viaGateway: Map<string, Use[]>;
   latency: Record<string, Latency>;
   onClose: () => void;
   onTest: (url: string) => void;
@@ -87,6 +90,7 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
   const [pick, setPick] = useState<Set<string>>(new Set(deletable.map(useKey)));
   const [fromLib, setFromLib] = useState(true);
   const free = freeAgents(agents, g);
+  const gw = props.viaGateway.get(g.key) ?? [];
 
   const src = g.lib ? { agent: "library", provider: g.lib.id } : (() => {
     const u = g.uses.find((x) => x.p && !x.p.isNew && x.p.baseUrl);
@@ -102,6 +106,11 @@ function GroupPanel({ g, open, onToggle, builtin, agents, ...props }: Props & { 
       <button className="gpanel-head" onClick={onToggle} aria-expanded={open}>
         <span className={`api-chip api-${g.api}`}>{API_LABEL[g.api]}</span>
         <span className="grow minw0 ellipsis small strong">{g.name}</span>
+        {gw.length > 0 && (
+          <span className="row" title={t("serviceDetail.throughGateway", { agents: joinList([...new Set(gw.map((u) => u.agent.name))]) })}>
+            <GatewayTile size={14} />
+          </span>
+        )}
         <span className="tiny muted">{tn("serviceDetail.uses", liveUses(g).length)}</span>
         <Icon.chevron />
       </button>
