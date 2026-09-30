@@ -1184,8 +1184,6 @@ pub struct Restarted {
     pub was_running: bool,
     /// The agent's CLI running in terminals: not restarted, it reads the new config once reopened.
     pub cli_sessions: usize,
-    /// The version detected (Codex: picks the UI patch shapes made for it).
-    pub version: Option<String>,
 }
 
 /// Restarts the agent's desktop app, or starts it when it isn't running.
@@ -1231,7 +1229,7 @@ pub fn restart(agent: &str, args: &str, on: &dyn Fn(Progress)) -> Result<Restart
             None => Progress::step("stop", "skip", Some(idle.into())),
         });
     }
-    let done = Restarted { was_running: running > 0, cli_sessions: cli, version: inst.version.clone() };
+    let done = Restarted { was_running: running > 0, cli_sessions: cli };
     check_cancel()?;
     on(Progress::step("start", "active", None));
     let t1 = Instant::now();
