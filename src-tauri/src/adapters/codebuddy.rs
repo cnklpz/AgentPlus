@@ -9,6 +9,8 @@
 //! sharing (base URL, apiKey, vendor); the vendor is the provider's name.
 //! `availableModels` is the native visibility list: hiding removes the id from it and
 //! keeps the entry. Disabled providers are moved out and parked in the AgentPlus store.
+//!
+//! WorkBuddy reads the same format (see `workbuddy.rs`); what differs is a [`Flavor`].
 
 use super::keyref::{self, host, resolve_key, set_or_remove, Group, Key};
 use super::msg;
@@ -20,7 +22,7 @@ use crate::process::Install;
 use crate::store;
 use crate::util::*;
 use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 pub const ID: &str = "codebuddy";
@@ -30,7 +32,25 @@ pub const WSL_SCRIPT: &str = "codebuddy --version 2>/dev/null | head -n 1; pgrep
 pub const WSL_MARKER: &str = ".codebuddy";
 
 const SUFFIX: &str = "/chat/completions";
-const STORE_LABEL: &str = "AgentPlus · CodeBuddy";
+
+/// What differs between the agents that keep custom models in this `models.json` format.
+pub(crate) struct Flavor {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// The config folder (the one picked in AgentPlus, else the agent's default).
+    pub dir: fn() -> PathBuf,
+    /// Hiding drops the id from `availableModels` and keeps the entry. Without it, a hidden
+    /// entry moves out of the file into the AgentPlus store, and `availableModels` is left
+    /// alone (WorkBuddy's replaces its whole model list, built-in ones included).
+    pub native_hide: bool,
+    /// A new file is a top-level array (the form WorkBuddy itself saves) instead of
+    /// `{ "models": [...] }`; an existing file keeps its form.
+    pub array_form: bool,
+    /// Diff label of the entries kept in the AgentPlus store.
+    pub store_label: &'static str,
+}
+
+pub(crate) const CODEBUDDY: Flavor = Flavor { id: ID, name: NAME, dir, native_hide: true, array_form: false, store_label: "AgentPlus · CodeBuddy" };
 
 /// `CODEBUDDY_CONFIG_DIR` (Windows side only), else `~/.codebuddy`.
 pub fn default_dir() -> PathBuf {
@@ -44,8 +64,8 @@ pub(crate) fn dir() -> PathBuf {
     super::dir_override(ID).unwrap_or_else(default_dir)
 }
 
-fn models_path() -> PathBuf {
-    dir().join("models.json")
+fn models_path(f: &Flavor) -> PathBuf {
+    (f.dir)().join("models.json")
 }
 
 pub(crate) fn settings_path() -> PathBuf {
@@ -112,8 +132,24 @@ fn key_of(e: &Value) -> Key {
     (base_of(&str_field(e, "url")), str_field(e, "apiKey"), str_field(e, "vendor"))
 }
 
-/// Groups in order of first appearance (active entries first, then parked ones).
-fn groups_of(entries: &[Value], parked: &[Value]) -> Vec<Group> {
+/// A group identity without keeping another copy of its API key in the store.
+fn group_hash(key: &Key) -> String {
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
+    for field in [&key.0, &key.1, &key.2] {
+        hash.update(&(field.len() as u64).to_le_bytes());
+        hash.update(field.as_bytes());
+    }
+    hash.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// WorkBuddy moves hidden models out of the file, so its provider IDs must survive changes
+/// to the entry order. CodeBuddy keeps its existing ID handling.
+fn provider_ids_of(f: &Flavor, root: &Value) -> Map<String, Value> {
+    if f.native_hide { Map::new() } else { store::get_obj(root, f.id, "providerIds") }
+}
+
+/// Groups in order of first appearance; saved IDs take precedence over that order.
+fn groups_of(entries: &[Value], parked: &[Value], ids: &Map<String, Value>) -> Vec<Group> {
     let mut out: Vec<Group> = vec![];
     for e in entries.iter().chain(parked.iter().filter_map(|p| p.get("entry"))) {
         let k = key_of(e);
@@ -121,7 +157,8 @@ fn groups_of(entries: &[Value], parked: &[Value]) -> Vec<Group> {
             continue;
         }
         let vendor = if k.2.trim().is_empty() { host(&k.0) } else { k.2.trim().to_string() };
-        let id = unique_id(&slug(&vendor), |c| out.iter().any(|g| g.id == c));
+        let id = ids.get(&group_hash(&k)).and_then(Value::as_str).filter(|id| !id.is_empty() && !out.iter().any(|g| g.id == *id)).map(String::from)
+            .unwrap_or_else(|| unique_id(&slug(&vendor), |c| out.iter().any(|g| g.id == c) || ids.values().any(|v| v.as_str() == Some(c))));
         out.push(Group { id, key: k, name: vendor });
     }
     // Same vendor twice: tell them apart by host.
@@ -132,22 +169,45 @@ fn groups_of(entries: &[Value], parked: &[Value]) -> Vec<Group> {
     out
 }
 
-fn parked_of(root: &Value) -> Vec<Value> {
-    store::get_arr(root, ID, "parked")
+/// Parked entries: `{ visible, entry }`, plus `off: true` for those of a disabled provider
+/// when the flavor has no native hiding (without `off`, the entry is only hidden).
+fn parked_of(f: &Flavor, root: &Value) -> Vec<Value> {
+    store::get_arr(root, f.id, "parked")
 }
 
-/// (models.json, meta, had_comments); a missing file reads as `{"models": []}`.
-fn load_models() -> Result<(Value, TextMeta, bool)> {
-    read_jsonc_object_or(&models_path(), json!({ "models": [] }))
+/// Whether a parked entry is there because its provider is disabled.
+fn parked_off(f: &Flavor, p: &Value) -> bool {
+    f.native_hide || p.get("off").and_then(|x| x.as_bool()) == Some(true)
+}
+
+fn parked_visible(p: &Value) -> bool {
+    p.get("visible").and_then(|x| x.as_bool()).unwrap_or(true)
+}
+
+/// (models.json as `{ models, availableModels? }`, meta, had_comments, top-level array);
+/// a missing file reads as no models.
+fn load_models(f: &Flavor) -> Result<(Value, TextMeta, bool, bool)> {
+    let path = models_path(f);
+    if !path.exists() {
+        return Ok((json!({ "models": [] }), TextMeta::NEW, false, f.array_form));
+    }
+    let (text, meta) = read_text(&path)?;
+    let (clean, had) = strip_jsonc(&text);
+    let v: Value = serde_json::from_str(&clean).map_err(|e| anyhow!(tr!("Failed to parse models.json: {e}", "models.json 解析失败：{e}")))?;
+    match v {
+        Value::Array(models) => Ok((json!({ "models": models }), meta, had, true)),
+        Value::Object(_) => Ok((v, meta, had, false)),
+        _ => Err(anyhow!(l("The top level of models.json is neither an object nor an array", "models.json 顶层既不是对象也不是数组"))),
+    }
 }
 
 fn entries_of(cfg: &Value) -> Vec<Value> {
     cfg.get("models").and_then(|x| x.as_array()).cloned().unwrap_or_default()
 }
 
-/// None = no `availableModels` (every model shows).
-fn available_of(cfg: &Value) -> Option<Vec<String>> {
-    str_list(cfg.get("availableModels"))
+/// None = no `availableModels` (every model shows), or a flavor that doesn't use it.
+fn available_of(f: &Flavor, cfg: &Value) -> Option<Vec<String>> {
+    f.native_hide.then(|| str_list(cfg.get("availableModels"))).flatten()
 }
 
 fn default_model() -> Option<String> {
@@ -179,18 +239,29 @@ fn model_of(e: &Value, visible: bool) -> Model {
     }
 }
 
-fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Vec<String>>) -> Provider {
+fn provider_of(f: &Flavor, g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Vec<String>>) -> Provider {
     let mine = |e: &Value| key_of(e) == g.key;
     let active: Vec<&Value> = entries.iter().filter(|e| mine(e)).collect();
-    let enabled = !active.is_empty();
+    let enabled = if f.native_hide { !active.is_empty() } else { !parked.iter().any(|p| parked_off(f, p) && p.get("entry").is_some_and(&mine)) };
     let mut models: Vec<Model> = active.iter().map(|e| model_of(e, avail.map(|a| a.contains(&str_field(e, "id"))).unwrap_or(true))).collect();
-    if !enabled {
+    // A disabled provider's entries; without native hiding, also an enabled one's hidden ones.
+    if !enabled || !f.native_hide {
         for p in parked {
             if let Some(e) = p.get("entry").filter(|e| mine(e)) {
-                models.push(model_of(e, p.get("visible").and_then(|x| x.as_bool()).unwrap_or(true)));
+                // The agent may have added a hidden model again. Its live entry is shown
+                // once; the kept copy is reconciled when hiding or showing it.
+                if models.iter().any(|m| m.id == str_field(e, "id")) {
+                    continue;
+                }
+                models.push(model_of(e, parked_visible(p)));
             }
         }
     }
+    let status = match (enabled, f.native_hide) {
+        (true, _) => l("Enabled", "已启用"),
+        (false, true) => l("Disabled · entries parked in AgentPlus", "已停用 · 条目暂存在 AgentPlus"),
+        (false, false) => l("Disabled · entries moved out of models.json and kept in AgentPlus", "已停用 · 条目已移出 models.json，暂存在 AgentPlus"),
+    };
     Provider {
         id: g.id.clone(),
         name: g.name.clone(),
@@ -204,7 +275,7 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
             Kv::mono("vendor", if g.key.2.is_empty() { "-".into() } else { g.key.2.clone() }),
             Kv::mono("url", url_of(&g.key.0)),
             Kv::text(lbl::api_key(), keyref::key_note(&g.key.1, "models.json")),
-            Kv::text(lbl::status(), if enabled { l("Enabled", "已启用") } else { l("Disabled · entries parked in AgentPlus", "已停用 · 条目暂存在 AgentPlus") }),
+            Kv::text(lbl::status(), status),
         ],
         editable: true,
         api: "chat".into(),
@@ -213,10 +284,13 @@ fn provider_of(g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Ve
     }
 }
 
-pub fn state(inst: &Install) -> AgentState {
-    let mut st = super::new_state(ID, NAME, inst, "multi", &dir(), vec![display_path(&models_path())]);
-    let cfg = match load_models() {
-        Ok((cfg, _, had)) => {
+/// The state shared by the flavors, and the models.json it read (None when it can't be
+/// read); each flavor adds its own rows and notes.
+pub(crate) fn state_of(f: &'static Flavor, inst: &Install) -> (AgentState, Option<Value>) {
+    let path = models_path(f);
+    let mut st = super::new_state(f.id, f.name, inst, "multi", &(f.dir)(), vec![display_path(&path)]);
+    let cfg = match load_models(f) {
+        Ok((cfg, _, had, _)) => {
             if had {
                 st.readonly = true;
                 st.notes.push(msg::comments_readonly("models.json"));
@@ -225,49 +299,81 @@ pub fn state(inst: &Install) -> AgentState {
         }
         Err(e) => {
             st.fail(e);
-            return st;
+            return (st, None);
         }
     };
     let root = store::load();
     let entries = entries_of(&cfg);
-    let parked = parked_of(&root);
-    let avail = available_of(&cfg);
-    for g in groups_of(&entries, &parked) {
-        st.providers.push(provider_of(&g, &entries, &parked, avail.as_ref()));
+    let parked = parked_of(f, &root);
+    let avail = available_of(f, &cfg);
+    for g in groups_of(&entries, &parked, &provider_ids_of(f, &root)) {
+        st.providers.push(provider_of(f, &g, &entries, &parked, avail.as_ref()));
     }
-    st.current = vec![
-        Kv::mono(lbl::default_model(), default_model().unwrap_or_else(|| l("- (CodeBuddy default)", "-（CodeBuddy 默认）").into())),
-        Kv::text(lbl::custom_models(), tr!("{}", "{} 个", entries.len())),
+    st.current = vec![Kv::text(lbl::custom_models(), tr!("{}", "{} 个", entries.len())), Kv::mono(lbl::config_file(), display_path(&path))];
+    let name = f.name;
+    st.notes.push(tr!("{name} custom models only support the OpenAI Chat Completions API; other protocols can be converted through the AgentPlus local gateway.", "{name} 的自定义模型只支持 OpenAI Chat Completions 接口；其他协议可经 AgentPlus 本地网关转换后接入。"));
+    (st, Some(cfg))
+}
+
+/// The WorkBuddy edition that reads this same models.json (a config-dir variable or a custom
+/// folder pointing both at one folder). A user `availableModels` there replaces WorkBuddy's
+/// whole model list, built-in models included. Only an edition that is there counts
+/// (`workbuddy::present`): `CODEBUDDY_CONFIG_DIR` alone points WorkBuddy's folder here too.
+fn shared_workbuddy() -> Option<&'static str> {
+    use super::workbuddy;
+    let d = dir();
+    [(workbuddy::ID, workbuddy::dir(), workbuddy::NAME), (workbuddy::ai::ID, workbuddy::ai::dir(), workbuddy::ai::NAME)]
+        .into_iter()
+        .find(|(id, w, _)| same_dir(&d, w) && workbuddy::present(id))
+        .map(|(.., n)| n)
+}
+
+pub fn state(inst: &Install) -> AgentState {
+    let (mut st, cfg) = state_of(&CODEBUDDY, inst);
+    if let Some(wb) = shared_workbuddy() {
+        st.notes.insert(0, tr!("{wb} reads this same models.json. An availableModels list here also replaces {wb}'s model list (its built-in models included), so AgentPlus won't create one; models can be hidden only once the file has one.", "{wb} 也读取这个 models.json。这里的 availableModels 同样会替换 {wb} 的模型列表（包括它的内置模型），所以 AgentPlus 不会创建它；文件里已有 availableModels 时才能隐藏模型。"));
+    }
+    let Some(cfg) = cfg else { return st };
+    let avail = str_list(cfg.get("availableModels"));
+    st.current.insert(0, Kv::mono(lbl::default_model(), default_model().unwrap_or_else(|| l("- (CodeBuddy default)", "-（CodeBuddy 默认）").into())));
+    st.current.insert(
+        2,
         Kv::text("availableModels", match &avail {
             Some(a) => tr!("{} (only listed models are shown)", "{} 个（只显示列出的模型）", a.len()),
             None => l("Not set (all shown)", "未设置（全部显示）").into(),
         }),
-        Kv::mono(lbl::config_file(), display_path(&models_path())),
-    ];
-    st.notes.push(l("CodeBuddy custom models only support the OpenAI Chat Completions API; other protocols can be converted through the AgentPlus local gateway.", "CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；其他协议可经 AgentPlus 本地网关转换后接入。").into());
+    );
     st.notes.push(l("Changes to models.json take effect in about a second (shared by the CLI and the IDE).", "models.json 改动约 1 秒后自动生效（CLI 与 IDE 共用）。").into());
     st.notes.push(l("A project's availableModels replaces the user list entirely.", "项目里的 availableModels 会整体覆盖用户列表。").into());
     st
 }
 
-pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
-    let (cfg, _, _) = load_models()?;
-    let g = groups_of(&entries_of(&cfg), &parked_of(&store::load())).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
+pub(crate) fn endpoint_of(f: &Flavor, id: &str) -> Result<Endpoint> {
+    let (cfg, ..) = load_models(f)?;
+    let root = store::load();
+    let g = groups_of(&entries_of(&cfg), &parked_of(f, &root), &provider_ids_of(f, &root)).into_iter().find(|g| g.id == id).ok_or_else(|| msg::no_provider(id))?;
     if g.key.0.is_empty() {
         return Err(anyhow!(tr!("Provider {id} has no url", "供应商 {id} 没有 url")));
     }
     Ok((g.key.0, resolve_key(&g.key.1), "chat".into()))
 }
 
-fn chat_only(api: &str) -> Result<()> {
+pub fn provider_endpoint(id: &str) -> Result<Endpoint> {
+    endpoint_of(&CODEBUDDY, id)
+}
+
+fn chat_only(name: &str, api: &str) -> Result<()> {
     if api == "chat" {
         Ok(())
     } else {
-        Err(anyhow!(tr!("CodeBuddy custom models only support the OpenAI Chat Completions API; connect {api} relays to the AgentPlus local gateway first, then add them with the Chat API", "CodeBuddy 的自定义模型只支持 OpenAI Chat Completions 接口；{api} 协议的中转请先接入 AgentPlus 本地网关，再以 Chat 接口添加")))
+        Err(anyhow!(tr!("{name} custom models only support the OpenAI Chat Completions API; connect {api} relays to the AgentPlus local gateway first, then add them with the Chat API", "{name} 的自定义模型只支持 OpenAI Chat Completions 接口；{api} 协议的中转请先接入 AgentPlus 本地网关，再以 Chat 接口添加")))
     }
 }
 
 struct Work {
+    f: &'static Flavor,
+    /// The WorkBuddy edition sharing the file (CodeBuddy only): no `availableModels` is created.
+    shared: Option<&'static str>,
     entries: Vec<Value>,
     avail: Option<Vec<String>>,
     parked: Vec<Value>,
@@ -282,7 +388,11 @@ impl Work {
     }
 
     fn enabled(&self, g: &Group) -> bool {
-        self.entries.iter().any(|e| key_of(e) == g.key)
+        if self.f.native_hide {
+            self.entries.iter().any(|e| key_of(e) == g.key)
+        } else {
+            !self.parked.iter().any(|p| parked_off(self.f, p) && p.get("entry").is_some_and(|e| key_of(e) == g.key))
+        }
     }
 
     fn require_enabled(&self, g: &Group) -> Result<()> {
@@ -298,7 +408,8 @@ impl Work {
         match self.owner_of(mid) {
             Some(k) if k != g.key => {
                 let other = self.groups.iter().find(|x| x.key == k).map(|x| x.name.clone()).unwrap_or_default();
-                Err(anyhow!(tr!("Model ID {mid} is already used by provider \"{other}\"; CodeBuddy model IDs must be unique", "模型 ID {mid} 已被供应商「{other}」使用；CodeBuddy 的模型 ID 必须唯一")))
+                let name = self.f.name;
+                Err(anyhow!(tr!("Model ID {mid} is already used by provider \"{other}\"; {name} model IDs must be unique", "模型 ID {mid} 已被供应商「{other}」使用；{name} 的模型 ID 必须唯一")))
             }
             _ => Ok(()),
         }
@@ -344,11 +455,89 @@ impl Work {
         Ok(())
     }
 
+    /// Merge old duplicate copies without losing fields added by the agent. The first
+    /// kept copy retains precedence, matching the previous restore behavior.
+    fn kept_model(&self, g: &Group, model: &str) -> Option<Value> {
+        let mut kept = None;
+        for e in self.parked.iter().rev().filter_map(|p| p.get("entry")).filter(|e| key_of(e) == g.key && str_field(e, "id") == model) {
+            match (&mut kept, e.as_object()) {
+                (Some(Value::Object(out)), Some(fields)) => out.extend(fields.clone()),
+                _ => kept = Some(e.clone()),
+            }
+        }
+        kept
+    }
+
+    fn merge_kept_fields(&self, g: &Group, model: &str, entry: &mut Value) {
+        if let Some(Value::Object(kept)) = self.kept_model(g, model) {
+            for (k, v) in kept.iter().filter(|(k, _)| !["id", "url", "apiKey", "vendor"].contains(&k.as_str())) {
+                entry[k.as_str()] = v.clone();
+            }
+        }
+    }
+
+    /// Hiding without `availableModels`: the entry moves between the file and the store.
+    fn set_parked_visible(&mut self, g: &Group, model: &str, visible: bool) -> Result<()> {
+        let file = self.file.clone();
+        let mine = |e: &Value| key_of(e) == g.key && str_field(e, "id") == model;
+        if visible {
+            let Some(kept) = self.kept_model(g, model) else {
+                return if self.entries.iter().any(&mine) { Ok(()) } else { Err(anyhow!(tr!("\"{}\" has no model {model}", "「{}」里没有模型 {model}", g.name))) };
+            };
+            // The id was added to the file again meanwhile (in the agent itself): the kept copy's
+            // fields (edited in AgentPlus while hidden) go onto that entry, each one shown in the
+            // diff, and the copy goes. Another provider's entry blocks it.
+            if let Some(j) = self.entries.iter().position(|e| str_field(e, "id") == model) {
+                if key_of(&self.entries[j]) != g.key {
+                    return Err(anyhow!(tr!("Model ID {model} is used by another provider; can't show it in \"{}\"", "模型 ID {model} 已被其他供应商使用，无法在「{}」里重新显示", g.name)));
+                }
+                let kept = kept.as_object().cloned().unwrap_or_default();
+                self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+                self.diff.push(self.f.store_label, tr!("models - {model} (already in models.json again, kept copy merged into it)", "models - {model}（models.json 里已重新有它，暂存的副本合并进去）"), false);
+                let e = &mut self.entries[j];
+                // The provider's own fields are equal already (same key).
+                for (k, v) in kept.into_iter().filter(|(k, _)| !["id", "url", "apiKey", "vendor"].contains(&k.as_str())) {
+                    if e.get(&k) != Some(&v) {
+                        self.diff.push(&file, format!("models.{model}.{k} = {}", v.as_str().map(String::from).unwrap_or_else(|| v.to_string())), true);
+                        e[k.as_str()] = v;
+                    }
+                }
+                return Ok(());
+            }
+            self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+            self.entries.push(kept);
+            self.diff.push(&file, tr!("models + {model} (shown again, restored from AgentPlus)", "models + {model}（重新显示，从 AgentPlus 恢复）"), true);
+        } else {
+            let Some(i) = self.entries.iter().position(&mine) else {
+                let copies: Vec<Value> = self.parked.iter().filter(|p| p.get("entry").is_some_and(&mine)).cloned().collect();
+                let Some(kept) = copies.first() else {
+                    return Err(anyhow!(tr!("\"{}\" has no model {model}", "「{}」里没有模型 {model}", g.name)));
+                };
+                if copies.len() > 1 {
+                    let mut kept = kept.clone();
+                    kept["entry"] = self.kept_model(g, model).unwrap();
+                    self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+                    self.parked.push(kept);
+                    self.diff.push(self.f.store_label, tr!("models - {model} (duplicate hidden copies removed)", "models - {model}（移除重复的隐藏副本）"), false);
+                }
+                return Ok(());
+            };
+            let mut e = self.entries.remove(i);
+            // Retain edits made while hidden, and fields the agent added meanwhile.
+            self.merge_kept_fields(g, model, &mut e);
+            self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+            self.parked.push(json!({ "visible": false, "entry": e }));
+            self.diff.push(&file, tr!("models - {model} (hidden, entry kept in AgentPlus)", "models - {model}（隐藏，条目暂存在 AgentPlus）"), false);
+        }
+        Ok(())
+    }
+
     fn apply(&mut self, op: &Op) -> Result<()> {
         let file = self.file.clone();
+        let name = self.f.name;
         match op {
             Op::UpsertProvider { provider: p } => {
-                chat_only(&p.api)?;
+                chat_only(name, &p.api)?;
                 if p.name.trim().is_empty() || p.base_url.trim().is_empty() {
                     return Err(msg::name_and_url_required());
                 }
@@ -359,7 +548,7 @@ impl Work {
                         let vendor = p.name.trim().to_string();
                         let models = clean_ids(&p.models);
                         if models.is_empty() {
-                            return Err(anyhow!(l("Each CodeBuddy model entry carries its own base URL and API key: add at least one model when creating a provider", "CodeBuddy 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型")));
+                            return Err(anyhow!(tr!("Each {name} model entry carries its own base URL and API key: add at least one model when creating a provider", "{name} 的每个模型条目自带地址和密钥：新建供应商时至少要填一个模型")));
                         }
                         let key: Key = (base.clone(), new_key.clone().unwrap_or_default(), vendor.clone());
                         let g = match self.groups.iter().find(|g| g.key == key) {
@@ -389,7 +578,7 @@ impl Work {
                             self.entries.push(Self::new_entry(&key, m, None, None));
                             self.show(m);
                         }
-                        for op in crate::modelinfo::seed_ops(ID, &g.id, &added) {
+                        for op in crate::modelinfo::seed_ops(self.f.id, &g.id, &added) {
                             self.apply(&op)?;
                         }
                     }
@@ -449,15 +638,29 @@ impl Work {
                 }
                 let n = self.parked.len();
                 self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key).unwrap_or(true));
-                let label = if gone.is_empty() && n != self.parked.len() { STORE_LABEL.to_string() } else { file.clone() };
+                let label = if gone.is_empty() && n != self.parked.len() { self.f.store_label.to_string() } else { file.clone() };
                 self.diff.push(&label, trn!(gone.len().max(n - self.parked.len()), "- \"{}\" ({n} model, with base URL and API key)", "- \"{}\" ({n} models, with base URL and API key)", "- 「{}」（{n} 个模型，含地址和密钥）", g.name), false);
                 self.groups.retain(|x| x.id != g.id);
             }
             Op::SetProviderEnabled { provider, enabled } => {
                 let g = self.group(provider)?;
+                let f = self.f;
+                let mine = |p: &Value| p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false);
                 if *enabled {
-                    let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| p.get("entry").map(|e| key_of(e) == g.key).unwrap_or(false));
+                    // Hidden entries (no native hiding) stay parked, no longer marked off.
+                    let (back, keep): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.parked).into_iter().partition(|p| mine(p) && parked_off(f, p) && (f.native_hide || parked_visible(p)));
                     self.parked = keep;
+                    if !f.native_hide {
+                        let hidden_off = self.parked.iter().filter(|p| mine(p) && parked_off(f, p)).count();
+                        for p in self.parked.iter_mut().filter(|p| mine(p) && parked_off(f, p)) {
+                            if let Some(o) = p.as_object_mut() {
+                                o.remove("off");
+                            }
+                        }
+                        if back.is_empty() && hidden_off > 0 {
+                            self.diff.push(f.store_label, trn!(hidden_off, "\"{}\" enabled ({n} hidden model)", "\"{}\" enabled ({n} hidden models)", "「{}」已启用（{n} 个隐藏的模型）", g.name), true);
+                        }
+                    }
                     if !back.is_empty() {
                         self.diff.push(&file, trn!(back.len(), "+ \"{}\" {n} model (restored from AgentPlus)", "+ \"{}\" {n} models (restored from AgentPlus)", "+ 「{}」{n} 个模型（从 AgentPlus 恢复）", g.name), true);
                     }
@@ -467,7 +670,7 @@ impl Work {
                         if self.owner_of(&mid).is_some() {
                             return Err(anyhow!(tr!("Model ID {mid} is used by another provider; can't restore \"{}\"", "模型 ID {mid} 已被其他供应商使用，无法恢复「{}」", g.name)));
                         }
-                        if p.get("visible").and_then(|x| x.as_bool()).unwrap_or(true) {
+                        if parked_visible(&p) {
                             self.show(&mid);
                         }
                         self.entries.push(e);
@@ -478,17 +681,38 @@ impl Work {
                     if !out.is_empty() {
                         self.diff.push(&file, trn!(out.len(), "- \"{}\" {n} model (parked in AgentPlus, restorable)", "- \"{}\" {n} models (parked in AgentPlus, restorable)", "- 「{}」{n} 个模型（暂存在 AgentPlus，可恢复）", g.name), false);
                     }
-                    for e in out {
+                    if !f.native_hide {
+                        let n = self.parked.iter().filter(|p| mine(p)).count();
+                        for p in self.parked.iter_mut().filter(|p| mine(p)) {
+                            p["off"] = json!(true);
+                        }
+                        // Every model already hidden: nothing leaves the file, but the store changes.
+                        if out.is_empty() && n > 0 {
+                            self.diff.push(f.store_label, trn!(n, "\"{}\" disabled ({n} hidden model)", "\"{}\" disabled ({n} hidden models)", "「{}」已停用（{n} 个隐藏的模型）", g.name), false);
+                        }
+                    }
+                    for mut e in out {
                         let mid = str_field(&e, "id");
                         let visible = self.avail.as_ref().map(|a| a.contains(&mid)).unwrap_or(true);
                         self.unlist(&mid);
-                        self.parked.push(json!({ "visible": visible, "entry": e }));
+                        if !f.native_hide {
+                            self.merge_kept_fields(&g, &mid, &mut e);
+                            self.parked.retain(|p| !p.get("entry").is_some_and(|e| key_of(e) == g.key && str_field(e, "id") == mid));
+                        }
+                        let mut p = json!({ "visible": visible, "entry": e });
+                        if !f.native_hide {
+                            p["off"] = json!(true);
+                        }
+                        self.parked.push(p);
                     }
                 }
             }
             Op::SetModelVisible { provider, model, visible } => {
                 let g = self.group(provider)?;
                 self.require_enabled(&g)?;
+                if !self.f.native_hide {
+                    return self.set_parked_visible(&g, model, *visible);
+                }
                 if !self.entries.iter().any(|e| key_of(e) == g.key && &str_field(e, "id") == model) {
                     return Err(anyhow!(tr!("\"{}\" has no model {model}", "「{}」里没有模型 {model}", g.name)));
                 }
@@ -500,6 +724,9 @@ impl Work {
                     self.show(model);
                     self.diff.push(&file, format!("availableModels + {model}"), true);
                 } else {
+                    if let (None, Some(wb)) = (&self.avail, self.shared) {
+                        return Err(anyhow!(tr!("models.json is shared with {wb}, where an availableModels list would also hide its built-in models; AgentPlus won't create one", "models.json 与 {wb} 共用，availableModels 在那里会把它的内置模型也隐藏掉；AgentPlus 不会创建它")));
+                    }
                     if self.avail.is_none() {
                         // First hide: create the list with every custom model that shows today.
                         self.avail = Some(self.entries.iter().map(|e| str_field(e, "id")).collect());
@@ -553,19 +780,21 @@ impl Work {
                 } else {
                     self.parked.iter_mut().filter_map(|p| p.get_mut("entry")).for_each(&mut edit);
                 }
-                let label = if in_cfg { file.clone() } else { STORE_LABEL.to_string() };
+                let label = if in_cfg { file.clone() } else { self.f.store_label.to_string() };
                 for l in lines {
                     self.diff.push(&label, l, true);
                 }
             }
             Op::DeleteModel { provider, model } => {
                 let g = self.group(provider)?;
-                let n = self.entries.len() + self.parked.len();
+                let (n, p) = (self.entries.len(), self.parked.len());
                 self.entries.retain(|e| !(key_of(e) == g.key && &str_field(e, "id") == model));
                 self.parked.retain(|p| !p.get("entry").map(|e| key_of(e) == g.key && &str_field(e, "id") == model).unwrap_or(false));
-                if self.entries.len() + self.parked.len() != n {
+                if self.entries.len() != n || self.parked.len() != p {
                     self.unlist(model);
-                    self.diff.push(&file, tr!("models - {model} ({}, deleted)", "models - {model}（{}，删除）", g.name), false);
+                    // Only a kept entry (a disabled provider's or a hidden one): the file doesn't change.
+                    let label = if self.entries.len() != n { file.clone() } else { self.f.store_label.to_string() };
+                    self.diff.push(&label, tr!("models - {model} ({}, deleted)", "models - {model}（{}，删除）", g.name), false);
                 }
             }
             Op::SetProviderModels { provider, models } => {
@@ -584,13 +813,19 @@ impl Work {
                     self.unlist(&m);
                     self.diff.push(&file, tr!("models - {m} ({})", "models - {m}（{}）", g.name), false);
                 }
+                // Hidden entries kept in the store go too when they're left out.
+                let hidden_gone: Vec<String> = self.parked.iter().filter_map(|p| p.get("entry")).filter(|e| key_of(e) == g.key && !want.contains(&str_field(e, "id"))).map(|e| str_field(e, "id")).collect();
+                self.parked.retain(|p| p.get("entry").map(|e| key_of(e) != g.key || want.contains(&str_field(e, "id"))).unwrap_or(true));
+                for m in hidden_gone {
+                    self.diff.push(self.f.store_label, tr!("models - {m} ({}, hidden)", "models - {m}（{}，已隐藏）", g.name), false);
+                }
                 for m in &want {
                     if self.owner_of(m).is_none() {
                         self.add_model(&g, m, None, None)?;
                     }
                 }
             }
-            Op::SetCurrentProvider { .. } => return Err(anyhow!(l("CodeBuddy custom models can all be enabled at once; switch models inside CodeBuddy", "CodeBuddy 的自定义模型可以同时启用，在 CodeBuddy 里切换模型"))),
+            Op::SetCurrentProvider { .. } => return Err(anyhow!(tr!("{name} custom models can all be enabled at once; switch models inside {name}", "{name} 的自定义模型可以同时启用，在 {name} 里切换模型"))),
             Op::SetModelRoles { .. } => return Err(msg::no_model_roles()),
             Op::SetSetting { key, .. } => return Err(msg::unknown_setting(key)),
             Op::ImportProvider { .. } => unreachable!("resolved in adapters::plan"),
@@ -600,19 +835,22 @@ impl Work {
     }
 }
 
-pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
-    let (mut cfg, meta, had_comments) = load_models()?;
+pub(crate) fn plan_of(f: &'static Flavor, ops: &[Op], dry_run: bool) -> Result<Plan> {
+    let (mut cfg, meta, had_comments, array) = load_models(f)?;
     let entries0 = entries_of(&cfg);
-    let avail0 = available_of(&cfg);
+    let avail0 = available_of(f, &cfg);
     let mut root = store::load();
-    let parked0 = parked_of(&root);
-    let groups = groups_of(&entries0, &parked0);
-    let mut w = Work { entries: entries0.clone(), avail: avail0.clone(), parked: parked0.clone(), groups, diff: Diff::default(), file: display_path(&models_path()) };
+    let parked0 = parked_of(f, &root);
+    let groups = groups_of(&entries0, &parked0, &provider_ids_of(f, &root));
+    let path = models_path(f);
+    let shared = if f.native_hide { shared_workbuddy() } else { None };
+    let mut w = Work { f, shared, entries: entries0.clone(), avail: avail0.clone(), parked: parked0.clone(), groups, diff: Diff::default(), file: display_path(&path) };
     for op in ops {
         w.apply(op)?;
     }
     let cfg_dirty = w.entries != entries0 || w.avail != avail0;
     let store_dirty = w.parked != parked0;
+    let provider_ids: Map<String, Value> = w.groups.iter().map(|g| (group_hash(&g.key), json!(g.id))).collect();
     if cfg_dirty && had_comments {
         return Err(msg::comments_not_written("models.json"));
     }
@@ -620,25 +858,39 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
     let mut backup_dir = None;
     if !dry_run {
         if cfg_dirty {
-            let path = models_path();
             if path.exists() {
-                backup_dir = Some(backup(ID, std::slice::from_ref(&path))?);
+                backup_dir = Some(backup(f.id, std::slice::from_ref(&path))?);
             }
-            let o = cfg.as_object_mut().unwrap();
-            o.insert("models".into(), Value::Array(w.entries));
-            if let Some(a) = w.avail {
-                o.insert("availableModels".into(), json!(a));
-            }
-            std::fs::create_dir_all(dir())?;
-            write_json(&path, &cfg, meta)?;
+            // A top-level array stays one unless `availableModels` has to be written.
+            let out = if array && w.avail.is_none() {
+                Value::Array(w.entries)
+            } else {
+                let o = cfg.as_object_mut().unwrap();
+                o.insert("models".into(), Value::Array(w.entries));
+                if let Some(a) = w.avail {
+                    o.insert("availableModels".into(), json!(a));
+                }
+                cfg
+            };
+            std::fs::create_dir_all((f.dir)())?;
+            write_json(&path, &out, meta)?;
             written.push(path);
         }
-        if store_dirty {
-            store::set_value(&mut root, ID, "parked", Value::Array(w.parked));
+        if store_dirty || (!f.native_hide && cfg_dirty) {
+            if store_dirty {
+                store::set_value(&mut root, f.id, "parked", Value::Array(w.parked));
+            }
+            if !f.native_hide {
+                store::set_value(&mut root, f.id, "providerIds", Value::Object(provider_ids));
+            }
             store::save(&root)?;
         }
     }
     Ok((w.diff, written, backup_dir))
+}
+
+pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
+    plan_of(&CODEBUDDY, ops, dry_run)
 }
 
 #[cfg(test)]

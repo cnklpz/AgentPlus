@@ -78,7 +78,7 @@ pub const DSH: &[Spec] = &[
     Spec { path: "/maxTokens", group: GEN, label: ("Max output", "最大输出"), desc: ("maxTokens: the maximum tokens in one reply; the provider's defaultMaxTokens (32768) when unset.", "maxTokens：单次回复最多多少 token；不设置时用供应商的 defaultMaxTokens（32768）。"), kind: Kind::Number, caps: &[] },
 ];
 
-/// CodeBuddy Code `models.json`: `models[]`.
+/// CodeBuddy Code `models.json`: `models[]` (WorkBuddy reads the same file format).
 pub const CODEBUDDY: &[Spec] = &[
     Spec { path: "/supportsImages", group: IO, label: ("Read images", "读取图片"), desc: ("supportsImages: images can be sent to this model.", "supportsImages：可以把图片发给这个模型。"), kind: Kind::Bool, caps: &[("Images", "图片")] },
     Spec { path: "/supportsReasoning", group: GEN, label: ("Reasoning model", "推理模型"), desc: ("supportsReasoning: the model outputs its thinking.", "supportsReasoning：模型会输出思考过程。"), kind: Kind::Bool, caps: &[] },
@@ -138,13 +138,13 @@ pub const KIMI: &[Spec] = &[Spec {
 
 /// Field declarations shown for an agent's models (OpenCode's for its project configs).
 pub fn for_agent(agent: &str) -> &'static [Spec] {
-    use crate::adapters::{base_agent, codebuddy, codex, droid, dsh, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
+    use crate::adapters::{base_agent, codebuddy, codex, droid, dsh, kilo, kimi, mimo, openclaw, opencode, pi, qwen, workbuddy, zcode};
     match base_agent(agent) {
         opencode::ID | kilo::ID | mimo::ID => OPENCODE,
         pi::ID => PI,
         dsh::ID => DSH,
         openclaw::ID => OPENCLAW,
-        codebuddy::ID => CODEBUDDY,
+        codebuddy::ID | workbuddy::ID | workbuddy::ai::ID => CODEBUDDY,
         droid::ID => DROID,
         codex::ID => CODEX,
         zcode::ID => ZCODE,

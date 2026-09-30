@@ -263,7 +263,7 @@ pub(crate) struct UninstallEntry {
 
 /// Every uninstall entry whose name starts with `prefix`, current user first.
 #[cfg(windows)]
-fn uninstall_entries(prefix: &str) -> Vec<UninstallEntry> {
+pub(crate) fn uninstall_entries(prefix: &str) -> Vec<UninstallEntry> {
     use winreg::enums::*;
     use winreg::RegKey;
     let path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall";
@@ -286,7 +286,7 @@ fn uninstall_entries(prefix: &str) -> Vec<UninstallEntry> {
     out
 }
 #[cfg(not(windows))]
-fn uninstall_entries(_: &str) -> Vec<UninstallEntry> {
+pub(crate) fn uninstall_entries(_: &str) -> Vec<UninstallEntry> {
     vec![]
 }
 

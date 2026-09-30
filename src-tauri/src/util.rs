@@ -426,6 +426,53 @@ pub fn norm_url(address: &str) -> String {
     }
 }
 
+/// Whether two paths name the same folder: `.` / `..` are normalized first (as written, so
+/// every ancestor left is a real folder name), then the longest existing ancestor is resolved
+/// through links. Missing config folders still compare through their real parent.
+pub fn same_dir(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| {
+        use std::path::Component;
+        let p = PathBuf::from(p.to_string_lossy().trim());
+        let absolute = if p.is_absolute() { p } else { std::env::current_dir().unwrap_or_default().join(p) };
+        let mut clean = PathBuf::new();
+        for part in absolute.components() {
+            match part {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    clean.pop();
+                }
+                _ => clean.push(part.as_os_str()),
+            }
+        }
+        let mut ancestor = clean.as_path();
+        let mut tail = PathBuf::new();
+        let resolved = loop {
+            if let Ok(real) = fs::canonicalize(ancestor) {
+                break real.join(tail);
+            }
+            let (Some(name), Some(parent)) = (ancestor.file_name(), ancestor.parent()) else {
+                break clean.clone();
+            };
+            tail = PathBuf::from(name).join(tail);
+            ancestor = parent;
+        };
+        let s = resolved.to_string_lossy();
+        if cfg!(windows) {
+            let s = s.replace('/', "\\");
+            let s = if let Some(unc) = s.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") } else { s.strip_prefix(r"\\?\").unwrap_or(&s).to_string() };
+            // The Windows host/distro are insensitive, but a WSL config path isn't.
+            if let Some((distro, unix)) = crate::env::wsl_path(&s) {
+                format!("//wsl.localhost/{}{unix}", distro.to_lowercase())
+            } else {
+                s.to_lowercase()
+            }
+        } else {
+            s.into_owned()
+        }
+    };
+    norm(a) == norm(b)
+}
+
 /// `v[k]` as an owned string; empty when it is missing or not a string.
 pub fn str_field(v: &serde_json::Value, k: &str) -> String {
     v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string()
@@ -630,6 +677,47 @@ mod tests {
             assert_ne!(norm_url(a), norm_url(b), "{a}, {b}");
         }
         assert_eq!(norm_url(" Not a URL "), "Not a URL");
+    }
+
+    #[test]
+    fn same_dir_ignores_trailing_separators_and_windows_case() {
+        assert!(same_dir(Path::new("/home/u/.workbuddy/"), Path::new(" /home/u/.workbuddy")));
+        assert!(!same_dir(Path::new("/home/u/.workbuddy"), Path::new("/home/u/.codebuddy")));
+        assert_eq!(same_dir(Path::new(r"C:\Users\U\.WorkBuddy"), Path::new("c:/users/u/.workbuddy/")), cfg!(windows));
+        assert_eq!(same_dir(Path::new("/home/u/.WorkBuddy"), Path::new("/home/u/.workbuddy")), cfg!(windows));
+    }
+
+    #[test]
+    fn same_dir_resolves_dot_segments_and_missing_folders() {
+        let h = TestHome::new("same-dir");
+        let dir = h.0.join("config");
+        fs::create_dir(&dir).unwrap();
+        assert!(same_dir(&dir, &dir.join(".")));
+        assert!(same_dir(&dir, &h.0.join("other").join("..").join("config")));
+        assert!(same_dir(&dir.join("new"), &dir.join(".").join("new")));
+        assert!(same_dir(Path::new("."), &std::env::current_dir().unwrap()));
+        assert!(!same_dir(&dir, &h.0));
+    }
+
+    #[test]
+    fn same_dir_resolves_directory_links_and_their_missing_children() {
+        let h = TestHome::new("same-dir-link");
+        let real = h.0.join("real");
+        let link = h.0.join("alias");
+        fs::create_dir(&real).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(windows)]
+        {
+            let output = std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(&link).arg(&real).output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        }
+        assert!(same_dir(&real, &link));
+        assert!(same_dir(&real.join("new"), &link.join("new")));
+        // `..` past a missing folder under a link still resolves the link (a symlinked temp
+        // folder on macOS is the same case).
+        assert!(same_dir(&real.join("new"), &link.join("missing").join("..").join("new")));
+        assert!(!same_dir(&h.0.join("another"), &link));
     }
 
     #[test]

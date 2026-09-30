@@ -19,7 +19,7 @@ export function logClient(level: "error" | "warn" | "info", source: string, e: u
 
 export type AgentId =
   | "codex" | "claude" | "opencode" | "zcode" | "mimo"
-  | "hermes" | "gemini" | "pi" | "openclaw" | "qwen" | "kimi" | "droid" | "codebuddy" | "kilo" | "dsh"
+  | "hermes" | "gemini" | "pi" | "openclaw" | "qwen" | "kimi" | "droid" | "codebuddy" | "workbuddy" | "workbuddy-ai" | "kilo" | "dsh"
   | "trae";
 
 /** A badge on a model: `id` is stable (`fast`, `custom`, `cap:image`, `role:default`…) and is
@@ -1451,7 +1451,7 @@ const demo: typeof real = {
   detectAgents: async () => (await fixture()).map((a) => ({
     id: a.id, name: a.name, appFound: a.installed, version: a.version, running: a.running,
     defaultDir: a.configDir, customDir: null, configDir: a.configDir, configFound: true, enabled: a.installed, note: null,
-  } as AgentDetect)).concat((["hermes", "gemini", "pi", "openclaw", "droid", "kilo", "codebuddy", "qwen", "kimi", "dsh"] as AgentId[]).map((id, i) => ({
+  } as AgentDetect)).concat((["hermes", "gemini", "pi", "openclaw", "droid", "kilo", "codebuddy", "workbuddy", "workbuddy-ai", "qwen", "kimi", "dsh"] as AgentId[]).map((id, i) => ({
     id, name: id, appFound: i < 2, version: i < 2 ? "1.0.0" : null, running: false, defaultDir: `~/.${id}`, customDir: null,
     configDir: `~/.${id}`, configFound: i < 2, enabled: i < 2, note: null,
   })), [{

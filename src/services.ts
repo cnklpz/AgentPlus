@@ -370,7 +370,7 @@ export function importSource(g: Group): { fromAgent: string; provider: string } 
 }
 
 /** Agents that accept only one protocol; everything else takes all three. */
-export const ONLY_API: Partial<Record<AgentId, ApiKind>> = { codex: "responses", claude: "anthropic", codebuddy: "chat", gemini: "gemini" };
+export const ONLY_API: Partial<Record<AgentId, ApiKind>> = { codex: "responses", claude: "anthropic", codebuddy: "chat", workbuddy: "chat", "workbuddy-ai": "chat", gemini: "gemini" };
 
 /** Can the local gateway serve this agent? (It speaks Chat / Responses / Anthropic, not Gemini.) */
 export function gatewayCapable(agent: AgentId): boolean {
@@ -385,7 +385,7 @@ export function apiFor(agent: AgentId, api: ApiKind): ApiKind {
 export const AGENT_NAME: Record<AgentId, string> = {
   codex: "Codex", claude: "Claude Code", opencode: "OpenCode", zcode: "ZCode", mimo: "MiMo Desktop",
   hermes: "Hermes", gemini: "Gemini CLI", pi: "pi", openclaw: "OpenClaw", qwen: "Qwen Code", kimi: "Kimi Code",
-  droid: "Droid", codebuddy: "CodeBuddy", kilo: "Kilo Code", dsh: "DeepSeek Harness", trae: "Trae",
+  droid: "Droid", codebuddy: "CodeBuddy", workbuddy: "WorkBuddy", "workbuddy-ai": "WorkBuddy AI", kilo: "Kilo Code", dsh: "DeepSeek Harness", trae: "Trae",
 };
 
 /** Product name of an agent id; anything else (e.g. "codex@wsl") as it is. */

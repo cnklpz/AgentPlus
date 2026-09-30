@@ -18,7 +18,10 @@ pub mod pi;
 pub mod pimodels;
 mod profiles;
 pub mod qwen;
+pub mod workbuddy;
 pub mod zcode;
+
+use workbuddy::ai as workbuddy_ai;
 
 use crate::i18n::l;
 use crate::model::{bool_setting, AgentState, Diff, Op, ProviderInput, Setting};
@@ -146,7 +149,7 @@ macro_rules! ext {
 /// Every agent, in sidebar order.
 pub const EXT: &[Ext] = &[
     ext!(codex), ext!(claude), ext!(opencode), ext!(zcode), ext!(mimo),
-    ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(qwen), ext!(kimi), ext!(dsh),
+    ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(workbuddy), ext!(workbuddy_ai), ext!(qwen), ext!(kimi), ext!(dsh),
 ];
 
 /// The ids of [`EXT`], in the same order.
@@ -192,7 +195,7 @@ pub fn only_api(agent: &str) -> Option<&'static str> {
     match base_agent(agent) {
         codex::ID => Some("responses"),
         claude::ID => Some("anthropic"),
-        codebuddy::ID => Some("chat"),
+        codebuddy::ID | workbuddy::ID | workbuddy_ai::ID => Some("chat"),
         gemini::ID => Some("gemini"),
         _ => None,
     }
@@ -281,6 +284,7 @@ fn markers(e: &'static Ext) -> &'static [&'static str] {
         zcode::ID => &[zcode::MARKER, "v2/provider_config.json"],
         pi::ID => &[pi::MARKER, "models.json"],
         codebuddy::ID => &[codebuddy::MARKER, "models.json"],
+        workbuddy::ID | workbuddy_ai::ID => &[workbuddy::MARKER, "models.json"],
         // The desktop app runs its own profile.
         dsh::ID => &[dsh::MARKER, dsh::DESKTOP_MARKER],
         _ => std::slice::from_ref(&e.marker),
@@ -725,7 +729,7 @@ mod tests {
         }
         // The Windows desktop apps.
         let desktop: Vec<&str> = EXT.iter().filter(|e| !in_wsl(e)).map(|e| e.id).collect();
-        assert_eq!(desktop, [zcode::ID, mimo::ID]);
+        assert_eq!(desktop, [zcode::ID, mimo::ID, workbuddy::ID, workbuddy_ai::ID]);
     }
 
     #[test]
@@ -809,7 +813,7 @@ mod tests {
             .iter()
             .map(|f| (opencode::ID, *f))
             .chain(kilo::CONFIG_FILES.iter().map(|f| (kilo::ID, *f)))
-            .chain([(zcode::ID, "provider_config.json"), (zcode::ID, "v2/provider_config.json"), (pi::ID, "models.json"), (codebuddy::ID, "models.json"), (dsh::ID, dsh::DESKTOP_MARKER)])
+            .chain([(zcode::ID, "provider_config.json"), (zcode::ID, "v2/provider_config.json"), (pi::ID, "models.json"), (codebuddy::ID, "models.json"), (workbuddy::ID, "models.json"), (workbuddy_ai::ID, "models.json"), (dsh::ID, dsh::DESKTOP_MARKER)])
             .chain(EXT.iter().map(|e| (e.id, e.marker)))
             .collect();
         for (i, (agent, file)) in cases.into_iter().enumerate() {

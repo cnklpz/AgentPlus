@@ -1,6 +1,7 @@
 import codexPng from "../assets/codex.png";
 import zcodePng from "../assets/zcode.png";
 import mimoPng from "../assets/mimo.png";
+import workbuddyPng from "../assets/workbuddy.png";
 // Marks from lobehub/lobe-icons (MIT), except pi (pi.dev), OpenCode (opencode.ai's
 // app icon), Droid (factory.ai's favicon) and DeepSeek Harness (its web UI favicon, MIT).
 import claudeSvg from "../assets/claude.svg";
@@ -32,7 +33,7 @@ function mono(text: string, bg: string, fg: string, size = 14) {
 }
 
 // Codex's app icon is a dark glyph on a light tile (outlined so it reads on the
-// light sidebar); ZCode's, MiMo's, Gemini CLI's and CodeBuddy's images are their own tiles.
+// light sidebar); ZCode's, MiMo's, Gemini CLI's, CodeBuddy's and WorkBuddy's images are their own tiles.
 type Tile = { src?: string; glyph?: React.ReactNode; bg: string; scale: number; ring?: string };
 const LIGHT_RING = "inset 0 0 0 1px #D5DAE1";
 const DARK_RING = "inset 0 0 0 1px #2A2A2E";
@@ -49,6 +50,8 @@ const AGENT_ICONS: Record<AgentId, Tile> = {
   kimi: { src: kimiSvg, bg: "#000000", scale: 70 },
   droid: { src: droidSvg, bg: "#020202", scale: 96 },
   codebuddy: { src: codebuddySvg, bg: "#6C4DFF", scale: 100 },
+  workbuddy: { src: workbuddyPng, bg: "#0AC89A", scale: 100 },
+  "workbuddy-ai": { src: workbuddyPng, bg: "#0AC89A", scale: 100 },
   kilo: { src: kiloSvg, bg: "#F8F675", scale: 66 },
   trae: { src: traeSvg, bg: "#0B0B0C", scale: 72 },
   opencode: { src: opencodeSvg, bg: "#131010", scale: 78, ring: DARK_RING },
