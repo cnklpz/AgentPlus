@@ -8,6 +8,21 @@ logic, add unit tests for the edge cases.
 
 Code, comments, docs and commit messages are written in English.
 
+## Adapting to a new agent release
+
+When a new release of an agent (Codex, Claude Code…) needs a change, **keep the handling for
+older releases** and pick one by version number. Releases before the change keep the old
+handling; releases from it on use the new one, until the next change. Never rewrite or
+delete what an older release still relies on.
+
+- Codex UI patches (`src-tauri/src/cdp.rs`): add a shape for the new release to the patch's
+  `by_version` list, tagged with the first release it is for (`[26, 928]` for 26.928.x), and
+  keep the older shapes. `by_version` takes the newest shape not newer than the running
+  release; only an unknown version tries every shape, oldest first.
+- Keep the older releases' tests, add one with a snippet from the new release, and check the
+  real bundles: extract `app.asar`, then `CODEX_ASSETS=<dir>\webview\assets
+  CODEX_VERSION=<version> cargo test real_bundles -- --ignored`.
+
 ## Commit messages
 
 Every commit subject uses exactly:
