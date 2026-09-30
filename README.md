@@ -72,7 +72,7 @@ Updates are checked on startup and installed from *Settings → General → Abou
 
 ## Supported agents
 
-AgentPlus recognizes 15 agents and reads and writes the following config files:
+AgentPlus recognizes 18 agents and reads and writes the following config files:
 
 | Agent | Config |
 |---|---|
@@ -86,10 +86,12 @@ AgentPlus recognizes 15 agents and reads and writes the following config files:
 | Kimi Code | `~/.kimi-code/config.toml` |
 | Kilo Code | `~/.config/kilo/kilo.json(c)` |
 | CodeBuddy | `~/.codebuddy/models.json` |
+| WorkBuddy / WorkBuddy AI | `~/.workbuddy/models.json` / `~/.workbuddy-ai/models.json` |
 | Droid (Factory) | `~/.factory/settings.json` |
 | Hermes | `$HERMES_HOME/config.yaml` |
 | pi | `~/.pi/agent/models.json` |
 | OpenClaw | `~/.openclaw/openclaw.json` |
+| DeepSeek Harness | `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (`~/.dsh` by default) |
 | Trae | Detection only. Custom models live in your account; AgentPlus walks you through adding them by hand |
 
 Only the agents it finds show up in the app. If yours is installed somewhere unusual, point AgentPlus at the folder in *Settings → Agent detection*.
@@ -140,9 +142,11 @@ Only the agents it finds show up in the app. If yours is installed somewhere unu
 - Gemini CLI: switch between profiles. If environment variables or a project's `.env` override the settings, you get a warning.
 - Kimi Code and Hermes: only the blocks that changed are rewritten, comments and formatting left intact.
 - CodeBuddy: one config for the IDE and the CLI, hot-reloaded within a second.
+- WorkBuddy: the China edition and WorkBuddy AI (international) keep separate model lists and show as two agents; WorkBuddy has no hide switch, so hiding a model moves it out of models.json into AgentPlus.
 - Droid: the config is re-read before writing, so edits made while Droid is running aren't lost.
 - OpenClaw: change a URL or key and the model files it generates per agent are updated too.
 - pi: written in the formats pi supports, so an invalid field can't make the file unreadable.
+- DeepSeek Harness: providers are edited per profile (`dsh web` or the desktop app); only the changed entries of `cordis.patch.yml` are rewritten, and keys stay in `.credentials.yaml`.
 - Variable references (`$VAR`, `${VAR}`, `env_key`) are left alone.
 
 </details>

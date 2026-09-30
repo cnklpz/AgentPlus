@@ -72,7 +72,7 @@ xattr -cr /Applications/AgentPlus.app
 
 ## 支持的 Agent
 
-AgentPlus 能识别 15 个 Agent，读取和写入这些配置文件：
+AgentPlus 能识别 18 个 Agent，读取和写入这些配置文件：
 
 | Agent | 配置文件 |
 |---|---|
@@ -86,10 +86,12 @@ AgentPlus 能识别 15 个 Agent，读取和写入这些配置文件：
 | Kimi Code | `~/.kimi-code/config.toml` |
 | Kilo Code | `~/.config/kilo/kilo.json(c)` |
 | CodeBuddy | `~/.codebuddy/models.json` |
+| WorkBuddy / WorkBuddy AI | `~/.workbuddy/models.json` / `~/.workbuddy-ai/models.json` |
 | Droid（Factory） | `~/.factory/settings.json` |
 | Hermes | `$HERMES_HOME/config.yaml` |
 | pi | `~/.pi/agent/models.json` |
 | OpenClaw | `~/.openclaw/openclaw.json` |
+| DeepSeek Harness | `$DSH_HOME/profiles/<配置档>/cordis.patch.yml`（默认 `~/.dsh`） |
 | Trae | 仅支持识别。自定义模型保存在账号里，需要按 AgentPlus 给出的步骤手动添加 |
 
 列表里只会出现检测到的 Agent。装在非常规位置的话，可以在「设置 → Agent 识别」中指定目录。
@@ -140,9 +142,11 @@ AgentPlus 能识别 15 个 Agent，读取和写入这些配置文件：
 - Gemini CLI：多套配置之间切换。环境变量或项目里的 `.env` 覆盖了当前设置时，会给出提示。
 - Kimi Code 和 Hermes：只重写有改动的配置块，注释和格式原样保留。
 - CodeBuddy：IDE 和 CLI 共用一份配置，改完一秒内热加载。
+- WorkBuddy：国内版和海外版 WorkBuddy AI 各有一份模型列表，分成两个 Agent 显示；WorkBuddy 没有隐藏开关，隐藏模型会把它移出 models.json、暂存在 AgentPlus。
 - Droid：写入前重新读一遍配置，Droid 运行期间做的改动不会被覆盖。
 - OpenClaw：地址或密钥变了，它为各 agent 生成的模型文件会一起更新。
 - pi：按 pi 支持的格式写入，无效字段不会让整个文件读不出来。
+- DeepSeek Harness：按配置档（`dsh web` 或桌面版）编辑供应商；`cordis.patch.yml` 只重写改动的条目，密钥保存在 `.credentials.yaml`。
 - 配置里的 `$VAR`、`${VAR}`、`env_key` 等变量引用会原样保留。
 
 </details>
