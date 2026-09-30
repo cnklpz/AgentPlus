@@ -249,7 +249,7 @@ export function ServiceDialog({ agents, group, prefill, imported, others = [], o
             <Icon.refresh size={12} />{fetching ? t("common.fetching") : t("common.fetchFromUrl")}
           </button>
         </div>
-        <ModelPicker pool={pool} checked={models} onChange={setModels} onAdd={addManual} empty={t("serviceDialog.noModels")} />
+        <ModelPicker bar pool={pool} checked={models} onChange={setModels} onAdd={addManual} empty={t("serviceDialog.noModels")} />
       </div>
 
       {editable.length > 0 && (
