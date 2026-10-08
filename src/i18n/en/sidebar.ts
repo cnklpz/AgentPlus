@@ -7,7 +7,7 @@ export default {
   skills: "Skills",
   history: "History & rollback",
   sync: "Multi-device sync",
-  wechat: "WeChat",
+  wechat: "Claw bridge",
   nav: "Navigation",
   agents: "AGENTS",
   fastBadge: "FAST",

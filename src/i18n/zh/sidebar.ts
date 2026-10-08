@@ -9,7 +9,7 @@ const zh: typeof en = {
   skills: "技能",
   history: "历史与回滚",
   sync: "多设备同步",
-  wechat: "微信",
+  wechat: "Claw 接入",
   nav: "导航",
   agents: "AGENT",
   fastBadge: "FAST",
