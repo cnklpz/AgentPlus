@@ -74,6 +74,16 @@ pub struct Saved {
     pub owned: BTreeMap<String, i64>,
     /// Recent bot messages: relay message id → session number, for quoted replies.
     pub quotes: VecDeque<(String, u32)>,
+    /// Model / effort chosen from WeChat, sent with the session's next turn: thread id →
+    /// override. Codex keeps them for the session from then on.
+    pub next: BTreeMap<String, NextTurn>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NextTurn {
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 fn saved_path() -> PathBuf {
@@ -121,6 +131,12 @@ pub struct SessionView {
     /// "idle" | "running" | "waiting" (an approval or a question)
     pub state: &'static str,
     pub queued: usize,
+    /// The model and reasoning effort Codex reports for the session ("" when unknown).
+    pub model: String,
+    pub effort: String,
+    /// Chosen from WeChat, taking effect with the next turn.
+    pub next_model: Option<String>,
+    pub next_effort: Option<String>,
     pub current: bool,
 }
 

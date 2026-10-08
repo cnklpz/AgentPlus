@@ -39,6 +39,9 @@ const COMMANDS: [string | { k: TKey }, TKey][] = [
   ["#3 …", "wechatPage.cmdTo"],
   ["/stop 3", "wechatPage.cmdStop"],
   ["/status", "wechatPage.cmdStatus"],
+  ["/model 2", "wechatPage.cmdModel"],
+  ["/effort high", "wechatPage.cmdEffort"],
+  ["/model default 2", "wechatPage.cmdModelDefault"],
   ["y3 · a3 · n3", "wechatPage.cmdApprove"],
 ];
 
@@ -195,6 +198,14 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
   );
 }
 
+/** "gpt-6.1-sol · xhigh", plus "→ next" when WeChat chose another for the next turn. */
+function modelText(s: WechatSession): string {
+  const now = [s.model, s.effort].filter(Boolean).join(" · ") || "—";
+  if (!s.nextModel && !s.nextEffort) return now;
+  const next = [s.nextModel ?? s.model, s.nextEffort].filter(Boolean).join(" · ");
+  return `${now} → ${next}`;
+}
+
 function Kv({ k, children }: { k: TKey; children: ReactNode }) {
   return <div className="wx-kv"><span className="muted">{t(k)}</span><span className="wx-kv-v">{children}</span></div>;
 }
@@ -238,6 +249,7 @@ function WechatAside({ st, busy, onStartCodex }: { st: WechatStatus; busy: boole
         <h2 className="row between">{t("wechatPage.codex")}<span className={st.codexReady ? "chip-ok" : "chip-muted"}>{t(st.codexReady ? "wechatPage.codexOn" : "wechatPage.codexIdle")}</span></h2>
         <div className="wx-kvs">
           <Kv k="wechatPage.currentSession">{current ? `#${current.no} ${current.title}` : "—"}</Kv>
+          {current && <Kv k="wechatPage.model">{modelText(current)}</Kv>}
           <Kv k="wechatPage.runningTurns">{running}</Kv>
           <Kv k="wechatPage.waitingTurns">{waiting}</Kv>
           <Kv k="wechatPage.queuedMsgs">{queued}</Kv>

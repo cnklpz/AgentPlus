@@ -12,7 +12,7 @@
 //!   `#3! text` or `/use 3!` sends anyway.
 
 use super::appserver::AppServer;
-use super::command::{self, Cmd, Decision};
+use super::command::{self, Cmd, Decision, ModelCmd};
 use super::format::{self, TurnStats};
 use super::ilink::{self, Inbound};
 use super::{log, set_sessions, set_state, stats, update_saved, Event, Saved, SessionView, Stats};
@@ -43,6 +43,9 @@ struct Live {
     loaded: bool,
     turn: Option<Turn>,
     queue: Vec<String>,
+    /// As Codex last reported them.
+    model: String,
+    effort: String,
 }
 
 struct Turn {
@@ -82,6 +85,8 @@ pub struct Bridge {
     run: u64,
     /// A message that needs Codex, waiting for the user to say whether to start it.
     deferred: Option<Inbound>,
+    /// Codex's `model/list`, read once per Codex start.
+    models: Option<Vec<Value>>,
 }
 
 fn thread_title(t: &Value) -> String {
@@ -92,7 +97,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: None }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: None, models: None }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -167,6 +172,10 @@ impl Bridge {
                     state: if waiting { "waiting" } else if live.is_some_and(|l| l.turn.is_some()) { "running" } else { "idle" },
                     queued: live.map(|l| l.queue.len()).unwrap_or(0),
                     current: self.saved.current.as_ref() == Some(t),
+                    model: live.map(|l| l.model.clone()).unwrap_or_default(),
+                    effort: live.map(|l| l.effort.clone()).unwrap_or_default(),
+                    next_model: self.saved.next.get(t).and_then(|n| n.model.clone()),
+                    next_effort: self.saved.next.get(t).and_then(|n| n.effort.clone()),
                 }
             })
             .collect();
@@ -267,6 +276,7 @@ impl Bridge {
             let mut last = None;
             for exe in &exes {
                 self.generation += 1;
+                self.models = None;
                 match AppServer::spawn(exe, self.events.clone(), self.generation) {
                     Ok(s) => {
                         self.codex = Some(s);
@@ -297,6 +307,12 @@ impl Bridge {
         live.title = thread_title(t);
         live.cwd = t["cwd"].as_str().unwrap_or("").to_string();
         live.updated = t["updatedAt"].as_i64().unwrap_or(live.updated);
+        if let Some(m) = t["model"].as_str() {
+            live.model = m.to_string();
+        }
+        if let Some(e) = t["reasoningEffort"].as_str() {
+            live.effort = e.to_string();
+        }
         Some(id)
     }
 
@@ -434,15 +450,26 @@ impl Bridge {
     }
 
     fn start_turn(&mut self, thread: &str, text: String) -> Result<()> {
-        let v = self.codex()?.request(
-            "turn/start",
-            json!({ "threadId": thread, "input": [{ "type": "text", "text": text, "text_elements": [] }] }),
-            CALL,
-        )?;
+        let mut params = json!({ "threadId": thread, "input": [{ "type": "text", "text": text, "text_elements": [] }] });
+        let next = self.saved.next.get(thread).cloned().unwrap_or_default();
+        if let Some(m) = &next.model {
+            params["model"] = json!(m);
+        }
+        if let Some(e) = &next.effort {
+            params["effort"] = json!(e);
+        }
+        let v = self.codex()?.request("turn/start", params, CALL)?;
         let live = self.live.entry(thread.to_string()).or_default();
+        if let Some(m) = next.model {
+            live.model = m;
+        }
+        if let Some(e) = next.effort {
+            live.effort = e;
+        }
         live.turn = Some(Turn { id: v["turn"]["id"].as_str().map(String::from), started: Instant::now(), stats: TurnStats::default(), final_answer: None, last_message: None });
         let t = thread.to_string();
         self.save(|s| {
+            s.next.remove(&t);
             s.owned.insert(t, now());
         });
         self.start_typing();
@@ -493,6 +520,127 @@ impl Bridge {
             lines.push(tr!("⚠️ #{no} is waiting for your answer", "⚠️ #{no} 在等你确认"));
         }
         lines.join("\n")
+    }
+
+    // ------------------------------------------------------------ models
+
+    fn models(&mut self) -> Result<Vec<Value>> {
+        if self.models.is_none() {
+            let v = self.codex()?.request("model/list", json!({ "limit": 200, "includeHidden": false }), CALL)?;
+            self.models = Some(v["data"].as_array().cloned().unwrap_or_default());
+        }
+        Ok(self.models.clone().unwrap_or_default())
+    }
+
+    /// The model a reply names: its number in `/model`'s list, or its name.
+    fn find_model(&mut self, arg: &str) -> Result<Value> {
+        let models = self.models()?;
+        pick_model(&models, arg)
+            .cloned()
+            .ok_or_else(|| anyhow!(tr!("No model \"{arg}\". Send /model to see the choices", "没有「{arg}」这个模型。发 /model 查看可选模型")))
+    }
+
+    fn model_cmd(&mut self, thread: Option<String>, cmd: ModelCmd) -> Result<String> {
+        match cmd {
+            ModelCmd::Show => self.model_overview(thread),
+            ModelCmd::Default(None) => Ok(match default_model() {
+                Some(m) => tr!("Default model for new sessions: {m}", "新会话的默认模型：{m}"),
+                None => l("No default model set in config.toml; Codex picks one.", "config.toml 里没有设置默认模型，由 Codex 自己选择。").into(),
+            }),
+            ModelCmd::Default(Some(arg)) => {
+                let name = model_name(&self.find_model(&arg)?);
+                set_default_model(&name)?;
+                Ok(tr!(
+                    "Default model is now {name}. New sessions use it; existing ones keep theirs.",
+                    "默认模型已改为 {name}。之后新建的会话使用它，已有会话不变。"
+                ))
+            }
+            ModelCmd::Set(arg) => {
+                let thread = thread.ok_or_else(|| anyhow!(l("No session selected. /use N first", "还没有选择会话，先发 /use 编号")))?;
+                let m = self.find_model(&arg)?;
+                let name = model_name(&m);
+                let no = self.number(&thread);
+                // An effort the new model doesn't support would be refused: let Codex pick one.
+                let effort = self.saved.next.get(&thread).and_then(|n| n.effort.clone()).or_else(|| self.live.get(&thread).map(|l| l.effort.clone()));
+                let keep = effort.is_some_and(|e| supports_effort(&m, &e));
+                let (t, n) = (thread.clone(), name.clone());
+                self.save(|s| {
+                    let next = s.next.entry(t).or_default();
+                    next.model = Some(n);
+                    if !keep {
+                        next.effort = None;
+                    }
+                });
+                Ok(if self.live.get(&thread).is_some_and(|l| l.turn.is_some()) {
+                    tr!("#{no} switches to {name} after the running turn.", "#{no} 将在当前这轮结束后改用 {name}。")
+                } else {
+                    tr!("#{no} switched to {name}, from your next message.", "#{no} 已切换为 {name}，下一条消息生效。")
+                })
+            }
+        }
+    }
+
+    fn model_overview(&mut self, thread: Option<String>) -> Result<String> {
+        let models = self.models()?;
+        let mut lines = vec![];
+        let mut using = String::new();
+        if let Some(t) = &thread {
+            self.refresh(t)?;
+            let no = self.number(t);
+            let live = &self.live[t];
+            using = live.model.clone();
+            lines.push(format::tag(no, &live.title));
+            lines.push(tr!("Now: {m} · {e}", "当前：{m} · {e}", m = or_dash(&live.model), e = or_dash(&live.effort)));
+            if let Some(n) = self.saved.next.get(t) {
+                let m = n.model.clone().unwrap_or_else(|| live.model.clone());
+                let e = n.effort.clone().unwrap_or_else(|| l("default", "默认").into());
+                lines.push(tr!("From the next message: {m} · {e}", "下一条消息起：{m} · {e}"));
+                using = m;
+            }
+        } else {
+            lines.push(l("No session selected: /use N first to switch its model.", "还没有选择会话：先发 /use 编号，才能切换它的模型。").into());
+        }
+        if let Some(d) = default_model() {
+            lines.push(tr!("Default (config.toml): {d}", "默认（config.toml）：{d}"));
+        }
+        lines.push(l("Models:", "可选模型：").into());
+        for (i, m) in models.iter().enumerate() {
+            let name = model_name(m);
+            let mark = if name == using { " ✓" } else { "" };
+            let efforts = efforts_of(m);
+            let efforts = if efforts.is_empty() { String::new() } else { format!(" · {}", efforts.join("/")) };
+            lines.push(format!("{}. {name}{mark}{efforts}", i + 1));
+        }
+        lines.push(
+            l(
+                "/model N switch this session · /effort high reasoning · /model default N new sessions' default",
+                "/model 编号 切换当前会话 · /effort high 推理强度 · /model default 编号 改新会话的默认",
+            )
+            .into(),
+        );
+        Ok(lines.join("\n"))
+    }
+
+    fn effort_cmd(&mut self, thread: Option<String>, effort: Option<String>) -> Result<String> {
+        let thread = thread.ok_or_else(|| anyhow!(l("No session selected. /use N first", "还没有选择会话，先发 /use 编号")))?;
+        if !self.live.contains_key(&thread) {
+            self.refresh(&thread)?;
+        }
+        let model = self.saved.next.get(&thread).and_then(|n| n.model.clone()).unwrap_or_else(|| self.live[&thread].model.clone());
+        let models = self.models()?;
+        let choices = pick_model(&models, &model).map(efforts_of).unwrap_or_default();
+        let no = self.number(&thread);
+        let Some(e) = effort.map(|e| e.trim().to_lowercase()) else {
+            let now = or_dash(&self.live[&thread].effort).to_string();
+            let c = choices.join(" / ");
+            return Ok(tr!("#{no} reasoning: {now}. Choices for {model}: {c}", "#{no} 推理强度：{now}。{model} 可选：{c}", c = or_dash(&c)));
+        };
+        if !choices.is_empty() && !choices.contains(&e) {
+            bail!("{}", tr!("{model} supports {c}", "{model} 支持的推理强度：{c}", c = choices.join(" / ")));
+        }
+        let (t, ev) = (thread.clone(), e.clone());
+        self.save(|s| s.next.entry(t).or_default().effort = Some(ev));
+        Ok(tr!("#{no} reasoning set to {e}, from your next message.", "#{no} 推理强度已改为 {e}，下一条消息生效。"))
     }
 
     // ------------------------------------------------------------ inbound
@@ -553,7 +701,7 @@ impl Bridge {
     fn needs_codex(&self, cmd: &Cmd, m: &Inbound) -> bool {
         match cmd {
             Cmd::Help | Cmd::Status | Cmd::Unknown(_) | Cmd::Stop(_) => false,
-            Cmd::List(_) | Cmd::Use { .. } | Cmd::New(_) | Cmd::To { .. } => true,
+            Cmd::List(_) | Cmd::Use { .. } | Cmd::New(_) | Cmd::To { .. } | Cmd::Model(_) | Cmd::Effort(_) => true,
             // Text only goes somewhere with a session to go to.
             Cmd::Text(_) | Cmd::Approve { .. } => self.saved.current.is_some() || self.session_of_quote(m).is_some_and(|n| self.thread_of(n).is_some()),
         }
@@ -588,8 +736,15 @@ impl Bridge {
                 Some(r) => r.map(Some),
                 None => self.route_text(m.text.trim().to_string(), quoted, false),
             },
+            Cmd::Model(c) => self.model_cmd(self.saved.current.clone(), c).map(Some),
+            Cmd::Effort(e) => self.effort_cmd(self.saved.current.clone(), e).map(Some),
             Cmd::To { no, force, text } => match self.thread_of(no) {
-                Some(t) => self.send_or_answer(&t, text, force).map(|_| None),
+                // `#3 /model 2`: a model command for that session.
+                Some(t) => match command::parse(&text) {
+                    Cmd::Model(c) => self.model_cmd(Some(t), c).map(Some),
+                    Cmd::Effort(e) => self.effort_cmd(Some(t), e).map(Some),
+                    _ => self.send_or_answer(&t, text, force).map(|_| None),
+                },
                 None => Err(anyhow!(tr!("There is no session #{no}. Send /ls to see the list", "没有 #{no} 这个会话。发 /ls 查看列表"))),
             },
             Cmd::Text(t) => self.route_text(t, quoted, false),
@@ -888,6 +1043,8 @@ fn help_text() -> String {
          #N text send to session N once\n\
          /stop [N] interrupt a turn\n\
          /status what's running\n\
+         /model [N] see or switch the model · /model default N new sessions' default\n\
+         /effort [level] reasoning effort\n\
          y N / a N / n N allow / allow for session / decline\n\
          Reply to (quote) a bot message to answer that session. Other text goes to the current session.",
         "AgentPlus · 微信使用 Codex\n\
@@ -897,10 +1054,59 @@ fn help_text() -> String {
          #编号 消息 临时发给某个会话\n\
          /stop [编号] 中断当前这轮\n\
          /status 查看运行情况\n\
+         /model [编号] 查看或切换模型 · /model default 编号 改新会话的默认模型\n\
+         /effort [强度] 推理强度\n\
          y编号 / a编号 / n编号 允许 / 本会话都允许 / 拒绝\n\
          引用机器人的某条消息回复，会发给那条消息的会话；其他消息发给当前会话。",
     )
     .to_string()
+}
+
+fn or_dash(s: &str) -> &str {
+    if s.is_empty() { "—" } else { s }
+}
+
+/// The name Codex takes for a model in `model/list`.
+fn model_name(m: &Value) -> String {
+    m["model"].as_str().or_else(|| m["id"].as_str()).unwrap_or("").to_string()
+}
+
+fn efforts_of(m: &Value) -> Vec<String> {
+    m["supportedReasoningEfforts"].as_array().into_iter().flatten().filter_map(|e| e["reasoningEffort"].as_str().map(String::from)).collect()
+}
+
+fn supports_effort(m: &Value, e: &str) -> bool {
+    let list = efforts_of(m);
+    list.is_empty() || list.iter().any(|x| x == e)
+}
+
+/// A model by its number (from 1) in the list, or by name, id or display name (any case).
+fn pick_model<'a>(models: &'a [Value], arg: &str) -> Option<&'a Value> {
+    let arg = arg.trim();
+    if let Ok(n) = arg.parse::<usize>() {
+        return n.checked_sub(1).and_then(|i| models.get(i));
+    }
+    let a = arg.to_lowercase();
+    models.iter().find(|m| ["model", "id", "displayName"].iter().any(|k| m[*k].as_str().is_some_and(|s| s.to_lowercase() == a)))
+}
+
+/// `model` in Codex's config.toml.
+fn default_model() -> Option<String> {
+    let text = std::fs::read_to_string(crate::adapters::codex::config_path()).ok()?;
+    let doc: toml_edit::DocumentMut = text.parse().ok()?;
+    doc.get("model").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
+/// Sets `model` in Codex's config.toml after a backup, keeping the rest of the file as it is.
+fn set_default_model(name: &str) -> Result<()> {
+    let path = crate::adapters::codex::config_path();
+    let (text, meta) = crate::util::read_text_or_new(&path)?;
+    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| anyhow!("config.toml: {e}"))?;
+    doc["model"] = toml_edit::value(name);
+    if path.exists() {
+        crate::util::backup_tagged("codex", std::slice::from_ref(&path), l("WeChat: default model", "微信：默认模型"))?;
+    }
+    crate::util::write_text_atomic(&path, &doc.to_string(), meta)
 }
 
 /// Grants what was asked (fields left out stay unchanged).
@@ -955,6 +1161,37 @@ mod tests {
         let two = vec![json!({ "id": "a", "options": null }), json!({ "id": "b", "options": [{ "label": "X" }] })];
         assert_eq!(question_answers(&two, "first\n\n1"), json!({ "a": { "answers": ["first"] }, "b": { "answers": ["X"] } }));
         assert_eq!(question_answers(&two, "only one"), json!({ "a": { "answers": ["only one"] }, "b": { "answers": [""] } }));
+    }
+
+    #[test]
+    fn picks_models_by_number_or_name() {
+        let models = vec![
+            json!({ "id": "a", "model": "gpt-6-sol", "displayName": "GPT-6 Sol", "supportedReasoningEfforts": [{ "reasoningEffort": "low" }, { "reasoningEffort": "high" }] }),
+            json!({ "id": "b", "model": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro", "supportedReasoningEfforts": [] }),
+        ];
+        assert_eq!(pick_model(&models, "2").map(model_name).as_deref(), Some("deepseek-v4-pro"));
+        assert_eq!(pick_model(&models, " GPT-6-SOL ").map(model_name).as_deref(), Some("gpt-6-sol"));
+        assert_eq!(pick_model(&models, "gpt-6 sol").map(model_name).as_deref(), Some("gpt-6-sol"));
+        assert_eq!(pick_model(&models, "b").map(model_name).as_deref(), Some("deepseek-v4-pro"));
+        assert!(pick_model(&models, "0").is_none() && pick_model(&models, "3").is_none() && pick_model(&models, "x").is_none());
+        assert_eq!(efforts_of(&models[0]), vec!["low", "high"]);
+        assert!(supports_effort(&models[0], "high") && !supports_effort(&models[0], "xhigh"));
+        // A model that lists no efforts takes any.
+        assert!(supports_effort(&models[1], "xhigh"));
+    }
+
+    #[test]
+    fn default_model_keeps_the_rest_of_config_toml() {
+        let _h = crate::util::TestHome::new("wechat-model");
+        let path = crate::adapters::codex::config_path();
+        assert_eq!(default_model(), None);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "# mine\nmodel = \"old\"\n\n[model_providers.x]\nname = \"x\" # keep\n").unwrap();
+        assert_eq!(default_model().as_deref(), Some("old"));
+        set_default_model("gpt-6-luna").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(default_model().as_deref(), Some("gpt-6-luna"));
+        assert!(text.contains("# mine") && text.contains("name = \"x\" # keep"), "{text}");
     }
 
     #[test]

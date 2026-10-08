@@ -10,7 +10,20 @@ pub enum Decision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelCmd {
+    /// The session's model, the default and the choices.
+    Show,
+    /// A model (number in the list, or its name) for the session, from its next turn.
+    Set(String),
+    /// Codex's default model for new sessions (`config.toml`); None shows it.
+    Default(Option<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cmd {
+    Model(ModelCmd),
+    /// The session's reasoning effort, from its next turn; None shows the choices.
+    Effort(Option<String>),
     Help,
     /// Recent sessions; how many.
     List(Option<usize>),
@@ -97,6 +110,12 @@ pub fn parse(input: &str) -> Cmd {
                 },
             },
             "status" | "st" | "状态" => Cmd::Status,
+            "model" | "m" | "模型" => Cmd::Model(match arg.split_once(char::is_whitespace).map_or((arg, ""), |(a, b)| (a, b.trim())) {
+                ("", _) => ModelCmd::Show,
+                ("default" | "默认", rest) => ModelCmd::Default((!rest.is_empty()).then(|| rest.to_string())),
+                _ => ModelCmd::Set(arg.to_string()),
+            }),
+            "effort" | "e" | "推理" => Cmd::Effort(arg_opt),
             _ => Cmd::Unknown(s.clone()),
         };
     }
@@ -143,6 +162,20 @@ mod tests {
         assert_eq!(parse("/stop 2"), Cmd::Stop(Some(2)));
         assert_eq!(parse("/STATUS"), Cmd::Status);
         assert_eq!(parse("/foo"), Cmd::Unknown("/foo".into()));
+    }
+
+    #[test]
+    fn parses_model_commands() {
+        assert_eq!(parse("/model"), Cmd::Model(ModelCmd::Show));
+        assert_eq!(parse("/model 2"), Cmd::Model(ModelCmd::Set("2".into())));
+        assert_eq!(parse("/m gpt-6-luna"), Cmd::Model(ModelCmd::Set("gpt-6-luna".into())));
+        assert_eq!(parse("/model default"), Cmd::Model(ModelCmd::Default(None)));
+        assert_eq!(parse("/model default 3"), Cmd::Model(ModelCmd::Default(Some("3".into()))));
+        assert_eq!(parse("/模型 默认 gpt-6-sol"), Cmd::Model(ModelCmd::Default(Some("gpt-6-sol".into()))));
+        assert_eq!(parse("/effort"), Cmd::Effort(None));
+        assert_eq!(parse("/effort high"), Cmd::Effort(Some("high".into())));
+        // To another session: the text is parsed again by the bridge.
+        assert_eq!(parse("#3 /model 2"), Cmd::To { no: 3, force: false, text: "/model 2".into() });
     }
 
     #[test]

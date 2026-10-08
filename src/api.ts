@@ -341,6 +341,12 @@ export interface WechatSession {
   state: "idle" | "running" | "waiting";
   queued: number;
   current: boolean;
+  /** The model and reasoning effort Codex reports ("" when unknown). */
+  model: string;
+  effort: string;
+  /** Chosen from WeChat, taking effect with the next turn. */
+  nextModel: string | null;
+  nextEffort: string | null;
 }
 
 export interface WechatLogin {
@@ -1298,8 +1304,8 @@ const demoWechat: WechatStatus = {
   enabled: true, bound: true, state: "running", error: null, botId: "a1b2c3@im.bot", userId: "o9x8y7@im.wechat", boundAt: 1791300000,
   defaultCwd: null, fallbackCwd: "C:\\Users\\me\\Documents\\AgentPlus", codexReady: true, login: null,
   sessions: [
-    { no: 4, title: "Fix the updater", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\updater", state: "running", queued: 1, current: true },
-    { no: 2, title: "Blog post draft", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\blog", state: "waiting", queued: 0, current: false },
+    { no: 4, title: "Fix the updater", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\updater", state: "running", queued: 1, current: true, model: "gpt-6.1-sol", effort: "xhigh", nextModel: "gpt-6-astra", nextEffort: null },
+    { no: 2, title: "Blog post draft", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\blog", state: "waiting", queued: 0, current: false, model: "gpt-6.1-sol", effort: "high", nextModel: null, nextEffort: null },
   ],
   log: [
     { at: 1791430000000, kind: "out", text: "【#2 Blog post draft】\n⚠️ 要执行命令：npm run build" },
