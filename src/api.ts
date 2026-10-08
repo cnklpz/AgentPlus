@@ -1095,6 +1095,8 @@ const real = {
   /** The number WeChat shows on the phone, when asked for. */
   wechatLoginVerify: (code: string) => invoke<void>("wechat_login_verify", { code }),
   wechatLoginCancel: () => invoke<void>("wechat_login_cancel"),
+  /** Starts Codex for the running bridge (a message waiting for it is then sent). */
+  wechatStartCodex: () => invoke<void>("wechat_start_codex"),
   wechatUnbind: () => invoke<WechatStatus>("wechat_unbind"),
   wechatSetDefaultCwd: (path: string | null) => invoke<WechatStatus>("wechat_set_default_cwd", { path }),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
@@ -1372,6 +1374,7 @@ const demo: typeof real = {
   wechatLoginStart: async () => demoWechat,
   wechatLoginVerify: async () => undefined,
   wechatLoginCancel: async () => undefined,
+  wechatStartCodex: async () => { demoWechat.codexReady = true; },
   wechatUnbind: async () => { Object.assign(demoWechat, { bound: false, enabled: false, state: "off", botId: null, userId: null, sessions: [] }); return demoWechat; },
   wechatSetDefaultCwd: async (path) => { demoWechat.defaultCwd = path; return demoWechat; },
   gatewayModels: async () => ["glm-5", "glm-5.3", "kimi-k3"],

@@ -871,6 +871,11 @@ fn wechat_login_verify(code: String) {
 }
 
 #[tauri::command]
+fn wechat_start_codex() -> Result<(), String> {
+    wechat::start_codex().map_err(err)
+}
+
+#[tauri::command]
 fn wechat_login_cancel() {
     wechat::login_cancel()
 }
@@ -1125,6 +1130,7 @@ pub fn run() {
             wechat_login_start,
             wechat_login_verify,
             wechat_login_cancel,
+            wechat_start_codex,
             wechat_unbind,
             wechat_set_default_cwd,
             update::update_check,

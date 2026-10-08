@@ -190,7 +190,7 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
         </div>
       </div>
     </main>
-    {aside && st && <WechatAside st={st} />}
+    {aside && st && <WechatAside st={st} busy={busy} onStartCodex={() => run(async () => { await api.wechatStartCodex(); })} />}
     </>
   );
 }
@@ -204,7 +204,7 @@ function Tile({ k, n, tone }: { k: TKey; n: number; tone?: "bad" | "warn" }) {
 }
 
 /** Right pane once connected: the connection, this run's counters, Codex, and recent activity. */
-function WechatAside({ st }: { st: WechatStatus }) {
+function WechatAside({ st, busy, onStartCodex }: { st: WechatStatus; busy: boolean; onStartCodex: () => void }) {
   const s = st.stats;
   const never = t("wechatPage.never");
   const running = st.sessions.filter((x) => x.state === "running").length;
@@ -243,6 +243,9 @@ function WechatAside({ st }: { st: WechatStatus }) {
           <Kv k="wechatPage.queuedMsgs">{queued}</Kv>
         </div>
         {s.codexExe && <div className="mono tiny muted wx-exe" title={scrub(s.codexExe)}>{scrub(s.codexExe)}</div>}
+        {!st.codexReady && st.state === "running" && (
+          <button className="btn primary" disabled={busy} onClick={onStartCodex}><Icon.play size={12} />{t("wechatPage.startCodex")}</button>
+        )}
       </section>
       <div className="sync-history-head">
         <h2>{t("wechatPage.activity")}</h2>

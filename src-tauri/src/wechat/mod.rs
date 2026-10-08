@@ -30,6 +30,8 @@ use std::time::Duration;
 /// What the bridge thread reacts to.
 pub enum Event {
     Inbound(ilink::Inbound),
+    /// Start Codex now (the page's button).
+    StartCodex,
     Cursor(String),
     /// The relay rejected the token (scan again).
     Expired,
@@ -381,6 +383,14 @@ pub fn set_enabled(on: bool) -> Result<()> {
     if on { start_locked(&mut ctl) } else {
         stop_locked(&mut ctl);
         Ok(())
+    }
+}
+
+/// Starts Codex for the running bridge (and sends a message that waited for it).
+pub fn start_codex() -> Result<()> {
+    match lock(&CONTROL).as_ref() {
+        Some(tx) => tx.send(Event::StartCodex).map_err(|_| anyhow!(l("The WeChat bridge isn't running", "微信桥接没有在运行"))),
+        None => bail!("{}", l("The WeChat bridge isn't running", "微信桥接没有在运行")),
     }
 }
 

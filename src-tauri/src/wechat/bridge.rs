@@ -80,6 +80,8 @@ pub struct Bridge {
     typing: Option<String>,
     /// This run of the bridge; once over, nothing more is saved.
     run: u64,
+    /// A message that needs Codex, waiting for the user to say whether to start it.
+    deferred: Option<Inbound>,
 }
 
 fn thread_title(t: &Value) -> String {
@@ -90,7 +92,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0 }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: None }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -107,6 +109,7 @@ impl Bridge {
             match ev {
                 Event::Stop => break,
                 Event::Inbound(m) => self.on_inbound(m),
+                Event::StartCodex => self.start_codex_now(),
                 Event::Cursor(c) => self.save(|s| s.cursor = c),
                 Event::Expired => {
                     set_state("expired", Some(l("WeChat signed the bot out. Scan the QR code again", "微信已让机器人下线，请重新扫码").into()));
@@ -201,10 +204,17 @@ impl Bridge {
         }
     }
 
+    /// The bridge's own text, a line per paragraph.
     fn say(&mut self, text: impl AsRef<str>) {
-        self.send(format::plain(text.as_ref()), None);
+        self.send(format::plain(&format::breaks(text.as_ref())), None);
     }
 
+    /// The bridge's own note about a session (approvals, questions, errors).
+    fn note(&mut self, thread: &str, body: &str) {
+        self.say_from(thread, &format::breaks(body));
+    }
+
+    /// A Codex answer: its Markdown goes as written.
     fn say_from(&mut self, thread: &str, body: &str) {
         let no = self.number(thread);
         let title = self.live.get(thread).map(|l| l.title.clone()).unwrap_or_default();
@@ -328,7 +338,7 @@ impl Bridge {
             let Some(id) = self.remember(t) else { continue };
             let no = self.number(&id);
             let live = &self.live[&id];
-            let mark = if self.saved.current.as_deref() == Some(id.as_str()) { "▶" } else { "  " };
+            let mark = if self.saved.current.as_deref() == Some(id.as_str()) { "▶ " } else { "" };
             let state = if live.turn.is_some() {
                 " ⏳"
             } else if desktop && live.updated > now() - LOCK_WINDOW && !self.saved.owned.get(&id).is_some_and(|o| live.updated <= o + 60) && !live.loaded {
@@ -509,8 +519,59 @@ impl Bridge {
             }
             return;
         }
-        let quoted = self.session_of_quote(&m);
         let cmd = command::parse(&m.text);
+        if !self.codex.as_ref().is_some_and(|c| c.alive()) {
+            // The answer to "Start Codex?".
+            if self.deferred.is_some() {
+                match cmd {
+                    Cmd::Approve { decision: Decision::Decline, .. } => {
+                        self.deferred = None;
+                        self.say(l("OK, Codex stays off.", "好的，先不启动 Codex。"));
+                        return;
+                    }
+                    Cmd::Approve { .. } => return self.start_codex_now(),
+                    _ => {}
+                }
+            }
+            if self.needs_codex(&cmd, &m) {
+                self.deferred = Some(m);
+                self.say(l(
+                    "Codex isn't running. Reply y to start it and run your message, or n to cancel.",
+                    "Codex 还没启动。回复 y 启动并执行刚才的消息，回复 n 取消。",
+                ));
+                return;
+            }
+        }
+        self.handle(m, cmd);
+    }
+
+    /// Whether this message has to reach Codex (and so start it).
+    fn needs_codex(&self, cmd: &Cmd, m: &Inbound) -> bool {
+        match cmd {
+            Cmd::Help | Cmd::Status | Cmd::Unknown(_) | Cmd::Stop(_) => false,
+            Cmd::List(_) | Cmd::Use { .. } | Cmd::New(_) | Cmd::To { .. } => true,
+            // Text only goes somewhere with a session to go to.
+            Cmd::Text(_) | Cmd::Approve { .. } => self.saved.current.is_some() || self.session_of_quote(m).is_some_and(|n| self.thread_of(n).is_some()),
+        }
+    }
+
+    /// Starts Codex (asked from WeChat or the page), then runs the message that waited for it.
+    fn start_codex_now(&mut self) {
+        let deferred = self.deferred.take();
+        match self.codex().map(|_| ()) {
+            Ok(()) => {
+                self.say(l("Codex started.", "Codex 已启动。"));
+                if let Some(m) = deferred {
+                    let cmd = command::parse(&m.text);
+                    self.handle(m, cmd);
+                }
+            }
+            Err(e) => self.say(format!("❗ {e:#}")),
+        }
+    }
+
+    fn handle(&mut self, m: Inbound, cmd: Cmd) {
+        let quoted = self.session_of_quote(&m);
         let r = match cmd {
             Cmd::Help => Ok(Some(help_text())),
             Cmd::List(n) => self.list(n.unwrap_or(LIST).min(30)).map(Some),
@@ -768,7 +829,7 @@ impl Bridge {
                 if let Some(c) = &self.codex {
                     let _ = c.respond(&id, json!({ "action": "decline", "content": null, "_meta": null }));
                 }
-                self.say_from(&thread, &tr!("{server} asked for a form, which WeChat can't show; declined.", "{server} 请求填写表单，微信里无法填写，已拒绝。"));
+                self.note(&thread, &tr!("{server} asked for a form, which WeChat can't show; declined.", "{server} 请求填写表单，微信里无法填写，已拒绝。"));
                 None
             }
             _ => {
@@ -787,7 +848,7 @@ impl Bridge {
             stats(|s| s.approvals += 1);
         }
         self.pending.push(Pending { id, thread: thread.clone(), ask });
-        self.say_from(&thread, &body);
+        self.note(&thread, &body);
     }
 
     fn on_codex_exit(&mut self) {
@@ -801,7 +862,7 @@ impl Bridge {
         }).collect();
         log("error", l("Codex stopped", "Codex 已退出"));
         for t in running {
-            self.say_from(&t, l("❗ Codex stopped unexpectedly; this turn was lost. Send the message again to retry.", "❗ Codex 意外退出，这一轮没有完成。重新发送消息即可重试。"));
+            self.note(&t, l("❗ Codex stopped unexpectedly; this turn was lost. Send the message again to retry.", "❗ Codex 意外退出，这一轮没有完成。重新发送消息即可重试。"));
         }
         self.stop_typing();
     }

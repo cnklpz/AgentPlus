@@ -59,9 +59,29 @@ pub fn tagged(no: u32, title: &str, body: &str) -> Vec<String> {
     let n = parts.len();
     match n {
         0 => vec![head],
-        1 => vec![format!("{head}\n{}", parts[0])],
-        _ => parts.into_iter().enumerate().map(|(i, p)| format!("{head} ({}/{n})\n{p}", i + 1)).collect(),
+        1 => vec![format!("{head}\n\n{}", parts[0])],
+        _ => parts.into_iter().enumerate().map(|(i, p)| format!("{head} ({}/{n})\n\n{p}", i + 1)).collect(),
     }
+}
+
+/// ClawBot renders Markdown, where a single line break is only a space: every line of the
+/// bridge's own text becomes its own paragraph (code blocks keep their lines).
+pub fn breaks(text: &str) -> String {
+    let mut out = String::new();
+    let mut fence = false;
+    for line in text.lines() {
+        if !fence && line.trim().is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(if fence { "\n" } else { "\n\n" });
+        }
+        out.push_str(line);
+        if line.trim_start().starts_with("```") {
+            fence = !fence;
+        }
+    }
+    out
 }
 
 /// Plain bot text (not from a session), split to fit.
@@ -156,12 +176,19 @@ mod tests {
 
     #[test]
     fn tags_every_part() {
-        assert_eq!(tagged(1, "t", "hi"), vec!["【#1 t】\nhi"]);
+        assert_eq!(tagged(1, "t", "hi"), vec!["【#1 t】\n\nhi"]);
         assert_eq!(tagged(1, "t", ""), vec!["【#1 t】"]);
         let parts = tagged(2, "t", &"x".repeat(9000));
         assert_eq!(parts.len(), 3);
-        assert!(parts[0].starts_with("【#2 t】 (1/3)\n"));
+        assert!(parts[0].starts_with("【#2 t】 (1/3)\n\n"));
         assert!(parts.iter().all(|p| p.chars().count() <= TEXT_LIMIT));
+    }
+
+    #[test]
+    fn breaks_lines_into_paragraphs() {
+        assert_eq!(breaks("a\nb\n\n\nc"), "a\n\nb\n\nc");
+        assert_eq!(breaks("run:\n```\nx\n\ny\n```\nend"), "run:\n\n```\nx\n\ny\n```\n\nend");
+        assert_eq!(breaks(""), "");
     }
 
     #[test]
