@@ -131,6 +131,24 @@ pub struct LoginView {
     pub message: Option<String>,
 }
 
+/// Counters of the current run (since the bridge last started).
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Stats {
+    /// Unix ms.
+    pub since: Option<i64>,
+    pub last_in: Option<i64>,
+    pub last_out: Option<i64>,
+    pub received: u32,
+    pub sent: u32,
+    pub turns_done: u32,
+    pub turns_failed: u32,
+    pub approvals: u32,
+    pub errors: u32,
+    /// The Codex program the bridge runs, while it runs.
+    pub codex_exe: Option<String>,
+}
+
 #[derive(Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -147,6 +165,7 @@ pub struct Status {
     pub login: Option<LoginView>,
     pub sessions: Vec<SessionView>,
     pub log: Vec<LogLine>,
+    pub stats: Stats,
 }
 
 #[derive(Default)]
@@ -157,6 +176,7 @@ struct Shared {
     sessions: Vec<SessionView>,
     log: VecDeque<LogLine>,
     login: Option<LoginView>,
+    stats: Stats,
 }
 
 static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
@@ -169,13 +189,30 @@ fn shared<T>(f: impl FnOnce(&mut Shared) -> T) -> T {
 const LOG_LINES: usize = 80;
 
 pub(crate) fn log(kind: &'static str, text: impl AsRef<str>) {
-    let line = LogLine { at: chrono::Utc::now().timestamp_millis(), kind, text: crate::util::clip(text.as_ref(), 300) };
+    let at = chrono::Utc::now().timestamp_millis();
+    let line = LogLine { at, kind, text: crate::util::clip(text.as_ref(), 300) };
     shared(|s| {
+        match kind {
+            "in" => {
+                s.stats.received += 1;
+                s.stats.last_in = Some(at);
+            }
+            "out" => {
+                s.stats.sent += 1;
+                s.stats.last_out = Some(at);
+            }
+            "error" => s.stats.errors += 1,
+            _ => {}
+        }
         s.log.push_back(line);
         while s.log.len() > LOG_LINES {
             s.log.pop_front();
         }
     });
+}
+
+pub(crate) fn stats(f: impl FnOnce(&mut Stats)) {
+    shared(|s| f(&mut s.stats));
 }
 
 pub(crate) fn set_state(state: &str, error: Option<String>) {
@@ -211,6 +248,7 @@ pub fn status() -> Status {
         login: s.login.clone(),
         sessions: s.sessions.clone(),
         log: s.log.iter().rev().cloned().collect(),
+        stats: s.stats.clone(),
     })
 }
 

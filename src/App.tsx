@@ -86,6 +86,8 @@ export default function App() {
   const [agents, setAgents] = useState<AgentState[]>([]);
   const [selected, setSelected] = useState<AgentId>("codex");
   const [page, setPage] = useState<Page | null>(null);
+  // The WeChat page has a right pane only once connected.
+  const [wechatAside, setWechatAside] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [diff, setDiff] = useState<DiffGroup[]>([]);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -1586,7 +1588,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
+      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : []), ...(wechatAside ? ["wechat"] : [])].includes(page) ? " wide" : ""}`}>
         {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills}
           onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
@@ -1662,7 +1664,7 @@ export default function App() {
         {page === "skills" && prefs.showSkills && <SkillsPage agents={listed} flash={flash} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
-        {page === "wechat" && <WechatPage flash={flash} />}
+        {page === "wechat" && <WechatPage flash={flash} onAside={setWechatAside} />}
         {page === "settings" && (
           <SettingsPage
             tab={settingsTab}

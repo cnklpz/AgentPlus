@@ -15,7 +15,7 @@ use super::appserver::AppServer;
 use super::command::{self, Cmd, Decision};
 use super::format::{self, TurnStats};
 use super::ilink::{self, Inbound};
-use super::{log, set_sessions, set_state, update_saved, Event, Saved, SessionView};
+use super::{log, set_sessions, set_state, stats, update_saved, Event, Saved, SessionView, Stats};
 use crate::i18n::l;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -95,6 +95,7 @@ impl Bridge {
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
         self.run = run;
+        stats(|s| *s = Stats { since: Some(chrono::Utc::now().timestamp_millis()), ..Default::default() });
         set_state("running", None);
         log("info", l("Connected to WeChat", "已连接微信"));
         self.publish();
@@ -125,6 +126,7 @@ impl Bridge {
         }
         self.stop_typing();
         self.codex = None;
+        stats(|s| s.codex_exe = None);
     }
 
     fn save(&mut self, f: impl FnOnce(&mut Saved)) {
@@ -258,6 +260,8 @@ impl Bridge {
                 match AppServer::spawn(exe, self.events.clone(), self.generation) {
                     Ok(s) => {
                         self.codex = Some(s);
+                        let shown = crate::util::display_path(exe);
+                        stats(|s| s.codex_exe = Some(shown));
                         break;
                     }
                     Err(e) => {
@@ -669,7 +673,9 @@ impl Bridge {
         let Some(live) = self.live.get_mut(thread) else { return };
         let Some(mut turn) = live.turn.take() else { return };
         turn.stats.duration_ms = t["durationMs"].as_u64().or(Some(turn.started.elapsed().as_millis() as u64));
-        let body = match t["status"].as_str().unwrap_or("completed") {
+        let status = t["status"].as_str().unwrap_or("completed");
+        stats(|s| if status == "failed" { s.turns_failed += 1 } else { s.turns_done += 1 });
+        let body = match status {
             "failed" => {
                 let msg = t["error"]["message"].as_str().unwrap_or("");
                 tr!("❌ The turn failed: {msg}", "❌ 这一轮失败了：{msg}")
@@ -777,12 +783,16 @@ impl Bridge {
         if !matches!(ask, Ask::Questions(_)) {
             body.push_str(&tr!("\n\nReply y{no} to allow · a{no} allow for this session · n{no} decline", "\n\n回复 y{no} 允许 · a{no} 本会话都允许 · n{no} 拒绝"));
         }
+        if !matches!(ask, Ask::Questions(_)) {
+            stats(|s| s.approvals += 1);
+        }
         self.pending.push(Pending { id, thread: thread.clone(), ask });
         self.say_from(&thread, &body);
     }
 
     fn on_codex_exit(&mut self) {
         self.codex = None;
+        stats(|s| s.codex_exe = None);
         self.pending.clear();
         let running: Vec<String> = self.live.iter_mut().filter_map(|(t, l)| {
             l.loaded = false;

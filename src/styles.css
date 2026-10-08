@@ -763,3 +763,14 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .wx-line.out .wx-dir { color: var(--accent); }
 .wx-line.in .wx-dir { color: var(--ok); }
 .wx-line.error { color: var(--del); }
+.wx-aside .aside-cur { gap: 12px; }
+.wx-kvs { display: flex; flex-direction: column; gap: 7px; }
+.wx-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+.wx-kv-v { min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.wx-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wx-tile { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--sunken); }
+.wx-tile-n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.wx-tile.bad .wx-tile-n { color: var(--del); }
+.wx-exe { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wx-aside .wx-log { flex-grow: 1; min-height: 0; max-height: none; padding: 0 0 14px; }
+.wx-aside .wx-line { grid-template-columns: 58px 12px minmax(0, 1fr); padding: 3px 18px; font-size: 12px; }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { type WechatSession, type WechatStatus, api } from "../api";
 import { Icon } from "./icons";
 import { ErrorBox, SettingRow, Switch } from "./controls";
@@ -6,6 +6,7 @@ import { ask } from "./Confirm";
 import { locale, t, type TKey, tn, useLang } from "../i18n";
 import { scrub } from "../privacy";
 import { errText, type Flash } from "../util";
+import { fmtAgo } from "../format";
 
 const STATE: Record<WechatStatus["state"], [TKey, string]> = {
   running: ["wechatPage.stateRunning", "chip-ok"],
@@ -43,7 +44,8 @@ const COMMANDS: [string, TKey][] = [
 
 const time = (ms: number) => new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
-export function WechatPage({ flash }: { flash: Flash }) {
+/** `onAside`: whether the page shows its right pane (once connected), for the layout. */
+export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boolean) => void }) {
   const lang = useLang();
   const [st, setSt] = useState<WechatStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,10 +86,14 @@ export function WechatPage({ flash }: { flash: Flash }) {
     if (p) return api.wechatSetDefaultCwd(p);
   });
 
+  const aside = !!st?.bound;
+  useEffect(() => { onAside(aside); }, [aside]);
+
   const login = st?.login && st.login.state !== "done" ? st.login : null;
   const [stateKey, stateClass] = STATE[st?.state ?? "off"];
 
   return (
+    <>
     <main className="page">
       <div className="page-top">
         <div className="page-head">
@@ -100,7 +106,7 @@ export function WechatPage({ flash }: { flash: Flash }) {
         </div>
       </div>
       <div className="page-body">
-        <div className="settings">
+        <div className="settings full">
           <section className="sgroup">
             <h2>{t("wechatPage.account")}</h2>
             {st?.error && <ErrorBox text={st.error} className="wx-err" />}
@@ -181,26 +187,76 @@ export function WechatPage({ flash }: { flash: Flash }) {
             <div className="muted small hint wx-quote">{t("wechatPage.quoteHint")}</div>
           </section>
 
-          {st?.bound && (
-            <section className="sgroup">
-              <h2>{t("wechatPage.activity")}</h2>
-              {st.log.length ? (
-                <div className="wx-log">
-                  {st.log.map((l, i) => (
-                    <div key={`${l.at}-${i}`} className={`wx-line ${l.kind}`}>
-                      <span className="wx-time mono tiny muted">{time(l.at)}</span>
-                      <span className="wx-dir" aria-hidden>{l.kind === "in" ? "←" : l.kind === "out" ? "→" : l.kind === "error" ? "!" : "·"}</span>
-                      <span className="wx-text">{scrub(l.text)}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <span className="muted small">{t("wechatPage.noActivity")}</span>
-              )}
-            </section>
-          )}
         </div>
       </div>
     </main>
+    {aside && st && <WechatAside st={st} />}
+    </>
+  );
+}
+
+function Kv({ k, children }: { k: TKey; children: ReactNode }) {
+  return <div className="wx-kv"><span className="muted">{t(k)}</span><span className="wx-kv-v">{children}</span></div>;
+}
+
+function Tile({ k, n, tone }: { k: TKey; n: number; tone?: "bad" | "warn" }) {
+  return <div className={`wx-tile${tone && n > 0 ? ` ${tone}` : ""}`}><span className="wx-tile-n">{n}</span><span className="muted tiny">{t(k)}</span></div>;
+}
+
+/** Right pane once connected: the connection, this run's counters, Codex, and recent activity. */
+function WechatAside({ st }: { st: WechatStatus }) {
+  const s = st.stats;
+  const never = t("wechatPage.never");
+  const running = st.sessions.filter((x) => x.state === "running").length;
+  const waiting = st.sessions.filter((x) => x.state === "waiting").length;
+  const queued = st.sessions.reduce((n, x) => n + x.queued, 0);
+  const current = st.sessions.find((x) => x.current);
+  return (
+    <aside className="aside wx-aside" aria-label={t("wechatPage.asideLabel")}>
+      <section className="aside-cur">
+        <h2>{t("wechatPage.connection")}</h2>
+        <div className="wx-kvs">
+          <Kv k="wechatPage.bot"><span className="mono">{scrub(st.botId ?? "")}</span></Kv>
+          <Kv k="wechatPage.user"><span className="mono">{scrub(st.userId ?? "")}</span></Kv>
+          <Kv k="wechatPage.runningSince">{s.since ? fmtAgo(s.since) : "—"}</Kv>
+          <Kv k="wechatPage.lastIn">{s.lastIn ? fmtAgo(s.lastIn) : never}</Kv>
+          <Kv k="wechatPage.lastOut">{s.lastOut ? fmtAgo(s.lastOut) : never}</Kv>
+        </div>
+      </section>
+      <section className="aside-cur">
+        <h2>{t("wechatPage.thisRun")}</h2>
+        <div className="wx-tiles">
+          <Tile k="wechatPage.received" n={s.received} />
+          <Tile k="wechatPage.sent" n={s.sent} />
+          <Tile k="wechatPage.turnsDone" n={s.turnsDone} />
+          <Tile k="wechatPage.turnsFailed" n={s.turnsFailed} tone="bad" />
+          <Tile k="wechatPage.approvals" n={s.approvals} />
+          <Tile k="wechatPage.errors" n={s.errors} tone="bad" />
+        </div>
+      </section>
+      <section className="aside-cur">
+        <h2 className="row between">{t("wechatPage.codex")}<span className={st.codexReady ? "chip-ok" : "chip-muted"}>{t(st.codexReady ? "wechatPage.codexOn" : "wechatPage.codexIdle")}</span></h2>
+        <div className="wx-kvs">
+          <Kv k="wechatPage.currentSession">{current ? `#${current.no} ${current.title}` : "—"}</Kv>
+          <Kv k="wechatPage.runningTurns">{running}</Kv>
+          <Kv k="wechatPage.waitingTurns">{waiting}</Kv>
+          <Kv k="wechatPage.queuedMsgs">{queued}</Kv>
+        </div>
+        {s.codexExe && <div className="mono tiny muted wx-exe" title={scrub(s.codexExe)}>{scrub(s.codexExe)}</div>}
+      </section>
+      <div className="sync-history-head">
+        <h2>{t("wechatPage.activity")}</h2>
+        <span className="count">{st.log.length}</span>
+      </div>
+      <div className="wx-log">
+        {st.log.length ? st.log.map((l, i) => (
+          <div key={`${l.at}-${i}`} className={`wx-line ${l.kind}`}>
+            <span className="wx-time mono tiny muted">{time(l.at)}</span>
+            <span className="wx-dir" aria-hidden>{l.kind === "in" ? "←" : l.kind === "out" ? "→" : l.kind === "error" ? "!" : "·"}</span>
+            <span className="wx-text">{scrub(l.text)}</span>
+          </div>
+        )) : <div className="dempty"><span className="muted small">{t("wechatPage.noActivity")}</span></div>}
+      </div>
+    </aside>
   );
 }

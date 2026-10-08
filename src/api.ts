@@ -349,6 +349,21 @@ export interface WechatLogin {
   message: string | null;
 }
 
+/** Counters since the bridge last started. Times are Unix ms. */
+export interface WechatStats {
+  since: number | null;
+  lastIn: number | null;
+  lastOut: number | null;
+  received: number;
+  sent: number;
+  turnsDone: number;
+  turnsFailed: number;
+  approvals: number;
+  errors: number;
+  /** The Codex program the bridge runs, while it runs. */
+  codexExe: string | null;
+}
+
 export interface WechatStatus {
   enabled: boolean;
   bound: boolean;
@@ -362,6 +377,7 @@ export interface WechatStatus {
   login: WechatLogin | null;
   sessions: WechatSession[];
   log: WechatLogLine[];
+  stats: WechatStats;
 }
 
 export interface GatewayStatus {
@@ -1286,6 +1302,8 @@ const demoWechat: WechatStatus = {
     { at: 1791429990000, kind: "in", text: "跑一下测试" },
     { at: 1791429900000, kind: "info", text: "已连接微信" },
   ],
+  stats: { since: 1791429900000, lastIn: 1791429990000, lastOut: 1791430000000, received: 12, sent: 15, turnsDone: 6, turnsFailed: 1, approvals: 3, errors: 0,
+    codexExe: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1002.7124.0_x64\\app\\resources\\codex.exe" },
 };
 
 const demo: typeof real = {
