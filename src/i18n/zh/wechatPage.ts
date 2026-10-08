@@ -45,6 +45,8 @@ const zh: typeof en = {
   commands: "命令",
   cmdLs: "最近的会话及编号",
   cmdUse: "切换当前会话",
+  cmdDirs: "最近的工作目录及编号",
+  cmdNewPick: "在 /dirs 的第 2 个目录新建会话",
   cmdNewSyntax: "/new [目录]",
   cmdNew: "新建会话（不写目录时用上面的目录）",
   cmdTo: "临时发给某个会话，不切换",

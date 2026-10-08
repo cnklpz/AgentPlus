@@ -35,6 +35,8 @@ const SESSION: Record<WechatSession["state"], TKey> = {
 const COMMANDS: [string | { k: TKey }, TKey][] = [
   ["/ls", "wechatPage.cmdLs"],
   ["/use 3", "wechatPage.cmdUse"],
+  ["/dirs", "wechatPage.cmdDirs"],
+  ["/new 2", "wechatPage.cmdNewPick"],
   [{ k: "wechatPage.cmdNewSyntax" }, "wechatPage.cmdNew"],
   ["#3 …", "wechatPage.cmdTo"],
   ["/stop 3", "wechatPage.cmdStop"],

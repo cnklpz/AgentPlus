@@ -29,8 +29,10 @@ pub enum Cmd {
     List(Option<usize>),
     /// Make this session the current one; `force` ignores the "open in Codex" lock.
     Use { no: u32, force: bool },
-    /// A new session in this folder (or the default one).
+    /// A new session in this folder (a number picks from `/dirs`), or the default one.
     New(Option<String>),
+    /// Recent working folders, numbered for `/new N`.
+    Dirs,
     /// Interrupt the running turn of this session (or the current one).
     Stop(Option<u32>),
     Status,
@@ -110,6 +112,7 @@ pub fn parse(input: &str) -> Cmd {
                 },
             },
             "status" | "st" | "状态" => Cmd::Status,
+            "dirs" | "d" | "目录" => Cmd::Dirs,
             "model" | "m" | "模型" => Cmd::Model(match arg.split_once(char::is_whitespace).map_or((arg, ""), |(a, b)| (a, b.trim())) {
                 ("", _) => ModelCmd::Show,
                 ("default" | "默认", rest) => ModelCmd::Default((!rest.is_empty()).then(|| rest.to_string())),
@@ -158,6 +161,9 @@ mod tests {
         assert_eq!(parse("/use 0"), Cmd::Unknown("/use 0".into()));
         assert_eq!(parse("/new"), Cmd::New(None));
         assert_eq!(parse("/new C:\\code\\blog"), Cmd::New(Some("C:\\code\\blog".into())));
+        assert_eq!(parse("/dirs"), Cmd::Dirs);
+        assert_eq!(parse("/目录"), Cmd::Dirs);
+        assert_eq!(parse("/new 2"), Cmd::New(Some("2".into())));
         assert_eq!(parse("/stop"), Cmd::Stop(None));
         assert_eq!(parse("/stop 2"), Cmd::Stop(Some(2)));
         assert_eq!(parse("/STATUS"), Cmd::Status);

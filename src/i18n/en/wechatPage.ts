@@ -43,6 +43,8 @@ export default {
   commands: "Commands",
   cmdLs: "Recent sessions, with their numbers",
   cmdUse: "Switch the current session",
+  cmdDirs: "Recent working folders, numbered",
+  cmdNewPick: "Start a session in folder 2 of /dirs",
   cmdNewSyntax: "/new [folder]",
   cmdNew: "Start a session (in the folder above if none is given)",
   cmdTo: "Send to one session without switching",

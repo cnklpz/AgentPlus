@@ -27,6 +27,8 @@ use std::time::{Duration, Instant};
 const LOCK_WINDOW: i64 = 30 * 60;
 const QUOTES: usize = 300;
 const LIST: usize = 10;
+/// Folders listed by `/dirs`.
+const DIRS: usize = 10;
 const CALL: Duration = Duration::from_secs(60);
 
 fn now() -> i64 {
@@ -393,7 +395,39 @@ impl Bridge {
         ))
     }
 
+    /// Folders of recent sessions, newest first, plus the default folder for new sessions.
+    fn recent_dirs(&mut self) -> Result<Vec<String>> {
+        let v = self.codex()?.request(
+            "thread/list",
+            json!({ "limit": 60, "sortKey": "updated_at", "modelProviders": [], "sourceKinds": ["vscode", "cli", "appServer"], "useStateDbOnly": true }),
+            CALL,
+        )?;
+        let cwds: Vec<String> = v["data"].as_array().into_iter().flatten().filter_map(|t| t["cwd"].as_str().map(String::from)).collect();
+        let default = super::load_saved().default_cwd.unwrap_or_else(|| super::fallback_cwd().to_string_lossy().into_owned());
+        Ok(distinct_dirs(cwds.iter().map(String::as_str).chain([default.as_str()]), DIRS, |p| std::path::Path::new(p).is_dir() || p == default))
+    }
+
+    fn dirs_text(&mut self) -> Result<String> {
+        let dirs = self.recent_dirs()?;
+        let mut lines = vec![l("Recent folders:", "最近的工作目录：").to_string()];
+        for (i, d) in dirs.iter().enumerate() {
+            lines.push(format!("{}. {} · {d}", i + 1, format::folder_name(d)));
+        }
+        lines.push(l("/new N starts a session in folder N", "/new 编号 在对应目录新建会话").into());
+        Ok(lines.join("\n"))
+    }
+
     fn new_session(&mut self, path: Option<String>) -> Result<String> {
+        // `/new 2`: the second folder of `/dirs`.
+        let path = match path.as_deref().map(str::trim).and_then(|p| p.parse::<usize>().ok()) {
+            Some(n) => {
+                let dirs = self.recent_dirs()?;
+                Some(n.checked_sub(1).and_then(|i| dirs.get(i)).cloned().ok_or_else(|| {
+                    anyhow!(tr!("There is no folder {n}. Send /dirs to see the list", "没有第 {n} 个目录。发 /dirs 查看列表"))
+                })?)
+            }
+            None => path,
+        };
         let cwd = path
             .or_else(|| self.saved.current.as_ref().and_then(|t| self.live.get(t)).map(|l| l.cwd.clone()).filter(|c| !c.is_empty()))
             .or_else(|| super::load_saved().default_cwd)
@@ -701,7 +735,7 @@ impl Bridge {
     fn needs_codex(&self, cmd: &Cmd, m: &Inbound) -> bool {
         match cmd {
             Cmd::Help | Cmd::Status | Cmd::Unknown(_) | Cmd::Stop(_) => false,
-            Cmd::List(_) | Cmd::Use { .. } | Cmd::New(_) | Cmd::To { .. } | Cmd::Model(_) | Cmd::Effort(_) => true,
+            Cmd::List(_) | Cmd::Dirs | Cmd::Use { .. } | Cmd::New(_) | Cmd::To { .. } | Cmd::Model(_) | Cmd::Effort(_) => true,
             // Text only goes somewhere with a session to go to.
             Cmd::Text(_) | Cmd::Approve { .. } => self.saved.current.is_some() || self.session_of_quote(m).is_some_and(|n| self.thread_of(n).is_some()),
         }
@@ -729,6 +763,7 @@ impl Bridge {
             Cmd::List(n) => self.list(n.unwrap_or(LIST).min(30)).map(Some),
             Cmd::Use { no, force } => self.use_session(no, force).map(Some),
             Cmd::New(p) => self.new_session(p).map(Some),
+            Cmd::Dirs => self.dirs_text().map(Some),
             Cmd::Stop(no) => self.stop(no).map(Some),
             Cmd::Status => Ok(Some(self.status_text())),
             Cmd::Unknown(c) => Ok(Some(tr!("Unknown command {c}. Send /help for the list.", "不认识的命令 {c}。发 /help 查看说明。"))),
@@ -1039,6 +1074,7 @@ fn help_text() -> String {
         "AgentPlus · Codex over WeChat\n\
          /ls [N] recent sessions\n\
          /use N switch to session N\n\
+         /dirs recent folders · /new N start a session in folder N\n\
          /new [folder] start a session\n\
          #N text send to session N once\n\
          /stop [N] interrupt a turn\n\
@@ -1050,6 +1086,7 @@ fn help_text() -> String {
         "AgentPlus · 微信使用 Codex\n\
          /ls [数量] 最近的会话\n\
          /use 编号 切换会话\n\
+         /dirs 最近的工作目录 · /new 编号 在该目录新建会话\n\
          /new [目录] 新建会话\n\
          #编号 消息 临时发给某个会话\n\
          /stop [编号] 中断当前这轮\n\
@@ -1060,6 +1097,27 @@ fn help_text() -> String {
          引用机器人的某条消息回复，会发给那条消息的会话；其他消息发给当前会话。",
     )
     .to_string()
+}
+
+/// Each folder once (any case on Windows, trailing slashes ignored), in order, up to
+/// `limit`, keeping only those `keep` accepts.
+fn distinct_dirs<'a>(dirs: impl Iterator<Item = &'a str>, limit: usize, keep: impl Fn(&str) -> bool) -> Vec<String> {
+    let key = |p: &str| {
+        let p = p.trim().trim_end_matches(['/', '\\']);
+        if cfg!(windows) { p.replace('/', "\\").to_lowercase() } else { p.to_string() }
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut out = vec![];
+    for d in dirs {
+        if out.len() >= limit {
+            break;
+        }
+        if d.trim().is_empty() || !keep(d) || !seen.insert(key(d)) {
+            continue;
+        }
+        out.push(d.trim().to_string());
+    }
+    out
 }
 
 fn or_dash(s: &str) -> &str {
@@ -1192,6 +1250,16 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(default_model().as_deref(), Some("gpt-6-luna"));
         assert!(text.contains("# mine") && text.contains("name = \"x\" # keep"), "{text}");
+    }
+
+    #[test]
+    fn lists_each_folder_once() {
+        let dirs = [r"C:\code\a", r"C:\code\b\", r"c:\code\A", "", r"C:\gone", r"C:\code\b", "C:/code/c"];
+        let got = distinct_dirs(dirs.into_iter(), 10, |p| p != r"C:\gone");
+        if cfg!(windows) {
+            assert_eq!(got, vec![r"C:\code\a", r"C:\code\b\", "C:/code/c"]);
+        }
+        assert_eq!(distinct_dirs(dirs.into_iter(), 1, |_| true), vec![r"C:\code\a"]);
     }
 
     #[test]
