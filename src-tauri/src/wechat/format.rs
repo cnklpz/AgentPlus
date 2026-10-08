@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn folder_names() {
-        assert_eq!(folder_name(r"D:\xm\AgentPlus"), "AgentPlus");
+        assert_eq!(folder_name(r"C:\code\AgentPlus"), "AgentPlus");
         assert_eq!(folder_name("/home/me/blog/"), "blog");
         assert_eq!(folder_name("/"), "");
         assert_eq!(folder_name(r"C:\"), "C:");

@@ -31,11 +31,11 @@ const SESSION: Record<WechatSession["state"], TKey> = {
   waiting: "wechatPage.waiting",
 };
 
-/** Command, then the key of what it does. */
-const COMMANDS: [string, TKey][] = [
+/** Command (text, or the key of a translated one), then the key of what it does. */
+const COMMANDS: [string | { k: TKey }, TKey][] = [
   ["/ls", "wechatPage.cmdLs"],
   ["/use 3", "wechatPage.cmdUse"],
-  ["/new D:\\xm\\app", "wechatPage.cmdNew"],
+  [{ k: "wechatPage.cmdNewSyntax" }, "wechatPage.cmdNew"],
   ["#3 …", "wechatPage.cmdTo"],
   ["/stop 3", "wechatPage.cmdStop"],
   ["/status", "wechatPage.cmdStatus"],
@@ -181,7 +181,7 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
             <h2>{t("wechatPage.commands")}</h2>
             <div className="wx-commands">
               {COMMANDS.map(([cmd, desc]) => (
-                <div key={cmd} className="wx-command"><code>{cmd}</code><span className="muted small">{t(desc)}</span></div>
+                <div key={desc} className="wx-command"><code>{typeof cmd === "string" ? cmd : t(cmd.k)}</code><span className="muted small">{t(desc)}</span></div>
               ))}
             </div>
             <div className="muted small hint wx-quote">{t("wechatPage.quoteHint")}</div>

@@ -573,7 +573,7 @@ mod tests {
             s.enabled = true;
             s.account = Some(Account { bot_id: "b".into(), user_id: "u".into(), base_url: ilink::LOGIN_BASE.into(), token: json!({ "plain": "t" }), bound_at: 1 });
             s.numbers.insert(3, "thread".into());
-            s.default_cwd = Some("D:/xm".into());
+            s.default_cwd = Some("C:/code".into());
             s.quotes.push_back(("m1".into(), 3));
         })
         .unwrap();
@@ -585,7 +585,7 @@ mod tests {
         unbind().unwrap();
         let s = load_saved();
         assert!(s.account.is_none() && !s.enabled && s.numbers.is_empty() && s.quotes.is_empty());
-        assert_eq!(s.default_cwd.as_deref(), Some("D:/xm"));
+        assert_eq!(s.default_cwd.as_deref(), Some("C:/code"));
         // Nothing to turn on without an account.
         assert!(set_enabled(true).is_err());
     }

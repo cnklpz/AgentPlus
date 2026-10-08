@@ -43,6 +43,7 @@ export default {
   commands: "Commands",
   cmdLs: "Recent sessions, with their numbers",
   cmdUse: "Switch the current session",
+  cmdNewSyntax: "/new [folder]",
   cmdNew: "Start a session (in the folder above if none is given)",
   cmdTo: "Send to one session without switching",
   cmdStop: "Interrupt a running turn",

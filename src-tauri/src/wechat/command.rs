@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(parse("/use"), Cmd::Unknown("/use".into()));
         assert_eq!(parse("/use 0"), Cmd::Unknown("/use 0".into()));
         assert_eq!(parse("/new"), Cmd::New(None));
-        assert_eq!(parse("/new D:\\xm\\blog"), Cmd::New(Some("D:\\xm\\blog".into())));
+        assert_eq!(parse("/new C:\\code\\blog"), Cmd::New(Some("C:\\code\\blog".into())));
         assert_eq!(parse("/stop"), Cmd::Stop(None));
         assert_eq!(parse("/stop 2"), Cmd::Stop(Some(2)));
         assert_eq!(parse("/STATUS"), Cmd::Status);
