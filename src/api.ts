@@ -1270,8 +1270,8 @@ function demoSeries() {
 }
 
 let demoProjects: ProjectEntry[] = [
-  { path: "D:\\xm\\shop", name: "shop", agent: "opencode@D:\\xm\\shop" as AgentId, lastOpened: new Date(Date.now() - 3600e3).toISOString(), exists: true, config: "D:\\xm\\shop\\opencode.json", providers: 1, git: true },
-  { path: "D:\\xm\\demo", name: "demo", agent: "opencode@D:\\xm\\demo" as AgentId, lastOpened: new Date(Date.now() - 3 * 86400e3).toISOString(), exists: true, config: null, providers: 0, git: false },
+  { path: "C:\\code\\shop", name: "shop", agent: "opencode@C:\\code\\shop" as AgentId, lastOpened: new Date(Date.now() - 3600e3).toISOString(), exists: true, config: "C:\\code\\shop\\opencode.json", providers: 1, git: true },
+  { path: "C:\\code\\demo", name: "demo", agent: "opencode@C:\\code\\demo" as AgentId, lastOpened: new Date(Date.now() - 3 * 86400e3).toISOString(), exists: true, config: null, providers: 0, git: false },
 ];
 
 /** Browser demo: a project is the OpenCode fixture with its custom providers inherited. */
@@ -1346,9 +1346,9 @@ const demo: typeof real = {
   openWebUi: async () => null,
   codexSessions: async () => ({
     sessions: [
-      { id: "demo-1", title: "修复登录页样式", cwd: "D:\\xm\\demo", provider: "klpz", model: "gpt-6-astra", kind: "user", archived: false, updatedMs: Date.now() - 3600e3, size: 2_400_000, rolloutPath: "", rolloutExists: true, hidden: ["属于「klpz」，当前是「work」：最近列表和归档里可能看不到"] },
-      { id: "demo-2", title: "接入支付回调", cwd: "D:\\xm\\shop", provider: "work", model: "gpt-5.6-sol", kind: "user", archived: false, updatedMs: Date.now() - 86400e3, size: 640_000, rolloutPath: "", rolloutExists: true, hidden: [] },
-      { id: "demo-3", title: "审查：依赖升级", cwd: "D:\\xm\\shop", provider: "klpz", model: "codex-auto-review", kind: "review", archived: false, updatedMs: Date.now() - 2 * 86400e3, size: 120_000, rolloutPath: "", rolloutExists: true, hidden: ["子代理 / 审查 / exec 会话不进侧边栏"] },
+      { id: "demo-1", title: "修复登录页样式", cwd: "C:\\code\\demo", provider: "klpz", model: "gpt-6-astra", kind: "user", archived: false, updatedMs: Date.now() - 3600e3, size: 2_400_000, rolloutPath: "", rolloutExists: true, hidden: ["属于「klpz」，当前是「work」：最近列表和归档里可能看不到"] },
+      { id: "demo-2", title: "接入支付回调", cwd: "C:\\code\\shop", provider: "work", model: "gpt-5.6-sol", kind: "user", archived: false, updatedMs: Date.now() - 86400e3, size: 640_000, rolloutPath: "", rolloutExists: true, hidden: [] },
+      { id: "demo-3", title: "审查：依赖升级", cwd: "C:\\code\\shop", provider: "klpz", model: "codex-auto-review", kind: "review", archived: false, updatedMs: Date.now() - 2 * 86400e3, size: 120_000, rolloutPath: "", rolloutExists: true, hidden: ["子代理 / 审查 / exec 会话不进侧边栏"] },
     ],
     currentProvider: "work",
     providers: [["klpz", 2], ["work", 1]],
@@ -1560,7 +1560,7 @@ const demo: typeof real = {
     return next;
   },
   projectForget: async (path) => { demoProjects = demoProjects.filter((x) => x.path !== path); },
-  pickFolder: async () => "D:\\xm\\newapp",
+  pickFolder: async () => "C:\\code\\newapp",
   updateCheck: async () => {
     await sleep(800);
     return { version: "0.2.0", current: "0.1.0", notes: "（演示）\n- 新功能：应用内更新\n- 修复若干问题", date: new Date().toISOString() };
