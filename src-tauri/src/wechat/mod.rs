@@ -163,6 +163,8 @@ pub struct Status {
     pub user_id: Option<String>,
     pub bound_at: Option<i64>,
     pub default_cwd: Option<String>,
+    /// Used when `default_cwd` isn't set.
+    pub fallback_cwd: String,
     pub codex_ready: bool,
     pub login: Option<LoginView>,
     pub sessions: Vec<SessionView>,
@@ -246,6 +248,7 @@ pub fn status() -> Status {
         user_id: acc.map(|a| a.user_id.clone()),
         bound_at: acc.map(|a| a.bound_at),
         default_cwd: saved.default_cwd.clone(),
+        fallback_cwd: crate::util::display_path(&fallback_cwd()),
         codex_ready: s.codex_ready,
         login: s.login.clone(),
         sessions: s.sessions.clone(),
@@ -392,6 +395,12 @@ pub fn start_codex() -> Result<()> {
         Some(tx) => tx.send(Event::StartCodex).map_err(|_| anyhow!(l("The WeChat bridge isn't running", "微信桥接没有在运行"))),
         None => bail!("{}", l("The WeChat bridge isn't running", "微信桥接没有在运行")),
     }
+}
+
+/// Where `/new` starts a session when no folder is given and none is set:
+/// DocumentsAgentPlus (created when first used).
+pub fn fallback_cwd() -> PathBuf {
+    dirs::document_dir().unwrap_or_else(crate::util::home).join("AgentPlus")
 }
 
 pub fn set_default_cwd(path: Option<String>) -> Result<()> {

@@ -32,7 +32,6 @@ const zh: typeof en = {
   sessions: "会话",
   folder: "/new 的目录",
   folderDesc: "/new 没写目录、也没有选中会话时使用。",
-  homeFolder: "用户主目录",
   browse: "浏览",
   reset: "恢复默认",
   inUse: "使用中",

@@ -373,6 +373,8 @@ export interface WechatStatus {
   userId: string | null;
   boundAt: number | null;
   defaultCwd: string | null;
+  /** Used when `defaultCwd` isn't set (DocumentsAgentPlus). */
+  fallbackCwd: string;
   codexReady: boolean;
   login: WechatLogin | null;
   sessions: WechatSession[];
@@ -1294,7 +1296,7 @@ async function demoProject(agent: string): Promise<AgentState> {
 
 const demoWechat: WechatStatus = {
   enabled: true, bound: true, state: "running", error: null, botId: "a1b2c3@im.bot", userId: "o9x8y7@im.wechat", boundAt: 1791300000,
-  defaultCwd: "D:\\xm", codexReady: true, login: null,
+  defaultCwd: "D:\\xm", fallbackCwd: "C:\\Users\\me\\Documents\\AgentPlus", codexReady: true, login: null,
   sessions: [
     { no: 4, title: "Fix the updater", cwd: "D:\\xm\\AgentPlus", state: "running", queued: 1, current: true },
     { no: 2, title: "Blog post draft", cwd: "D:\\xm\\blog", state: "waiting", queued: 0, current: false },

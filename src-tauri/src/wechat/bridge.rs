@@ -381,7 +381,11 @@ impl Bridge {
         let cwd = path
             .or_else(|| self.saved.current.as_ref().and_then(|t| self.live.get(t)).map(|l| l.cwd.clone()).filter(|c| !c.is_empty()))
             .or_else(|| super::load_saved().default_cwd)
-            .unwrap_or_else(|| crate::util::home().to_string_lossy().into_owned());
+            .unwrap_or_else(|| {
+                let dir = super::fallback_cwd();
+                let _ = std::fs::create_dir_all(&dir);
+                dir.to_string_lossy().into_owned()
+            });
         let cwd = cwd.trim().trim_matches('"').to_string();
         if !std::path::Path::new(&cwd).is_dir() {
             bail!("{}", tr!("Folder not found: {cwd}", "找不到文件夹：{cwd}"));

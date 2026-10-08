@@ -30,7 +30,6 @@ export default {
   sessions: "Sessions",
   folder: "Folder for /new",
   folderDesc: "Used when /new has no folder and no session is selected.",
-  homeFolder: "Home folder",
   browse: "Browse",
   reset: "Reset",
   inUse: "In use",

@@ -150,7 +150,7 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
           <section className="sgroup">
             <h2>{t("wechatPage.sessions")}</h2>
             <SettingRow label={t("wechatPage.folder")} keepDesc
-              desc={<><span className="mono">{scrub(st?.defaultCwd ?? "") || t("wechatPage.homeFolder")}</span><span className="hint"> · {t("wechatPage.folderDesc")}</span></>}>
+              desc={<><span className="mono">{scrub(st?.defaultCwd ?? st?.fallbackCwd ?? "")}</span><span className="hint"> · {t("wechatPage.folderDesc")}</span></>}>
               <div className="row gap10">
                 {st?.defaultCwd && <button className="btn" disabled={busy} onClick={() => run(() => api.wechatSetDefaultCwd(null))}>{t("wechatPage.reset")}</button>}
                 <button className="btn" disabled={busy} onClick={browse}><Icon.folder size={13} />{t("wechatPage.browse")}</button>
