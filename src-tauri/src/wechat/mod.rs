@@ -310,8 +310,7 @@ fn start_locked(ctl: &mut Option<mpsc::Sender<Event>>) -> Result<()> {
     set_state("starting", None);
     {
         let tx = tx.clone();
-        let cursor = saved.cursor.clone();
-        std::thread::Builder::new().name("agentplus-wechat-poll".into()).spawn(move || poll_loop(poll, cursor, run, tx))?;
+        std::thread::Builder::new().name("agentplus-wechat-poll".into()).spawn(move || poll_loop(poll, run, tx))?;
     }
     {
         let tx = tx.clone();
@@ -324,8 +323,19 @@ fn start_locked(ctl: &mut Option<mpsc::Sender<Event>>) -> Result<()> {
     Ok(())
 }
 
-fn poll_loop(wx: ilink::Client, mut cursor: String, run: u64, tx: mpsc::Sender<Event>) {
+/// Held while a poll thread runs. A stopped run's thread can still be inside a long poll for
+/// up to its hold time: the next run waits for it, so polls never overlap and its
+/// "stop" notice can't follow the new run's "start".
+static POLL: Mutex<()> = Mutex::new(());
+
+fn poll_loop(wx: ilink::Client, run: u64, tx: mpsc::Sender<Event>) {
     let current = || RUN.load(Ordering::SeqCst) == run;
+    let _one = lock(&POLL);
+    if !current() {
+        return;
+    }
+    // Read now: the previous run may have moved it while this one waited.
+    let mut cursor = load_saved().cursor;
     wx.notify(true);
     let mut hold = ilink::LONG_POLL;
     let mut failures = 0u32;

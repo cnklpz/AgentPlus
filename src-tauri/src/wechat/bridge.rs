@@ -48,6 +48,9 @@ struct Live {
     /// As Codex last reported them.
     model: String,
     effort: String,
+    /// Answered "allow for this session" (`a3`): later command and file approvals are accepted
+    /// without asking. Codex's own `acceptForSession` only covers that exact command.
+    allow_all: bool,
 }
 
 struct Turn {
@@ -85,10 +88,38 @@ pub struct Bridge {
     typing: Option<String>,
     /// This run of the bridge; once over, nothing more is saved.
     run: u64,
-    /// A message that needs Codex, waiting for the user to say whether to start it.
-    deferred: Option<Inbound>,
+    /// Messages that need Codex, waiting for the user to say whether to start it.
+    deferred: Vec<Inbound>,
+    /// The list the last reply showed: a bare number in the next message picks from it.
+    pick: Option<Pick>,
+    /// The folders `/dirs` showed, in order, so `/new N` gets the folder that was shown.
+    dirs: Vec<String>,
+    /// `saved` changed since it was last written.
+    dirty: bool,
+    /// Tests: messages are kept here instead of being sent.
+    outbox: Option<Vec<String>>,
     /// Codex's `model/list`, read once per Codex start.
     models: Option<Vec<Value>>,
+}
+
+/// A numbered list the bot just showed.
+#[derive(Debug, Clone, PartialEq)]
+enum Pick {
+    /// `/ls`: numbers are session numbers.
+    Sessions,
+    /// `/dirs`: numbers pick a folder for `/new`.
+    Dirs,
+    /// `/model`: numbers pick a model for this session (None: no session selected).
+    Models(Option<String>),
+}
+
+/// What a bare number means right after a list.
+fn pick_cmd(pick: &Pick, n: u32) -> (Cmd, Option<String>) {
+    match pick {
+        Pick::Sessions => (Cmd::Use { no: n, force: false }, None),
+        Pick::Dirs => (Cmd::New(Some(n.to_string())), None),
+        Pick::Models(thread) => (Cmd::Model(ModelCmd::Set(n.to_string())), thread.clone()),
+    }
 }
 
 fn thread_title(t: &Value) -> String {
@@ -99,7 +130,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: None, models: None }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, models: None }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -117,7 +148,11 @@ impl Bridge {
                 Event::Stop => break,
                 Event::Inbound(m) => self.on_inbound(m),
                 Event::StartCodex => self.start_codex_now(),
-                Event::Cursor(c) => self.save(|s| s.cursor = c),
+                Event::Cursor(c) => {
+                    if self.saved.cursor != c {
+                        self.save(|s| s.cursor = c);
+                    }
+                }
                 Event::Expired => {
                     set_state("expired", Some(l("WeChat signed the bot out. Scan the QR code again", "微信已让机器人下线，请重新扫码").into()));
                     super::RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -132,15 +167,25 @@ impl Bridge {
                 Event::CodexExited { generation } if generation == self.generation => self.on_codex_exit(),
                 _ => {}
             }
+            self.flush();
             self.publish();
         }
+        self.flush();
         self.stop_typing();
         self.codex = None;
         stats(|s| s.codex_exe = None);
     }
 
+    /// Changes the state; it is written once the current event is handled.
     fn save(&mut self, f: impl FnOnce(&mut Saved)) {
         f(&mut self.saved);
+        self.dirty = true;
+    }
+
+    fn flush(&mut self) {
+        if !std::mem::take(&mut self.dirty) {
+            return;
+        }
         let s = self.saved.clone();
         let run = self.run;
         // Keep fields the page changes (folder, switch) as they are in the file. A run that
@@ -188,6 +233,10 @@ impl Bridge {
     // ------------------------------------------------------------ sending
 
     fn send(&mut self, texts: Vec<String>, no: Option<u32>) {
+        if let Some(out) = &mut self.outbox {
+            out.extend(texts);
+            return;
+        }
         let ctx = self.saved.context_token.clone();
         let mut ids = vec![];
         for t in texts {
@@ -325,18 +374,19 @@ impl Bridge {
         Ok(())
     }
 
+    /// Whether Codex desktop (running when `desktop`) may have this session open: it
+    /// changed lately, and not through the bridge.
+    fn locked(&self, thread: &str, desktop: bool) -> bool {
+        let Some(live) = self.live.get(thread) else { return false };
+        let ours = self.saved.owned.get(thread).is_some_and(|t| live.updated <= t + 60);
+        desktop && !live.loaded && !ours && now() - live.updated < LOCK_WINDOW
+    }
+
     /// Why sending to this session could clash with Codex desktop, if it could.
     fn lock_reason(&self, thread: &str) -> Option<String> {
         let live = self.live.get(thread)?;
-        if live.loaded {
-            return None;
-        }
-        let ours = self.saved.owned.get(thread).is_some_and(|t| live.updated <= t + 60);
-        let age = now() - live.updated;
-        if ours || age >= LOCK_WINDOW || !crate::process::detect_codex().running {
-            return None;
-        }
-        Some(format::ago(live.updated, now()))
+        // Asks the system for Codex's process only when the rest of the rule holds.
+        (self.locked(thread, true) && crate::process::detect_codex().running).then(|| format::ago(live.updated, now()))
     }
 
     fn list(&mut self, n: usize) -> Result<String> {
@@ -359,7 +409,7 @@ impl Bridge {
             let mark = if self.saved.current.as_deref() == Some(id.as_str()) { "▶ " } else { "" };
             let state = if live.turn.is_some() {
                 " ⏳"
-            } else if desktop && live.updated > now() - LOCK_WINDOW && !self.saved.owned.get(&id).is_some_and(|o| live.updated <= o + 60) && !live.loaded {
+            } else if self.locked(&id, desktop) {
                 " 🔒"
             } else {
                 ""
@@ -372,7 +422,8 @@ impl Bridge {
             ));
         }
         lines.push(String::new());
-        lines.push(l("/use N switch · #N text send once · /new start one · 🔒 may be open in Codex", "/use 编号 切换 · #编号 消息 临时发送 · /new 新建 · 🔒 可能正开在 Codex 里").into());
+        lines.push(l("/use N or just N switch · #N text send once · /new start one · 🔒 may be open in Codex", "/use 编号（或直接回编号）切换 · #编号 消息 临时发送 · /new 新建 · 🔒 可能正开在 Codex 里").into());
+        self.pick = Some(Pick::Sessions);
         Ok(lines.join("\n"))
     }
 
@@ -404,7 +455,7 @@ impl Bridge {
         )?;
         let cwds: Vec<String> = v["data"].as_array().into_iter().flatten().filter_map(|t| t["cwd"].as_str().map(String::from)).collect();
         let default = super::load_saved().default_cwd.unwrap_or_else(|| super::fallback_cwd().to_string_lossy().into_owned());
-        Ok(distinct_dirs(cwds.iter().map(String::as_str).chain([default.as_str()]), DIRS, |p| std::path::Path::new(p).is_dir() || p == default))
+        Ok(with_default(distinct_dirs(cwds.iter().map(String::as_str), DIRS, |p| std::path::Path::new(p).is_dir()), &default, DIRS))
     }
 
     fn dirs_text(&mut self) -> Result<String> {
@@ -413,7 +464,9 @@ impl Bridge {
         for (i, d) in dirs.iter().enumerate() {
             lines.push(format!("{}. {} · {d}", i + 1, format::folder_name(d)));
         }
-        lines.push(l("/new N starts a session in folder N", "/new 编号 在对应目录新建会话").into());
+        lines.push(l("/new N (or just N) starts a session in folder N", "/new 编号（或直接回编号）在对应目录新建会话").into());
+        self.dirs = dirs;
+        self.pick = Some(Pick::Dirs);
         Ok(lines.join("\n"))
     }
 
@@ -421,7 +474,7 @@ impl Bridge {
         // `/new 2`: the second folder of `/dirs`.
         let path = match path.as_deref().map(str::trim).and_then(|p| p.parse::<usize>().ok()) {
             Some(n) => {
-                let dirs = self.recent_dirs()?;
+                let dirs = if self.dirs.is_empty() { self.recent_dirs()? } else { self.dirs.clone() };
                 Some(n.checked_sub(1).and_then(|i| dirs.get(i)).cloned().ok_or_else(|| {
                     anyhow!(tr!("There is no folder {n}. Send /dirs to see the list", "没有第 {n} 个目录。发 /dirs 查看列表"))
                 })?)
@@ -652,6 +705,7 @@ impl Bridge {
             )
             .into(),
         );
+        self.pick = Some(Pick::Models(thread));
         Ok(lines.join("\n"))
     }
 
@@ -705,14 +759,14 @@ impl Bridge {
             }
             return;
         }
-        let cmd = command::parse(&m.text);
+        let (cmd, target) = self.resolve(&m.text);
         if !self.codex.as_ref().is_some_and(|c| c.alive()) {
             // The answer to "Start Codex?".
-            if self.deferred.is_some() {
+            if !self.deferred.is_empty() {
                 match cmd {
                     Cmd::Approve { decision: Decision::Decline, .. } => {
-                        self.deferred = None;
-                        self.say(l("OK, Codex stays off.", "好的，先不启动 Codex。"));
+                        let n = std::mem::take(&mut self.deferred).len();
+                        self.say(trn!(n, "OK, Codex stays off; {n} message dropped.", "OK, Codex stays off; {n} messages dropped.", "好的，先不启动 Codex，{n} 条消息已取消。"));
                         return;
                     }
                     Cmd::Approve { .. } => return self.start_codex_now(),
@@ -720,22 +774,38 @@ impl Bridge {
                 }
             }
             if self.needs_codex(&cmd, &m) {
-                self.deferred = Some(m);
-                self.say(l(
-                    "Codex isn't running. Reply y to start it and run your message, or n to cancel.",
-                    "Codex 还没启动。回复 y 启动并执行刚才的消息，回复 n 取消。",
-                ));
+                self.deferred.push(m);
+                let n = self.deferred.len();
+                self.say(if n == 1 {
+                    l("Codex isn't running. Reply y to start it and run your message, or n to cancel.", "Codex 还没启动。回复 y 启动并执行刚才的消息，回复 n 取消。").to_string()
+                } else {
+                    tr!("Codex isn't running; {n} messages are waiting. Reply y to start it and run them in order, or n to cancel.", "Codex 还没启动，已有 {n} 条消息在等。回复 y 启动并按顺序执行，回复 n 全部取消。")
+                });
                 return;
             }
         }
-        self.handle(m, cmd);
+        self.handle(m, cmd, target);
+    }
+
+    /// The command a message asks for. A bare number right after a list picks from that list
+    /// (unless a session waits for an answer: then it is that answer). Also returns the
+    /// session a picked model is for.
+    fn resolve(&mut self, text: &str) -> (Cmd, Option<String>) {
+        let cmd = command::parse(text);
+        let pick = self.pick.take();
+        match (&cmd, pick, text.trim().parse::<u32>()) {
+            (Cmd::Text(_), Some(p), Ok(n)) if n > 0 && !self.pending.iter().any(|x| matches!(x.ask, Ask::Questions(_))) => pick_cmd(&p, n),
+            _ => (cmd, None),
+        }
     }
 
     /// Whether this message has to reach Codex (and so start it).
     fn needs_codex(&self, cmd: &Cmd, m: &Inbound) -> bool {
         match cmd {
             Cmd::Help | Cmd::Status | Cmd::Unknown(_) | Cmd::Stop(_) => false,
-            Cmd::List(_) | Cmd::Dirs | Cmd::Use { .. } | Cmd::New(_) | Cmd::To { .. } | Cmd::Model(_) | Cmd::Effort(_) => true,
+            Cmd::List(_) | Cmd::Dirs | Cmd::New(_) | Cmd::Model(_) | Cmd::Effort(_) => true,
+            // A session number that doesn't exist fails without Codex.
+            Cmd::Use { no, .. } | Cmd::To { no, .. } => self.thread_of(*no).is_some(),
             // Text only goes somewhere with a session to go to.
             Cmd::Text(_) | Cmd::Approve { .. } => self.saved.current.is_some() || self.session_of_quote(m).is_some_and(|n| self.thread_of(n).is_some()),
         }
@@ -743,20 +813,21 @@ impl Bridge {
 
     /// Starts Codex (asked from WeChat or the page), then runs the message that waited for it.
     fn start_codex_now(&mut self) {
-        let deferred = self.deferred.take();
+        let deferred = std::mem::take(&mut self.deferred);
         match self.codex().map(|_| ()) {
             Ok(()) => {
                 self.say(l("Codex started.", "Codex 已启动。"));
-                if let Some(m) = deferred {
-                    let cmd = command::parse(&m.text);
-                    self.handle(m, cmd);
+                for m in deferred {
+                    let (cmd, target) = self.resolve(&m.text);
+                    self.handle(m, cmd, target);
                 }
             }
             Err(e) => self.say(format!("❗ {e:#}")),
         }
     }
 
-    fn handle(&mut self, m: Inbound, cmd: Cmd) {
+    /// `target`: the session a model picked from `/model`'s list is for.
+    fn handle(&mut self, m: Inbound, cmd: Cmd, target: Option<String>) {
         let quoted = self.session_of_quote(&m);
         let r = match cmd {
             Cmd::Help => Ok(Some(help_text())),
@@ -771,7 +842,7 @@ impl Bridge {
                 Some(r) => r.map(Some),
                 None => self.route_text(m.text.trim().to_string(), quoted, false),
             },
-            Cmd::Model(c) => self.model_cmd(self.saved.current.clone(), c).map(Some),
+            Cmd::Model(c) => self.model_cmd(target.or_else(|| self.saved.current.clone()), c).map(Some),
             Cmd::Effort(e) => self.effort_cmd(self.saved.current.clone(), e).map(Some),
             Cmd::To { no, force, text } => match self.thread_of(no) {
                 // `#3 /model 2`: a model command for that session.
@@ -844,6 +915,9 @@ impl Bridge {
             },
         };
         let p = self.pending.remove(pick);
+        if d == Decision::Always && auto_reply(&p.ask).is_some() {
+            self.live.entry(p.thread.clone()).or_default().allow_all = true;
+        }
         let result = match &p.ask {
             Ask::Command | Ask::File => json!({ "decision": match d { Decision::Accept => "accept", Decision::Always => "acceptForSession", Decision::Decline => "decline" } }),
             Ask::Permissions(asked) => match d {
@@ -919,7 +993,7 @@ impl Bridge {
                 let id = &p["requestId"];
                 self.pending.retain(|x| &x.id != id);
             }
-            "error" if p["willRetry"] != true => log("error", p["error"]["message"].as_str().unwrap_or("Codex error")),
+            "error" if p["willRetry"] != true => log("error", p["error"]["message"].as_str().unwrap_or(l("Codex error", "Codex 出错"))),
             _ => {}
         }
     }
@@ -1035,6 +1109,16 @@ impl Bridge {
         };
         let Some((ask, mut body)) = ask else { return };
         let no = self.number(&thread);
+        if self.live.get(&thread).is_some_and(|l| l.allow_all) {
+            if let Some(reply) = auto_reply(&ask) {
+                if let Some(c) = &self.codex {
+                    let _ = c.respond(&id, reply);
+                }
+                let what = body.lines().skip(1).find(|l| !l.trim().is_empty()).or_else(|| body.lines().next()).unwrap_or("").trim().to_string();
+                self.note(&thread, &tr!("✅ Allowed #{no} (allowed for this session): {what}", "✅ 已自动允许 #{no}（本会话都允许）：{what}"));
+                return;
+            }
+        }
         if !matches!(ask, Ask::Questions(_)) {
             body.push_str(&tr!("\n\nReply y{no} to allow · a{no} allow for this session · n{no} decline", "\n\n回复 y{no} 允许 · a{no} 本会话都允许 · n{no} 拒绝"));
         }
@@ -1099,13 +1183,25 @@ fn help_text() -> String {
     .to_string()
 }
 
-/// Each folder once (any case on Windows, trailing slashes ignored), in order, up to
-/// `limit`, keeping only those `keep` accepts.
+/// A folder for comparing: any case on Windows, trailing slashes ignored.
+fn dir_key(p: &str) -> String {
+    let p = p.trim().trim_end_matches(['/', '\\']);
+    if cfg!(windows) { p.replace('/', "\\").to_lowercase() } else { p.to_string() }
+}
+
+/// `dirs` with `default` always in it: last, taking the place of the oldest when full.
+fn with_default(mut dirs: Vec<String>, default: &str, limit: usize) -> Vec<String> {
+    if !dirs.iter().any(|d| dir_key(d) == dir_key(default)) {
+        dirs.truncate(limit.saturating_sub(1));
+        dirs.push(default.to_string());
+    }
+    dirs
+}
+
+/// Each folder once (see `dir_key`), in order, up to `limit`, keeping only those `keep`
+/// accepts.
 fn distinct_dirs<'a>(dirs: impl Iterator<Item = &'a str>, limit: usize, keep: impl Fn(&str) -> bool) -> Vec<String> {
-    let key = |p: &str| {
-        let p = p.trim().trim_end_matches(['/', '\\']);
-        if cfg!(windows) { p.replace('/', "\\").to_lowercase() } else { p.to_string() }
-    };
+    let key = dir_key;
     let mut seen = std::collections::HashSet::new();
     let mut out = vec![];
     for d in dirs {
@@ -1168,6 +1264,14 @@ fn set_default_model(name: &str) -> Result<()> {
 }
 
 /// Grants what was asked (fields left out stay unchanged).
+/// The answer to an approval once its session is allowed throughout, or None when it still asks.
+fn auto_reply(ask: &Ask) -> Option<Value> {
+    match ask {
+        Ask::Command | Ask::File => Some(json!({ "decision": "acceptForSession" })),
+        Ask::Permissions(_) | Ask::Questions(_) => None,
+    }
+}
+
 fn granted(asked: &Value) -> Value {
     let mut out = serde_json::Map::new();
     for k in ["network", "fileSystem"] {
@@ -1207,6 +1311,15 @@ mod tests {
         assert_eq!(thread_title(&json!({ "name": "Fix updater", "preview": "hi" })), "Fix updater");
         assert_eq!(thread_title(&json!({ "name": null, "preview": "first line\nsecond" })), "first line");
         assert_eq!(thread_title(&json!({})), "");
+    }
+
+    #[test]
+    fn allowing_a_session_covers_commands_and_files_only() {
+        let yes = json!({ "decision": "acceptForSession" });
+        assert_eq!(auto_reply(&Ask::Command), Some(yes.clone()));
+        assert_eq!(auto_reply(&Ask::File), Some(yes));
+        assert_eq!(auto_reply(&Ask::Permissions(json!({ "network": { "enabled": true } }))), None);
+        assert_eq!(auto_reply(&Ask::Questions(vec![])), None);
     }
 
     #[test]
@@ -1260,6 +1373,115 @@ mod tests {
             assert_eq!(got, vec![r"C:\code\a", r"C:\code\b\", "C:/code/c"]);
         }
         assert_eq!(distinct_dirs(dirs.into_iter(), 1, |_| true), vec![r"C:\code\a"]);
+    }
+
+    /// A bridge for user "me" that keeps what it would send, with Codex not running.
+    fn bridge() -> Bridge {
+        let wx = ilink::Client::new("http://127.0.0.1:9", None).unwrap();
+        let (tx, _rx) = mpsc::channel();
+        let mut b = Bridge::new(wx, "me".into(), Saved::default(), tx);
+        b.outbox = Some(vec![]);
+        b
+    }
+
+    fn msg(text: &str) -> Inbound {
+        Inbound { from: "me".into(), text: text.into(), ..Default::default() }
+    }
+
+    fn sent(b: &mut Bridge) -> Vec<String> {
+        std::mem::take(b.outbox.as_mut().unwrap())
+    }
+
+    #[test]
+    fn a_bare_number_picks_from_the_last_list() {
+        let _h = crate::util::TestHome::new("wechat-pick");
+        let mut b = bridge();
+        assert_eq!(b.resolve("9").0, Cmd::Text("9".into()));
+        b.pick = Some(Pick::Sessions);
+        assert_eq!(b.resolve(" 9 ").0, Cmd::Use { no: 9, force: false });
+        // Only the next message.
+        assert_eq!(b.resolve("9").0, Cmd::Text("9".into()));
+        b.pick = Some(Pick::Dirs);
+        assert_eq!(b.resolve("2").0, Cmd::New(Some("2".into())));
+        b.pick = Some(Pick::Models(Some("t1".into())));
+        assert_eq!(b.resolve("3"), (Cmd::Model(ModelCmd::Set("3".into())), Some("t1".into())));
+        b.pick = Some(Pick::Sessions);
+        assert_eq!(b.resolve("0").0, Cmd::Text("0".into()));
+        b.pick = Some(Pick::Sessions);
+        assert_eq!(b.resolve("hi").0, Cmd::Text("hi".into()));
+        // A session asking a question gets the number as its answer.
+        b.pending.push(Pending { id: json!(1), thread: "t1".into(), ask: Ask::Questions(vec![]) });
+        b.pick = Some(Pick::Sessions);
+        assert_eq!(b.resolve("2").0, Cmd::Text("2".into()));
+    }
+
+    #[test]
+    fn needs_codex_only_for_sessions_that_exist() {
+        let _h = crate::util::TestHome::new("wechat-needs");
+        let mut b = bridge();
+        b.saved.numbers.insert(3, "t3".into());
+        let m = msg("x");
+        assert!(!b.needs_codex(&Cmd::Use { no: 99, force: false }, &m));
+        assert!(b.needs_codex(&Cmd::Use { no: 3, force: false }, &m));
+        assert!(!b.needs_codex(&Cmd::To { no: 99, force: false, text: "x".into() }, &m));
+        assert!(!b.needs_codex(&Cmd::Help, &m) && !b.needs_codex(&Cmd::Status, &m));
+        // Text with no session to go to is answered with a hint, without Codex.
+        assert!(!b.needs_codex(&Cmd::Text("x".into()), &m));
+        b.saved.current = Some("t3".into());
+        assert!(b.needs_codex(&Cmd::Text("x".into()), &m));
+    }
+
+    #[test]
+    fn messages_wait_for_codex_in_order_and_n_drops_them() {
+        let _h = crate::util::TestHome::new("wechat-defer");
+        let mut b = bridge();
+        b.on_inbound(msg("/ls"));
+        assert_eq!(b.deferred.len(), 1);
+        assert!(sent(&mut b)[0].contains("回复 y 启动"));
+        b.on_inbound(msg("/dirs"));
+        assert_eq!(b.deferred.iter().map(|m| m.text.as_str()).collect::<Vec<_>>(), ["/ls", "/dirs"]);
+        assert!(sent(&mut b)[0].contains("已有 2 条消息在等"));
+        // Commands that don't need Codex still answer right away.
+        b.on_inbound(msg("/help"));
+        assert!(sent(&mut b)[0].contains("/model"));
+        assert_eq!(b.deferred.len(), 2);
+        b.on_inbound(msg("n"));
+        assert!(b.deferred.is_empty());
+        assert!(sent(&mut b)[0].contains("2 条消息已取消"));
+        // Someone else's message is ignored.
+        b.on_inbound(Inbound { from: "other".into(), text: "/ls".into(), ..Default::default() });
+        assert!(b.deferred.is_empty() && sent(&mut b).is_empty());
+    }
+
+    #[test]
+    fn locks_sessions_codex_desktop_may_have_open() {
+        let _h = crate::util::TestHome::new("wechat-lock");
+        let mut b = bridge();
+        b.live.insert("t".into(), Live { updated: now() - 60, ..Default::default() });
+        assert!(b.locked("t", true));
+        assert!(!b.locked("t", false));
+        b.saved.owned.insert("t".into(), now() - 100);
+        assert!(!b.locked("t", true), "changed by the bridge itself");
+        b.saved.owned.clear();
+        b.live.get_mut("t").unwrap().updated = now() - LOCK_WINDOW - 1;
+        assert!(!b.locked("t", true), "too long ago");
+        assert!(!b.locked("unknown", true));
+    }
+
+    #[test]
+    fn the_default_folder_is_always_listed() {
+        let ten: Vec<String> = (0..10).map(|i| format!("C:/p{i}")).collect();
+        let got = with_default(ten.clone(), "C:/home", 10);
+        assert_eq!(got.len(), 10);
+        assert_eq!(got.last().map(String::as_str), Some("C:/home"));
+        assert_eq!(got[8], "C:/p8");
+        // Already there (another spelling on Windows): unchanged.
+        let mut with = ten[..3].to_vec();
+        with.push("C:/home/".into());
+        if cfg!(windows) {
+            assert_eq!(with_default(with.clone(), "c:\\HOME", 10), with);
+        }
+        assert_eq!(with_default(vec![], "C:/home", 10), vec!["C:/home"]);
     }
 
     #[test]
