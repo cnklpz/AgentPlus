@@ -9,7 +9,7 @@ import { flushSync } from "react-dom";
 import { dragSort, markReordered } from "../dragSort";
 import { moveItem } from "../order";
 
-export type Page = "providers" | "mcp" | "skills" | "gateway" | "history" | "sync" | "settings";
+export type Page = "providers" | "mcp" | "skills" | "gateway" | "wechat" | "history" | "sync" | "settings";
 
 interface Props {
   agents: AgentState[];
@@ -52,6 +52,7 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
     ...(showMcp ? [["mcp", "sidebar.mcp", <Icon.plug key="m" />] as [Page, TKey, JSX.Element]] : []),
     ...(showSkills ? [["skills", "sidebar.skills", <Icon.book key="s" />] as [Page, TKey, JSX.Element]] : []),
     ["gateway", "sidebar.gateway", <Icon.gateway key="g" />],
+    ["wechat", "sidebar.wechat", <Icon.chat key="w" />],
     ["history", "sidebar.history", <Icon.history key="h" />],
     ["sync", "sidebar.sync", <Icon.cloud key="c" />],
   ];

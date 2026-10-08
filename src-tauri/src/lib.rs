@@ -30,6 +30,7 @@ mod sync;
 mod tray;
 mod update;
 mod util;
+mod wechat;
 
 use model::*;
 use tauri::Manager;
@@ -834,9 +835,62 @@ async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>, purpos
     let title = match purpose.as_deref() {
         Some("sync") => i18n::l("Choose sync folder", "选择同步文件夹"),
         Some("skill") => i18n::l("Choose a skill folder", "选择技能文件夹"),
+        Some("wechat") => i18n::l("Choose the folder for new sessions", "选择新会话的目录"),
         _ => i18n::l("Choose project folder", "选择项目文件夹"),
     };
     blocking(move || projects::pick_folder(owner, start.as_deref(), title)).await
+}
+
+#[tauri::command]
+async fn wechat_status() -> Result<wechat::Status, String> {
+    blocking(|| Ok(wechat::status())).await
+}
+
+#[tauri::command]
+async fn wechat_set_enabled(on: bool) -> Result<wechat::Status, String> {
+    blocking(move || {
+        wechat::set_enabled(on)?;
+        Ok(wechat::status())
+    })
+    .await
+}
+
+/// Fetches a sign-in QR code; the page polls `wechat_status` for the result.
+#[tauri::command]
+async fn wechat_login_start() -> Result<wechat::Status, String> {
+    blocking(|| {
+        wechat::login_start()?;
+        Ok(wechat::status())
+    })
+    .await
+}
+
+#[tauri::command]
+fn wechat_login_verify(code: String) {
+    wechat::login_verify(code)
+}
+
+#[tauri::command]
+fn wechat_login_cancel() {
+    wechat::login_cancel()
+}
+
+#[tauri::command]
+async fn wechat_unbind() -> Result<wechat::Status, String> {
+    blocking(|| {
+        wechat::unbind()?;
+        Ok(wechat::status())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn wechat_set_default_cwd(path: Option<String>) -> Result<wechat::Status, String> {
+    blocking(move || {
+        wechat::set_default_cwd(path)?;
+        Ok(wechat::status())
+    })
+    .await
 }
 
 /// Panics (a worker thread, the gateway) go to the diagnostic log before the default report.
@@ -941,6 +995,7 @@ pub fn run() {
             setup_links(app);
             // Off the startup path: binding the port and stopping an old listener can wait.
             std::thread::spawn(gateway::server::autostart);
+            std::thread::spawn(wechat::autostart);
             // macOS: ask the login shell for PATH now, before the first detection needs it.
             std::thread::spawn(process::search_path);
             // models.dev's catalog, for filling in new models' settings (refreshed weekly).
@@ -1065,6 +1120,13 @@ pub fn run() {
             parse_import_link,
             ccswitch_link_status,
             set_ccswitch_link,
+            wechat_status,
+            wechat_set_enabled,
+            wechat_login_start,
+            wechat_login_verify,
+            wechat_login_cancel,
+            wechat_unbind,
+            wechat_set_default_cwd,
             update::update_check,
             update::update_install
         ])
@@ -1078,6 +1140,7 @@ pub fn run() {
             }
             if let tauri::RunEvent::Exit = event {
                 process::end_own_servers();
+                wechat::shutdown();
             }
         });
 }

@@ -37,6 +37,7 @@ import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
 import { AgentSkillsTab, SkillsPage } from "./components/SkillsPage";
 import { SyncPage } from "./components/SyncPage";
+import { WechatPage } from "./components/WechatPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
 import { CodexTimezone } from "./components/CodexTimezone";
@@ -1553,6 +1554,7 @@ export default function App() {
       ...(prefs.showMcp ? [{ label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") }] : []),
       ...(prefs.showSkills ? [{ label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") }] : []),
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
+      { label: t("app.navWechat"), icon: <Icon.chat size={13} />, disabled: page === "wechat", action: () => setPage("wechat") },
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
       "sep",
@@ -1660,6 +1662,7 @@ export default function App() {
         {page === "skills" && prefs.showSkills && <SkillsPage agents={listed} flash={flash} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
+        {page === "wechat" && <WechatPage flash={flash} />}
         {page === "settings" && (
           <SettingsPage
             tab={settingsTab}

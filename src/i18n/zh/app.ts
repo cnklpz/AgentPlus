@@ -146,6 +146,7 @@ const zh: typeof en = {
   gatewayTurnOff: "关闭本地网关",
   gatewayTurnOn: "开启本地网关",
   navGateway: "本地网关",
+  navWechat: "微信",
   navHistory: "历史与回滚",
   navSettings: "AgentPlus 设置",
   privacyOnToast: "已开启隐私模式",

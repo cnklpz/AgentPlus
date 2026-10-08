@@ -37,6 +37,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-deep-link = "~2.4"
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 ring = "0.17"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

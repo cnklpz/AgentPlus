@@ -326,6 +326,44 @@ export interface GatewayMinute {
   agents: Record<string, GatewayAgentUse>;
 }
 
+/** One line of the WeChat bridge's recent activity. */
+export interface WechatLogLine {
+  at: number;
+  kind: "in" | "out" | "info" | "error";
+  text: string;
+}
+
+/** A numbered Codex session the WeChat bridge is using. */
+export interface WechatSession {
+  no: number;
+  title: string;
+  cwd: string;
+  state: "idle" | "running" | "waiting";
+  queued: number;
+  current: boolean;
+}
+
+export interface WechatLogin {
+  state: "wait" | "scanned" | "needCode" | "badCode" | "done" | "failed";
+  qrSvg: string | null;
+  message: string | null;
+}
+
+export interface WechatStatus {
+  enabled: boolean;
+  bound: boolean;
+  state: "off" | "starting" | "running" | "expired" | "error";
+  error: string | null;
+  botId: string | null;
+  userId: string | null;
+  boundAt: number | null;
+  defaultCwd: string | null;
+  codexReady: boolean;
+  login: WechatLogin | null;
+  sessions: WechatSession[];
+  log: WechatLogLine[];
+}
+
 export interface GatewayStatus {
   enabled: boolean;
   running: boolean;
@@ -1034,6 +1072,15 @@ const real = {
   codexBuiltinCommit: () => invoke<FetchedModel[]>("codex_builtin_commit"),
   codexBuiltinDiscard: () => invoke<void>("codex_builtin_discard"),
   officialCancel: () => invoke<void>("codex_official_cancel"),
+  wechatStatus: () => invoke<WechatStatus>("wechat_status"),
+  wechatSetEnabled: (on: boolean) => invoke<WechatStatus>("wechat_set_enabled", { on }),
+  /** Shows a sign-in QR code; poll `wechatStatus` for the result. */
+  wechatLoginStart: () => invoke<WechatStatus>("wechat_login_start"),
+  /** The number WeChat shows on the phone, when asked for. */
+  wechatLoginVerify: (code: string) => invoke<void>("wechat_login_verify", { code }),
+  wechatLoginCancel: () => invoke<void>("wechat_login_cancel"),
+  wechatUnbind: () => invoke<WechatStatus>("wechat_unbind"),
+  wechatSetDefaultCwd: (path: string | null) => invoke<WechatStatus>("wechat_set_default_cwd", { path }),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
   gatewaySaveRoute: (route: GatewayRoute, oldId: string | null) => invoke<GatewayStatus>("gateway_save_route", { route, oldId }),
@@ -1049,7 +1096,7 @@ const real = {
   projectOpen: (path: string) => invoke<ProjectEntry>("project_open", { path }),
   projectForget: (path: string) => invoke<void>("project_forget", { path }),
   /** Native folder dialog; `purpose` sets its title. null when cancelled. */
-  pickFolder: (start: string | null, purpose?: "sync" | "skill") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
+  pickFolder: (start: string | null, purpose?: "sync" | "skill" | "wechat") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
   /** Import links that came in since the last call (the backend keeps them until then). */
   takeImports: () => invoke<ImportItem[]>("take_imports"),
   parseImportLink: (link: string) => invoke<ImportItem>("parse_import_link", { link }),
@@ -1227,6 +1274,20 @@ async function demoProject(agent: string): Promise<AgentState> {
   };
 }
 
+const demoWechat: WechatStatus = {
+  enabled: true, bound: true, state: "running", error: null, botId: "a1b2c3@im.bot", userId: "o9x8y7@im.wechat", boundAt: 1791300000,
+  defaultCwd: "D:\\xm", codexReady: true, login: null,
+  sessions: [
+    { no: 4, title: "Fix the updater", cwd: "D:\\xm\\AgentPlus", state: "running", queued: 1, current: true },
+    { no: 2, title: "Blog post draft", cwd: "D:\\xm\\blog", state: "waiting", queued: 0, current: false },
+  ],
+  log: [
+    { at: 1791430000000, kind: "out", text: "【#2 Blog post draft】\n⚠️ 要执行命令：npm run build" },
+    { at: 1791429990000, kind: "in", text: "跑一下测试" },
+    { at: 1791429900000, kind: "info", text: "已连接微信" },
+  ],
+};
+
 const demo: typeof real = {
   listAgents: fixture,
   getAgent: async (agent) => (isProjectId(agent) ? demoProject(agent) : (await fixture()).find((a) => a.id === agent)!),
@@ -1288,6 +1349,13 @@ const demo: typeof real = {
   fetchModels: async () => ["gpt-5.6-sol", "gpt-5.6-luna", "deepseek-v4-pro", "kimi-k3", "glm-5.3", "qwen3.8-max"],
   fetchModelsUrl: async () => ["deepseek-v4-pro", "kimi-k3", "glm-5.3"],
   fetchModelsLib: async () => ["glm-5", "glm-5.3", "kimi-k3"],
+  wechatStatus: async () => demoWechat,
+  wechatSetEnabled: async (on) => { demoWechat.enabled = on; demoWechat.state = on ? "running" : "off"; return demoWechat; },
+  wechatLoginStart: async () => demoWechat,
+  wechatLoginVerify: async () => undefined,
+  wechatLoginCancel: async () => undefined,
+  wechatUnbind: async () => { Object.assign(demoWechat, { bound: false, enabled: false, state: "off", botId: null, userId: null, sessions: [] }); return demoWechat; },
+  wechatSetDefaultCwd: async (path) => { demoWechat.defaultCwd = path; return demoWechat; },
   gatewayModels: async () => ["glm-5", "glm-5.3", "kimi-k3"],
   guessModels: async (_agent, ids) =>
     Object.fromEntries(ids.filter((id) => /^(glm|kimi|deepseek|gpt|qwen)/i.test(id)).map((id) => [id, { context: 200000, extra: {}, matched: id.toLowerCase(), source: "builtin" as const }])),
