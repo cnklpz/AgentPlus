@@ -90,6 +90,8 @@ pub struct Bridge {
     run: u64,
     /// Messages that need Codex, waiting for the user to say whether to start it.
     deferred: Vec<Inbound>,
+    /// Session messages accepted before Codex stopped, waiting for a restart.
+    retry: Vec<(String, String)>,
     /// The list the last reply showed: a bare number in the next message picks from it.
     pick: Option<Pick>,
     /// The folders `/dirs` showed, in order, so `/new N` gets the folder that was shown.
@@ -130,7 +132,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, models: None }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, models: None }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -155,6 +157,7 @@ impl Bridge {
                 }
                 Event::Expired => {
                     set_state("expired", Some(l("WeChat signed the bot out. Scan the QR code again", "微信已让机器人下线，请重新扫码").into()));
+                    set_sessions(vec![], false);
                     super::RUN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     break;
                 }
@@ -217,7 +220,7 @@ impl Bridge {
                     title: live.map(|l| l.title.clone()).unwrap_or_default(),
                     cwd: live.map(|l| l.cwd.clone()).unwrap_or_default(),
                     state: if waiting { "waiting" } else if live.is_some_and(|l| l.turn.is_some()) { "running" } else { "idle" },
-                    queued: live.map(|l| l.queue.len()).unwrap_or(0),
+                    queued: live.map(|l| l.queue.len()).unwrap_or(0) + self.retry.iter().filter(|(thread, _)| thread == t).count(),
                     current: self.saved.current.as_ref() == Some(t),
                     model: live.map(|l| l.model.clone()).unwrap_or_default(),
                     effort: live.map(|l| l.effort.clone()).unwrap_or_default(),
@@ -762,10 +765,10 @@ impl Bridge {
         let (cmd, target) = self.resolve(&m.text);
         if !self.codex.as_ref().is_some_and(|c| c.alive()) {
             // The answer to "Start Codex?".
-            if !self.deferred.is_empty() {
+            if !self.deferred.is_empty() || !self.retry.is_empty() {
                 match cmd {
                     Cmd::Approve { decision: Decision::Decline, .. } => {
-                        let n = std::mem::take(&mut self.deferred).len();
+                        let n = std::mem::take(&mut self.deferred).len() + std::mem::take(&mut self.retry).len();
                         self.say(trn!(n, "OK, Codex stays off; {n} message dropped.", "OK, Codex stays off; {n} messages dropped.", "好的，先不启动 Codex，{n} 条消息已取消。"));
                         return;
                     }
@@ -775,7 +778,7 @@ impl Bridge {
             }
             if self.needs_codex(&cmd, &m) {
                 self.deferred.push(m);
-                let n = self.deferred.len();
+                let n = self.deferred.len() + self.retry.len();
                 self.say(if n == 1 {
                     l("Codex isn't running. Reply y to start it and run your message, or n to cancel.", "Codex 还没启动。回复 y 启动并执行刚才的消息，回复 n 取消。").to_string()
                 } else {
@@ -814,6 +817,7 @@ impl Bridge {
     /// Starts Codex (asked from WeChat or the page), then runs the message that waited for it.
     fn start_codex_now(&mut self) {
         let deferred = std::mem::take(&mut self.deferred);
+        let retry = std::mem::take(&mut self.retry);
         match self.codex().map(|_| ()) {
             Ok(()) => {
                 self.say(l("Codex started.", "Codex 已启动。"));
@@ -821,8 +825,21 @@ impl Bridge {
                     let (cmd, target) = self.resolve(&m.text);
                     self.handle(m, cmd, target);
                 }
+                let mut failed = vec![];
+                for (thread, text) in retry {
+                    if let Err(e) = self.send_to(&thread, text.clone(), false) {
+                        self.say(format!("❗ {e:#}"));
+                        failed.push((thread, text));
+                    }
+                }
+                self.retry = failed;
             }
-            Err(e) => self.say(format!("❗ {e:#}")),
+            Err(e) => {
+                // Starting Codex is retryable; keep the messages that were waiting for it.
+                self.deferred = deferred;
+                self.retry = retry;
+                self.say(format!("❗ {e:#}"));
+            }
         }
     }
 
@@ -1027,6 +1044,7 @@ impl Bridge {
         self.say_from(thread, &body);
         if !queued.is_empty() {
             if let Err(e) = self.start_turn(thread, queued.join("\n\n")) {
+                self.live.entry(thread.to_string()).or_default().queue = queued;
                 self.say(format!("❗ {e:#}"));
             }
         }
@@ -1133,14 +1151,35 @@ impl Bridge {
         self.codex = None;
         stats(|s| s.codex_exe = None);
         self.pending.clear();
-        let running: Vec<String> = self.live.iter_mut().filter_map(|(t, l)| {
+        let mut running = vec![];
+        let mut queued = vec![];
+        let mut queued_counts = vec![];
+        for (t, l) in &mut self.live {
             l.loaded = false;
-            l.queue.clear();
-            l.turn.take().map(|_| t.clone())
-        }).collect();
+            if l.turn.take().is_some() {
+                running.push(t.clone());
+            }
+            let texts = std::mem::take(&mut l.queue);
+            if !texts.is_empty() {
+                queued_counts.push((t.clone(), texts.len()));
+                queued.extend(texts.into_iter().map(|text| (t.clone(), text)));
+            }
+        }
+        self.retry.extend(queued);
         log("error", l("Codex stopped", "Codex 已退出"));
         for t in running {
             self.note(&t, l("❗ Codex stopped unexpectedly; this turn was lost. Send the message again to retry.", "❗ Codex 意外退出，这一轮没有完成。重新发送消息即可重试。"));
+        }
+        for (t, n) in queued_counts {
+            self.note(
+                &t,
+                &trn!(
+                    n,
+                    "❗ Codex stopped before {n} queued message could run. Reply y to restart and retry it, or n to cancel.",
+                    "❗ Codex stopped before {n} queued messages could run. Reply y to restart and retry them, or n to cancel.",
+                    "❗ Codex 在 {n} 条排队消息执行前退出了。回复 y 重启并重试，回复 n 取消。"
+                ),
+            );
         }
         self.stop_typing();
     }
@@ -1451,6 +1490,22 @@ mod tests {
         // Someone else's message is ignored.
         b.on_inbound(Inbound { from: "other".into(), text: "/ls".into(), ..Default::default() });
         assert!(b.deferred.is_empty() && sent(&mut b).is_empty());
+    }
+
+    #[test]
+    fn codex_exit_keeps_queued_messages_for_retry() {
+        let _h = crate::util::TestHome::new("wechat-retry");
+        let mut b = bridge();
+        b.saved.numbers.insert(1, "t1".into());
+        b.live.insert("t1".into(), Live { queue: vec!["one".into(), "two".into()], ..Default::default() });
+
+        b.on_codex_exit();
+
+        assert_eq!(b.retry, vec![("t1".into(), "one".into()), ("t1".into(), "two".into())]);
+        assert!(sent(&mut b).iter().any(|text| text.contains("排队消息")));
+        // The start prompt counts the messages waiting for a retry too.
+        b.on_inbound(msg("/ls"));
+        assert!(sent(&mut b)[0].contains("已有 3 条消息在等"));
     }
 
     #[test]

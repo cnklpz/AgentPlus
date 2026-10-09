@@ -359,13 +359,22 @@ fn poll_loop(wx: ilink::Client, run: u64, tx: mpsc::Sender<Event>) {
                 if let Some(ms) = v["longpolling_timeout_ms"].as_u64().filter(|ms| *ms > 0) {
                     hold = Duration::from_millis(ms.min(120_000));
                 }
-                if let Some(c) = v["get_updates_buf"].as_str().filter(|c| !c.is_empty()) {
-                    cursor = c.to_string();
-                    let _ = tx.send(Event::Cursor(cursor.clone()));
-                }
+                // Queue the messages before advancing the durable cursor. If the bridge is
+                // stopped or crashes between these events, leaving the old cursor causes the
+                // relay to deliver the batch again; advancing it first would lose the batch.
+                let mut sent_all = true;
                 for m in v["msgs"].as_array().into_iter().flatten() {
                     if let Some(i) = ilink::parse_message(m) {
-                        let _ = tx.send(Event::Inbound(i));
+                        if tx.send(Event::Inbound(i)).is_err() {
+                            sent_all = false;
+                            break;
+                        }
+                    }
+                }
+                if sent_all {
+                    if let Some(c) = v["get_updates_buf"].as_str().filter(|c| !c.is_empty()) {
+                        cursor = c.to_string();
+                        let _ = tx.send(Event::Cursor(cursor.clone()));
                     }
                 }
             }

@@ -91,8 +91,12 @@ impl AppServer {
                     }
                 }
                 alive.store(false, Ordering::SeqCst);
-                // Wake whoever still waits for an answer.
-                crate::util::lock(&pending).clear();
+                // Wake whoever still waits for an answer instead of leaving the bridge blocked
+                // until each request's timeout.
+                let waiting = std::mem::take(&mut *crate::util::lock(&pending));
+                for tx in waiting.into_values() {
+                    let _ = tx.send(Err(crate::i18n::l("Codex stopped", "Codex 已退出").into()));
+                }
                 let _ = events.send(Event::CodexExited { generation });
             })?;
         }
