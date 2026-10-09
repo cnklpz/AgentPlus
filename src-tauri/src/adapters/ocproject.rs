@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn project_ids() {
-        assert!(is_project(&agent_id(r"D:\xm\demo")));
+        assert!(is_project(&agent_id(r"C:\code\demo")));
         assert!(!is_project("opencode"));
         assert!(dir_of("opencode@").is_err());
     }

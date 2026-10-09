@@ -47,6 +47,8 @@ export default {
   showMcpHint: "Off: hides the MCP page and each agent's MCP tab. Configs are not changed",
   showSkills: "Show skills",
   showSkillsHint: "Off: hides the skills page and each agent's skills tab. Skills are not changed",
+  showClaw: "Show Claw bridge",
+  showClawHint: "Off: hides the Claw bridge page. A bridge that is on keeps running",
   showPlugins: "Show plugins",
   showPluginsHint: "Off: hides each agent's plugins tab. Plugins are not changed",
   closeAction: "When closing the window",

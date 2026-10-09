@@ -33,7 +33,7 @@ describe("bundled bank", () => {
   it("loads and validates", async () => {
     const b = await loadBank();
     expect(b.models.map((m) => m.id)).toEqual(bank.models.map((m) => m.id));
-    expect(b.models).toHaveLength(16);
+    expect(b.models).toHaveLength(18);
     expect(new Set(b.models.map((m) => m.family))).toEqual(new Set(["gpt", "claude"]));
   });
 });

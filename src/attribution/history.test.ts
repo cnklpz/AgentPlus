@@ -32,7 +32,7 @@ describe("history entries", () => {
     expect(rank).toBeGreaterThan(1);
     expect(e.scores!.own).toEqual({ probability: want[rank - 1].probability, rank });
     expect(e.scores!.top.map((x) => x.model)).toEqual(want.slice(0, 3).map((x) => x.model));
-    expect(e.scores!.candidates).toBe(16);
+    expect(e.scores!.candidates).toBe(18);
     expect(e.scores!.calibration.queries).toBe("3");
     expect([e.model, e.candidate, e.provider, e.forward, e.bank]).toEqual(["openai/gpt-5.4", "gpt-5.4", "relay", null, BANK_SOURCE.commit]);
     expect(outcome(e)).toBe("complete");

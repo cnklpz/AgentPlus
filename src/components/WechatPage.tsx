@@ -1,0 +1,279 @@
+import { type ReactNode, useEffect, useState } from "react";
+import { type WechatSession, type WechatStatus, api } from "../api";
+import { Icon } from "./icons";
+import { ErrorBox, SettingRow, Switch } from "./controls";
+import { ask } from "./Confirm";
+import { locale, t, type TKey, tn, useLang } from "../i18n";
+import { scrub } from "../privacy";
+import { errText, type Flash } from "../util";
+import { fmtAgo } from "../format";
+
+const STATE: Record<WechatStatus["state"], [TKey, string]> = {
+  running: ["wechatPage.stateRunning", "chip-ok"],
+  starting: ["wechatPage.stateStarting", "chip-muted"],
+  off: ["wechatPage.stateOff", "chip-muted"],
+  expired: ["wechatPage.stateExpired", "chip-bad"],
+  error: ["wechatPage.stateError", "chip-bad"],
+};
+
+const LOGIN: Record<string, TKey> = {
+  wait: "wechatPage.qrWait",
+  scanned: "wechatPage.qrScanned",
+  needCode: "wechatPage.qrNeedCode",
+  badCode: "wechatPage.qrBadCode",
+  done: "wechatPage.qrDone",
+  failed: "wechatPage.qrFailed",
+};
+
+const SESSION: Record<WechatSession["state"], TKey> = {
+  idle: "wechatPage.idle",
+  running: "wechatPage.running",
+  waiting: "wechatPage.waiting",
+};
+
+/** Command (text, or the key of a translated one), then the key of what it does. */
+const COMMANDS: [string | { k: TKey }, TKey][] = [
+  ["/ls", "wechatPage.cmdLs"],
+  ["/use 3", "wechatPage.cmdUse"],
+  ["/dirs", "wechatPage.cmdDirs"],
+  ["/new 2", "wechatPage.cmdNewPick"],
+  [{ k: "wechatPage.cmdNewSyntax" }, "wechatPage.cmdNew"],
+  ["#3 …", "wechatPage.cmdTo"],
+  ["/stop 3", "wechatPage.cmdStop"],
+  ["/status", "wechatPage.cmdStatus"],
+  ["/model 2", "wechatPage.cmdModel"],
+  ["/effort high", "wechatPage.cmdEffort"],
+  ["/model default 2", "wechatPage.cmdModelDefault"],
+  ["y3 · a3 · n3", "wechatPage.cmdApprove"],
+];
+
+const time = (ms: number) => new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+/** `onAside`: whether the page shows its right pane (once connected), for the layout. */
+export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boolean) => void }) {
+  const lang = useLang();
+  const [st, setSt] = useState<WechatStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [code, setCode] = useState("");
+
+  // Sign-in and the bridge run in the background: follow them while the page is open.
+  // Backend text (errors, log lines) follows the language too.
+  useEffect(() => {
+    let live = true;
+    const load = () => api.wechatStatus().then((s) => { if (live) setSt(s); }, () => undefined);
+    void load();
+    const timer = window.setInterval(load, 1500);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [lang]);
+
+  const run = async (f: () => Promise<WechatStatus | void>) => {
+    setBusy(true);
+    try {
+      const s = await f();
+      if (s) setSt(s);
+    } catch (e) {
+      flash(errText(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const connect = () => run(() => { setCode(""); return api.wechatLoginStart(); });
+  const cancelLogin = () => run(async () => { await api.wechatLoginCancel(); return api.wechatStatus(); });
+  const sendCode = () => { if (code.trim()) void run(async () => { await api.wechatLoginVerify(code.trim()); setCode(""); }); };
+  const disconnect = async () => {
+    if (await ask({ title: t("wechatPage.disconnectTitle"), message: t("wechatPage.disconnectMsg"), danger: true, confirmText: t("wechatPage.disconnect") })) {
+      await run(() => api.wechatUnbind());
+    }
+  };
+  const browse = () => run(async () => {
+    const p = await api.pickFolder(st?.defaultCwd ?? null, "wechat");
+    if (p) return api.wechatSetDefaultCwd(p);
+  });
+
+  const aside = !!st?.bound;
+  useEffect(() => { onAside(aside); }, [aside]);
+
+  const login = st?.login && st.login.state !== "done" ? st.login : null;
+  const [stateKey, stateClass] = STATE[st?.state ?? "off"];
+
+  return (
+    <>
+    <main className="page">
+      <div className="page-top">
+        <div className="page-head">
+          <span className="page-icon"><Icon.chat size={20} /></span>
+          <div className="page-title">
+            <h1 className="row gap10">{t("wechatPage.title")}{st?.bound && <span className={stateClass}>{t(stateKey)}</span>}</h1>
+            <span className="muted small hint">{t("wechatPage.intro")}</span>
+          </div>
+          {st?.bound && <Switch on={st.enabled} disabled={busy} label={t("wechatPage.switchLabel")} onChange={(on) => run(() => api.wechatSetEnabled(on))} />}
+        </div>
+      </div>
+      <div className="page-body">
+        <div className="settings full">
+          <section className="sgroup">
+            <h2>{t("wechatPage.account")}</h2>
+            {st?.error && <ErrorBox text={st.error} className="wx-err" />}
+            {login ? (
+              <div className="srow wx-login">
+                {login.qrSvg && login.state !== "failed" && (
+                  // Generated by AgentPlus itself (the qrcode crate), not by the relay.
+                  <div className="wx-qr" role="img" aria-label={t("wechatPage.qrWait")} dangerouslySetInnerHTML={{ __html: login.qrSvg }} />
+                )}
+                <div className="grow minw0 wx-login-text">
+                  <div className="slabel">{t(LOGIN[login.state] ?? "wechatPage.qrWait")}</div>
+                  {login.message && <div className="muted small">{scrub(login.message)}</div>}
+                  {(login.state === "needCode" || login.state === "badCode") && (
+                    <div className="row gap10">
+                      <input className="input wx-code" value={code} inputMode="numeric" autoFocus placeholder={t("wechatPage.codePlaceholder")}
+                        aria-label={t("wechatPage.qrNeedCode")} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendCode(); }} />
+                      <button className="btn primary" disabled={busy || !code.trim()} onClick={sendCode}>{t("wechatPage.submitCode")}</button>
+                    </div>
+                  )}
+                  <div className="row gap10">
+                    {login.state === "failed" && <button className="btn primary" disabled={busy} onClick={connect}>{t("wechatPage.retry")}</button>}
+                    <button className="btn" disabled={busy} onClick={cancelLogin}>{t("common.cancel")}</button>
+                  </div>
+                </div>
+              </div>
+            ) : st?.bound ? (
+              <SettingRow label={t("wechatPage.connected")} keepDesc
+                desc={t("wechatPage.connectedDesc", { bot: scrub(st.botId ?? "") ?? "", date: st.boundAt ? new Date(st.boundAt * 1000).toLocaleDateString(locale()) : "" })}>
+                <div className="row gap10">
+                  <button className={`btn${st.state === "expired" ? " primary" : ""}`} disabled={busy} onClick={connect}>{t("wechatPage.rescan")}</button>
+                  <button className="btn wx-danger" disabled={busy} onClick={disconnect}>{t("wechatPage.disconnect")}</button>
+                </div>
+              </SettingRow>
+            ) : (
+              <SettingRow label={t("wechatPage.notConnected")} desc={t("wechatPage.notConnectedDesc")} keepDesc>
+                <button className="btn primary" disabled={busy || !st} onClick={connect}>{t("wechatPage.connect")}</button>
+              </SettingRow>
+            )}
+          </section>
+
+          <section className="sgroup">
+            <h2>{t("wechatPage.sessions")}</h2>
+            <SettingRow label={t("wechatPage.folder")} keepDesc
+              desc={<><span className="mono">{scrub(st?.defaultCwd ?? st?.fallbackCwd ?? "")}</span><span className="hint"> · {t("wechatPage.folderDesc")}</span></>}>
+              <div className="row gap10">
+                {st?.defaultCwd && <button className="btn" disabled={busy} onClick={() => run(() => api.wechatSetDefaultCwd(null))}>{t("wechatPage.reset")}</button>}
+                <button className="btn" disabled={busy} onClick={browse}><Icon.folder size={13} />{t("wechatPage.browse")}</button>
+              </div>
+            </SettingRow>
+            <div className="srow stacked">
+              <div className="slabel">{t("wechatPage.inUse")}</div>
+              {st?.sessions.length ? (
+                <div className="wx-sessions">
+                  {st.sessions.map((s) => (
+                    <div key={s.no} className={`wx-session${s.current ? " current" : ""}`}>
+                      <span className="mono strong">#{s.no}</span>
+                      <span className="grow minw0 ellipsis" title={scrub(s.cwd) ?? undefined}>{s.title || "—"}</span>
+                      {s.current && <span className="chip-muted">{t("wechatPage.current")}</span>}
+                      {s.queued > 0 && <span className="muted tiny">{tn("wechatPage.queued", s.queued)}</span>}
+                      <span className={`wx-state ${s.state}`}>{t(SESSION[s.state])}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <span className="muted small">{t("wechatPage.noSessions")}</span>
+              )}
+              {st?.state === "running" && !st.codexReady && <span className="muted tiny hint">{t("wechatPage.codexOff")}</span>}
+            </div>
+          </section>
+
+          <section className="sgroup">
+            <h2>{t("wechatPage.commands")}</h2>
+            <div className="wx-commands">
+              {COMMANDS.map(([cmd, desc]) => (
+                <div key={desc} className="wx-command"><code>{typeof cmd === "string" ? cmd : t(cmd.k)}</code><span className="muted small">{t(desc)}</span></div>
+              ))}
+            </div>
+            <div className="muted small hint wx-quote">{t("wechatPage.quoteHint")}</div>
+          </section>
+
+        </div>
+      </div>
+    </main>
+    {aside && st && <WechatAside st={st} busy={busy} onStartCodex={() => run(async () => { await api.wechatStartCodex(); })} />}
+    </>
+  );
+}
+
+/** "gpt-6.1-sol · xhigh", plus "→ next" when WeChat chose another for the next turn. */
+function modelText(s: WechatSession): string {
+  const now = [s.model, s.effort].filter(Boolean).join(" · ") || "—";
+  if (!s.nextModel && !s.nextEffort) return now;
+  const next = [s.nextModel ?? s.model, s.nextEffort].filter(Boolean).join(" · ");
+  return `${now} → ${next}`;
+}
+
+function Kv({ k, children }: { k: TKey; children: ReactNode }) {
+  return <div className="wx-kv"><span className="muted">{t(k)}</span><span className="wx-kv-v">{children}</span></div>;
+}
+
+function Tile({ k, n, tone }: { k: TKey; n: number; tone?: "bad" | "warn" }) {
+  return <div className={`wx-tile${tone && n > 0 ? ` ${tone}` : ""}`}><span className="wx-tile-n">{n}</span><span className="muted tiny">{t(k)}</span></div>;
+}
+
+/** Right pane once connected: the connection, this run's counters, Codex, and recent activity. */
+function WechatAside({ st, busy, onStartCodex }: { st: WechatStatus; busy: boolean; onStartCodex: () => void }) {
+  const s = st.stats;
+  const never = t("wechatPage.never");
+  const running = st.sessions.filter((x) => x.state === "running").length;
+  const waiting = st.sessions.filter((x) => x.state === "waiting").length;
+  const queued = st.sessions.reduce((n, x) => n + x.queued, 0);
+  const current = st.sessions.find((x) => x.current);
+  return (
+    <aside className="aside wx-aside" aria-label={t("wechatPage.asideLabel")}>
+      <section className="aside-cur">
+        <h2>{t("wechatPage.connection")}</h2>
+        <div className="wx-kvs">
+          <Kv k="wechatPage.bot"><span className="mono">{scrub(st.botId ?? "")}</span></Kv>
+          <Kv k="wechatPage.user"><span className="mono">{scrub(st.userId ?? "")}</span></Kv>
+          <Kv k="wechatPage.runningSince">{s.since ? fmtAgo(s.since) : "—"}</Kv>
+          <Kv k="wechatPage.lastIn">{s.lastIn ? fmtAgo(s.lastIn) : never}</Kv>
+          <Kv k="wechatPage.lastOut">{s.lastOut ? fmtAgo(s.lastOut) : never}</Kv>
+        </div>
+      </section>
+      <section className="aside-cur">
+        <h2>{t("wechatPage.thisRun")}</h2>
+        <div className="wx-tiles">
+          <Tile k="wechatPage.received" n={s.received} />
+          <Tile k="wechatPage.sent" n={s.sent} />
+          <Tile k="wechatPage.turnsDone" n={s.turnsDone} />
+          <Tile k="wechatPage.turnsFailed" n={s.turnsFailed} tone="bad" />
+          <Tile k="wechatPage.approvals" n={s.approvals} />
+          <Tile k="wechatPage.errors" n={s.errors} tone="bad" />
+        </div>
+      </section>
+      <section className="aside-cur">
+        <h2 className="row between">{t("wechatPage.codex")}<span className={st.codexReady ? "chip-ok" : "chip-muted"}>{t(st.codexReady ? "wechatPage.codexOn" : "wechatPage.codexIdle")}</span></h2>
+        <div className="wx-kvs">
+          <Kv k="wechatPage.currentSession">{current ? `#${current.no} ${current.title}` : "—"}</Kv>
+          {current && <Kv k="wechatPage.model">{modelText(current)}</Kv>}
+          <Kv k="wechatPage.runningTurns">{running}</Kv>
+          <Kv k="wechatPage.waitingTurns">{waiting}</Kv>
+          <Kv k="wechatPage.queuedMsgs">{queued}</Kv>
+        </div>
+        {s.codexExe && <div className="mono tiny muted wx-exe" title={scrub(s.codexExe)}>{scrub(s.codexExe)}</div>}
+        {!st.codexReady && st.state === "running" && (
+          <button className="btn primary" disabled={busy} onClick={onStartCodex}><Icon.play size={12} />{t("wechatPage.startCodex")}</button>
+        )}
+      </section>
+      <div className="sync-history-head">
+        <h2>{t("wechatPage.activity")}</h2>
+        <span className="count">{st.log.length}</span>
+      </div>
+      <div className="wx-log">
+        {st.log.length ? st.log.map((l, i) => (
+          <div key={`${l.at}-${i}`} className={`wx-line ${l.kind}`}>
+            <span className="wx-time mono tiny muted">{time(l.at)}</span>
+            <span className="wx-dir" aria-hidden>{l.kind === "in" ? "←" : l.kind === "out" ? "→" : l.kind === "error" ? "!" : "·"}</span>
+            <span className="wx-text">{scrub(l.text)}</span>
+          </div>
+        )) : <div className="dempty"><span className="muted small">{t("wechatPage.noActivity")}</span></div>}
+      </div>
+    </aside>
+  );
+}

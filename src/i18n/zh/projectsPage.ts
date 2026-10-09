@@ -5,7 +5,7 @@ const zh: typeof en = {
   intro: "给单个项目文件夹单独配置 OpenCode：项目里的 opencode.json 会和全局配置合并，同名的键以项目为准。",
   pickFolder: "选择文件夹…",
   or: "或",
-  pathPlaceholder: "粘贴文件夹路径，如 D:\\xm\\my-app",
+  pathPlaceholder: "粘贴文件夹路径，如 C:\\code\\my-app",
   pathLabel: "文件夹路径",
   recent: "最近打开",
   empty: "还没有打开过项目。选一个项目文件夹，就能给它单独配置供应商、默认模型和权限。",

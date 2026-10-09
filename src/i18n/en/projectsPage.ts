@@ -3,7 +3,7 @@ export default {
   intro: "Configure OpenCode for a single project folder: the project's opencode.json is merged with the global config, and keys defined in the project take precedence.",
   pickFolder: "Choose folder…",
   or: "or",
-  pathPlaceholder: "Paste a folder path, e.g. D:\\xm\\my-app",
+  pathPlaceholder: "Paste a folder path, e.g. C:\\code\\my-app",
   pathLabel: "Folder path",
   recent: "Recent",
   empty: "No projects opened yet. Pick a project folder to give it its own providers, default model and permissions.",

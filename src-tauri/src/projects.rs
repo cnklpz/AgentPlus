@@ -48,7 +48,7 @@ fn save_list(root: &mut Value, list: Vec<Value>) -> Result<()> {
     store::save(root)
 }
 
-/// "D:\xm\proj\" -> "D:\xm\proj" (roots like "D:\" and "/" stay).
+/// "C:\code\proj\" -> "C:\code\proj" (roots like "D:\" and "/" stay).
 fn normalize(path: &str) -> String {
     let t = path.trim().trim_matches('"');
     let s = t.trim_end_matches(['\\', '/']);
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn normalizes_paths() {
-        assert_eq!(normalize(r" D:\xm\proj\ "), r"D:\xm\proj");
+        assert_eq!(normalize(r" C:\code\proj\ "), r"C:\code\proj");
         assert_eq!(normalize(r"D:\"), r"D:\");
         assert_eq!(normalize("/home/me/p/"), "/home/me/p");
         assert_eq!(normalize("\"C:\\a b\""), r"C:\a b");

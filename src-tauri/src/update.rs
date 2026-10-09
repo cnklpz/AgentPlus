@@ -46,9 +46,18 @@ fn info(u: &Update) -> UpdateInfo {
 /// A newer release, or `None` when this is the latest.
 #[tauri::command]
 pub async fn update_check(app: AppHandle, pending: State<'_, Pending>) -> Result<Option<UpdateInfo>, String> {
-    let fail = |e: tauri_plugin_updater::Error| tr!("Update check failed: {e}", "检查更新失败：{e}");
+    let fail = |e: tauri_plugin_updater::Error| {
+        crate::applog::warn("update", format!("check failed: {e:?}"));
+        tr!("Update check failed: {e}", "检查更新失败：{e}")
+    };
+    let started = Instant::now();
     let updater = app.updater_builder().timeout(Duration::from_secs(30)).build().map_err(fail)?;
     let found = updater.check().await.map_err(fail)?;
+    let secs = started.elapsed().as_secs_f32();
+    match &found {
+        Some(u) => crate::applog::info("update", format!("{} available (running {}, {secs:.1}s)", u.version, u.current_version)),
+        None => crate::applog::info("update", format!("up to date ({secs:.1}s)")),
+    }
     let out = found.as_ref().map(info);
     *pending.0.lock().unwrap() = found;
     Ok(out)
@@ -85,7 +94,10 @@ async fn install(update: &Update, on_progress: &Channel<Progress>) -> Result<(),
             || {},
         )
         .await
-        .map_err(|e| tr!("Download failed: {e}", "下载更新失败：{e}"))?;
+        .map_err(|e| {
+            crate::applog::warn("update", format!("download of {} failed: {e:?}", update.version));
+            tr!("Download failed: {e}", "下载更新失败：{e}")
+        })?;
     let _ = on_progress.send(Progress::Install);
     update.install(bytes).map_err(|e| tr!("Install failed: {e}", "安装更新失败：{e}"))
 }

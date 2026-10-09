@@ -123,6 +123,7 @@ export const Icon = {
   layers: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="m12 3 9 5-9 5-9-5 9-5Z" /><path d="m3 13 9 5 9-5" /></>, sw),
   history: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5M12 7v5l3 2" /></>, sw),
   cloud: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 13 3.5 3.5 0 0 0 6 19Z" />, sw),
+  chat: ({ size = 16, color = "currentColor", sw = 2 }: P) => svg(size, color, <><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" /><path d="M8.5 12h.01M12 12h.01M15.5 12h.01" /></>, sw),
   plus: ({ size = 14, color = "currentColor", sw = 2.4 }: P) => svg(size, color, <path d="M12 5v14M5 12h14" />, sw),
   check: ({ size = 14, color = "currentColor", sw = 2.4 }: P) => svg(size, color, <path d="M20 6 9 17l-5-5" />, sw),
   pulse: ({ size = 14, color = "currentColor", sw = 2 }: P) => svg(size, color, <path d="M22 12h-4l-3 9L9 3l-3 9H2" />, sw),

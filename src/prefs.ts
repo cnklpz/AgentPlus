@@ -39,10 +39,12 @@ export interface Prefs {
   showSkills: boolean;
   /** Show the plugins tab of each agent. Display only. */
   showPlugins: boolean;
+  /** Show the Claw bridge (WeChat) page. Display only: a running bridge keeps running. */
+  showClaw: boolean;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true, showPlugins: true };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true, showPlugins: true, showClaw: true };
 
 export function loadPrefs(): Prefs {
   try {
@@ -77,6 +79,7 @@ export function normalizePrefs(v: unknown): Prefs {
     showMcp: bool(o.showMcp, DEFAULTS.showMcp),
     showSkills: bool(o.showSkills, DEFAULTS.showSkills),
     showPlugins: bool(o.showPlugins, DEFAULTS.showPlugins),
+    showClaw: bool(o.showClaw, DEFAULTS.showClaw),
   };
 }
 

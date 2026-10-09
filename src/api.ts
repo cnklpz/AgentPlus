@@ -326,6 +326,68 @@ export interface GatewayMinute {
   agents: Record<string, GatewayAgentUse>;
 }
 
+/** One line of the WeChat bridge's recent activity. */
+export interface WechatLogLine {
+  at: number;
+  kind: "in" | "out" | "info" | "error";
+  text: string;
+}
+
+/** A numbered Codex session the WeChat bridge is using. */
+export interface WechatSession {
+  no: number;
+  title: string;
+  cwd: string;
+  state: "idle" | "running" | "waiting";
+  queued: number;
+  current: boolean;
+  /** The model and reasoning effort Codex reports ("" when unknown). */
+  model: string;
+  effort: string;
+  /** Chosen from WeChat, taking effect with the next turn. */
+  nextModel: string | null;
+  nextEffort: string | null;
+}
+
+export interface WechatLogin {
+  state: "wait" | "scanned" | "needCode" | "badCode" | "done" | "failed";
+  qrSvg: string | null;
+  message: string | null;
+}
+
+/** Counters since the bridge last started. Times are Unix ms. */
+export interface WechatStats {
+  since: number | null;
+  lastIn: number | null;
+  lastOut: number | null;
+  received: number;
+  sent: number;
+  turnsDone: number;
+  turnsFailed: number;
+  approvals: number;
+  errors: number;
+  /** The Codex program the bridge runs, while it runs. */
+  codexExe: string | null;
+}
+
+export interface WechatStatus {
+  enabled: boolean;
+  bound: boolean;
+  state: "off" | "starting" | "running" | "expired" | "error";
+  error: string | null;
+  botId: string | null;
+  userId: string | null;
+  boundAt: number | null;
+  defaultCwd: string | null;
+  /** Used when `defaultCwd` isn't set (DocumentsAgentPlus). */
+  fallbackCwd: string;
+  codexReady: boolean;
+  login: WechatLogin | null;
+  sessions: WechatSession[];
+  log: WechatLogLine[];
+  stats: WechatStats;
+}
+
 export interface GatewayStatus {
   enabled: boolean;
   running: boolean;
@@ -1034,6 +1096,17 @@ const real = {
   codexBuiltinCommit: () => invoke<FetchedModel[]>("codex_builtin_commit"),
   codexBuiltinDiscard: () => invoke<void>("codex_builtin_discard"),
   officialCancel: () => invoke<void>("codex_official_cancel"),
+  wechatStatus: () => invoke<WechatStatus>("wechat_status"),
+  wechatSetEnabled: (on: boolean) => invoke<WechatStatus>("wechat_set_enabled", { on }),
+  /** Shows a sign-in QR code; poll `wechatStatus` for the result. */
+  wechatLoginStart: () => invoke<WechatStatus>("wechat_login_start"),
+  /** The number WeChat shows on the phone, when asked for. */
+  wechatLoginVerify: (code: string) => invoke<void>("wechat_login_verify", { code }),
+  wechatLoginCancel: () => invoke<void>("wechat_login_cancel"),
+  /** Starts Codex for the running bridge (a message waiting for it is then sent). */
+  wechatStartCodex: () => invoke<void>("wechat_start_codex"),
+  wechatUnbind: () => invoke<WechatStatus>("wechat_unbind"),
+  wechatSetDefaultCwd: (path: string | null) => invoke<WechatStatus>("wechat_set_default_cwd", { path }),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
   gatewaySaveRoute: (route: GatewayRoute, oldId: string | null) => invoke<GatewayStatus>("gateway_save_route", { route, oldId }),
@@ -1049,7 +1122,7 @@ const real = {
   projectOpen: (path: string) => invoke<ProjectEntry>("project_open", { path }),
   projectForget: (path: string) => invoke<void>("project_forget", { path }),
   /** Native folder dialog; `purpose` sets its title. null when cancelled. */
-  pickFolder: (start: string | null, purpose?: "sync" | "skill") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
+  pickFolder: (start: string | null, purpose?: "sync" | "skill" | "wechat") => invoke<string | null>("pick_folder", { start, purpose: purpose ?? null }),
   /** Import links that came in since the last call (the backend keeps them until then). */
   takeImports: () => invoke<ImportItem[]>("take_imports"),
   parseImportLink: (link: string) => invoke<ImportItem>("parse_import_link", { link }),
@@ -1203,8 +1276,8 @@ function demoSeries() {
 }
 
 let demoProjects: ProjectEntry[] = [
-  { path: "D:\\xm\\shop", name: "shop", agent: "opencode@D:\\xm\\shop" as AgentId, lastOpened: new Date(Date.now() - 3600e3).toISOString(), exists: true, config: "D:\\xm\\shop\\opencode.json", providers: 1, git: true },
-  { path: "D:\\xm\\demo", name: "demo", agent: "opencode@D:\\xm\\demo" as AgentId, lastOpened: new Date(Date.now() - 3 * 86400e3).toISOString(), exists: true, config: null, providers: 0, git: false },
+  { path: "C:\\code\\shop", name: "shop", agent: "opencode@C:\\code\\shop" as AgentId, lastOpened: new Date(Date.now() - 3600e3).toISOString(), exists: true, config: "C:\\code\\shop\\opencode.json", providers: 1, git: true },
+  { path: "C:\\code\\demo", name: "demo", agent: "opencode@C:\\code\\demo" as AgentId, lastOpened: new Date(Date.now() - 3 * 86400e3).toISOString(), exists: true, config: null, providers: 0, git: false },
 ];
 
 /** Browser demo: a project is the OpenCode fixture with its custom providers inherited. */
@@ -1226,6 +1299,22 @@ async function demoProject(agent: string): Promise<AgentState> {
     ],
   };
 }
+
+const demoWechat: WechatStatus = {
+  enabled: true, bound: true, state: "running", error: null, botId: "a1b2c3@im.bot", userId: "o9x8y7@im.wechat", boundAt: 1791300000,
+  defaultCwd: null, fallbackCwd: "C:\\Users\\me\\Documents\\AgentPlus", codexReady: true, login: null,
+  sessions: [
+    { no: 4, title: "Fix the updater", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\updater", state: "running", queued: 1, current: true, model: "gpt-6.1-sol", effort: "xhigh", nextModel: "gpt-6-astra", nextEffort: null },
+    { no: 2, title: "Blog post draft", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\blog", state: "waiting", queued: 0, current: false, model: "gpt-6.1-sol", effort: "high", nextModel: null, nextEffort: null },
+  ],
+  log: [
+    { at: 1791430000000, kind: "out", text: "【#2 Blog post draft】\n⚠️ 要执行命令：npm run build" },
+    { at: 1791429990000, kind: "in", text: "跑一下测试" },
+    { at: 1791429900000, kind: "info", text: "已连接微信" },
+  ],
+  stats: { since: 1791429900000, lastIn: 1791429990000, lastOut: 1791430000000, received: 12, sent: 15, turnsDone: 6, turnsFailed: 1, approvals: 3, errors: 0,
+    codexExe: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1002.7124.0_x64\\app\\resources\\codex.exe" },
+};
 
 const demo: typeof real = {
   listAgents: fixture,
@@ -1263,9 +1352,9 @@ const demo: typeof real = {
   openWebUi: async () => null,
   codexSessions: async () => ({
     sessions: [
-      { id: "demo-1", title: "修复登录页样式", cwd: "D:\\xm\\demo", provider: "klpz", model: "gpt-6-astra", kind: "user", archived: false, updatedMs: Date.now() - 3600e3, size: 2_400_000, rolloutPath: "", rolloutExists: true, hidden: ["属于「klpz」，当前是「work」：最近列表和归档里可能看不到"] },
-      { id: "demo-2", title: "接入支付回调", cwd: "D:\\xm\\shop", provider: "work", model: "gpt-5.6-sol", kind: "user", archived: false, updatedMs: Date.now() - 86400e3, size: 640_000, rolloutPath: "", rolloutExists: true, hidden: [] },
-      { id: "demo-3", title: "审查：依赖升级", cwd: "D:\\xm\\shop", provider: "klpz", model: "codex-auto-review", kind: "review", archived: false, updatedMs: Date.now() - 2 * 86400e3, size: 120_000, rolloutPath: "", rolloutExists: true, hidden: ["子代理 / 审查 / exec 会话不进侧边栏"] },
+      { id: "demo-1", title: "修复登录页样式", cwd: "C:\\code\\demo", provider: "klpz", model: "gpt-6-astra", kind: "user", archived: false, updatedMs: Date.now() - 3600e3, size: 2_400_000, rolloutPath: "", rolloutExists: true, hidden: ["属于「klpz」，当前是「work」：最近列表和归档里可能看不到"] },
+      { id: "demo-2", title: "接入支付回调", cwd: "C:\\code\\shop", provider: "work", model: "gpt-5.6-sol", kind: "user", archived: false, updatedMs: Date.now() - 86400e3, size: 640_000, rolloutPath: "", rolloutExists: true, hidden: [] },
+      { id: "demo-3", title: "审查：依赖升级", cwd: "C:\\code\\shop", provider: "klpz", model: "codex-auto-review", kind: "review", archived: false, updatedMs: Date.now() - 2 * 86400e3, size: 120_000, rolloutPath: "", rolloutExists: true, hidden: ["子代理 / 审查 / exec 会话不进侧边栏"] },
     ],
     currentProvider: "work",
     providers: [["klpz", 2], ["work", 1]],
@@ -1288,6 +1377,14 @@ const demo: typeof real = {
   fetchModels: async () => ["gpt-5.6-sol", "gpt-5.6-luna", "deepseek-v4-pro", "kimi-k3", "glm-5.3", "qwen3.8-max"],
   fetchModelsUrl: async () => ["deepseek-v4-pro", "kimi-k3", "glm-5.3"],
   fetchModelsLib: async () => ["glm-5", "glm-5.3", "kimi-k3"],
+  wechatStatus: async () => demoWechat,
+  wechatSetEnabled: async (on) => { demoWechat.enabled = on; demoWechat.state = on ? "running" : "off"; return demoWechat; },
+  wechatLoginStart: async () => demoWechat,
+  wechatLoginVerify: async () => undefined,
+  wechatLoginCancel: async () => undefined,
+  wechatStartCodex: async () => { demoWechat.codexReady = true; },
+  wechatUnbind: async () => { Object.assign(demoWechat, { bound: false, enabled: false, state: "off", botId: null, userId: null, sessions: [] }); return demoWechat; },
+  wechatSetDefaultCwd: async (path) => { demoWechat.defaultCwd = path; return demoWechat; },
   gatewayModels: async () => ["glm-5", "glm-5.3", "kimi-k3"],
   guessModels: async (_agent, ids) =>
     Object.fromEntries(ids.filter((id) => /^(glm|kimi|deepseek|gpt|qwen)/i.test(id)).map((id) => [id, { context: 200000, extra: {}, matched: id.toLowerCase(), source: "builtin" as const }])),
@@ -1469,7 +1566,7 @@ const demo: typeof real = {
     return next;
   },
   projectForget: async (path) => { demoProjects = demoProjects.filter((x) => x.path !== path); },
-  pickFolder: async () => "D:\\xm\\newapp",
+  pickFolder: async () => "C:\\code\\newapp",
   updateCheck: async () => {
     await sleep(800);
     return { version: "0.2.0", current: "0.1.0", notes: "（演示）\n- 新功能：应用内更新\n- 修复若干问题", date: new Date().toISOString() };

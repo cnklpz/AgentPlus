@@ -37,6 +37,7 @@ import { type Page, Sidebar } from "./components/Sidebar";
 import { AgentMcpTab, McpPage } from "./components/McpPage";
 import { AgentSkillsTab, SkillsPage } from "./components/SkillsPage";
 import { SyncPage } from "./components/SyncPage";
+import { WechatPage } from "./components/WechatPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
 import { CodexTimezone } from "./components/CodexTimezone";
@@ -85,6 +86,8 @@ export default function App() {
   const [agents, setAgents] = useState<AgentState[]>([]);
   const [selected, setSelected] = useState<AgentId>("codex");
   const [page, setPage] = useState<Page | null>(null);
+  // The WeChat page has a right pane only once connected.
+  const [wechatAside, setWechatAside] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [diff, setDiff] = useState<DiffGroup[]>([]);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -119,7 +122,7 @@ export default function App() {
     setPage("settings");
   };
   // The page settings was opened from may have been switched off there.
-  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) ? null : beforeSettings);
+  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) || (beforeSettings === "wechat" && !prefs.showClaw) ? null : beforeSettings);
   const [hubSel, setHubSel] = useState<string | null>(null);
   const [hubDialog, setHubDialog] = useState<HubDialog>(undefined);
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
@@ -1553,6 +1556,7 @@ export default function App() {
       ...(prefs.showMcp ? [{ label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") }] : []),
       ...(prefs.showSkills ? [{ label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") }] : []),
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
+      ...(prefs.showClaw ? [{ label: t("app.navWechat"), icon: <Icon.chat size={13} />, disabled: page === "wechat", action: () => setPage("wechat") }] : []),
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
       "sep",
@@ -1584,8 +1588,8 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : [])].includes(page) ? " wide" : ""}`}>
-        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills}
+      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : []), ...(wechatAside ? ["wechat"] : [])].includes(page) ? " wide" : ""}`}>
+        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showClaw={prefs.showClaw}
           onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
         {page === "providers" && (
@@ -1660,6 +1664,7 @@ export default function App() {
         {page === "skills" && prefs.showSkills && <SkillsPage agents={listed} flash={flash} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
+        {page === "wechat" && prefs.showClaw && <WechatPage flash={flash} onAside={setWechatAside} />}
         {page === "settings" && (
           <SettingsPage
             tab={settingsTab}

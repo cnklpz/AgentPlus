@@ -45,6 +45,7 @@ import attributionDialog from "./attributionDialog";
 import restartDialog from "./restartDialog";
 import format from "./format";
 import errorBoundary from "./errorBoundary";
+import wechatPage from "./wechatPage";
 
 export default {
   common,
@@ -93,4 +94,5 @@ export default {
   restartDialog,
   format,
   errorBoundary,
+  wechatPage,
 };

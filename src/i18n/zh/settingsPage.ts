@@ -49,6 +49,8 @@ const zh: typeof en = {
   showMcpHint: "关闭后隐藏 MCP 页面和各 Agent 的 MCP 标签页，不会改动任何配置",
   showSkills: "显示技能",
   showSkillsHint: "关闭后隐藏技能页面和各 Agent 的技能标签页，不会改动任何技能",
+  showClaw: "显示 Claw 接入",
+  showClawHint: "关闭后隐藏 Claw 接入页面，已开启的桥接会继续运行",
   showPlugins: "显示插件",
   showPluginsHint: "关闭后隐藏各 Agent 的插件标签页，不会改动任何插件",
   closeAction: "关闭窗口时",
