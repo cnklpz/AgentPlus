@@ -242,7 +242,7 @@ fn model_of(e: &Value, visible: bool) -> Model {
 fn provider_of(f: &Flavor, g: &Group, entries: &[Value], parked: &[Value], avail: Option<&Vec<String>>) -> Provider {
     let mine = |e: &Value| key_of(e) == g.key;
     let active: Vec<&Value> = entries.iter().filter(|e| mine(e)).collect();
-    let enabled = if f.native_hide { !active.is_empty() } else { !parked.iter().any(|p| parked_off(f, p) && p.get("entry").is_some_and(&mine)) };
+    let enabled = if f.native_hide { !active.is_empty() } else { !parked.iter().any(|p| parked_off(f, p) && p.get("entry").is_some_and(mine)) };
     let mut models: Vec<Model> = active.iter().map(|e| model_of(e, avail.map(|a| a.contains(&str_field(e, "id"))).unwrap_or(true))).collect();
     // A disabled provider's entries; without native hiding, also an enabled one's hidden ones.
     if !enabled || !f.native_hide {
@@ -492,7 +492,7 @@ impl Work {
                     return Err(anyhow!(tr!("Model ID {model} is used by another provider; can't show it in \"{}\"", "模型 ID {model} 已被其他供应商使用，无法在「{}」里重新显示", g.name)));
                 }
                 let kept = kept.as_object().cloned().unwrap_or_default();
-                self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+                self.parked.retain(|p| !p.get("entry").is_some_and(mine));
                 self.diff.push(self.f.store_label, tr!("models - {model} (already in models.json again, kept copy merged into it)", "models - {model}（models.json 里已重新有它，暂存的副本合并进去）"), false);
                 let e = &mut self.entries[j];
                 // The provider's own fields are equal already (same key).
@@ -504,19 +504,19 @@ impl Work {
                 }
                 return Ok(());
             }
-            self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+            self.parked.retain(|p| !p.get("entry").is_some_and(mine));
             self.entries.push(kept);
             self.diff.push(&file, tr!("models + {model} (shown again, restored from AgentPlus)", "models + {model}（重新显示，从 AgentPlus 恢复）"), true);
         } else {
             let Some(i) = self.entries.iter().position(&mine) else {
-                let copies: Vec<Value> = self.parked.iter().filter(|p| p.get("entry").is_some_and(&mine)).cloned().collect();
+                let copies: Vec<Value> = self.parked.iter().filter(|p| p.get("entry").is_some_and(mine)).cloned().collect();
                 let Some(kept) = copies.first() else {
                     return Err(anyhow!(tr!("\"{}\" has no model {model}", "「{}」里没有模型 {model}", g.name)));
                 };
                 if copies.len() > 1 {
                     let mut kept = kept.clone();
                     kept["entry"] = self.kept_model(g, model).unwrap();
-                    self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+                    self.parked.retain(|p| !p.get("entry").is_some_and(mine));
                     self.parked.push(kept);
                     self.diff.push(self.f.store_label, tr!("models - {model} (duplicate hidden copies removed)", "models - {model}（移除重复的隐藏副本）"), false);
                 }
@@ -525,7 +525,7 @@ impl Work {
             let mut e = self.entries.remove(i);
             // Retain edits made while hidden, and fields the agent added meanwhile.
             self.merge_kept_fields(g, model, &mut e);
-            self.parked.retain(|p| !p.get("entry").is_some_and(&mine));
+            self.parked.retain(|p| !p.get("entry").is_some_and(mine));
             self.parked.push(json!({ "visible": false, "entry": e }));
             self.diff.push(&file, tr!("models - {model} (hidden, entry kept in AgentPlus)", "models - {model}（隐藏，条目暂存在 AgentPlus）"), false);
         }
