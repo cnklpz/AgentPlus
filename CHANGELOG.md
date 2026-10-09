@@ -2,6 +2,32 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.0
+
+新增 Claw 接入：通过微信 ClawBot 在手机上和 Codex 会话对话。
+
+- 连接：在「Claw 接入」页面扫码绑定微信，只有扫码的这个微信能使用机器人；登录信息只保存在本机，不参与多设备同步
+- 多会话：所有会话共用一个聊天，每个会话有固定编号，机器人的消息都以【#编号 标题】开头。/ls 列出最近的会话，/use 编号 切换，#编号 消息 临时发给某个会话，引用机器人的消息回复会发给那条消息的会话；刚列出列表后直接回编号也能选
+- 新建会话：/dirs 列出最近的工作目录，/new 编号 在该目录新建；不写目录时默认用「文档\AgentPlus」，也可以在页面上另选
+- 运行：一个会话同一时间只跑一轮，期间发的消息会排队；每轮结束发回最终回答和一行摘要（命令数、改动文件数、用时）。Codex 要执行命令、改文件时会转到微信确认，回复 y编号 允许、a编号 本会话都允许、n编号 拒绝
+- 模型：/model 查看和切换会话的模型，/effort 设置推理强度，/model default 编号 修改新会话的默认模型
+- Codex 没在运行时，会先在微信里问你是否启动；可能正在 Codex 桌面版里打开的会话会被锁定，避免同时写入
+- 连接后页面右侧显示连接状态、本次运行的统计、当前会话的模型和最近的消息；设置 → 界面 里可以隐藏这个页面
+- 检查更新和下载失败会记录到诊断日志
+- 页面撕纸动画：两列列表也能撕开，收尾时卡片不再闪一下
+
+Adds the Claw bridge: talk to your Codex sessions from WeChat through ClawBot.
+
+- Connect: scan a QR code on the Claw bridge page. Only the WeChat account that scanned can use the bot; its sign-in stays on this device and is never synced
+- Sessions: all sessions share one chat. Each has a fixed number and every bot message starts with its tag 【#N title】. /ls lists recent sessions, /use N switches, #N text sends to one session once, and replying to a bot message goes to that message's session; right after a list, a bare number picks from it
+- New sessions: /dirs lists recent working folders and /new N starts a session in one; without a folder it uses Documents\AgentPlus, or a folder picked on the page
+- Turns: a session runs one turn at a time and queues what you send meanwhile; each turn ends with the final answer and a summary line (commands, files changed, time). When Codex wants to run a command or change files it asks in WeChat: reply yN to allow, aN to allow for the session, nN to decline
+- Models: /model shows and switches a session's model, /effort sets the reasoning effort, /model default N sets the model for new sessions
+- When Codex isn't running the bot asks before starting it; sessions that may be open in Codex desktop are locked so the two don't write at once
+- Once connected, a side pane shows the connection, this run's counters, the current session's model and recent messages; Settings → Interface can hide the page
+- Update checks and download failures go to the diagnostic log
+- Page tear animation: two-column lists tear apart too, and cards no longer flash at the end
+
 ## 0.3.3
 
 支持 WorkBuddy 和 WorkBuddy AI；添加供应商时可以直接从供应商库挑选，粘贴带接口路径的地址会自动去掉路径。
