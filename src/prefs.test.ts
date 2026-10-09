@@ -51,9 +51,9 @@ describe("normalizePrefs", () => {
   });
 
   it("shows MCP, skills and plugins unless told not to", () => {
-    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true });
-    expect(normalizePrefs({ showMcp: false, showSkills: false, showPlugins: false })).toMatchObject({ showMcp: false, showSkills: false, showPlugins: false });
-    expect(normalizePrefs({ showMcp: "no", showSkills: 0, showPlugins: null })).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true });
+    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true, showClaw: true });
+    expect(normalizePrefs({ showMcp: false, showSkills: false, showPlugins: false, showClaw: false })).toMatchObject({ showMcp: false, showSkills: false, showPlugins: false, showClaw: false });
+    expect(normalizePrefs({ showMcp: "no", showSkills: 0, showPlugins: null, showClaw: "off" })).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true, showClaw: true });
   });
 
   it("forgets keys it doesn't know", () => {
