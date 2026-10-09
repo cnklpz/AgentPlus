@@ -1,4 +1,4 @@
-/*! Adapted from ModelTrace static/challenge-browser.js (commit df3a0f9d3e054c0dc02d6d586686db8daf8fa7c8),
+/*! Adapted from ModelTrace static/challenge-browser.js (commit 6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2),
  * https://github.com/xqy2006/ModelTrace. Copyright (c) 2026 xqy2006. MIT License; the full
  * notice is in src/attribution/LICENSE-ModelTrace.txt and shown in the attribution dialog. */
 

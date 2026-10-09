@@ -5,9 +5,9 @@ import { AttributionError, DIMENSION } from "./core";
 /** Where the bundled bank comes from. `sha256` is of the upstream blob (LF line ends). */
 export const BANK_SOURCE = {
   repository: "https://github.com/xqy2006/ModelTrace",
-  commit: "df3a0f9d3e054c0dc02d6d586686db8daf8fa7c8",
+  commit: "6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2",
   path: "data/unified_bank.json",
-  sha256: "1c2cb74d372f9f0f30d0dabbb7b7a838660d2f769a88d0c8489e4c662e088c21",
+  sha256: "f267d0513aa06981d024ec5394746fceddf44e4e8a75fa6bf8304255f4b32d6d",
 } as const;
 
 /** Length of the ordered-block feature: 4 blocks × 16 value bins + 10 final digits. */

@@ -21,7 +21,7 @@ const scored = cases.filter((c): c is RefCase & { result: Exclude<RefCase["resul
 
 describe("reference fixture", () => {
   it("comes from the pinned commit and covers the calibration keys", () => {
-    expect(reference.source.commit).toBe("df3a0f9d3e054c0dc02d6d586686db8daf8fa7c8");
+    expect(reference.source.commit).toBe("6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2");
     expect(new Set(scored.map((c) => c.result.calibration.queries))).toEqual(new Set(["1", "2", "3"]));
   });
 });

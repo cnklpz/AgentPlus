@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const COMMIT = "df3a0f9d3e054c0dc02d6d586686db8daf8fa7c8";
+const COMMIT = "6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2";
 const root = process.argv[2];
 if (!root) {
   console.error("usage: node scripts/attribution-fixtures.mjs <ModelTrace checkout>");
