@@ -254,6 +254,10 @@ let torn: {
   goal: number; shown: number; quick: boolean;
 } | null = null;
 
+/** Most pieces torn at once: enough for a screen of small cells (a two-column list is two per row);
+ *  past it the rest of the page would stay whole under the scraps. */
+const MAX_PIECES = 80;
+
 /**
  * The pieces on screen: rows and small blocks. A card that gets split leaves an empty shell,
  * so it turns see-through while the page is torn and each scrap carries the card's surface.
@@ -263,7 +267,12 @@ function shards(root: HTMLElement, box: DOMRect): { pieces: HTMLElement[]; shell
   const shells: HTMLElement[] = [];
   const walk = (el: Element) => {
     for (const c of el.children) {
-      if (!(c instanceof HTMLElement) || pieces.length >= 30 || c.classList.contains("ap-glider")) continue;
+      if (!(c instanceof HTMLElement) || pieces.length >= MAX_PIECES || c.classList.contains("ap-glider")) continue;
+      // A `display: contents` wrapper (a grid row of cells) has no box: its children are the pieces.
+      if (getComputedStyle(c).display === "contents") {
+        walk(c);
+        continue;
+      }
       const r = c.getBoundingClientRect();
       if (r.width === 0 || r.height === 0 || r.bottom < box.top || r.top > box.bottom) continue;
       if (r.height <= 96 || c.children.length === 0) pieces.push(c);
@@ -275,6 +284,13 @@ function shards(root: HTMLElement, box: DOMRect): { pieces: HTMLElement[]; shell
   };
   walk(root);
   return { pieces, shells };
+}
+
+/** The nearest ancestor with a box of its own (skipping `display: contents` wrappers). */
+function boxParent(el: HTMLElement): HTMLElement {
+  let p = el.parentElement!;
+  while (p.parentElement && getComputedStyle(p).display === "contents") p = p.parentElement;
+  return p;
 }
 
 const rnd = (a: number) => (Math.random() - 0.5) * 2 * a;
@@ -363,7 +379,7 @@ function tear(host: HTMLElement, dir: number) {
   for (const s of shells) s.classList.add("ap-shell");
   const lifted: HTMLElement[] = [];
   for (const el of pieces) {
-    const parent = el.parentElement!;
+    const parent = boxParent(el);
     if (!lifted.includes(parent) && getComputedStyle(parent).position === "static") {
       parent.style.position = "relative";
       lifted.push(parent);
@@ -372,12 +388,15 @@ function tear(host: HTMLElement, dir: number) {
   // Layout positions, not screen ones: a piece may be mid-animation (an entrance, a glide),
   // and its scraps belong where it rests.
   const plans = pieces.map((el) => {
-    const parent = el.parentElement!;
+    const parent = boxParent(el);
     const pr = parent.getBoundingClientRect();
     let [left, top, w, h] = [el.offsetLeft, el.offsetTop, el.offsetWidth, el.offsetHeight];
+    // offsetWidth rounds: a copy a fraction narrower wraps its last word onto a clipped line.
+    const sr = el.getBoundingClientRect();
+    if (Math.abs(sr.width - w) < 1) w = sr.width;
+    if (Math.abs(sr.height - h) < 1) h = sr.height;
     if (el.offsetParent !== parent) {
-      const r = el.getBoundingClientRect();
-      [left, top, w, h] = [r.left - pr.left - parent.clientLeft + parent.scrollLeft, r.top - pr.top - parent.clientTop + parent.scrollTop, r.width, r.height];
+      [left, top, w, h] = [sr.left - pr.left - parent.clientLeft + parent.scrollLeft, sr.top - pr.top - parent.clientTop + parent.scrollTop, sr.width, sr.height];
     }
     // Where it rests on screen, for the fall.
     const r = { left: pr.left + parent.clientLeft - parent.scrollLeft + left, top: pr.top + parent.clientTop - parent.scrollTop + top, width: w, height: h };
@@ -416,7 +435,8 @@ function tear(host: HTMLElement, dir: number) {
         rest: 0, phase: Math.random() * Math.PI * 2, landed: false,
       });
     }
-    p.parent.appendChild(frag);
+    // Beside the piece itself, even inside a `display: contents` wrapper (placed against `parent`).
+    p.el.parentElement!.appendChild(frag);
     // Scraps come to lie on the floor, a little heaped; ones that start down there already
     // (a row across the bottom of the view) would jump into the heap, so they fall out instead.
     for (const s of list) {
@@ -448,6 +468,9 @@ function tick(now: number) {
     const target = t.quick ? 1 : t.goal;
     t.shown += (target - t.shown) * Math.min(1, (t.quick ? 0.16 : 0.22) * dt);
     if (target === 1 && t.shown > 0.995) return clearTorn(t);
+    // Nearly whole again: the cards' surfaces fade back in under the scraps, so nothing flashes
+    // when the scraps give way to the page.
+    if (target === 1 && t.shown > 0.8) for (const s of t.shells) s.classList.add("ap-mending");
     const k = 1 - t.shown;
     const ease = k * k * (3 - 2 * k);
     for (const s of t.scraps) {
@@ -525,7 +548,7 @@ function clearTorn(t: NonNullable<typeof torn>) {
   for (const s of t.scraps) s.el.remove();
   for (const p of t.pieces) p.classList.remove("ap-torn-away");
   for (const p of t.lifted) p.style.removeProperty("position");
-  for (const s of t.shells) s.classList.remove("ap-shell");
+  for (const s of t.shells) s.classList.remove("ap-shell", "ap-mending");
   t.host.classList.remove("ap-torn");
 }
 
