@@ -5,6 +5,7 @@
 //! - Fast: Codex's UI hides the Fast option unless the auth method is "chatgpt":
 //!   `isServiceTierAllowed = authMethod==="chatgpt" && !loading && requirements?.featureRequirements?.fast_mode!==false`
 //!   We drop the auth check, keeping the admin switch (`fast_mode === false`) intact.
+//!   Since 26.1007 the check is in the UI hook and in the request (see `patch_fast`).
 //! - Full model names: the model-name formatter takes `stripGptPrefix` and turns
 //!   "GPT-6 Sol" into "6 Sol" unless a Statsig gate (only granted to ChatGPT accounts)
 //!   is on. We make it always return the full name.
@@ -138,10 +139,42 @@ fn by_version<T>(version: Option<[u32; 2]>, shapes: &[([u32; 2], T)], apply: imp
 }
 
 /// Rewrites the Fast gate. Minified names change per release, so match on shape.
-fn patch_fast(src: &str) -> Option<String> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = cached(&RE, r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1");
-    replace_once(src, re, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{FAST_MARK}"))
+/// Since 26.1007 the requirements are turned into `{fast, ultrafast}` by a shared helper, and
+/// the sign-in check sits in two places, both in app-initial: the UI hook
+///   a=i?.authMethod===`chatgpt`||i?.authMethod===`personalAccessToken`,o=i?.authMethod??null
+/// and the request, which drops the service tier for any other sign-in:
+///   if(n!==`chatgpt`&&n!==`personalAccessToken`)return null;let r=await KPe(…);return e.query.setData(…
+/// Both drop the sign-in check; the requirements (`configRequirements/read`, the admin
+/// switch) are read for any sign-in. Either one alone would show Fast without sending it,
+/// or the other way round, so it is both or nothing.
+fn patch_fast(src: &str, version: Option<[u32; 2]>) -> Option<String> {
+    static GATE: OnceLock<Regex> = OnceLock::new();
+    static HOOK: OnceLock<Regex> = OnceLock::new();
+    static REQUEST: OnceLock<Regex> = OnceLock::new();
+    enum Shape {
+        /// Up to 26.1001: one expression with the auth check and `fast_mode`.
+        Gate,
+        /// Since 26.1007: the UI hook and the request check the sign-in on their own.
+        Access,
+    }
+    by_version(version, &[([0, 0], Shape::Gate), ([26, 1007], Shape::Access)], |shape| match shape {
+        Shape::Gate => {
+            let re = cached(&GATE, r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1");
+            replace_once(src, re, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{FAST_MARK}"))
+        }
+        Shape::Access => {
+            let hook = cached(
+                &HOOK,
+                r"([\w$]+)=[\w$]+\?\.authMethod===`chatgpt`\|\|[\w$]+\?\.authMethod===`personalAccessToken`(,[\w$]+=[\w$]+\?\.authMethod\?\?null)",
+            );
+            let request = cached(
+                &REQUEST,
+                r"if\([\w$]+!==`chatgpt`&&[\w$]+!==`personalAccessToken`\)return null;(let [\w$]+=await [\w$]+\([^;]{0,80};return [\w$]+\.query\.setData\()",
+            );
+            let src = replace_once(src, hook, format!("${{1}}=!0{FAST_MARK}${{2}}"))?;
+            replace_once(&src, request, format!("if(!1)return null{FAST_MARK};${{1}}"))
+        }
+    })
 }
 
 /// Makes the model-name formatter ignore `stripGptPrefix`:
@@ -224,7 +257,7 @@ fn patch_smooth(src: &str) -> Option<String> {
 pub fn patch_source(src: &str, want: Patches) -> (Option<String>, Vec<&'static str>) {
     type Patch = (&'static str, fn(&str, Option<[u32; 2]>) -> Option<String>);
     let patches: [Patch; 6] = [
-        (FAST_MARK, |s, _| patch_fast(s)),
+        (FAST_MARK, patch_fast),
         (NAMES_MARK, |s, _| patch_names(s)),
         (QUOTA_MARK, |s, _| patch_quota(s)),
         (BANNER_MARK, patch_banner),
@@ -690,6 +723,33 @@ mod tests {
         assert!(missing.is_empty());
         assert!(out.contains("d=!u&&c?.requirements?.featureRequirements?.fast_mode!==!1/*agentplus-fast*/"));
         assert_eq!(patch_source(&out, FAST), (None, vec![]));
+    }
+
+    #[test]
+    fn patches_fast_access_since_26_1007() {
+        // Codex 26.1007 app-initial bundle: the UI hook and the request.
+        let hook = "r=e?.hostId??n,i=BYe(r),a=i?.authMethod===`chatgpt`||i?.authMethod===`personalAccessToken`,o=i?.authMethod??null,s;t[0]!==r||t[1]!==o?(s={authMethod:o,hostId:r},t[0]=r,t[1]=o,t[2]=s):s=t[2];";
+        let request = "async function bga(e,t){let n=await _ga(e,t);if(n!==`chatgpt`&&n!==`personalAccessToken`)return null;let r=await KPe(e,t,{priority:`critical`});return e.query.setData(Hd,{authMethod:n,hostId:t},r),oee(r)}";
+        let src = format!("{hook}{request}");
+        let on = |v: &str| Patches { version: codex_version(v), ..FAST };
+        for want in [on("26.1007.2314.0"), on("27.1.0.0"), FAST] {
+            let (out, missing) = patch_source(&src, want);
+            let out = out.unwrap();
+            assert!(missing.is_empty());
+            assert!(out.contains("i=BYe(r),a=!0/*agentplus-fast*/,o=i?.authMethod??null,s;"), "{out}");
+            assert!(out.contains("let n=await _ga(e,t);if(!1)return null/*agentplus-fast*/;let r=await KPe("), "{out}");
+            assert_eq!(patch_source(&out, want), (None, vec![]));
+        }
+        // Both or nothing: one of them alone isn't enough.
+        assert_eq!(patch_source(hook, on("26.1007.2314.0")), (None, vec!["Fast"]));
+        assert_eq!(patch_source(request, on("26.1007.2314.0")), (None, vec!["Fast"]));
+        // Each release gets only its own shape.
+        assert_eq!(patch_source(GATE, on("26.1007.2314.0")), (None, vec!["Fast"]));
+        assert_eq!(patch_source(&src, on("26.1001.1.0")), (None, vec!["Fast"]));
+        assert!(patch_source(GATE, on("26.1001.1.0")).0.is_some());
+        // A similar sign-in check elsewhere (app-primary) is left alone.
+        let other = "k=(l===`local`||u?.authMethod===`chatgpt`||u?.authMethod===`personalAccessToken`)&&s!=null";
+        assert_eq!(patch_source(other, FAST).0, None);
     }
 
     #[test]
