@@ -2,6 +2,16 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.1
+
+适配 Codex 26.1007：界面注入的 Fast 补丁又能用了。
+
+- Codex 26.1007 起，Fast 在界面上和发送请求时分别检查登录方式，非 ChatGPT 登录时选项不显示、请求里也会去掉 Fast。现在两处都会处理，管理员关闭 Fast 的开关照常生效；更早的 Codex 版本仍用原来的方式
+
+Supports Codex 26.1007: the Fast UI patch works again.
+
+- Since Codex 26.1007, Fast checks the sign-in method both in the UI and when sending a request: without ChatGPT sign-in the option is hidden and requests drop Fast. Both are handled now, and the admin switch that turns Fast off still applies; older Codex releases keep the previous handling
+
 ## 0.4.0
 
 新增 Claw 接入：通过微信 ClawBot 在手机上和 Codex 会话对话。
