@@ -9,6 +9,11 @@ license = "AGPL-3.0-only"
 name = "agentplus_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# MSVC's link.exe reports the import library it writes for the cdylib on stdout; newer Rust
+# turns that into a warning.
+[lints.rust]
+linker_messages = "allow"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
