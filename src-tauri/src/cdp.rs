@@ -15,7 +15,8 @@
 //! - Usage banners: the composer's usage-banner slot shows the account's limit banners
 //!   (server-sent `rate_limit_upsell` ones like "You're out of Codex and Work usage", and
 //!   the app's own warnings). Those are about the ChatGPT quota, not the relay, so we
-//!   make the slot always show what it would without them.
+//!   make the slot always show what it would without them. Since 26.1007 the thread
+//!   composer's banners come from a lazily loaded chunk; we switch them off in its props.
 //! - Short model names: the opposite of full names, for the official sign-in mix. Signed
 //!   in with ChatGPT, the Statsig gate above is on and names keep "GPT-"; we make every
 //!   read of that gate false, so names are shortened just as with custom providers.
@@ -207,23 +208,39 @@ fn patch_quota(src: &str) -> Option<String> {
 ///   E=T?.rate_limit_upsell?.banner_type===`image_generation_limit_reached`,D=J(Jy,f);if(!n)return c;let O;…
 /// The early return already exists (for `canShowUsageBanners` off), so every hook before
 /// it still runs as usual.
+/// Since 26.1007 the thread composer takes its banners from a copy of that component in the
+/// lazily loaded `usage-*.js` chunk, which loads too late to be intercepted. Its props are
+/// built in app-primary, so we turn `canShowUsageBanners` off there, which takes the same
+/// early return:
+///   usageBannerProps:{canShowUsageBanners:Kt&&Un==null,…  →  canShowUsageBanners:!1&&Kt&&Un==null
+/// The app-primary component is still used elsewhere (with `canShowUsageBanners:!0`), so it
+/// keeps its patch too.
 fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static SLOT: OnceLock<Regex> = OnceLock::new();
     static COMPONENT: OnceLock<Regex> = OnceLock::new();
+    static PROPS: OnceLock<Regex> = OnceLock::new();
     enum Shape {
         /// Up to 26.924: the slot's early return, then the helper call (memoized since 26.924).
         Slot,
         /// Since 26.928: one component, its early return right after the image-limit check.
         Component,
+        /// Since 26.1007: the component, and the props of its copy in the `usage` chunk.
+        Props,
     }
-    by_version(version, &[([0, 0], Shape::Slot), ([26, 928], Shape::Component)], |shape| match shape {
+    let component = |src: &str| {
+        let re = cached(&COMPONENT, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
+        replace_once(src, re, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};"))
+    };
+    by_version(version, &[([0, 0], Shape::Slot), ([26, 928], Shape::Component), ([26, 1007], Shape::Props)], |shape| match shape {
         Shape::Slot => {
             let re = cached(&SLOT, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
             replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
         }
-        Shape::Component => {
-            let re = cached(&COMPONENT, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
-            replace_once(src, re, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};"))
+        Shape::Component => component(src),
+        Shape::Props => {
+            let src = component(src)?;
+            let re = cached(&PROPS, r"usageBannerProps:\{canShowUsageBanners:");
+            replace_once(&src, re, format!("usageBannerProps:{{canShowUsageBanners:!1{BANNER_MARK}&&"))
         }
     })
 }
@@ -858,6 +875,20 @@ mod tests {
         }
         assert_eq!(patch_source(slot, on("26.928.1915.0")).1.len(), 1, "26.928 doesn't fall back to the old shape");
         assert_eq!(patch_source(comp, on("26.924.2738.0")).1.len(), 1, "26.924 doesn't try the new shape");
+        // Codex 26.1007: the thread composer's banners come from a lazily loaded chunk, whose
+        // props are built in app-primary next to the component.
+        let props = "usageBannerProps:{canShowUsageBanners:Kt&&Un==null,imageGenerationLimit:Gt,rateLimit:Jt}";
+        let new = format!("{comp}{props}");
+        let out = patch_source(&new, on("26.1007.2314.0")).0.unwrap();
+        assert!(out.contains("D=J(Jy,f);if(!0)return c/*agentplus-banner*/;"), "{out}");
+        assert!(out.contains("usageBannerProps:{canShowUsageBanners:!1/*agentplus-banner*/&&Kt&&Un==null,"), "{out}");
+        assert_eq!(patch_source(&out, on("26.1007.2314.0")), (None, vec![]));
+        // Both or nothing: either one alone leaves banners somewhere.
+        assert_eq!(patch_source(comp, on("26.1007.2314.0")).1.len(), 1);
+        assert_eq!(patch_source(props, on("26.1007.2314.0")).1.len(), 1);
+        // Older releases keep their shape and leave the props alone.
+        let old = patch_source(&new, on("26.1001.1.0")).0.unwrap();
+        assert!(old.contains("if(!0)return c/*agentplus-banner*/;") && old.contains("canShowUsageBanners:Kt&&"), "{old}");
         // Version unknown: every shape, oldest first.
         let out = patch_source(&both, BANNER).0.unwrap();
         assert!(out.contains("if(!0)return u/*agentplus-banner*/;let P=i!=null"), "{out}");
