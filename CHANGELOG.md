@@ -2,6 +2,16 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.2
+
+适配 Codex 26.1007：「隐藏用量提示横幅」又能隐藏额度用完的提示了。
+
+- Codex 26.1007 起，对话输入框上方的额度提示（如「Codex 和工作使用额度已用完」及随之弹出的重置额度窗口）改由单独加载的脚本显示，原来的补丁拦不到。现在会一并隐藏；更早的 Codex 版本仍用原来的方式
+
+Supports Codex 26.1007: "Hide usage banners" hides the out-of-quota notice again.
+
+- Since Codex 26.1007, the quota notices above the thread composer (such as "You're out of Codex and Work usage" and the reset dialog it opens) come from a separately loaded script the previous patch couldn't reach. They are hidden now too; older Codex releases keep the previous handling
+
 ## 0.4.1
 
 适配 Codex 26.1007：界面注入的 Fast 补丁又能用了。
