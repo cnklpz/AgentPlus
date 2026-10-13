@@ -528,10 +528,22 @@ const isCapTag = (g: ModelTag) => g.id.startsWith("cap:");
 /** A raw config value as a tag ("image_x" → "Image_x"). */
 const rawTag = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/** Codex's speed-mode field: its chips are shown as speed tags, not capability tags. */
+const SPEED_FIELD = "service_tiers";
+
+/** Speed tags (Fast, Ultrafast) from the speed-mode field (pending edits included). */
+function speedTags(fields: ModelField[], extra: Model["extra"]): string[] {
+  const f = fields.find((x) => x.key === SPEED_FIELD);
+  const v = extra?.[SPEED_FIELD];
+  if (!f || !Array.isArray(v)) return [];
+  return v.map((o) => { const i = f.options.indexOf(o); return (i >= 0 && f.hints[i]) || rawTag(o); });
+}
+
 /** Short tags for what a model can read / do, from its field values (pending edits included). */
 function capTags(fields: ModelField[], extra: Model["extra"]): string[] {
   const out: string[] = [];
   for (const f of fields) {
+    if (f.key === SPEED_FIELD) continue;
     const v = extra?.[f.key];
     if (f.kind === "chips" && Array.isArray(v)) {
       for (const o of v) {
@@ -678,6 +690,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
         const dirty = m.isNew || m.isEdited || m.isDeleted || on !== m.visible;
         const editable = !readonly && !m.readonly && !m.isDeleted;
         const caps = capTags(fields, m.extra);
+        const speeds = speedTags(fields, m.extra);
         const tags = (fields.length ? m.tags.filter((g) => !isCapTag(g)) : m.tags).filter((g) => !hasDefault || g.id !== "role:default");
         const isDefault = hasDefault && m.id === dflt.id;
         return (
@@ -691,6 +704,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
                 {m.isNew && <span className="mtag new">{t("common.tagNew")}</span>}
                 {m.isDeleted && <span className="mtag">{t("common.tagDeleting")}</span>}
                 {isDefault && <span className={`mtag${dflt.pending ? " new" : ""}`}>{t("agentPage.tagDefault")}</span>}
+                {speeds.map((x) => <span key={x} className="mtag fast">{x}</span>)}
                 {tags.map((g) => <span key={g.id} className={`mtag${g.id === "fast" ? " fast" : ""}`}>{g.label}</span>)}
               </span>
               {((hasNames && m.name && m.name !== m.id) || caps.length > 0) && (

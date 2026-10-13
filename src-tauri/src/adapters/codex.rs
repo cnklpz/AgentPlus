@@ -12,7 +12,7 @@ use crate::process::Install;
 use crate::store;
 use crate::util::*;
 use anyhow::{anyhow, bail, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table, TableLike};
 
@@ -161,6 +161,108 @@ fn service_tier(doc: &DocumentMut) -> String {
 
 fn is_fast_tier(t: &str) -> bool {
     t == FAST_TIER || t == "fast"
+}
+
+/// The model field for a catalog entry's speed modes (see `mfields::CODEX`): chips of tier ids.
+const TIERS_FIELD: &str = "service_tiers";
+/// Codex 26.1007+ shows Ultrafast for a tier with this id (or the name "Ultrafast").
+const ULTRAFAST_TIER: &str = "ultrafast";
+
+/// A `service_tiers` entry as a chip: Fast and Ultrafast the way Codex recognizes them
+/// (by id, or by name), anything else by its id.
+fn tier_chip(t: &Value) -> Option<String> {
+    let id = t.get("id").and_then(|x| x.as_str()).unwrap_or_default();
+    let name = t.get("name").and_then(|x| x.as_str()).unwrap_or_default().trim().to_lowercase();
+    if is_fast_tier(id) || name == "fast" || name == "priority" {
+        Some(FAST_TIER.into())
+    } else if id == ULTRAFAST_TIER || name == ULTRAFAST_TIER {
+        Some(ULTRAFAST_TIER.into())
+    } else {
+        (!id.is_empty()).then(|| id.to_string())
+    }
+}
+
+/// Speed-mode chips of a catalog entry; None when it has only the standard speed. Older
+/// catalogs mark Fast with `additional_speed_tiers: ["fast"]` instead.
+fn read_tiers(entry: &Value) -> Option<Value> {
+    let mut out: Vec<String> = vec![];
+    let mut add = |c: String| {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    };
+    match entry.get("service_tiers") {
+        Some(Value::Array(a)) => a.iter().filter_map(tier_chip).for_each(&mut add),
+        Some(t @ Value::Object(_)) => tier_chip(t).into_iter().for_each(&mut add),
+        _ => {}
+    }
+    if entry.get("additional_speed_tiers").and_then(|x| x.as_array()).is_some_and(|a| a.iter().any(|x| x == "fast")) {
+        add(FAST_TIER.into());
+    }
+    (!out.is_empty()).then(|| json!(out))
+}
+
+/// Makes the entry offer exactly the `want` speed modes (None = standard only). Kept tiers keep
+/// their entry as it is; new ones get Codex's own label and description.
+fn write_tiers(entry: &mut Value, want: Option<&Value>) -> Option<String> {
+    let want: Vec<String> = want.and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    let before = read_tiers(entry);
+    let old: Vec<Value> = match entry.get("service_tiers") {
+        Some(Value::Array(a)) => a.clone(),
+        Some(t @ Value::Object(_)) => vec![t.clone()],
+        _ => vec![],
+    };
+    let mut tiers: Vec<Value> = old.into_iter().filter(|t| tier_chip(t).is_some_and(|c| want.contains(&c))).collect();
+    for c in &want {
+        if !tiers.iter().any(|t| tier_chip(t).as_ref() == Some(c)) {
+            let name = match c.as_str() {
+                FAST_TIER => "Fast",
+                ULTRAFAST_TIER => "Ultrafast",
+                other => other,
+            };
+            // An empty description makes Codex show its own (translated) one.
+            tiers.push(json!({ "id": c, "name": name, "description": "" }));
+        }
+    }
+    entry["service_tiers"] = Value::Array(tiers);
+    // The older marker for Fast follows it.
+    let fast = want.iter().any(|c| c == FAST_TIER);
+    if let Some(a) = entry.get_mut("additional_speed_tiers").and_then(|x| x.as_array_mut()) {
+        let has = a.iter().any(|x| x == "fast");
+        if fast && !has {
+            a.push(json!("fast"));
+        } else if !fast && has {
+            a.retain(|x| x != "fast");
+        }
+    }
+    let after = read_tiers(entry);
+    (after != before).then(|| match &after {
+        Some(v) => format!("service_tiers = {v}"),
+        None => tr!("service_tiers: standard speed only", "service_tiers：只保留标准速度"),
+    })
+}
+
+/// A catalog entry's model fields, speed modes included.
+fn read_extra(entry: &Value) -> crate::mfields::Extra {
+    let mut x = crate::mfields::read(entry, crate::mfields::CODEX);
+    if let Some(t) = read_tiers(entry) {
+        x.insert(TIERS_FIELD.into(), t);
+    }
+    x
+}
+
+/// Applies model fields to a catalog entry, speed modes included. One line per change.
+fn write_extra(entry: &mut Value, extra: &crate::mfields::Extra) -> Result<Vec<String>> {
+    let mut rest = extra.clone();
+    let tiers = rest.remove(TIERS_FIELD);
+    if let Some(t) = &tiers {
+        crate::mfields::check(crate::mfields::CODEX, TIERS_FIELD, t)?;
+    }
+    let mut lines = crate::mfields::write(entry, crate::mfields::CODEX, &rest)?;
+    if let Some(t) = tiers {
+        lines.extend(write_tiers(entry, Some(&t).filter(|t| !t.is_null())));
+    }
+    Ok(lines)
 }
 
 /// The raw `model_provider` value in config.toml.
@@ -800,6 +902,11 @@ fn add_custom_model(v: &mut Value, store: &mut Value, id: &str, name: Option<&st
     entry["description"] = Value::from("自定义模型（AgentPlus 添加）");
     entry["visibility"] = Value::from("list");
     entry["priority"] = Value::from(prio);
+    // Speed modes are the upstream's to support: a new model offers none until picked.
+    entry["service_tiers"] = json!([]);
+    if let Some(a) = entry.get_mut("additional_speed_tiers").and_then(|x| x.as_array_mut()) {
+        a.retain(|x| x != "fast");
+    }
     for k in ["availability_nux", "upgrade"] {
         if entry.get(k).is_some() {
             entry[k] = Value::Null;
@@ -836,7 +943,7 @@ fn apply_list(v: &mut Value, store: &mut Value, list: &[String], diff: &mut Diff
             let g = crate::modelinfo::guess(ID, id);
             added.push(add_custom_model(v, store, id, None, g.as_ref().and_then(|g| g.context))?);
             if let (Some(g), Some(entry)) = (&g, catalog_entry(v, id)) {
-                added.extend(crate::mfields::write(entry, crate::mfields::CODEX, &g.extra)?.into_iter().map(|l| format!("{id}  {l}")));
+                added.extend(write_extra(entry, &g.extra)?.into_iter().map(|l| format!("{id}  {l}")));
             }
         }
     }
@@ -856,16 +963,9 @@ fn catalog_models(v: &Value, custom: &[String], codex_hidden: &[String]) -> Vec<
     list.iter()
         .filter_map(|m| {
             let id = m.get("slug")?.as_str()?.to_string();
-            let fast = match m.get("service_tiers") {
-                Some(Value::Array(a)) => a.iter().any(|t| t.get("id").and_then(|x| x.as_str()) == Some(FAST_TIER)),
-                Some(Value::Object(o)) => o.get("id").and_then(|x| x.as_str()) == Some(FAST_TIER),
-                _ => false,
-            } || m.get("additional_speed_tiers").map(|x| x.to_string().contains("fast")).unwrap_or(false);
+            // Speed modes are a model field (`service_tiers`): the UI tags them from it.
             let is_custom = custom.contains(&id);
             let mut tags = vec![];
-            if fast {
-                tags.push(Tag::new("fast", "Fast"));
-            }
             if is_custom {
                 tags.push(Tag::new("custom", l("Custom", "自定义")));
             } else if codex_hidden.contains(&id) {
@@ -880,7 +980,7 @@ fn catalog_models(v: &Value, custom: &[String], codex_hidden: &[String]) -> Vec<
                 name: m.get("display_name").and_then(|x| x.as_str()).map(String::from),
                 context,
                 deletable: is_custom,
-                extra: crate::mfields::read(m, crate::mfields::CODEX),
+                extra: read_extra(m),
                 id,
             })
         })
@@ -1364,7 +1464,7 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     store_dirty = true;
                 }
                 if let Some(entry) = catalog_entry(v, &id) {
-                    for l in crate::mfields::write(entry, crate::mfields::CODEX, &m.extra)? {
+                    for l in write_extra(entry, &m.extra)? {
                         diff.push(&cat_file, format!("{id}  {l}"), true);
                         cat_dirty = true;
                     }
@@ -1600,6 +1700,50 @@ mod tests {
             .map(|m| (m.id, m.tags.into_iter().map(|t| t.id).collect::<Vec<_>>()))
             .collect::<Vec<_>>();
         assert_eq!(tags, [("a".into(), vec![]), ("day".into(), vec!["codex-hidden".to_string()]), ("mine".into(), vec!["custom".to_string()])]);
+    }
+
+    #[test]
+    fn speed_modes_read_from_ids_names_and_the_older_marker() {
+        let tiers = |e: Value| read_extra(&e).get(TIERS_FIELD).cloned();
+        assert_eq!(tiers(json!({ "service_tiers": [{ "id": "priority", "name": "Fast", "description": "2x" }] })), Some(json!(["priority"])));
+        assert_eq!(tiers(json!({ "service_tiers": [{ "id": "x1", "name": " Ultrafast " }, { "id": "flex", "name": "Flex" }] })), Some(json!(["ultrafast", "flex"])));
+        assert_eq!(tiers(json!({ "service_tiers": { "id": "fast", "name": "" } })), Some(json!(["priority"])));
+        assert_eq!(tiers(json!({ "service_tiers": [], "additional_speed_tiers": ["fast"] })), Some(json!(["priority"])));
+        assert_eq!(tiers(json!({ "service_tiers": [] })), None, "standard only = unset");
+    }
+
+    #[test]
+    fn speed_modes_write_keeps_known_tiers_and_the_older_marker() {
+        let fast = json!({ "id": "priority", "name": "Fast", "description": "2x speed, increased usage" });
+        let mut e = json!({ "slug": "m", "service_tiers": [fast.clone(), { "id": "flex", "name": "Flex" }], "additional_speed_tiers": ["fast"] });
+        let ex = |v: Value| [(TIERS_FIELD.to_string(), v)].into_iter().collect::<crate::mfields::Extra>();
+
+        let lines = write_extra(&mut e, &ex(json!(["priority", "ultrafast"]))).unwrap();
+        assert_eq!(e["service_tiers"], json!([fast, { "id": "ultrafast", "name": "Ultrafast", "description": "" }]), "Fast keeps its entry, flex is dropped");
+        assert_eq!(lines, ["service_tiers = [\"priority\",\"ultrafast\"]"]);
+        assert!(write_extra(&mut e, &ex(json!(["priority", "ultrafast"]))).unwrap().is_empty(), "no change, no line");
+
+        write_extra(&mut e, &ex(json!(["ultrafast"]))).unwrap();
+        assert_eq!(e["additional_speed_tiers"], json!([]), "the older Fast marker follows");
+        write_extra(&mut e, &ex(json!(["priority", "ultrafast"]))).unwrap();
+        assert_eq!(e["additional_speed_tiers"], json!(["fast"]));
+
+        let lines = write_extra(&mut e, &ex(Value::Null)).unwrap();
+        assert_eq!((&e["service_tiers"], &e["additional_speed_tiers"]), (&json!([]), &json!([])));
+        assert_eq!(lines.len(), 1);
+        assert!(read_extra(&e).is_empty());
+
+        assert!(write_extra(&mut e, &ex(json!("ultrafast"))).is_err(), "chips are a list");
+        assert_eq!(e["service_tiers"], json!([]));
+    }
+
+    #[test]
+    fn a_custom_model_starts_without_speed_modes() {
+        let mut v = json!({ "models": [{ "slug": "gpt-x", "service_tiers": [{ "id": "priority", "name": "Fast", "description": "" }], "additional_speed_tiers": ["fast"] }] });
+        add_custom_model(&mut v, &mut json!({}), "mine", None, None).unwrap();
+        let e = catalog_entry(&mut v, "mine").unwrap();
+        assert_eq!((&e["service_tiers"], &e["additional_speed_tiers"]), (&json!([]), &json!([])));
+        assert_eq!(read_tiers(catalog_entry(&mut v, "gpt-x").unwrap()), Some(json!(["priority"])), "the copied entry is untouched");
     }
 
     #[test]

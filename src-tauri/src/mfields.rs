@@ -104,6 +104,15 @@ pub const CODEX: &[Spec] = &[
         kind: Kind::Select(&[("none", "none", "none"), ("minimal", "minimal", "minimal"), ("low", "low", "low"), ("medium", "medium", "medium"), ("high", "high", "high"), ("xhigh", "xhigh", "xhigh"), ("max", "max", "max"), ("ultra", "ultra", "ultra")]),
         caps: &[],
     },
+    // Not a JSON pointer: `service_tiers` holds objects, mapped in the Codex adapter.
+    Spec {
+        path: "service_tiers",
+        group: GEN,
+        label: ("Speed modes", "速度模式"),
+        desc: ("service_tiers: the speed modes Codex offers for this model; picking one sends service_tier = \"priority\" (Fast) or \"ultrafast\" with each request. The upstream must support that tier, or requests may fail or run at standard speed. Unset = standard speed only.", "service_tiers：Codex 为这个模型提供的速度模式；选中后每个请求会带上 service_tier = \"priority\"（Fast）或 \"ultrafast\"。需要上游支持这个档位，否则请求可能报错或仍按标准速度。不设置 = 只有标准速度。"),
+        kind: Kind::Chips(&[("priority", "Fast", "Fast"), ("ultrafast", "Ultrafast", "Ultrafast")]),
+        caps: &[],
+    },
 ];
 
 /// ZCode: `config.modelConfigRules.providerModelRules[].config` (paths are inside `config`).
