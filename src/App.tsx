@@ -8,7 +8,7 @@ import {
   opsToWrite, pendingTotal, removeProvider, setDefaultModel, setModelVisible, setProviderEnabled, setSetting, shouldAutoRestart, upsertModel, upsertProvider, viewModels, viewProviders,
   withOp,
 } from "./draft";
-import { AgentPage, type Tab } from "./components/AgentPage";
+import { AgentPage, EDIT_MODEL_EVENT, type EditModelDetail, type Tab } from "./components/AgentPage";
 import { Aside } from "./components/Aside";
 import { CommandPalette, type Target } from "./components/CommandPalette";
 import { HistoryPage } from "./components/HistoryPage";
@@ -1443,6 +1443,11 @@ export default function App() {
           }];
         };
         return [
+          // The table decides what can be edited (a disabled or built-in provider's models can't).
+          ...(el.getAttribute("data-editable") ? [{
+            label: t("app.editMenu"), icon: <Icon.edit size={12} />,
+            action: () => window.dispatchEvent(new CustomEvent<EditModelDetail>(EDIT_MODEL_EVENT, { detail: { agent: st.id, pid, mid } })),
+          }] : []),
           { label: t("app.copyModelId"), icon: <Icon.copy size={13} />, action: () => copy(mid) },
           // Hermes: the provider's default model (a model added in this draft can't be one yet).
           ...(hasDefaultModel(st.id) && !m.isDeleted && !m.readonly && !m.isNew && vis ? [{

@@ -539,6 +539,10 @@ function speedTags(fields: ModelField[], extra: Model["extra"]): string[] {
   return v.map((o) => { const i = f.options.indexOf(o); return (i >= 0 && f.hints[i]) || rawTag(o); });
 }
 
+/** Asks the model table showing `pid` to open the edit dialog for `mid` (from the right-click menu). */
+export const EDIT_MODEL_EVENT = "agentplus:edit-model";
+export interface EditModelDetail { agent: string; pid: string; mid: string }
+
 /** Short tags for what a model can read / do, from its field values (pending edits included). */
 function capTags(fields: ModelField[], extra: Model["extra"]): string[] {
   const out: string[] = [];
@@ -572,6 +576,15 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
   const [filter, setFilter] = useState("");
 
   useEffect(() => { setEditing(null); setFetched(null); setFilter(""); }, [pid]);
+  // "Edit" in a model's right-click menu.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const d = (e as CustomEvent<EditModelDetail>).detail;
+      if (d.agent === st.id && d.pid === pid && !readonly) setEditing(d.mid);
+    };
+    window.addEventListener(EDIT_MODEL_EVENT, open);
+    return () => window.removeEventListener(EDIT_MODEL_EVENT, open);
+  }, [st.id, pid, readonly]);
   // Where a fetch was started from vs. where the table is now (the provider can change meanwhile).
   const source = useRef({ pid, fetchFrom });
   source.current = { pid, fetchFrom };
@@ -694,7 +707,7 @@ function ModelTable({ st, title, note, pid, fetchFrom, models, base, draft, setD
         const tags = (fields.length ? m.tags.filter((g) => !isCapTag(g)) : m.tags).filter((g) => !hasDefault || g.id !== "role:default");
         const isDefault = hasDefault && m.id === dflt.id;
         return (
-          <div key={m.id} className={`mrow${m.isDeleted ? " deleted" : ""}`} data-ctx="model" data-pid={pid} data-mid={m.id}
+          <div key={m.id} className={`mrow${m.isDeleted ? " deleted" : ""}`} data-ctx="model" data-pid={pid} data-mid={m.id} data-editable={editable ? "1" : undefined}
             title={editable ? t("agentPage.dblClickEdit") : undefined}
             onDoubleClick={(e) => { if (editable && !(e.target as HTMLElement).closest("button")) setEditing(m.id); }}>
             <Icon.grip />
