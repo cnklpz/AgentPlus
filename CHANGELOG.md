@@ -2,6 +2,18 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.3
+
+Codex 模型可以设置速度模式（Fast / Ultrafast）。
+
+- Codex 模型新增「速度模式」字段，可以为每个模型开启 Fast 或 Ultrafast（Codex 26.1007 起支持 Ultrafast），开启的模式会以标签显示在模型列表里。需要上游支持对应档位，否则请求可能报错或仍按标准速度；自定义模型默认不开启
+- 模型的右键菜单新增「编辑…」，和双击一样打开编辑窗口
+
+Codex models can set speed modes (Fast / Ultrafast).
+
+- Codex models have a new "Speed modes" field to turn on Fast or Ultrafast per model (Ultrafast needs Codex 26.1007 or later); the modes that are on show as tags in the model list. The upstream must support the tier, or requests may fail or run at standard speed; custom models start with none
+- The model right-click menu has a new "Edit…" item, which opens the edit dialog like a double-click
+
 ## 0.4.2
 
 适配 Codex 26.1007：「隐藏用量提示横幅」又能隐藏额度用完的提示了。
