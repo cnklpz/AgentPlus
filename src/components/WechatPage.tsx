@@ -310,10 +310,10 @@ function WechatAside({ st, busy, onStartCodex, onExport }: { st: WechatStatus; b
           <button className="btn primary" disabled={busy} onClick={onStartCodex}><Icon.play size={12} />{t("wechatPage.startCodex")}</button>
         )}
       </section>
-      <div className="sync-history-head">
+      <div className="wx-log-head">
         <h2>{t("wechatPage.activity")}</h2>
         <span className="count">{log.length}</span>
-        <button className="btn small" disabled={busy} onClick={onExport} title={t("wechatPage.exportLog")}><Icon.download size={12} />{t("wechatPage.exportLog")}</button>
+        <button className="btn small" disabled={busy} onClick={onExport}><Icon.download size={12} />{t("wechatPage.exportLog")}</button>
       </div>
       {st.sessions.length > 0 && (
         <Seg<number> className="wx-log-filter" value={only ?? 0} label={t("wechatPage.logFilter")} onChange={(v) => setOnly(v === 0 ? null : v)}
