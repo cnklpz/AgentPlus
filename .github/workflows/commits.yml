@@ -1,0 +1,33 @@
+name: Commit messages
+
+# Checks a pull request's commit subjects and its title (the subject of a squash merge)
+# against AGENTS.md. `edited` re-runs it when the title is fixed.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commits-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  commit-messages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Passed through the environment, never interpolated into the script: the title is
+      # untrusted input.
+      - name: Check
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-commits.mjs "$BASE" "$HEAD"
