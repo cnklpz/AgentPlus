@@ -8,6 +8,7 @@
 //! - Send: `sendmessage`, echoing the `context_token` of a message received from that user.
 //! - Errcode -14 means the bot token is no longer valid (scan again).
 
+use crate::i18n::l;
 use anyhow::{anyhow, bail, Result};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -193,6 +194,117 @@ impl Client {
     }
 }
 
+/// Where WeChat keeps message media (`CDN_BASE_URL` of the channel). Downloads carry no token.
+const CDN_BASE: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
+/// Largest picture downloaded.
+pub const IMAGE_MAX: u64 = 20 * 1024 * 1024;
+const CDN_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// A picture in a message: where to download it and the key it is encrypted with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageRef {
+    pub url: String,
+    /// None: stored unencrypted.
+    pub key: Option<[u8; 16]>,
+}
+
+/// An AES key as the relay sends it: base64 of the 16 bytes (pictures), or base64 of
+/// their 32-character hex form (other media).
+fn media_key(b64: &str) -> Option<[u8; 16]> {
+    let raw = B64.decode(b64.trim()).ok()?;
+    if let Ok(k) = <[u8; 16]>::try_from(raw.as_slice()) {
+        return Some(k);
+    }
+    let hex = std::str::from_utf8(&raw).ok()?;
+    hex_key(hex)
+}
+
+fn hex_key(hex: &str) -> Option<[u8; 16]> {
+    let hex = hex.trim();
+    if hex.len() != 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut k = [0u8; 16];
+    for (i, b) in k.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(k)
+}
+
+/// The picture of an `image_item`, or None when it can't be fetched from a WeChat host.
+fn image_ref(img: &Value) -> Option<ImageRef> {
+    let media = &img["media"];
+    let url = match media["full_url"].as_str().map(str::trim).filter(|u| !u.is_empty()) {
+        // Only WeChat's own hosts, as for the relay.
+        Some(u) if trusted_base(u) => u.to_string(),
+        _ => {
+            let q = media["encrypt_query_param"].as_str().map(str::trim).filter(|q| !q.is_empty())?;
+            let mut u = url::Url::parse(&format!("{CDN_BASE}/download")).ok()?;
+            u.query_pairs_mut().append_pair("encrypted_query_param", q);
+            u.to_string()
+        }
+    };
+    // The hex key on the item is preferred, as in the channel.
+    let key = img["aeskey"].as_str().and_then(hex_key).or_else(|| media["aes_key"].as_str().and_then(media_key));
+    Some(ImageRef { url, key })
+}
+
+/// AES-128-ECB with PKCS#7 padding.
+fn decrypt_ecb(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
+    use aes::cipher::{BlockDecrypt, KeyInit};
+    if data.is_empty() || !data.len().is_multiple_of(16) {
+        bail!("encrypted picture has {} bytes, not whole blocks", data.len());
+    }
+    let cipher = aes::Aes128::new(key.into());
+    let mut out = data.to_vec();
+    for block in out.as_chunks_mut::<16>().0 {
+        cipher.decrypt_block(block.into());
+    }
+    let pad = usize::from(*out.last().expect("not empty"));
+    if pad == 0 || pad > 16 || out[out.len() - pad..].iter().any(|b| usize::from(*b) != pad) {
+        bail!("bad padding in decrypted picture");
+    }
+    out.truncate(out.len() - pad);
+    Ok(out)
+}
+
+/// The file extension of a picture from its first bytes.
+pub fn image_ext(data: &[u8]) -> &'static str {
+    match data {
+        [0x89, b'P', b'N', b'G', ..] => "png",
+        [b'G', b'I', b'F', b'8', ..] => "gif",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "webp",
+        [b'B', b'M', ..] => "bmp",
+        _ => "jpg",
+    }
+}
+
+/// Downloads and decrypts a picture.
+pub fn download_image(img: &ImageRef) -> Result<Vec<u8>> {
+    use std::io::Read;
+    if !trusted_base(&img.url) {
+        bail!("refusing to download a picture from {}", img.url);
+    }
+    let http = reqwest::blocking::Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::none()).build()?;
+    let resp = http.get(&img.url).timeout(CDN_TIMEOUT).send()?;
+    let status = resp.status();
+    if !status.is_success() {
+        bail!("picture download: HTTP {}", status.as_u16());
+    }
+    if resp.content_length().is_some_and(|n| n > IMAGE_MAX + 16) {
+        bail!("{}", l("The picture is larger than 20 MB", "图片超过 20 MB"));
+    }
+    let mut data = vec![];
+    resp.take(IMAGE_MAX + 17).read_to_end(&mut data)?;
+    if data.len() as u64 > IMAGE_MAX + 16 {
+        bail!("{}", l("The picture is larger than 20 MB", "图片超过 20 MB"));
+    }
+    match &img.key {
+        Some(k) => decrypt_ecb(&data, k),
+        None => Ok(data),
+    }
+}
+
 /// The error of a `getupdates` answer, if it is one.
 pub fn updates_error(v: &Value) -> Option<(i64, String)> {
     api_error(v)
@@ -208,8 +320,10 @@ pub struct Inbound {
     pub quote_id: Option<String>,
     /// The quoted message's text (title and body), when the relay includes it.
     pub quote_text: Option<String>,
-    /// It carried an image, file or video (not passed on).
+    /// It carried a file, a video, or a picture that can't be fetched (not passed on).
     pub media: bool,
+    /// Pictures to download and pass on.
+    pub images: Vec<ImageRef>,
     /// It carried a voice message WeChat gave no text for.
     pub voice_blank: bool,
 }
@@ -234,13 +348,18 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
     let items = m["item_list"].as_array().cloned().unwrap_or_default();
     let mut texts: Vec<String> = vec![];
     let (mut media, mut voice_blank) = (false, false);
+    let mut images = vec![];
     let (mut quote_id, mut quote_text) = (None, None);
     for item in &items {
         if let Some(t) = item_text(item) {
             texts.push(t);
         } else {
             match item["type"].as_i64() {
-                Some(2 | 4 | 5) => media = true,
+                Some(2) => match image_ref(&item["image_item"]) {
+                    Some(i) => images.push(i),
+                    None => media = true,
+                },
+                Some(4 | 5) => media = true,
                 Some(3) => voice_blank = true,
                 _ => {}
             }
@@ -261,12 +380,12 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
     }
     Some(Inbound {
         from: m["from_user_id"].as_str()?.to_string(),
-        text: texts.join("
-"),
+        text: texts.join("\n"),
         context_token: m["context_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
         quote_id,
         quote_text,
         media,
+        images,
         voice_blank,
     })
 }
@@ -317,9 +436,54 @@ mod tests {
             { "type": 1, "text_item": { "text": "a" } }, { "type": 3, "voice_item": {} }, { "type": 1, "text_item": { "text": "b" } }
         ] });
         let i = parse_message(&two).unwrap();
-        assert_eq!(i.text, "a
-b");
+        assert_eq!(i.text, "a\nb");
         assert!(i.voice_blank && !i.media);
+    }
+
+    #[test]
+    fn reads_picture_references() {
+        let key = [7u8; 16];
+        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(media_key(&B64.encode(key)), Some(key));
+        assert_eq!(media_key(&B64.encode(&hex)), Some(key));
+        assert_eq!(media_key(&B64.encode([1u8; 8])), None);
+        assert_eq!(hex_key(&hex), Some(key));
+        assert_eq!(hex_key("zz"), None);
+
+        let m = json!({ "message_type": 1, "from_user_id": "u", "item_list": [
+            { "type": 2, "image_item": { "aeskey": hex, "media": { "encrypt_query_param": "a b&c", "aes_key": "ignored" } } },
+            { "type": 2, "image_item": { "media": { "full_url": "https://novac2c.cdn.weixin.qq.com/c2c/download?x=1", "aes_key": B64.encode(key) } } },
+            // A host that isn't WeChat's: built from the query instead.
+            { "type": 2, "image_item": { "media": { "full_url": "https://evil.example/x", "encrypt_query_param": "q" } } },
+            { "type": 2, "image_item": { "media": { "full_url": "https://evil.example/x" } } },
+        ] });
+        let i = parse_message(&m).unwrap();
+        assert_eq!(i.images.len(), 3);
+        assert_eq!(i.images[0], ImageRef { url: format!("{CDN_BASE}/download?encrypted_query_param=a+b%26c"), key: Some(key) });
+        assert_eq!(i.images[1].url, "https://novac2c.cdn.weixin.qq.com/c2c/download?x=1");
+        assert_eq!(i.images[2], ImageRef { url: format!("{CDN_BASE}/download?encrypted_query_param=q"), key: None });
+        assert!(i.media, "the last one can't be fetched");
+        assert!(download_image(&ImageRef { url: "https://evil.example/x".into(), key: None }).is_err());
+    }
+
+    #[test]
+    fn decrypts_pictures() {
+        use aes::cipher::{BlockEncrypt, KeyInit};
+        let key = [3u8; 16];
+        let plain = b"\x89PNG\r\n\x1a\nhello picture".to_vec();
+        let pad = 16 - plain.len() % 16;
+        let mut data = plain.clone();
+        data.extend(std::iter::repeat_n(pad as u8, pad));
+        let cipher = aes::Aes128::new(&key.into());
+        for block in data.as_chunks_mut::<16>().0 {
+            cipher.encrypt_block(block.into());
+        }
+        assert_eq!(decrypt_ecb(&data, &key).unwrap(), plain);
+        assert!(decrypt_ecb(&data, &[4u8; 16]).is_err(), "wrong key: bad padding");
+        assert!(decrypt_ecb(&data[..20], &key).is_err());
+        assert_eq!(image_ext(&plain), "png");
+        assert_eq!(image_ext(b"RIFF\0\0\0\0WEBPVP8"), "webp");
+        assert_eq!(image_ext(&[0xff, 0xd8, 0xff]), "jpg");
     }
 
     #[test]
