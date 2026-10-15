@@ -46,6 +46,8 @@ pub enum Cmd {
     Last(Option<u32>),
     /// Show the session's queued messages, or drop them.
     Queue { no: Option<u32>, clear: bool },
+    /// Add text (or what is queued) to the session's running turn now.
+    Now { no: Option<u32>, text: Option<String> },
     /// Give the session a title.
     Rename { no: Option<u32>, title: String },
     /// Archive a session in Codex (it leaves `/ls`).
@@ -86,6 +88,14 @@ pub const SPECS: &[Spec] = &[
     Spec { names: &["stop", "停止"], usage: ("/stop [N | all]", "/stop [编号 | all]"), about: ("Interrupt the running turn and drop its queue; all stops every session.", "中断正在运行的这一轮并清空排队；all 停止所有会话。") },
     Spec { names: &["status", "st", "状态"], usage: ("/status", "/status"), about: ("The current session, running turns and what waits for you.", "当前会话、正在运行的任务和等你确认的事项。") },
     Spec { names: &["last", "l", "重发"], usage: ("/last [N]", "/last [编号]"), about: ("Send the session's last reply again.", "重发该会话最后一次的回复。") },
+    Spec {
+        names: &["now", "插话"],
+        usage: ("/now [N] [text]", "/now [编号] [消息]"),
+        about: (
+            "Add a message to the turn that is running instead of queuing it; /now alone sends what is queued. Starts a turn when none runs.",
+            "把消息直接插入正在进行的这一轮，不用排队；只发 /now 会把排队的消息立即发过去。没有在运行时就正常开始一轮。",
+        ),
+    },
     Spec { names: &["queue", "q", "排队"], usage: ("/queue [N] [clear]", "/queue [编号] [clear]"), about: ("The messages waiting for the running turn; clear drops them.", "查看等当前这轮结束后发送的消息；clear 清空。") },
     Spec { names: &["rename", "rn", "改名"], usage: ("/rename [N] title", "/rename [编号] 标题"), about: ("Give the session a title.", "给会话改标题。") },
     Spec { names: &["archive", "归档"], usage: ("/archive N", "/archive 编号"), about: ("Archive session N in Codex; it leaves /ls.", "在 Codex 里归档会话 N，它不再出现在 /ls 里。") },
@@ -125,8 +135,8 @@ fn distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
-/// The known command closest to a mistyped one: at most two edits away, and fewer than its
-/// own length (so `/x` doesn't suggest `/h`).
+/// The known command closest to a mistyped one: one edit away (fewer than its length, so `/x`
+/// doesn't suggest `/h`), or two for names of five letters or more (`/foo` isn't `/now`).
 pub fn closest(name: &str) -> Option<&'static str> {
     let lower = name.to_lowercase();
     let name = lower.as_str();
@@ -134,7 +144,7 @@ pub fn closest(name: &str) -> Option<&'static str> {
     SPECS
         .iter()
         .flat_map(|s| s.names.iter().map(move |a| (distance(name, a), a.chars().count(), s.names[0])))
-        .filter(|(d, len, _)| *d <= 2 && *d < n.min(*len))
+        .filter(|(d, len, _)| *d < n.min(*len) && (*d <= 1 || (*d == 2 && n.min(*len) >= 5)))
         .min_by_key(|(d, _, _)| *d)
         .map(|(_, _, main)| main)
 }
@@ -234,6 +244,10 @@ fn command(name: &str, arg: &str) -> Cmd {
                 _ => usage,
             }
         }
+        "now" => match split_session(arg) {
+            (no, "") => Cmd::Now { no, text: None },
+            (no, text) => Cmd::Now { no, text: Some(text.to_string()) },
+        },
         "rename" => match split_session(arg) {
             _ if arg.is_empty() => usage,
             // `/rename 2026`: a title that is only a number.
@@ -293,6 +307,7 @@ pub fn for_session(cmd: Cmd, n: u32) -> Option<Cmd> {
         Cmd::Stop(None) => Cmd::Stop(Some(n)),
         Cmd::Last(None) => Cmd::Last(Some(n)),
         Cmd::Queue { no: None, clear } => Cmd::Queue { no: Some(n), clear },
+        Cmd::Now { no: None, text } => Cmd::Now { no: Some(n), text },
         Cmd::Rename { no: None, title } => Cmd::Rename { no: Some(n), title },
         Cmd::Archive(None) => Cmd::Archive(Some(n)),
         Cmd::Diff(None) => Cmd::Diff(Some(n)),
@@ -357,6 +372,11 @@ mod tests {
         assert_eq!(parse("/q 2 clear"), Cmd::Queue { no: Some(2), clear: true });
         assert_eq!(parse("/排队 清空"), Cmd::Queue { no: None, clear: true });
         assert_eq!(parse("/queue 2 x"), usage("queue"));
+        assert_eq!(parse("/now"), Cmd::Now { no: None, text: None });
+        assert_eq!(parse("/now also check the logs"), Cmd::Now { no: None, text: Some("also check the logs".into()) });
+        assert_eq!(parse("/插话 3 先别提交"), Cmd::Now { no: Some(3), text: Some("先别提交".into()) });
+        assert_eq!(parse("/now 3"), Cmd::Now { no: Some(3), text: None });
+        assert_eq!(for_session(parse("/now stop here"), 5), Some(Cmd::Now { no: Some(5), text: Some("stop here".into()) }));
         assert_eq!(parse("/rename 3 Fix the updater"), Cmd::Rename { no: Some(3), title: "Fix the updater".into() });
         assert_eq!(parse("/rename Fix it"), Cmd::Rename { no: None, title: "Fix it".into() });
         // A title that is just a number names the current session.
@@ -378,7 +398,8 @@ mod tests {
         assert_eq!(parse("/stauts"), Cmd::Unknown("/stauts".into(), Some("status")));
         assert_eq!(parse("/efort high"), Cmd::Unknown("/efort".into(), Some("effort")));
         assert_eq!(parse("/lst"), Cmd::Unknown("/lst".into(), Some("ls")));
-        assert_eq!(parse("/hello"), Cmd::Unknown("/hello".into(), Some("help")));
+        assert_eq!(parse("/hel"), Cmd::Unknown("/hel".into(), Some("help")));
+        assert_eq!(parse("/hello"), Cmd::Unknown("/hello".into(), None));
         assert_eq!(parse("/x"), Cmd::Unknown("/x".into(), None));
         assert_eq!(parse("/whatever"), Cmd::Unknown("/whatever".into(), None));
         assert_eq!(distance("kitten", "sitting"), 3);
