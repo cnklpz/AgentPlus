@@ -156,6 +156,9 @@ pub struct Bridge {
     held_notices: std::collections::BTreeMap<String, String>,
     /// Pictures of the message being handled, for the turn it starts.
     attach: Vec<std::path::PathBuf>,
+    /// A message's pictures are downloading; later messages wait in `held`.
+    downloading: bool,
+    held: std::collections::VecDeque<Inbound>,
 }
 
 /// A numbered list the bot just showed.
@@ -186,7 +189,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false, desktop: desktop::Watch::default(), desktop_at: None, held_notices: Default::default(), attach: vec![] }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false, desktop: desktop::Watch::default(), desktop_at: None, held_notices: Default::default(), attach: vec![], downloading: false, held: Default::default() }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -196,26 +199,32 @@ impl Bridge {
         log("info", l("Connected to WeChat", "已连接微信"));
         self.publish();
         let current = || super::RUN.load(std::sync::atomic::Ordering::SeqCst) == run;
+        // Timers run every TICK whether or not events keep coming (a turn streams them).
+        let mut ticked = Instant::now();
         loop {
-            let ev = match rx.recv_timeout(TICK) {
-                Ok(ev) => ev,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if !current() {
-                        break;
-                    }
-                    self.tick();
-                    self.flush();
-                    continue;
-                }
+            let wait = TICK.saturating_sub(ticked.elapsed());
+            let ev = match rx.recv_timeout(wait) {
+                Ok(ev) => Some(ev),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
             if !current() {
                 break;
             }
+            if ticked.elapsed() >= TICK {
+                ticked = Instant::now();
+                self.tick();
+            }
+            let Some(ev) = ev else {
+                self.flush();
+                self.publish();
+                continue;
+            };
             match ev {
                 Event::Stop => break,
                 Event::Options(o) => self.set_options(o),
                 Event::Inbound(m) => self.on_inbound(m),
+                Event::Pictures { message, paths, failed } => self.on_pictures(message, paths, failed),
                 Event::StartCodex => self.start_codex_now(),
                 Event::Cursor(c) => {
                     if self.saved.cursor != c {
@@ -459,6 +468,10 @@ impl Bridge {
                 Some((thread.clone(), format::summary(&stats).unwrap_or_default()))
             })
             .collect();
+        // Without a reply context they would pile up for later; the turn's reply says it all.
+        if self.reply_context().is_none() {
+            return;
+        }
         for (thread, summary) in due {
             self.note(&thread, &tr!("⏳ Still running · {summary}", "⏳ 仍在运行 · {summary}"));
         }
@@ -486,11 +499,11 @@ impl Bridge {
                 live.title = e.title.clone();
             }
             live.updated = now();
-            let body = desktop_notice(&e);
+            let no = self.number(&e.thread);
+            let body = desktop_notice(&e, no);
             if self.reply_context().is_some() {
                 self.note(&e.thread, &body);
             } else {
-                self.number(&e.thread);
                 self.held_notices.insert(e.thread, body);
             }
         }
@@ -885,8 +898,8 @@ impl Bridge {
         self.codex()?.request("thread/archive", json!({ "threadId": thread }), CALL)?;
         self.live.remove(&thread);
         self.pending.retain(|p| p.thread != thread);
+        // The number stays taken: old messages tagged with it must not reach another session.
         self.save(|s| {
-            s.numbers.remove(&n);
             s.modes.remove(&thread);
             s.next.remove(&thread);
             if s.current.as_ref() == Some(&thread) {
@@ -915,7 +928,7 @@ impl Bridge {
         let thread = self.session(no)?;
         let no = self.number(&thread);
         let cwd = self.cwd_of(&thread)?;
-        if let Some(stat) = git_diff_stat(&cwd) {
+        if let Some(stat) = git_diff_stat(&cwd)? {
             return Ok(if stat.trim().is_empty() {
                 tr!("#{no}: no uncommitted changes in {cwd}", "#{no}：{cwd} 没有未提交的改动")
             } else {
@@ -937,6 +950,16 @@ impl Bridge {
             let now = self.saved.modes.get(&thread).map(|m| mode_label(m).to_string()).unwrap_or_else(|| l("Codex's own setting", "Codex 自己的设置").into());
             return Ok(format!("{}\n{}", tr!("#{no} mode: {now}", "#{no} 的模式：{now}"), usage_text(command::spec("mode").expect("listed"))));
         };
+        if m == "default" {
+            let t = thread.clone();
+            self.save(|s| {
+                s.modes.remove(&t);
+            });
+            return Ok(tr!(
+                "WeChat no longer sets a mode for #{no}. Codex may keep the last one it was given; /mode sets one again.",
+                "微信不再为 #{no} 指定模式。Codex 可能沿用上一次收到的模式；发 /mode 可重新指定。"
+            ));
+        }
         let (t, mv) = (thread.clone(), m.clone());
         self.save(|s| {
             s.modes.insert(t, mv);
@@ -1166,6 +1189,87 @@ impl Bridge {
         if m.media {
             self.say(l("Files and videos can't be passed to Codex yet; the rest of that message is sent.", "文件和视频暂时无法转给 Codex，这条消息的其他内容已发送。"));
         }
+        // Messages keep their order: later ones wait while pictures download, except those
+        // that start no turn (stop, approvals…), which mustn't wait for a slow download.
+        if self.downloading && !self.urgent(&m) {
+            self.held.push_back(m);
+            return;
+        }
+        self.dispatch(m);
+    }
+
+    /// A message that acts right away and never starts a turn, so it can't change the order
+    /// of what reaches a session.
+    fn urgent(&self, m: &Inbound) -> bool {
+        if !m.images.is_empty() {
+            return false;
+        }
+        match command::parse(&m.text) {
+            Cmd::Stop(_) | Cmd::StopAll | Cmd::Status | Cmd::Help(_) | Cmd::Queue { .. } | Cmd::Last(_) | Cmd::Current | Cmd::Usage(_) | Cmd::Unknown(..) => true,
+            // An answer only while something waits for one; otherwise it is text for a session.
+            Cmd::Approve { .. } => self.pending.iter().any(|p| !matches!(p.ask, Ask::Questions(_))) || !self.deferred.is_empty() || !self.retry.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// A message with pictures waits for them (downloaded in the background); others go on.
+    fn dispatch(&mut self, m: Inbound) {
+        if m.images.is_empty() {
+            return self.process(m);
+        }
+        self.downloading = true;
+        let tx = self.events.clone();
+        let spawned = std::thread::Builder::new().name("agentplus-wechat-pictures".into()).spawn(move || {
+            let images = m.images.clone();
+            // Whatever happens here, the bridge must hear back: it holds later messages until then.
+            let got = std::panic::catch_unwind(|| {
+                let mut paths = vec![];
+                let mut failed = 0;
+                for img in &images {
+                    match ilink::download_image(img).and_then(|data| super::save_media(&data, ilink::image_ext(&data))) {
+                        Ok(p) => paths.push(p),
+                        Err(e) => {
+                            failed += 1;
+                            crate::applog::warn("wechat", format!("picture: {e:#}"));
+                            log("error", format!("{e:#}"));
+                        }
+                    }
+                }
+                (paths, failed)
+            });
+            let (paths, failed) = got.unwrap_or_else(|_| {
+                crate::applog::error("wechat", "picture download panicked");
+                (vec![], images.len())
+            });
+            let _ = tx.send(Event::Pictures { message: m, paths, failed });
+        });
+        if let Err(e) = spawned {
+            self.downloading = false;
+            self.say(format!("❗ {e:#}"));
+        }
+    }
+
+    /// The pictures of a message are in: it goes on with them, then the messages that waited.
+    fn on_pictures(&mut self, mut m: Inbound, paths: Vec<std::path::PathBuf>, failed: usize) {
+        self.downloading = false;
+        m.images.clear();
+        if paths.is_empty() && m.text == IMAGE_ONLY {
+            self.say(l("❗ The picture couldn't be downloaded from WeChat; nothing was sent. Send it again.", "❗ 无法从微信下载图片，消息没有发送，请重发。"));
+        } else {
+            if failed > 0 {
+                self.say(trn!(failed, "❗ {n} picture couldn't be downloaded; the rest was sent.", "❗ {n} pictures couldn't be downloaded; the rest was sent.", "❗ 有 {n} 张图片下载失败，其余内容已发送。"));
+            }
+            m.pictures = paths;
+            self.process(m);
+        }
+        while !self.downloading {
+            let Some(next) = self.held.pop_front() else { break };
+            self.dispatch(next);
+        }
+    }
+
+    /// A message ready to act on.
+    fn process(&mut self, m: Inbound) {
         let (cmd, target) = self.resolve(&m.text);
         if !self.codex.as_ref().is_some_and(|c| c.alive()) {
             // The answer to "Start Codex?".
@@ -1251,13 +1355,7 @@ impl Bridge {
     fn handle(&mut self, m: Inbound, cmd: Cmd, target: Option<String>) {
         let quoted = self.session_of_quote(&m);
         // Pictures go with the text of this message; a command doesn't use them.
-        self.attach.clear();
-        if !m.images.is_empty() && matches!(cmd, Cmd::Text(_) | Cmd::To { .. } | Cmd::Approve { .. }) {
-            self.attach = self.fetch_images(&m.images);
-            if self.attach.is_empty() {
-                return;
-            }
-        }
+        self.attach = if matches!(cmd, Cmd::Text(_) | Cmd::To { .. } | Cmd::Approve { .. }) { m.pictures.clone() } else { vec![] };
         let r = match cmd {
             Cmd::To { no, force, text } => match self.thread_of(no) {
                 // `#3 /stop`: a command for that session; it never goes to Codex as text.
@@ -1265,14 +1363,14 @@ impl Bridge {
                     Some(c) => self.run_cmd(c, Some(t)),
                     None => Ok(Some(tr!("{text} doesn't take a session with #{no}. Send it on its own.", "{text} 不能配合 #{no} 使用，请单独发送。"))),
                 },
-                Some(t) => self.send_or_answer(&t, with_quote(&m, &text), force).map(|_| None),
+                Some(t) => self.send_or_answer(&t, with_quote(&m, &text, quoted.is_some()), force).map(|_| None),
                 None => Err(anyhow!(tr!("There is no session #{no}. Send /ls to see the list", "没有 #{no} 这个会话。发 /ls 查看列表"))),
             },
             Cmd::Approve { no, decision } => match self.answer_approval(no.or(quoted), decision) {
                 Some(r) => r.map(Some),
-                None => self.route_text(with_quote(&m, m.text.trim()), quoted, false),
+                None => self.route_text(with_quote(&m, m.text.trim(), quoted.is_some()), quoted, false),
             },
-            Cmd::Text(t) => self.route_text(with_quote(&m, &t), quoted, false),
+            Cmd::Text(t) => self.route_text(with_quote(&m, &t, quoted.is_some()), quoted, false),
             // A model picked from the list goes to the session the list was for; otherwise a
             // quoted session, then the current one.
             c => {
@@ -1285,30 +1383,6 @@ impl Bridge {
             Ok(None) => {}
             Err(e) => self.say(format!("❗ {e:#}")),
         }
-    }
-
-    /// Downloads a message's pictures into `~/.agentplus/wechat-media`; says which failed.
-    fn fetch_images(&mut self, images: &[ilink::ImageRef]) -> Vec<std::path::PathBuf> {
-        let mut paths = vec![];
-        let mut failed = 0;
-        for img in images {
-            match ilink::download_image(img).and_then(|data| super::save_media(&data, ilink::image_ext(&data))) {
-                Ok(p) => paths.push(p),
-                Err(e) => {
-                    failed += 1;
-                    crate::applog::warn("wechat", format!("picture: {e:#}"));
-                    log("error", format!("{e:#}"));
-                }
-            }
-        }
-        if failed > 0 {
-            self.say(if paths.is_empty() {
-                l("❗ The picture couldn't be downloaded from WeChat; nothing was sent. Send it again.", "❗ 无法从微信下载图片，消息没有发送，请重发。").to_string()
-            } else {
-                trn!(failed, "❗ {n} picture couldn't be downloaded; the rest was sent.", "❗ {n} pictures couldn't be downloaded; the rest was sent.", "❗ 有 {n} 张图片下载失败，其余内容已发送。")
-            });
-        }
-        paths
     }
 
     /// A command. `session`: the one it is aimed at (`#3 /stop`, a quoted message), else the
@@ -1714,7 +1788,7 @@ impl Bridge {
 }
 
 /// "✅ Finished in Codex · 2m 50s", Codex's last words, and how to go on from here.
-fn desktop_notice(e: &desktop::Finished) -> String {
+fn desktop_notice(e: &desktop::Finished, no: u32) -> String {
     let mut head = if e.aborted { l("⏹ Stopped in Codex", "⏹ 已在 Codex 中停止").to_string() } else { l("✅ Finished in Codex", "✅ 已在 Codex 中完成").to_string() };
     if let Some(ms) = e.duration_ms.filter(|ms| *ms >= 1000) {
         head.push_str(&format!(" · {}", format::duration(ms)));
@@ -1723,7 +1797,11 @@ fn desktop_notice(e: &desktop::Finished) -> String {
     if let Some(m) = e.message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
         lines.push(crate::util::clip(&m.replace('\n', " "), NOTICE_CHARS));
     }
-    lines.push(l("Reply to this message to continue the session here.", "引用这条消息回复，可以在微信里继续这个会话。").into());
+    // It is likely still open in Codex desktop, which locks it: say how to go ahead.
+    lines.push(tr!(
+        "To continue here, send #{no}! text (it may still be open in Codex desktop).",
+        "要在微信里继续，发 #{no}! 消息（它可能还开在 Codex 桌面版里）。"
+    ));
     lines.join("\n")
 }
 
@@ -1888,29 +1966,55 @@ fn help_of(s: &Spec) -> String {
     lines.join("\n")
 }
 
-/// The message for Codex, with the quoted message in front when the user replied to one.
-fn with_quote(m: &Inbound, text: &str) -> String {
-    let Some(q) = m.quote_text.as_deref() else { return text.to_string() };
-    // A bot message starts with its session tag (`【#3 title】 | …`); Codex doesn't need it.
-    let q = q.trim();
-    let q = match q.strip_prefix("【#").and_then(|r| r.split_once('】')) {
-        Some((_, rest)) => rest.trim_start_matches([' ', '|', '\n']).trim(),
-        None => q,
+/// The message for Codex, with the quoted text in front: the part the user selected, or a
+/// whole message of their own or someone else's. A whole bot message (`bot`, or tagged
+/// `【#3 …】`) is only quoted to pick its session: Codex already has its text.
+fn with_quote(m: &Inbound, text: &str, bot: bool) -> String {
+    let q = match (m.quote_part.as_deref().map(str::trim), m.quote_text.as_deref().map(str::trim)) {
+        (Some(part), _) if !part.is_empty() => part,
+        (_, Some(q)) if !bot && !q.is_empty() && command::tag_in(q).is_none() => q,
+        _ => return text.to_string(),
     };
-    if q.is_empty() {
-        return text.to_string();
-    }
     let quoted: String = crate::util::clip(q, QUOTE_CHARS).lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
     format!("{quoted}\n\n{text}")
 }
 
-/// `git diff --stat` in a folder, or None when it isn't a Git working tree.
-fn git_diff_stat(cwd: &str) -> Option<String> {
+/// `git diff` gives up after this; it runs on the bridge thread.
+const GIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `git diff --stat` in a folder; None when it isn't a Git working tree.
+/// Settings that make git run other programs (fsmonitor, external diff, text conversion)
+/// are turned off: the folder is whatever the session uses, and this is asked from a phone.
+fn git_diff_stat(cwd: &str) -> Result<Option<String>> {
+    use std::io::Read;
     let mut cmd = std::process::Command::new("git");
-    cmd.args(["-C", cwd, "diff", "HEAD", "--stat", "--no-color"]);
+    cmd.args(["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", cwd, "diff", "HEAD", "--stat", "--no-color", "--no-ext-diff", "--no-textconv"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
     crate::process::no_window(&mut cmd);
-    let out = cmd.output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+    let mut child = cmd.spawn().map_err(|e| anyhow!(tr!("Can't run git ({e}). Is Git installed?", "无法运行 git（{e}）。装了 Git 吗？")))?;
+    let mut stdout = child.stdout.take().expect("piped");
+    // Read while it runs, so a long output can't fill the pipe and stall git.
+    let reader = std::thread::spawn(move || {
+        let mut out = vec![];
+        let _ = stdout.read_to_end(&mut out);
+        out
+    });
+    let deadline = Instant::now() + GIT_TIMEOUT;
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{}", l("git took too long in this folder", "git 在这个目录里运行太久，已放弃"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let out = reader.join().unwrap_or_default();
+    Ok(status.success().then(|| String::from_utf8_lossy(&out).trim_end().to_string()))
 }
 
 /// The first `n` lines, and how many more there are.
@@ -1998,14 +2102,18 @@ mod tests {
     }
 
     #[test]
-    fn quotes_go_in_front_without_the_tag() {
+    fn quotes_go_in_front_unless_they_are_the_bots() {
         let m = |q: Option<&str>| Inbound { quote_text: q.map(String::from), ..msg("why?") };
-        assert_eq!(with_quote(&m(None), "why?"), "why?");
-        assert_eq!(with_quote(&m(Some("【#2 demo】 | line one\nline two")), "why?"), "> line one\n> line two\n\nwhy?");
-        assert_eq!(with_quote(&m(Some("【#2 demo】")), "why?"), "why?");
-        assert_eq!(with_quote(&m(Some("plain")), "why?"), "> plain\n\nwhy?");
+        assert_eq!(with_quote(&m(None), "why?", false), "why?");
+        assert_eq!(with_quote(&m(Some("line one\nline two")), "why?", false), "> line one\n> line two\n\nwhy?");
+        // The bot's own messages only pick the session.
+        assert_eq!(with_quote(&m(Some("【#2 demo】 | line one")), "why?", false), "why?");
+        assert_eq!(with_quote(&m(Some("plain")), "why?", true), "why?");
+        // A selected part of the bot's message is passed on.
+        let part = Inbound { quote_part: Some("step 3".into()), ..m(Some("【#2 demo】 | step 3 fails")) };
+        assert_eq!(with_quote(&part, "why?", true), "> step 3\n\nwhy?");
         let long = "x".repeat(QUOTE_CHARS * 2);
-        assert!(with_quote(&m(Some(&long)), "q").chars().count() < QUOTE_CHARS + 20);
+        assert!(with_quote(&m(Some(&long)), "q", false).chars().count() < QUOTE_CHARS + 20);
         assert_eq!(clip_lines("a\nb\nc", 2), "a\nb\n……还有 1 行");
         assert_eq!(clip_lines("a\nb", 2), "a\nb");
     }
@@ -2055,10 +2163,11 @@ mod tests {
 
     #[test]
     fn desktop_notices_say_how_it_ended() {
-        let e = desktop::Finished { thread: "t".into(), title: "x".into(), turn: "1".into(), aborted: false, duration_ms: Some(170_966), message: Some("Line one\nline two".into()) };
-        let text = desktop_notice(&e);
+        let e = desktop::Finished { thread: "t".into(), title: "x".into(), turn: "1".into(), aborted: false, duration_ms: Some(170_966), message: Some("Line one\nline two".into()), at: None };
+        let text = desktop_notice(&e, 4);
         assert!(text.starts_with("✅ 已在 Codex 中完成 · 2 分 50 秒\nLine one line two\n"), "{text}");
-        let stopped = desktop_notice(&desktop::Finished { aborted: true, message: None, duration_ms: None, ..e });
+        assert!(text.contains("#4!"), "{text}");
+        let stopped = desktop_notice(&desktop::Finished { aborted: true, message: None, duration_ms: None, ..e }, 4);
         assert!(stopped.starts_with("⏹ 已在 Codex 中停止\n"), "{stopped}");
     }
 
@@ -2074,6 +2183,27 @@ mod tests {
         let out = sent(&mut b);
         assert_eq!(out.len(), 1);
         assert!(out[0].ends_with("second"), "{out:?}");
+    }
+
+    #[test]
+    fn messages_wait_for_pictures_in_order() {
+        let _h = crate::util::TestHome::new("wechat-pictures");
+        let mut b = bridge();
+        b.downloading = true;
+        b.on_inbound(msg("what is it?"));
+        b.on_inbound(msg("/new"));
+        assert!(sent(&mut b).is_empty(), "held while a picture downloads");
+        // What starts no turn doesn't wait.
+        b.on_inbound(msg("/status"));
+        assert!(sent(&mut b)[0].contains("还没有选择会话"));
+        b.on_inbound(msg("n"));
+        assert_eq!(b.held.len(), 3, "n with nothing to answer is text");
+        // Every picture failed and there was no text: nothing goes on, then the rest runs.
+        b.on_pictures(Inbound { text: IMAGE_ONLY.into(), ..msg("") }, vec![], 1);
+        let out = sent(&mut b);
+        assert!(out[0].contains("无法从微信下载图片"), "{out:?}");
+        assert!(out[1].contains("还没有选择会话") && out[2].contains("Codex 还没启动"), "{out:?}");
+        assert!(!b.downloading && b.held.is_empty());
     }
 
     #[test]
