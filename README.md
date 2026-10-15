@@ -92,6 +92,7 @@ AgentPlus recognizes 18 agents and reads and writes the following config files:
 | pi | `~/.pi/agent/models.json` |
 | OpenClaw | `~/.openclaw/openclaw.json` |
 | DeepSeek Harness | `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (`~/.dsh` by default) |
+| Antigravity | `~/.gemini/config/mcp_config.json`, `~/.gemini/config/skills` (Google sign-in only: no providers) |
 | Trae | Detection only. Custom models live in your account; AgentPlus walks you through adding them by hand |
 
 Only the agents it finds show up in the app. If yours is installed somewhere unusual, point AgentPlus at the folder in *Settings → Agent detection*.
@@ -147,6 +148,7 @@ Only the agents it finds show up in the app. If yours is installed somewhere unu
 - OpenClaw: change a URL or key and the model files it generates per agent are updated too.
 - pi: written in the formats pi supports, so an invalid field can't make the file unreadable.
 - DeepSeek Harness: providers are edited per profile (`dsh web` or the desktop app); only the changed entries of `cordis.patch.yml` are rewritten, and keys stay in `.credentials.yaml`.
+- Antigravity: signs in with a Google account, so there are no providers to edit; AgentPlus manages its MCP servers and skills, and can show its own UI in Chinese while AgentPlus runs (built-in dictionary plus your own entries, through its local debug port; conversations and code are left alone).
 - Variable references (`$VAR`, `${VAR}`, `env_key`) are left alone.
 
 </details>

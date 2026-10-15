@@ -92,6 +92,7 @@ AgentPlus 能识别 18 个 Agent，读取和写入这些配置文件：
 | pi | `~/.pi/agent/models.json` |
 | OpenClaw | `~/.openclaw/openclaw.json` |
 | DeepSeek Harness | `$DSH_HOME/profiles/<配置档>/cordis.patch.yml`（默认 `~/.dsh`） |
+| Antigravity | `~/.gemini/config/mcp_config.json`、`~/.gemini/config/skills`（只支持 Google 账号登录，没有供应商可管） |
 | Trae | 仅支持识别。自定义模型保存在账号里，需要按 AgentPlus 给出的步骤手动添加 |
 
 列表里只会出现检测到的 Agent。装在非常规位置的话，可以在「设置 → Agent 识别」中指定目录。
@@ -147,6 +148,7 @@ AgentPlus 能识别 18 个 Agent，读取和写入这些配置文件：
 - OpenClaw：地址或密钥变了，它为各 agent 生成的模型文件会一起更新。
 - pi：按 pi 支持的格式写入，无效字段不会让整个文件读不出来。
 - DeepSeek Harness：按配置档（`dsh web` 或桌面版）编辑供应商；`cordis.patch.yml` 只重写改动的条目，密钥保存在 `.credentials.yaml`。
+- Antigravity：用 Google 账号登录，没有供应商可编辑；AgentPlus 管理它的 MCP 服务器和技能，并能在 AgentPlus 运行期间把它自己的界面汉化（内置词典加自定义译文，经它的本地调试端口生效；对话和代码内容不动）。
 - 配置里的 `$VAR`、`${VAR}`、`env_key` 等变量引用会原样保留。
 
 </details>
