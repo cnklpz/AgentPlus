@@ -791,18 +791,15 @@ pub(crate) fn detect_codex() -> Install {
 fn codex_bundle_cli(exe: &Path, version: Option<&str>) -> Option<PathBuf> {
     let resources = bundle_of(exe)?.join("Contents").join("Resources");
     let layouts = [([0, 0], "codex"), ([26, 930], "codex-cli/CodexCLI.app/Contents/MacOS/codex")];
-    let existing = |rel: &str| Some(resources.join(rel)).filter(|p| p.is_file());
-    match version.and_then(crate::cdp::codex_version) {
-        Some(v) => layouts.iter().rev().find(|(since, _)| *since <= v).and_then(|(_, rel)| existing(rel)),
-        None => layouts.iter().find_map(|(_, rel)| existing(rel)),
-    }
+    crate::cdp::by_version(version.and_then(crate::cdp::codex_version), &layouts, |rel| Some(resources.join(rel)).filter(|p| p.is_file()))
 }
 
 /// Codex command-line programs of the installed Codex, best first: the one the desktop app
 /// ships (`app\resources\codex.exe` in the Windows package, see [`codex_bundle_cli`] for
 /// the macOS bundle), the copies the Windows app unpacks under
 /// `%LOCALAPPDATA%\OpenAI\Codex\bin` (newest first; some systems won't let other programs
-/// run what is inside WindowsApps), then a standalone CLI on PATH.
+/// run what is inside WindowsApps). Without the desktop app, a standalone CLI on PATH (only a
+/// native `codex.exe` on Windows, not an npm `codex.cmd` shim).
 pub(crate) fn codex_clis() -> Vec<PathBuf> {
     let inst = detect_codex();
     let mut unpacked = vec![];
