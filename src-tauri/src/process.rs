@@ -786,17 +786,26 @@ pub(crate) fn detect_codex() -> Install {
     inst
 }
 
+/// The CLI in a macOS Codex bundle. The packaged layout is verified in 26.930.61225;
+/// older releases keep their original path. Only an unknown version tries both layouts.
+fn codex_bundle_cli(exe: &Path, version: Option<&str>) -> Option<PathBuf> {
+    let resources = bundle_of(exe)?.join("Contents").join("Resources");
+    let layouts = [([0, 0], "codex"), ([26, 930], "codex-cli/CodexCLI.app/Contents/MacOS/codex")];
+    let existing = |rel: &str| Some(resources.join(rel)).filter(|p| p.is_file());
+    match version.and_then(crate::cdp::codex_version) {
+        Some(v) => layouts.iter().rev().find(|(since, _)| *since <= v).and_then(|(_, rel)| existing(rel)),
+        None => layouts.iter().find_map(|(_, rel)| existing(rel)),
+    }
+}
+
 /// Codex command-line programs of the installed Codex, best first: the one the desktop app
-/// ships (`app\resources\codex.exe` in the Windows package, `Contents/Resources/codex` in
+/// ships (`app\resources\codex.exe` in the Windows package, see [`codex_bundle_cli`] for
 /// the macOS bundle), the copies the Windows app unpacks under
 /// `%LOCALAPPDATA%\OpenAI\Codex\bin` (newest first; some systems won't let other programs
-/// run what is inside WindowsApps), or the CLI itself when only that is installed.
+/// run what is inside WindowsApps), then a standalone CLI on PATH.
 pub(crate) fn codex_clis() -> Vec<PathBuf> {
     let inst = detect_codex();
-    let mut found = vec![];
-    if let Some(dir) = &inst.dir {
-        found.push(dir.join("app").join("resources").join("codex.exe"));
-    }
+    let mut unpacked = vec![];
     if cfg!(windows) {
         if let Some(bin) = dirs::data_local_dir().map(|d| d.join("OpenAI").join("Codex").join("bin")) {
             let mut copies: Vec<(std::time::SystemTime, PathBuf)> = std::fs::read_dir(&bin)
@@ -808,17 +817,25 @@ pub(crate) fn codex_clis() -> Vec<PathBuf> {
                 .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
                 .collect();
             copies.sort_by_key(|c| std::cmp::Reverse(c.0));
-            found.extend(copies.into_iter().map(|(_, p)| p));
+            unpacked.extend(copies.into_iter().map(|(_, p)| p));
         }
     }
+    codex_cli_candidates(&inst, unpacked, on_path(&["codex.exe", "codex.cmd"]))
+}
+
+fn codex_cli_candidates(inst: &Install, unpacked: Vec<PathBuf>, cli: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut found = vec![];
+    if let Some(dir) = &inst.dir {
+        found.push(dir.join("app").join("resources").join("codex.exe"));
+    }
+    found.extend(unpacked);
     if let Some(exe) = &inst.exe {
-        if let Some(app) = exe.ancestors().find(|d| d.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"))) {
-            found.push(app.join("Contents").join("Resources").join("codex"));
-        }
-        if exe.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("codex")) {
+        found.extend(codex_bundle_cli(exe, inst.version.as_deref()));
+        if bundle_of(exe).is_none() && exe.file_stem().is_some_and(|s| s.eq_ignore_ascii_case("codex")) {
             found.push(exe.clone());
         }
     }
+    found.extend(cli);
     let mut out: Vec<PathBuf> = vec![];
     for p in found {
         if p.is_file() && !out.contains(&p) {
@@ -2240,6 +2257,100 @@ mod any_os_tests {
         // The bundle, where the helper processes live too.
         assert_eq!(inst.dir.as_deref(), Some(chatgpt.as_path()));
         assert_eq!(bundle_of(&codex[0].exe), Some(chatgpt.as_path()));
+    }
+
+    fn cli_file(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn codex_cli_bundle_layout_follows_the_release() {
+        let h = crate::util::TestHome::new("codex-cli-layout");
+        let app = h.0.join("ChatGPT.app");
+        let exe = app.join("Contents/MacOS/ChatGPT");
+        let old = app.join("Contents/Resources/codex");
+        let new = app.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
+        cli_file(&old);
+        cli_file(&new);
+
+        assert_eq!(codex_bundle_cli(&exe, Some("26.929.99999")), Some(old.clone()));
+        for version in ["26.930.61225", "26.1007.30912", "26.1007.71326", "27.1.0"] {
+            assert_eq!(codex_bundle_cli(&exe, Some(version)), Some(new.clone()), "{version}");
+        }
+        for version in [None, Some("unknown"), Some("26.invalid")] {
+            assert_eq!(codex_bundle_cli(&exe, version), Some(old.clone()), "{version:?}");
+        }
+
+        std::fs::remove_file(&old).unwrap();
+        assert_eq!(codex_bundle_cli(&exe, Some("26.929.99999")), None, "known releases keep their own layout");
+        for version in [None, Some("unknown")] {
+            assert_eq!(codex_bundle_cli(&exe, version), Some(new.clone()));
+        }
+        cli_file(&old);
+        std::fs::remove_file(&new).unwrap();
+        assert_eq!(codex_bundle_cli(&exe, Some("26.930.61225")), None, "new releases do not try the legacy layout");
+    }
+
+    #[test]
+    fn codex_cli_bundle_ignores_missing_files_and_directories() {
+        let h = crate::util::TestHome::new("codex-cli-missing");
+        let app = h.0.join("ChatGPT.app");
+        let exe = app.join("Contents/MacOS/ChatGPT");
+        for version in [None, Some("26.929.0"), Some("26.930.0")] {
+            assert_eq!(codex_bundle_cli(&exe, version), None);
+        }
+        std::fs::create_dir_all(app.join("Contents/Resources/codex")).unwrap();
+        std::fs::create_dir_all(app.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")).unwrap();
+        for version in [None, Some("26.929.0"), Some("26.930.0")] {
+            assert_eq!(codex_bundle_cli(&exe, version), None, "directories are not CLI programs");
+        }
+        assert_eq!(codex_bundle_cli(&h.0.join("bin/codex"), None), None);
+    }
+
+    #[test]
+    fn codex_cli_candidates_find_a_standalone_cli_without_a_desktop() {
+        let h = crate::util::TestHome::new("codex-cli-standalone");
+        let cli = h.0.join("bin").join(exe("codex"));
+        cli_file(&cli);
+        // CLI detection leaves exe unset because there is no desktop app to restart.
+        let mut inst = Install { installed: true, version: Some("0.160.1".into()), ..Default::default() };
+        assert_eq!(codex_cli_candidates(&inst, vec![], Some(cli.clone())).as_slice(), std::slice::from_ref(&cli));
+        inst.exe = Some(cli.clone());
+        assert_eq!(codex_cli_candidates(&inst, vec![cli.clone()], Some(cli.clone())), [cli]);
+    }
+
+    #[test]
+    fn codex_cli_candidates_keep_fallback_order_and_remove_duplicates() {
+        let h = crate::util::TestHome::new("codex-cli-candidates");
+        let package = h.0.join("WindowsApps/OpenAI.Codex_26.1007");
+        let bundled = package.join("app/resources/codex.exe");
+        let newest = h.0.join("unpacked/newest/codex.exe");
+        let older = h.0.join("unpacked/older/codex.exe");
+        let cli = h.0.join("bin/codex");
+        for path in [&bundled, &newest, &older, &cli] {
+            cli_file(path);
+        }
+        let inst = Install { dir: Some(package), ..Default::default() };
+        let unpacked = vec![newest.clone(), h.0.join("missing"), h.0.clone(), older.clone(), bundled.clone(), newest.clone()];
+        assert_eq!(codex_cli_candidates(&inst, unpacked, Some(cli.clone())), [bundled.clone(), newest.clone(), older, cli]);
+        assert_eq!(codex_cli_candidates(&inst, vec![newest.clone()], Some(bundled.clone())), [bundled, newest]);
+        assert!(codex_cli_candidates(&Install::default(), vec![], Some(h.0.clone())).is_empty());
+    }
+
+    #[test]
+    fn codex_cli_candidates_exclude_a_legacy_desktop_named_codex() {
+        let h = crate::util::TestHome::new("codex-cli-desktop");
+        let bundle = h.0.join("Codex.app");
+        let exe = bundle.join("Contents/MacOS/Codex");
+        let cli = h.0.join("bin/codex");
+        cli_file(&exe);
+        cli_file(&cli);
+        let inst = Install { exe: Some(exe), version: Some("26.929.0".into()), ..Default::default() };
+        assert_eq!(codex_cli_candidates(&inst, vec![], Some(cli.clone())).as_slice(), std::slice::from_ref(&cli));
+        let bundled = bundle.join("Contents/Resources/codex");
+        cli_file(&bundled);
+        assert_eq!(codex_cli_candidates(&inst, vec![], Some(cli.clone())), [bundled, cli]);
     }
 
     #[test]
