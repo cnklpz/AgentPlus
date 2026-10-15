@@ -817,7 +817,7 @@ pub(crate) fn codex_clis() -> Vec<PathBuf> {
             unpacked.extend(copies.into_iter().map(|(_, p)| p));
         }
     }
-    codex_cli_candidates(&inst, unpacked, on_path(&["codex.exe", "codex.cmd"]))
+    codex_cli_candidates(&inst, unpacked, on_path(&["codex.exe"]))
 }
 
 fn codex_cli_candidates(inst: &Install, unpacked: Vec<PathBuf>, cli: Option<PathBuf>) -> Vec<PathBuf> {
@@ -832,7 +832,10 @@ fn codex_cli_candidates(inst: &Install, unpacked: Vec<PathBuf>, cli: Option<Path
             found.push(exe.clone());
         }
     }
-    found.extend(cli);
+    // The desktop's own CLI only: another CLI can be another release, with other models.
+    if inst.dir.is_none() && inst.exe.is_none() {
+        found.extend(cli);
+    }
     let mut out: Vec<PathBuf> = vec![];
     for p in found {
         if p.is_file() && !out.contains(&p) {
@@ -2330,7 +2333,7 @@ mod any_os_tests {
         }
         let inst = Install { dir: Some(package), ..Default::default() };
         let unpacked = vec![newest.clone(), h.0.join("missing"), h.0.clone(), older.clone(), bundled.clone(), newest.clone()];
-        assert_eq!(codex_cli_candidates(&inst, unpacked, Some(cli.clone())), [bundled.clone(), newest.clone(), older, cli]);
+        assert_eq!(codex_cli_candidates(&inst, unpacked, Some(cli.clone())), [bundled.clone(), newest.clone(), older], "no PATH CLI beside the desktop");
         assert_eq!(codex_cli_candidates(&inst, vec![newest.clone()], Some(bundled.clone())), [bundled, newest]);
         assert!(codex_cli_candidates(&Install::default(), vec![], Some(h.0.clone())).is_empty());
     }
@@ -2344,10 +2347,10 @@ mod any_os_tests {
         cli_file(&exe);
         cli_file(&cli);
         let inst = Install { exe: Some(exe), version: Some("26.929.0".into()), ..Default::default() };
-        assert_eq!(codex_cli_candidates(&inst, vec![], Some(cli.clone())).as_slice(), std::slice::from_ref(&cli));
+        assert!(codex_cli_candidates(&inst, vec![], Some(cli.clone())).is_empty());
         let bundled = bundle.join("Contents/Resources/codex");
         cli_file(&bundled);
-        assert_eq!(codex_cli_candidates(&inst, vec![], Some(cli.clone())), [bundled, cli]);
+        assert_eq!(codex_cli_candidates(&inst, vec![], Some(cli)), [bundled]);
     }
 
     #[test]
