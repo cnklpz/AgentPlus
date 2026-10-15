@@ -26,6 +26,25 @@ const BOT_TYPE: &str = "3";
 pub const LONG_POLL: Duration = Duration::from_secs(35);
 const API_TIMEOUT: Duration = Duration::from_secs(15);
 pub const STALE_TOKEN: i64 = -14;
+/// `sendmessage` answers "-2 prepare failed" when the reply context it was given no longer
+/// works (seen on the first reply after a restart, with the saved context). Not documented;
+/// a new message from the user gives a fresh one.
+pub const STALE_CONTEXT: i64 = -2;
+
+/// The relay refused a message.
+#[derive(Debug)]
+pub struct SendRefused {
+    pub code: i64,
+    pub msg: String,
+}
+
+impl std::fmt::Display for SendRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sendmessage: {} {}", self.code, self.msg)
+    }
+}
+
+impl std::error::Error for SendRefused {}
 /// Longest text the channel sends in one message (`textChunkLimit`).
 pub const TEXT_LIMIT: usize = 4000;
 
@@ -172,7 +191,7 @@ impl Client {
         });
         let v = self.post("ilink/bot/sendmessage", body, API_TIMEOUT)?;
         if let Some((code, msg)) = api_error(&v) {
-            bail!("sendmessage: {code} {msg}");
+            return Err(SendRefused { code, msg }.into());
         }
         Ok(id_text(&v["message_id"]))
     }
@@ -562,6 +581,13 @@ mod tests {
         assert!(qrcode::QrCode::new(content.as_bytes()).is_ok(), "{content}");
         let status = Client::new(LOGIN_BASE, None).unwrap().qr_status(&id, None).unwrap();
         assert!(status["status"].is_string(), "{status}");
+    }
+
+    #[test]
+    fn refused_sends_keep_their_code() {
+        let e: anyhow::Error = SendRefused { code: STALE_CONTEXT, msg: "prepare failed".into() }.into();
+        assert_eq!(e.to_string(), "sendmessage: -2 prepare failed");
+        assert!(e.context("while sending").downcast_ref::<SendRefused>().is_some_and(|r| r.code == STALE_CONTEXT));
     }
 
     #[test]
