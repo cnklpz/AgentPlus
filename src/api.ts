@@ -349,6 +349,20 @@ export interface WechatSession {
   /** Chosen from WeChat, taking effect with the next turn. */
   nextModel: string | null;
   nextEffort: string | null;
+  /** `/mode`; null: Codex's own setting. */
+  mode: WechatMode | null;
+}
+
+export type WechatMode = "ask" | "auto" | "full" | "readonly";
+
+/** Set on the page. */
+export interface WechatOptions {
+  /** Send Codex's messages during a turn too, not only its final answer. */
+  relayProgress: boolean;
+  /** Tell WeChat when a Codex desktop or CLI session finishes a turn. */
+  notifyDesktop: boolean;
+  /** `/mode` for sessions started from WeChat; null keeps Codex's own setting. */
+  defaultMode: WechatMode | null;
 }
 
 export interface WechatLogin {
@@ -388,6 +402,7 @@ export interface WechatStatus {
   sessions: WechatSession[];
   log: WechatLogLine[];
   stats: WechatStats;
+  options: WechatOptions;
 }
 
 export interface GatewayStatus {
@@ -1109,6 +1124,9 @@ const real = {
   wechatStartCodex: () => invoke<void>("wechat_start_codex"),
   wechatUnbind: () => invoke<WechatStatus>("wechat_unbind"),
   wechatSetDefaultCwd: (path: string | null) => invoke<WechatStatus>("wechat_set_default_cwd", { path }),
+  wechatSetOptions: (options: WechatOptions) => invoke<WechatStatus>("wechat_set_options", { options }),
+  /** Writes the kept WeChat activity to one text file; returns its path. */
+  wechatLogExport: () => invoke<string>("wechat_log_export"),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
   gatewaySaveRoute: (route: GatewayRoute, oldId: string | null) => invoke<GatewayStatus>("gateway_save_route", { route, oldId }),
@@ -1306,8 +1324,8 @@ const demoWechat: WechatStatus = {
   enabled: true, bound: true, state: "running", error: null, botId: "a1b2c3@im.bot", userId: "o9x8y7@im.wechat", boundAt: 1791300000,
   defaultCwd: null, fallbackCwd: "C:\\Users\\me\\Documents\\AgentPlus", codexReady: true, login: null,
   sessions: [
-    { no: 4, title: "Fix the updater", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\updater", state: "running", queued: 1, current: true, model: "gpt-6.1-sol", effort: "xhigh", nextModel: "gpt-6-astra", nextEffort: null },
-    { no: 2, title: "Blog post draft", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\blog", state: "waiting", queued: 0, current: false, model: "gpt-6.1-sol", effort: "high", nextModel: null, nextEffort: null },
+    { no: 4, title: "Fix the updater", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\updater", state: "running", queued: 1, current: true, model: "gpt-6.1-sol", effort: "xhigh", nextModel: "gpt-6-astra", nextEffort: null, mode: "auto" },
+    { no: 2, title: "Blog post draft", cwd: "C:\\Users\\me\\Documents\\AgentPlus\\blog", state: "waiting", queued: 0, current: false, model: "gpt-6.1-sol", effort: "high", nextModel: null, nextEffort: null, mode: null },
   ],
   log: [
     { at: 1791430000000, kind: "out", text: "【#2 Blog post draft】\n⚠️ 要执行命令：npm run build" },
@@ -1316,6 +1334,7 @@ const demoWechat: WechatStatus = {
   ],
   stats: { since: 1791429900000, lastIn: 1791429990000, lastOut: 1791430000000, received: 12, sent: 15, turnsDone: 6, turnsFailed: 1, approvals: 3, errors: 0,
     codexExe: "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1002.7124.0_x64\\app\\resources\\codex.exe" },
+  options: { relayProgress: false, notifyDesktop: true, defaultMode: "auto" },
 };
 
 const demo: typeof real = {
@@ -1387,6 +1406,8 @@ const demo: typeof real = {
   wechatStartCodex: async () => { demoWechat.codexReady = true; },
   wechatUnbind: async () => { Object.assign(demoWechat, { bound: false, enabled: false, state: "off", botId: null, userId: null, sessions: [] }); return demoWechat; },
   wechatSetDefaultCwd: async (path) => { demoWechat.defaultCwd = path; return demoWechat; },
+  wechatSetOptions: async (options) => { demoWechat.options = options; return demoWechat; },
+  wechatLogExport: async () => "C:\\Users\\me\\Downloads\\AgentPlus-wechat-demo.txt",
   gatewayModels: async () => ["glm-5", "glm-5.3", "kimi-k3"],
   guessModels: async (_agent, ids) =>
     Object.fromEntries(ids.filter((id) => /^(glm|kimi|deepseek|gpt|qwen)/i.test(id)).map((id) => [id, { context: 200000, extra: {}, matched: id.toLowerCase(), source: "builtin" as const }])),

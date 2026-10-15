@@ -210,6 +210,8 @@ pub struct Inbound {
     pub quote_text: Option<String>,
     /// It carried an image, file or video (not passed on).
     pub media: bool,
+    /// It carried a voice message WeChat gave no text for.
+    pub voice_blank: bool,
 }
 
 fn item_text(item: &Value) -> Option<String> {
@@ -230,16 +232,18 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
         return None;
     }
     let items = m["item_list"].as_array().cloned().unwrap_or_default();
-    let mut text = String::new();
-    let mut media = false;
+    let mut texts: Vec<String> = vec![];
+    let (mut media, mut voice_blank) = (false, false);
     let (mut quote_id, mut quote_text) = (None, None);
     for item in &items {
         if let Some(t) = item_text(item) {
-            if text.is_empty() {
-                text = t;
+            texts.push(t);
+        } else {
+            match item["type"].as_i64() {
+                Some(2 | 4 | 5) => media = true,
+                Some(3) => voice_blank = true,
+                _ => {}
             }
-        } else if matches!(item["type"].as_i64(), Some(2 | 4 | 5)) {
-            media = true;
         }
         let r = &item["ref_msg"];
         if r.is_object() {
@@ -257,11 +261,13 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
     }
     Some(Inbound {
         from: m["from_user_id"].as_str()?.to_string(),
-        text,
+        text: texts.join("
+"),
         context_token: m["context_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
         quote_id,
         quote_text,
         media,
+        voice_blank,
     })
 }
 
@@ -306,6 +312,14 @@ mod tests {
         let img = json!({ "message_type": 1, "from_user_id": "u", "item_list": [{ "type": 2 }] });
         let i = parse_message(&img).unwrap();
         assert!(i.media && i.text.is_empty());
+        // Every text item, in order; a voice without text is flagged.
+        let two = json!({ "message_type": 1, "from_user_id": "u", "item_list": [
+            { "type": 1, "text_item": { "text": "a" } }, { "type": 3, "voice_item": {} }, { "type": 1, "text_item": { "text": "b" } }
+        ] });
+        let i = parse_message(&two).unwrap();
+        assert_eq!(i.text, "a
+b");
+        assert!(i.voice_blank && !i.media);
     }
 
     #[test]

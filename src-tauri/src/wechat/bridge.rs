@@ -12,10 +12,10 @@
 //!   `#3! text` or `/use 3!` sends anyway.
 
 use super::appserver::AppServer;
-use super::command::{self, Cmd, Decision, ModelCmd};
+use super::command::{self, Cmd, Decision, ModelCmd, Spec};
 use super::format::{self, TurnStats};
 use super::ilink::{self, Inbound};
-use super::{log, set_sessions, set_state, stats, update_saved, Event, Saved, SessionView, Stats};
+use super::{log, set_sessions, set_state, stats, update_saved, Event, Options, Saved, SessionView, Stats};
 use crate::i18n::l;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -30,6 +30,16 @@ const LIST: usize = 10;
 /// Folders listed by `/dirs`.
 const DIRS: usize = 10;
 const CALL: Duration = Duration::from_secs(60);
+/// How often the bridge checks timers (typing, heartbeats) between events.
+const TICK: Duration = Duration::from_secs(5);
+/// WeChat drops the "typing…" line after a while: send it again this often during a turn.
+const TYPING_EVERY: Duration = Duration::from_secs(20);
+/// Tries per message part before giving up on it.
+const SEND_TRIES: u32 = 3;
+/// Characters of a quoted message passed on to Codex.
+const QUOTE_CHARS: usize = 500;
+/// Lines `/diff` shows.
+const DIFF_LINES: usize = 30;
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -51,6 +61,10 @@ struct Live {
     /// Answered "allow for this session" (`a3`): later command and file approvals are accepted
     /// without asking. Codex's own `acceptForSession` only covers that exact command.
     allow_all: bool,
+    /// The last turn's reply, for `/last`.
+    last_reply: Option<String>,
+    /// Files the last turn changed, for `/diff` outside a Git repository.
+    last_files: Vec<String>,
 }
 
 struct Turn {
@@ -59,6 +73,23 @@ struct Turn {
     stats: TurnStats,
     final_answer: Option<String>,
     last_message: Option<String>,
+    /// `last_message` was already relayed as progress.
+    relayed: bool,
+    /// Heartbeats sent so far.
+    beats: u32,
+    /// `/stop` came before Codex said which turn it started: interrupt once it does.
+    stop_asked: bool,
+}
+
+impl Turn {
+    fn new(id: Option<String>) -> Turn {
+        Turn { id, started: Instant::now(), stats: TurnStats::default(), final_answer: None, last_message: None, relayed: false, beats: 0, stop_asked: false }
+    }
+}
+
+/// When heartbeat `n` (from 0) of a running turn is due: 5 minutes in, then every 10.
+fn beat_at(n: u32) -> Duration {
+    Duration::from_secs(5 * 60 + 10 * 60 * u64::from(n))
 }
 
 enum Ask {
@@ -105,6 +136,10 @@ pub struct Bridge {
     unsent: Vec<(Vec<String>, Option<u32>)>,
     /// Codex's `model/list`, read once per Codex start.
     models: Option<Vec<Value>>,
+    /// When "typing…" was last sent.
+    typed_at: Option<Instant>,
+    /// A message didn't fully arrive: the next one says so.
+    lost: bool,
 }
 
 /// A numbered list the bot just showed.
@@ -135,7 +170,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -145,12 +180,25 @@ impl Bridge {
         log("info", l("Connected to WeChat", "已连接微信"));
         self.publish();
         let current = || super::RUN.load(std::sync::atomic::Ordering::SeqCst) == run;
-        while let Ok(ev) = rx.recv() {
+        loop {
+            let ev = match rx.recv_timeout(TICK) {
+                Ok(ev) => ev,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if !current() {
+                        break;
+                    }
+                    self.tick();
+                    self.flush();
+                    continue;
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             if !current() {
                 break;
             }
             match ev {
                 Event::Stop => break,
+                Event::Options(o) => self.set_options(o),
                 Event::Inbound(m) => self.on_inbound(m),
                 Event::StartCodex => self.start_codex_now(),
                 Event::Cursor(c) => {
@@ -200,10 +248,11 @@ impl Bridge {
             if super::RUN.load(std::sync::atomic::Ordering::SeqCst) != run {
                 return;
             }
-            let (enabled, cwd) = (file.enabled, file.default_cwd.clone());
+            let (enabled, cwd, options) = (file.enabled, file.default_cwd.clone(), file.options.clone());
             *file = s;
             file.enabled = enabled;
             file.default_cwd = cwd;
+            file.options = options;
         }) {
             crate::applog::warn("wechat", format!("save: {e:#}"));
         }
@@ -229,6 +278,7 @@ impl Bridge {
                     effort: live.map(|l| l.effort.clone()).unwrap_or_default(),
                     next_model: self.saved.next.get(t).and_then(|n| n.model.clone()),
                     next_effort: self.saved.next.get(t).and_then(|n| n.effort.clone()),
+                    mode: self.saved.modes.get(t).cloned(),
                 }
             })
             .collect();
@@ -251,22 +301,44 @@ impl Bridge {
             self.unsent.push((texts, no));
             return;
         };
+        let mut texts = texts;
+        if std::mem::take(&mut self.lost) {
+            if let Some(first) = texts.first_mut() {
+                first.push_str(l("\n\n(The previous reply didn't fully arrive. Send /last to get it again.)", "\n\n（上一条回复没有完整送达，发 /last 重发。）"));
+            }
+        }
         if let Some(out) = &mut self.outbox {
             out.extend(texts);
             return;
         }
         let mut ids = vec![];
         for t in texts {
-            match self.wx.send_text(&self.user, &t, Some(&ctx)) {
-                Ok(id) => {
+            let mut tries = 0;
+            let sent = loop {
+                tries += 1;
+                match self.wx.send_text(&self.user, &t, Some(&ctx)) {
+                    Ok(id) => break Some(id),
+                    Err(e) if tries < SEND_TRIES => {
+                        crate::applog::warn("wechat", format!("send (try {tries}): {e:#}"));
+                        std::thread::sleep(Duration::from_secs(u64::from(tries)));
+                    }
+                    Err(e) => {
+                        log("error", format!("{e:#}"));
+                        crate::applog::warn("wechat", format!("send: {e:#}"));
+                        break None;
+                    }
+                }
+            };
+            match sent {
+                Some(id) => {
                     log("out", &t);
                     if let (Some(id), Some(no)) = (id, no) {
                         ids.push((id, no));
                     }
                 }
-                Err(e) => {
-                    log("error", format!("{e:#}"));
-                    crate::applog::warn("wechat", format!("send: {e:#}"));
+                None => {
+                    // The rest would read as if this part was there; the next message says so.
+                    self.lost = true;
                     break;
                 }
             }
@@ -313,12 +385,19 @@ impl Bridge {
     }
 
     fn start_typing(&mut self) {
+        if self.outbox.is_some() {
+            return;
+        }
         if self.typing.is_none() {
             let Some(ctx) = self.reply_context() else { return };
             self.typing = self.wx.typing_ticket(&self.user, Some(&ctx)).ok().flatten();
         }
+        self.typed_at = Some(Instant::now());
         if let Some(t) = &self.typing {
-            let _ = self.wx.send_typing(&self.user, t, true);
+            if self.wx.send_typing(&self.user, t, true).is_err() {
+                // The ticket may have run out: fetch a new one next time.
+                self.typing = None;
+            }
         }
     }
 
@@ -326,9 +405,44 @@ impl Bridge {
         if self.live.values().any(|l| l.turn.is_some()) {
             return;
         }
-        if let Some(t) = &self.typing {
+        self.typed_at = None;
+        if let (Some(t), None) = (&self.typing, &self.outbox) {
             let _ = self.wx.send_typing(&self.user, t, false);
         }
+    }
+
+    /// Timers between events: keeps "typing…" on during turns and sends heartbeats for
+    /// long ones.
+    fn tick(&mut self) {
+        if !self.live.values().any(|l| l.turn.is_some()) {
+            return;
+        }
+        if self.typed_at.is_none_or(|t| t.elapsed() >= TYPING_EVERY) {
+            self.start_typing();
+        }
+        let due: Vec<(String, String)> = self
+            .live
+            .iter_mut()
+            .filter_map(|(thread, l)| {
+                let turn = l.turn.as_mut()?;
+                let elapsed = turn.started.elapsed();
+                if elapsed < beat_at(turn.beats) {
+                    return None;
+                }
+                while elapsed >= beat_at(turn.beats) {
+                    turn.beats += 1;
+                }
+                let stats = TurnStats { duration_ms: Some(elapsed.as_millis() as u64), ..turn.stats.clone() };
+                Some((thread.clone(), format::summary(&stats).unwrap_or_default()))
+            })
+            .collect();
+        for (thread, summary) in due {
+            self.note(&thread, &tr!("⏳ Still running · {summary}", "⏳ 仍在运行 · {summary}"));
+        }
+    }
+
+    fn set_options(&mut self, o: Options) {
+        self.saved.options = o;
     }
 
     // ------------------------------------------------------------ sessions
@@ -535,6 +649,9 @@ impl Bridge {
         self.save(|s| {
             s.current = Some(id.clone());
             s.owned.insert(id.clone(), now());
+            if let Some(m) = s.options.default_mode.clone() {
+                s.modes.insert(id.clone(), m);
+            }
         });
         Ok(tr!(
             "New session #{no} in {cwd}. Send a message to start.",
@@ -577,6 +694,10 @@ impl Bridge {
         if let Some(e) = &next.effort {
             params["effort"] = json!(e);
         }
+        if let Some((approval, sandbox)) = self.saved.modes.get(thread).and_then(|m| mode_policy(m)) {
+            params["approvalPolicy"] = approval;
+            params["sandboxPolicy"] = sandbox;
+        }
         let v = self.codex()?.request("turn/start", params, CALL)?;
         let live = self.live.entry(thread.to_string()).or_default();
         if let Some(m) = next.model {
@@ -585,7 +706,7 @@ impl Bridge {
         if let Some(e) = next.effort {
             live.effort = e;
         }
-        live.turn = Some(Turn { id: v["turn"]["id"].as_str().map(String::from), started: Instant::now(), stats: TurnStats::default(), final_answer: None, last_message: None });
+        live.turn = Some(Turn::new(v["turn"]["id"].as_str().map(String::from)));
         let t = thread.to_string();
         self.save(|s| {
             s.next.remove(&t);
@@ -595,20 +716,185 @@ impl Bridge {
         Ok(())
     }
 
+    /// The session a command names, or the current one.
+    fn session(&self, no: Option<u32>) -> Result<String> {
+        match no {
+            Some(n) => self.thread_of(n).ok_or_else(|| anyhow!(tr!("There is no session #{n}. Send /ls to see the list", "没有 #{n} 这个会话。发 /ls 查看列表"))),
+            None => self.saved.current.clone().ok_or_else(|| anyhow!(l("No session selected. /use N first", "还没有选择会话，先发 /use 编号"))),
+        }
+    }
+
     fn stop(&mut self, no: Option<u32>) -> Result<String> {
-        let thread = match no {
-            Some(n) => self.thread_of(n).ok_or_else(|| anyhow!(tr!("There is no session #{n}", "没有 #{n} 这个会话")))?,
-            None => self.saved.current.clone().ok_or_else(|| anyhow!(l("No session selected", "还没有选择会话")))?,
-        };
+        let thread = self.session(no)?;
         let no = self.number(&thread);
-        let Some(turn_id) = self.live.get(&thread).and_then(|l| l.turn.as_ref()).and_then(|t| t.id.clone()) else {
+        let Some(turn) = self.live.get_mut(&thread).and_then(|l| l.turn.as_mut()) else {
             return Ok(tr!("#{no} isn't running", "#{no} 没有在运行"));
+        };
+        let Some(turn_id) = turn.id.clone() else {
+            // Codex hasn't said which turn it started yet: interrupt it once it does.
+            turn.stop_asked = true;
+            self.live.get_mut(&thread).expect("found above").queue.clear();
+            return Ok(tr!("Stopping #{no}…", "正在停止 #{no}…"));
         };
         if let Some(l) = self.live.get_mut(&thread) {
             l.queue.clear();
         }
         self.codex()?.request("turn/interrupt", json!({ "threadId": thread, "turnId": turn_id }), CALL)?;
         Ok(tr!("Stopping #{no}…", "正在停止 #{no}…"))
+    }
+
+    fn stop_all(&mut self) -> Result<String> {
+        let running: Vec<u32> = {
+            let threads: Vec<String> = self.live.iter().filter(|(_, l)| l.turn.is_some()).map(|(t, _)| t.clone()).collect();
+            threads.iter().map(|t| self.number(t)).collect()
+        };
+        if running.is_empty() {
+            return Ok(l("Nothing is running.", "没有正在运行的会话。").into());
+        }
+        let mut failed = vec![];
+        for no in &running {
+            if let Err(e) = self.stop(Some(*no)) {
+                failed.push(format!("#{no}: {e:#}"));
+            }
+        }
+        let list: Vec<String> = running.iter().map(|n| format!("#{n}")).collect();
+        let mut text = tr!("Stopping {list}…", "正在停止 {list}…", list = crate::i18n::join(&list));
+        for f in failed {
+            text.push_str(&format!("\n❗ {f}"));
+        }
+        Ok(text)
+    }
+
+    fn current_text(&mut self) -> String {
+        match self.saved.current.clone() {
+            Some(t) => {
+                let no = self.number(&t);
+                let (title, cwd) = self.live.get(&t).map(|l| (l.title.clone(), l.cwd.clone())).unwrap_or_default();
+                let mut text = tr!("Current: {tag}", "当前：{tag}", tag = format::tag(no, &title));
+                if !cwd.is_empty() {
+                    text.push_str(&tr!("\nFolder: {cwd}", "\n目录：{cwd}"));
+                }
+                text.push_str(l("\n/use N switches · /ls lists sessions", "\n/use 编号 切换 · /ls 查看会话"));
+                text
+            }
+            None => l("No session selected. /ls lists sessions, /use N picks one.", "还没有选择会话。发 /ls 查看会话，/use 编号 选择。").into(),
+        }
+    }
+
+    fn last(&mut self, no: Option<u32>) -> Result<Option<String>> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        match self.live.get(&thread).and_then(|l| l.last_reply.clone()) {
+            Some(body) => {
+                self.say_from(&thread, &body);
+                Ok(None)
+            }
+            None => Ok(Some(tr!("#{no} has no reply from this run of the bridge yet.", "#{no} 在本次连接里还没有回复。"))),
+        }
+    }
+
+    fn queue(&mut self, no: Option<u32>, clear: bool) -> Result<String> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        let live = self.live.entry(thread.clone()).or_default();
+        if live.queue.is_empty() {
+            return Ok(tr!("Nothing is queued for #{no}.", "#{no} 没有排队的消息。"));
+        }
+        if clear {
+            let n = std::mem::take(&mut live.queue).len();
+            return Ok(trn!(n, "Dropped {n} queued message for #{no}.", "Dropped {n} queued messages for #{no}.", "已清空 #{no} 的 {n} 条排队消息。"));
+        }
+        let mut lines = vec![tr!("Queued for #{no} (sent together when the turn ends):", "#{no} 排队中（这一轮结束后一起发送）：")];
+        for (i, q) in live.queue.iter().enumerate() {
+            lines.push(format!("{}. {}", i + 1, crate::util::clip(&q.replace('\n', " "), 80)));
+        }
+        lines.push(tr!("/queue {no} clear drops them", "/queue {no} clear 清空"));
+        Ok(lines.join("\n"))
+    }
+
+    fn rename(&mut self, no: Option<u32>, title: String) -> Result<String> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        self.codex()?.request("thread/name/set", json!({ "threadId": thread, "name": title }), CALL)?;
+        self.live.entry(thread).or_default().title = title.clone();
+        Ok(tr!("Renamed #{no} to {title}", "已把 #{no} 改名为 {title}"))
+    }
+
+    fn archive(&mut self, no: Option<u32>) -> Result<String> {
+        let Some(n) = no else {
+            bail!("{}", usage_text(command::spec("archive").expect("listed")));
+        };
+        let thread = self.session(Some(n))?;
+        if self.live.get(&thread).is_some_and(|l| l.turn.is_some()) {
+            bail!("{}", tr!("#{n} is running. /stop {n} first", "#{n} 正在运行，先发 /stop {n}"));
+        }
+        self.codex()?.request("thread/archive", json!({ "threadId": thread }), CALL)?;
+        self.live.remove(&thread);
+        self.pending.retain(|p| p.thread != thread);
+        self.save(|s| {
+            s.numbers.remove(&n);
+            s.modes.remove(&thread);
+            s.next.remove(&thread);
+            if s.current.as_ref() == Some(&thread) {
+                s.current = None;
+            }
+        });
+        Ok(tr!("Archived #{n}. It can be restored in Codex desktop.", "已归档 #{n}，可以在 Codex 桌面版里恢复。"))
+    }
+
+    /// The session's folder, read from Codex when the bridge doesn't know it yet.
+    fn cwd_of(&mut self, thread: &str) -> Result<String> {
+        if self.live.get(thread).is_none_or(|l| l.cwd.is_empty()) {
+            self.refresh(thread)?;
+        }
+        Ok(self.live.get(thread).map(|l| l.cwd.clone()).unwrap_or_default())
+    }
+
+    fn cwd(&mut self, no: Option<u32>) -> Result<String> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        let cwd = self.cwd_of(&thread)?;
+        Ok(tr!("#{no} folder: {cwd}", "#{no} 的目录：{cwd}"))
+    }
+
+    fn diff(&mut self, no: Option<u32>) -> Result<String> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        let cwd = self.cwd_of(&thread)?;
+        if let Some(stat) = git_diff_stat(&cwd) {
+            return Ok(if stat.trim().is_empty() {
+                tr!("#{no}: no uncommitted changes in {cwd}", "#{no}：{cwd} 没有未提交的改动")
+            } else {
+                format!("{}\n```\n{}\n```", tr!("#{no} uncommitted changes:", "#{no} 未提交的改动："), clip_lines(&stat, DIFF_LINES))
+            });
+        }
+        let files = self.live.get(&thread).map(|l| l.last_files.clone()).unwrap_or_default();
+        Ok(if files.is_empty() {
+            tr!("#{no}: {cwd} isn't a Git repository, and the last turn changed no files.", "#{no}：{cwd} 不是 Git 仓库，上一轮也没有改动文件。")
+        } else {
+            format!("{}\n{}", tr!("#{no}: files the last turn changed:", "#{no} 上一轮改动的文件："), clip_lines(&files.join("\n"), DIFF_LINES))
+        })
+    }
+
+    fn mode(&mut self, no: Option<u32>, mode: Option<String>) -> Result<String> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        let Some(m) = mode else {
+            let now = self.saved.modes.get(&thread).map(|m| mode_label(m).to_string()).unwrap_or_else(|| l("Codex's own setting", "Codex 自己的设置").into());
+            return Ok(format!("{}\n{}", tr!("#{no} mode: {now}", "#{no} 的模式：{now}"), usage_text(command::spec("mode").expect("listed"))));
+        };
+        let (t, mv) = (thread.clone(), m.clone());
+        self.save(|s| {
+            s.modes.insert(t, mv);
+        });
+        let mut text = tr!("#{no} mode: {m}, from the next message.", "#{no} 的模式已改为 {m}，下一条消息生效。", m = mode_label(&m));
+        if m == "full" {
+            text.push_str(l(
+                "\n⚠️ Codex now runs any command and changes any file without asking. /mode auto goes back.",
+                "\n⚠️ Codex 现在执行任何命令、修改任何文件都不再询问。发 /mode auto 恢复。",
+            ));
+        }
+        Ok(text)
     }
 
     fn status_text(&mut self) -> String {
@@ -755,6 +1041,24 @@ impl Bridge {
             let c = choices.join(" / ");
             return Ok(tr!("#{no} reasoning: {now}. Choices for {model}: {c}", "#{no} 推理强度：{now}。{model} 可选：{c}", c = or_dash(&c)));
         };
+        if e == "default" {
+            let t = thread.clone();
+            let had = self.saved.next.get(&t).is_some_and(|n| n.effort.is_some());
+            self.save(|s| {
+                if let Some(n) = s.next.get_mut(&t) {
+                    n.effort = None;
+                    if n.model.is_none() {
+                        s.next.remove(&t);
+                    }
+                }
+            });
+            let now = or_dash(&self.live[&thread].effort).to_string();
+            return Ok(if had {
+                tr!("#{no} keeps its reasoning effort ({now}).", "#{no} 保持原来的推理强度（{now}）。")
+            } else {
+                tr!("#{no} has no reasoning change waiting; it uses {now}.", "#{no} 没有待生效的推理强度修改，当前为 {now}。")
+            });
+        }
         if !choices.is_empty() && !choices.contains(&e) {
             bail!("{}", tr!("{model} supports {c}", "{model} 支持的推理强度：{c}", c = choices.join(" / ")));
         }
@@ -786,11 +1090,17 @@ impl Bridge {
         }
         self.flush_unsent();
         log("in", if m.text.is_empty() && m.media { l("[media]", "[媒体]") } else { m.text.as_str() });
+        if m.voice_blank {
+            self.say(l("WeChat sent no text for that voice message. Say it again, or type it.", "微信没有给出这条语音的文字，请重说一遍或直接打字。"));
+        }
         if m.text.trim().is_empty() {
             if m.media {
                 self.say(l("Only text and voice messages can be passed to Codex for now.", "目前只能把文字和语音消息转给 Codex。"));
             }
             return;
+        }
+        if m.media {
+            self.say(l("The file or picture in that message can't be passed to Codex yet; only its text is sent.", "这条消息里的文件或图片暂时无法转给 Codex，只发送了文字部分。"));
         }
         let (cmd, target) = self.resolve(&m.text);
         if !self.codex.as_ref().is_some_and(|c| c.alive()) {
@@ -835,8 +1145,8 @@ impl Bridge {
     /// Whether this message has to reach Codex (and so start it).
     fn needs_codex(&self, cmd: &Cmd, m: &Inbound) -> bool {
         match cmd {
-            Cmd::Help | Cmd::Status | Cmd::Unknown(_) | Cmd::Stop(_) => false,
-            Cmd::List(_) | Cmd::Dirs | Cmd::New(_) | Cmd::Model(_) | Cmd::Effort(_) => true,
+            Cmd::Help(_) | Cmd::Status | Cmd::Unknown(..) | Cmd::Usage(_) | Cmd::Stop(_) | Cmd::StopAll | Cmd::Current | Cmd::Last(_) | Cmd::Queue { .. } | Cmd::Mode { .. } => false,
+            Cmd::List(_) | Cmd::Dirs | Cmd::New(_) | Cmd::Model(_) | Cmd::Effort(_) | Cmd::Rename { .. } | Cmd::Archive(_) | Cmd::Diff(_) | Cmd::Cwd(_) => true,
             // A session number that doesn't exist fails without Codex.
             Cmd::Use { no, .. } | Cmd::To { no, .. } => self.thread_of(*no).is_some(),
             // Text only goes somewhere with a session to go to.
@@ -877,35 +1187,83 @@ impl Bridge {
     fn handle(&mut self, m: Inbound, cmd: Cmd, target: Option<String>) {
         let quoted = self.session_of_quote(&m);
         let r = match cmd {
-            Cmd::Help => Ok(Some(help_text())),
-            Cmd::List(n) => self.list(n.unwrap_or(LIST).min(30)).map(Some),
-            Cmd::Use { no, force } => self.use_session(no, force).map(Some),
-            Cmd::New(p) => self.new_session(p).map(Some),
-            Cmd::Dirs => self.dirs_text().map(Some),
-            Cmd::Stop(no) => self.stop(no).map(Some),
-            Cmd::Status => Ok(Some(self.status_text())),
-            Cmd::Unknown(c) => Ok(Some(tr!("Unknown command {c}. Send /help for the list.", "不认识的命令 {c}。发 /help 查看说明。"))),
-            Cmd::Approve { no, decision } => match self.answer_approval(no.or(quoted), decision) {
-                Some(r) => r.map(Some),
-                None => self.route_text(m.text.trim().to_string(), quoted, false),
-            },
-            Cmd::Model(c) => self.model_cmd(target.or_else(|| self.saved.current.clone()), c).map(Some),
-            Cmd::Effort(e) => self.effort_cmd(self.saved.current.clone(), e).map(Some),
             Cmd::To { no, force, text } => match self.thread_of(no) {
-                // `#3 /model 2`: a model command for that session.
-                Some(t) => match command::parse(&text) {
-                    Cmd::Model(c) => self.model_cmd(Some(t), c).map(Some),
-                    Cmd::Effort(e) => self.effort_cmd(Some(t), e).map(Some),
-                    _ => self.send_or_answer(&t, text, force).map(|_| None),
+                // `#3 /stop`: a command for that session; it never goes to Codex as text.
+                Some(t) if text.starts_with(['/', '／']) => match command::for_session(command::parse(&text), no) {
+                    Some(c) => self.run_cmd(c, Some(t)),
+                    None => Ok(Some(tr!("{text} doesn't take a session with #{no}. Send it on its own.", "{text} 不能配合 #{no} 使用，请单独发送。"))),
                 },
+                Some(t) => self.send_or_answer(&t, with_quote(&m, &text), force).map(|_| None),
                 None => Err(anyhow!(tr!("There is no session #{no}. Send /ls to see the list", "没有 #{no} 这个会话。发 /ls 查看列表"))),
             },
-            Cmd::Text(t) => self.route_text(t, quoted, false),
+            Cmd::Approve { no, decision } => match self.answer_approval(no.or(quoted), decision) {
+                Some(r) => r.map(Some),
+                None => self.route_text(with_quote(&m, m.text.trim()), quoted, false),
+            },
+            Cmd::Text(t) => self.route_text(with_quote(&m, &t), quoted, false),
+            // A model picked from the list goes to the session the list was for; otherwise a
+            // quoted session, then the current one.
+            c => {
+                let session = target.or_else(|| quoted.and_then(|n| self.thread_of(n)));
+                self.run_cmd(c, session)
+            }
         };
         match r {
             Ok(Some(text)) => self.say(text),
             Ok(None) => {}
             Err(e) => self.say(format!("❗ {e:#}")),
+        }
+    }
+
+    /// A command. `session`: the one it is aimed at (`#3 /stop`, a quoted message), else the
+    /// current one.
+    fn run_cmd(&mut self, cmd: Cmd, session: Option<String>) -> Result<Option<String>> {
+        let no_of = |b: &Self, n: Option<u32>| n.or_else(|| session.as_ref().and_then(|t| b.saved.numbers.iter().find(|(_, x)| *x == t).map(|(n, _)| *n)));
+        match cmd {
+            Cmd::Help(None) => Ok(Some(help_text())),
+            Cmd::Help(Some(s)) => Ok(Some(help_of(s))),
+            Cmd::Usage(s) => Ok(Some(usage_text(s))),
+            Cmd::Unknown(c, Some(near)) => Ok(Some(tr!("Unknown command {c}. Did you mean /{near}? Send /help for the list.", "不认识的命令 {c}，是要发 /{near} 吗？发 /help 查看说明。"))),
+            Cmd::Unknown(c, None) => Ok(Some(tr!("Unknown command {c}. Send /help for the list.", "不认识的命令 {c}。发 /help 查看说明。"))),
+            Cmd::List(n) => self.list(n.unwrap_or(LIST).min(30)).map(Some),
+            Cmd::Use { no, force } => self.use_session(no, force).map(Some),
+            Cmd::Current => Ok(Some(self.current_text())),
+            Cmd::New(p) => self.new_session(p).map(Some),
+            Cmd::Dirs => self.dirs_text().map(Some),
+            Cmd::Stop(no) => {
+                let no = no_of(self, no);
+                self.stop(no).map(Some)
+            }
+            Cmd::StopAll => self.stop_all().map(Some),
+            Cmd::Status => Ok(Some(self.status_text())),
+            Cmd::Last(no) => {
+                let no = no_of(self, no);
+                self.last(no)
+            }
+            Cmd::Queue { no, clear } => {
+                let no = no_of(self, no);
+                self.queue(no, clear).map(Some)
+            }
+            Cmd::Rename { no, title } => {
+                let no = no_of(self, no);
+                self.rename(no, title).map(Some)
+            }
+            Cmd::Archive(no) => self.archive(no).map(Some),
+            Cmd::Diff(no) => {
+                let no = no_of(self, no);
+                self.diff(no).map(Some)
+            }
+            Cmd::Cwd(no) => {
+                let no = no_of(self, no);
+                self.cwd(no).map(Some)
+            }
+            Cmd::Mode { no, mode } => {
+                let no = no_of(self, no);
+                self.mode(no, mode).map(Some)
+            }
+            Cmd::Model(c) => self.model_cmd(session.or_else(|| self.saved.current.clone()), c).map(Some),
+            Cmd::Effort(e) => self.effort_cmd(session.or_else(|| self.saved.current.clone()), e).map(Some),
+            Cmd::To { .. } | Cmd::Approve { .. } | Cmd::Text(_) => unreachable!("handled by handle()"),
         }
     }
 
@@ -929,10 +1287,22 @@ impl Bridge {
     /// Text for a session: the answer to its open question, else a new turn.
     fn send_or_answer(&mut self, thread: &str, text: String, force: bool) -> Result<()> {
         if let Some(i) = self.pending.iter().position(|p| p.thread == thread && matches!(p.ask, Ask::Questions(_))) {
-            let p = self.pending.remove(i);
-            let Ask::Questions(qs) = &p.ask else { unreachable!() };
-            let answers = question_answers(qs, &text);
-            self.codex()?.respond(&p.id, json!({ "answers": answers }))?;
+            let Ask::Questions(qs) = &self.pending[i].ask else { unreachable!() };
+            match question_answers(qs, &text) {
+                Ok(answers) => {
+                    let p = self.pending.remove(i);
+                    self.codex()?.respond(&p.id, json!({ "answers": answers }))?;
+                }
+                Err(missing) => {
+                    let (n, total) = (missing.len(), qs.len());
+                    let mut body = tr!("Codex asked {total} questions; {n} have no answer yet:", "Codex 问了 {total} 个问题，还有 {n} 个没有回答：");
+                    for q in &missing {
+                        body.push_str(&format!("\n- {q}"));
+                    }
+                    body.push_str(l("\nReply again with every answer, one per line.", "\n请重新回复，每行回答一个问题。"));
+                    self.note(thread, &body);
+                }
+            }
             return Ok(());
         }
         self.send_to(thread, text, force)
@@ -987,8 +1357,12 @@ impl Bridge {
         let thread = p["threadId"].as_str().unwrap_or("").to_string();
         match method {
             "turn/started" => {
-                if let Some(t) = self.live.get_mut(&thread).and_then(|l| l.turn.as_mut()) {
-                    t.id = t.id.clone().or_else(|| p["turn"]["id"].as_str().map(String::from));
+                let Some(t) = self.live.get_mut(&thread).and_then(|l| l.turn.as_mut()) else { return };
+                t.id = t.id.clone().or_else(|| p["turn"]["id"].as_str().map(String::from));
+                if let (true, Some(id)) = (std::mem::take(&mut t.stop_asked), t.id.clone()) {
+                    if let Err(e) = self.codex().and_then(|c| c.request("turn/interrupt", json!({ "threadId": thread, "turnId": id }), CALL)) {
+                        self.note(&thread, &format!("❗ {e:#}"));
+                    }
                 }
             }
             "item/started" => {
@@ -1002,15 +1376,22 @@ impl Bridge {
             }
             "item/completed" => {
                 let item = &p["item"];
+                let relay = self.saved.options.relay_progress;
                 let Some(turn) = self.live.get_mut(&thread).and_then(|l| l.turn.as_mut()) else { return };
                 match item["type"].as_str().unwrap_or("") {
                     "agentMessage" => {
                         let text = item["text"].as_str().unwrap_or("").to_string();
-                        if item["phase"] == "final_answer" {
+                        let is_final = item["phase"] == "final_answer";
+                        if is_final {
                             turn.final_answer = Some(text.clone());
                         }
                         if !text.trim().is_empty() {
-                            turn.last_message = Some(text);
+                            turn.last_message = Some(text.clone());
+                            let relayed = relay && !is_final;
+                            turn.relayed = relayed;
+                            if relayed {
+                                self.say_from(&thread, &text);
+                            }
                         }
                     }
                     "commandExecution" => turn.stats.commands += 1,
@@ -1040,7 +1421,14 @@ impl Bridge {
                 let id = &p["requestId"];
                 self.pending.retain(|x| &x.id != id);
             }
-            "error" if p["willRetry"] != true => log("error", p["error"]["message"].as_str().unwrap_or(l("Codex error", "Codex 出错"))),
+            "error" if p["willRetry"] != true => {
+                let msg = p["error"]["message"].as_str().unwrap_or(l("Codex error", "Codex 出错")).to_string();
+                log("error", &msg);
+                // A failed turn reports its error when it ends; others would go unseen.
+                if self.live.get(&thread).is_some_and(|l| l.turn.is_none()) {
+                    self.note(&thread, &tr!("❗ Codex: {msg}", "❗ Codex：{msg}"));
+                }
+            }
             _ => {}
         }
     }
@@ -1058,13 +1446,20 @@ impl Bridge {
             }
             "interrupted" => l("⏹ Stopped", "⏹ 已停止").to_string(),
             _ => {
-                let answer = turn.final_answer.or(turn.last_message).unwrap_or_else(|| l("(no reply)", "（没有回复）").to_string());
+                // An answer already relayed as progress isn't sent twice.
+                let answer = match (turn.final_answer, turn.relayed) {
+                    (Some(a), _) => a,
+                    (None, true) => l("✅ Done", "✅ 完成").to_string(),
+                    (None, false) => turn.last_message.unwrap_or_else(|| l("(no reply)", "（没有回复）").to_string()),
+                };
                 match format::summary(&turn.stats) {
                     Some(s) => format!("{answer}\n\n— {s}"),
                     None => answer,
                 }
             }
         };
+        live.last_reply = Some(body.clone());
+        live.last_files = turn.stats.files.iter().cloned().collect();
         let queued = std::mem::take(&mut live.queue);
         self.pending.retain(|p| p.thread != thread);
         let t = thread.to_string();
@@ -1152,6 +1547,9 @@ impl Bridge {
                 if let Some(c) = &self.codex {
                     let _ = c.respond_error(&id, "not supported by this client");
                 }
+                if !thread.is_empty() {
+                    self.note(&thread, &tr!("Codex asked for {method}, which WeChat can't handle; declined.", "Codex 请求了 {method}，微信里无法处理，已拒绝。"));
+                }
                 None
             }
         };
@@ -1225,29 +1623,27 @@ fn locked_text(no: u32, when: &str) -> String {
 fn help_text() -> String {
     l(
         "AgentPlus · Codex over WeChat\n\
-         /ls [N] recent sessions\n\
-         /use N switch to session N\n\
-         /dirs recent folders · /new N start a session in folder N\n\
-         /new [folder] start a session\n\
-         #N text send to session N once\n\
-         /stop [N] interrupt a turn\n\
-         /status what's running\n\
-         /model [N] see or switch the model · /model default N new sessions' default\n\
-         /effort [level] reasoning effort\n\
+         /ls [N] recent sessions · /use N switch · /status what's running\n\
+         /dirs recent folders · /new [folder | N] start a session\n\
+         #N text send to session N once · #N /command a command for session N\n\
+         /stop [N | all] interrupt · /queue [N] [clear] waiting messages\n\
+         /last [N] the last reply again · /diff [N] changes · /cwd [N] folder\n\
+         /rename [N] title · /archive N\n\
+         /mode [N] ask|auto|full|readonly what it may do without asking\n\
+         /model [N] see or switch the model · /effort [level] reasoning effort\n\
          y N / a N / n N allow / allow for session / decline\n\
-         Reply to (quote) a bot message to answer that session. Other text goes to the current session.",
+         /help command for details. Reply to (quote) a bot message to answer that session; other text goes to the current session.",
         "AgentPlus · 微信使用 Codex\n\
-         /ls [数量] 最近的会话\n\
-         /use 编号 切换会话\n\
-         /dirs 最近的工作目录 · /new 编号 在该目录新建会话\n\
-         /new [目录] 新建会话\n\
-         #编号 消息 临时发给某个会话\n\
-         /stop [编号] 中断当前这轮\n\
-         /status 查看运行情况\n\
-         /model [编号] 查看或切换模型 · /model default 编号 改新会话的默认模型\n\
-         /effort [强度] 推理强度\n\
+         /ls [数量] 最近的会话 · /use 编号 切换 · /status 运行情况\n\
+         /dirs 最近的目录 · /new [目录 | 编号] 新建会话\n\
+         #编号 消息 临时发给某个会话 · #编号 /命令 对该会话执行命令\n\
+         /stop [编号 | all] 中断 · /queue [编号] [clear] 排队的消息\n\
+         /last [编号] 重发上次回复 · /diff [编号] 改动 · /cwd [编号] 目录\n\
+         /rename [编号] 标题 改名 · /archive 编号 归档\n\
+         /mode [编号] ask|auto|full|readonly 无需询问可做的事\n\
+         /model [编号] 查看或切换模型 · /effort [强度] 推理强度\n\
          y编号 / a编号 / n编号 允许 / 本会话都允许 / 拒绝\n\
-         引用机器人的某条消息回复，会发给那条消息的会话；其他消息发给当前会话。",
+         /help 命令 查看详细说明。引用机器人的某条消息回复，会发给那条消息的会话；其他消息发给当前会话。",
     )
     .to_string()
 }
@@ -1332,13 +1728,83 @@ fn set_default_model(name: &str) -> Result<()> {
     crate::util::write_text_atomic(&path, &doc.to_string(), meta)
 }
 
-/// Grants what was asked (fields left out stay unchanged).
 /// The answer to an approval once its session is allowed throughout, or None when it still asks.
 fn auto_reply(ask: &Ask) -> Option<Value> {
     match ask {
         Ask::Command | Ask::File => Some(json!({ "decision": "acceptForSession" })),
-        Ask::Permissions(_) | Ask::Questions(_) => None,
+        Ask::Permissions(asked) => Some(json!({ "permissions": granted(asked), "scope": "session" })),
+        Ask::Questions(_) => None,
     }
+}
+
+/// `/mode`: (approval policy, sandbox policy) for `turn/start`.
+fn mode_policy(mode: &str) -> Option<(Value, Value)> {
+    Some(match mode {
+        "ask" => (json!("untrusted"), json!({ "type": "workspaceWrite" })),
+        "auto" => (json!("on-request"), json!({ "type": "workspaceWrite" })),
+        "full" => (json!("never"), json!({ "type": "dangerFullAccess" })),
+        "readonly" => (json!("on-request"), json!({ "type": "readOnly" })),
+        _ => return None,
+    })
+}
+
+fn mode_label(mode: &str) -> &'static str {
+    match mode {
+        "ask" => l("ask (asks for anything not known safe)", "ask（不确定安全的都问）"),
+        "auto" => l("auto (works in its folder, asks for more)", "auto（目录内自由工作，超出才问）"),
+        "full" => l("full (no sandbox, never asks)", "full（无沙箱、从不询问）"),
+        "readonly" => l("readonly (reads only)", "readonly（只读）"),
+        _ => l("unknown", "未知"),
+    }
+}
+
+fn usage_text(s: &Spec) -> String {
+    tr!("Usage: {u}", "用法：{u}", u = l(s.usage.0, s.usage.1))
+}
+
+/// `/help stop`: usage, what it does and its other names.
+fn help_of(s: &Spec) -> String {
+    let mut lines = vec![l(s.usage.0, s.usage.1).to_string(), l(s.about.0, s.about.1).to_string()];
+    if s.names.len() > 1 {
+        let names: Vec<String> = s.names.iter().map(|n| format!("/{n}")).collect();
+        lines.push(tr!("Also: {n}", "也可以发：{n}", n = names[1..].join(" ")));
+    }
+    lines.join("\n")
+}
+
+/// The message for Codex, with the quoted message in front when the user replied to one.
+fn with_quote(m: &Inbound, text: &str) -> String {
+    let Some(q) = m.quote_text.as_deref() else { return text.to_string() };
+    // A bot message starts with its session tag (`【#3 title】 | …`); Codex doesn't need it.
+    let q = q.trim();
+    let q = match q.strip_prefix("【#").and_then(|r| r.split_once('】')) {
+        Some((_, rest)) => rest.trim_start_matches([' ', '|', '\n']).trim(),
+        None => q,
+    };
+    if q.is_empty() {
+        return text.to_string();
+    }
+    let quoted: String = crate::util::clip(q, QUOTE_CHARS).lines().map(|l| format!("> {l}")).collect::<Vec<_>>().join("\n");
+    format!("{quoted}\n\n{text}")
+}
+
+/// `git diff --stat` in a folder, or None when it isn't a Git working tree.
+fn git_diff_stat(cwd: &str) -> Option<String> {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["-C", cwd, "diff", "HEAD", "--stat", "--no-color"]);
+    crate::process::no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// The first `n` lines, and how many more there are.
+fn clip_lines(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= n {
+        return text.to_string();
+    }
+    let more = lines.len() - n;
+    format!("{}\n{}", lines[..n].join("\n"), trn!(more, "… {n} more line", "… {n} more lines", "……还有 {n} 行"))
 }
 
 fn granted(asked: &Value) -> Value {
@@ -1352,9 +1818,12 @@ fn granted(asked: &Value) -> Value {
 }
 
 /// `{ questionId: { answers: [..] } }` from the user's reply: one line per question; a
-/// number picks that option.
-fn question_answers(qs: &[Value], text: &str) -> Value {
+/// number picks that option. Too few lines: Err with the questions left without an answer.
+fn question_answers(qs: &[Value], text: &str) -> Result<Value, Vec<String>> {
     let lines: Vec<&str> = if qs.len() > 1 { text.lines().map(str::trim).filter(|l| !l.is_empty()).collect() } else { vec![text.trim()] };
+    if lines.len() < qs.len() {
+        return Err(qs[lines.len()..].iter().map(|q| q["question"].as_str().unwrap_or("").to_string()).collect());
+    }
     let mut out = serde_json::Map::new();
     for (i, q) in qs.iter().enumerate() {
         let Some(id) = q["id"].as_str() else { continue };
@@ -1368,7 +1837,7 @@ fn question_answers(qs: &[Value], text: &str) -> Value {
             .unwrap_or(line);
         out.insert(id.into(), json!({ "answers": [answer] }));
     }
-    Value::Object(out)
+    Ok(Value::Object(out))
 }
 
 #[cfg(test)]
@@ -1383,24 +1852,113 @@ mod tests {
     }
 
     #[test]
-    fn allowing_a_session_covers_commands_and_files_only() {
+    fn allowing_a_session_covers_approvals_but_not_questions() {
         let yes = json!({ "decision": "acceptForSession" });
         assert_eq!(auto_reply(&Ask::Command), Some(yes.clone()));
         assert_eq!(auto_reply(&Ask::File), Some(yes));
-        assert_eq!(auto_reply(&Ask::Permissions(json!({ "network": { "enabled": true } }))), None);
+        assert_eq!(
+            auto_reply(&Ask::Permissions(json!({ "network": { "enabled": true } }))),
+            Some(json!({ "permissions": { "network": { "enabled": true } }, "scope": "session" }))
+        );
         assert_eq!(auto_reply(&Ask::Questions(vec![])), None);
+    }
+
+    #[test]
+    fn modes_map_to_codex_policies() {
+        assert_eq!(mode_policy("readonly"), Some((json!("on-request"), json!({ "type": "readOnly" }))));
+        assert_eq!(mode_policy("full"), Some((json!("never"), json!({ "type": "dangerFullAccess" }))));
+        assert!(mode_policy("ask").is_some() && mode_policy("auto").is_some());
+        assert_eq!(mode_policy("yolo"), None);
+        for s in command::SPECS {
+            assert!(!help_of(s).is_empty());
+        }
+    }
+
+    #[test]
+    fn heartbeats_come_at_5_then_every_10_minutes() {
+        assert_eq!(beat_at(0), Duration::from_secs(300));
+        assert_eq!(beat_at(1), Duration::from_secs(900));
+        assert_eq!(beat_at(2), Duration::from_secs(1500));
+    }
+
+    #[test]
+    fn quotes_go_in_front_without_the_tag() {
+        let m = |q: Option<&str>| Inbound { quote_text: q.map(String::from), ..msg("why?") };
+        assert_eq!(with_quote(&m(None), "why?"), "why?");
+        assert_eq!(with_quote(&m(Some("【#2 demo】 | line one\nline two")), "why?"), "> line one\n> line two\n\nwhy?");
+        assert_eq!(with_quote(&m(Some("【#2 demo】")), "why?"), "why?");
+        assert_eq!(with_quote(&m(Some("plain")), "why?"), "> plain\n\nwhy?");
+        let long = "x".repeat(QUOTE_CHARS * 2);
+        assert!(with_quote(&m(Some(&long)), "q").chars().count() < QUOTE_CHARS + 20);
+        assert_eq!(clip_lines("a\nb\nc", 2), "a\nb\n……还有 1 行");
+        assert_eq!(clip_lines("a\nb", 2), "a\nb");
+    }
+
+    #[test]
+    fn session_commands_never_reach_codex_as_text() {
+        let _h = crate::util::TestHome::new("wechat-to-cmd");
+        let mut b = bridge();
+        b.saved.numbers.insert(3, "t3".into());
+        b.live.insert("t3".into(), Live { queue: vec!["a".into(), "b".into()], ..Default::default() });
+        b.handle(msg("#3 /queue"), command::parse("#3 /queue"), None);
+        let out = sent(&mut b);
+        assert!(out[0].contains("#3 排队中") && out[0].contains("1. a"), "{out:?}");
+        b.handle(msg("#3 /queue clear"), command::parse("#3 /queue clear"), None);
+        assert!(sent(&mut b)[0].contains("已清空 #3 的 2 条"));
+        assert!(b.live["t3"].queue.is_empty());
+        b.handle(msg("#3 /ls"), command::parse("#3 /ls"), None);
+        assert!(sent(&mut b)[0].contains("不能配合 #3"));
+        b.handle(msg("#3 /stauts"), command::parse("#3 /stauts"), None);
+        assert!(sent(&mut b)[0].contains("/status"));
+        // `/stop` before Codex named the turn: remembered for when it does.
+        b.live.get_mut("t3").unwrap().turn = Some(Turn::new(None));
+        b.handle(msg("#3 /stop"), command::parse("#3 /stop"), None);
+        assert!(sent(&mut b)[0].contains("正在停止 #3"));
+        assert!(b.live["t3"].turn.as_ref().unwrap().stop_asked);
+    }
+
+    #[test]
+    fn quoted_session_gets_the_command() {
+        let _h = crate::util::TestHome::new("wechat-quote-cmd");
+        let mut b = bridge();
+        b.saved.numbers.insert(1, "t1".into());
+        b.saved.numbers.insert(2, "t2".into());
+        b.saved.current = Some("t1".into());
+        b.live.insert("t2".into(), Live { last_reply: Some("the answer".into()), ..Default::default() });
+        let m = Inbound { quote_text: Some("【#2 x】 | the answer".into()), ..msg("/last") };
+        b.handle(m, Cmd::Last(None), None);
+        assert_eq!(sent(&mut b), ["【#2】\n\nthe answer"]);
+        b.handle(msg("/last"), Cmd::Last(None), None);
+        assert!(sent(&mut b)[0].contains("#1 在本次连接里还没有回复"));
+        b.handle(msg("/mode 2 readonly"), command::parse("/mode 2 readonly"), None);
+        assert_eq!(b.saved.modes.get("t2").map(String::as_str), Some("readonly"));
+        assert!(sent(&mut b)[0].contains("readonly"));
+        b.handle(msg("/use"), Cmd::Current, None);
+        assert!(sent(&mut b)[0].contains("当前：【#1】"));
+    }
+
+    #[test]
+    fn a_failed_part_is_mentioned_next_time() {
+        let _h = crate::util::TestHome::new("wechat-lost");
+        let mut b = bridge();
+        b.lost = true;
+        b.say("hi");
+        assert_eq!(sent(&mut b), ["hi\n\n（上一条回复没有完整送达，发 /last 重发。）"]);
+        b.say("again");
+        assert_eq!(sent(&mut b), ["again"]);
     }
 
     #[test]
     fn answers_questions() {
         let qs = vec![json!({ "id": "q1", "options": [{ "label": "Yes" }, { "label": "No" }] })];
-        assert_eq!(question_answers(&qs, "2"), json!({ "q1": { "answers": ["No"] } }));
-        assert_eq!(question_answers(&qs, "7"), json!({ "q1": { "answers": ["7"] } }));
-        assert_eq!(question_answers(&qs, "0"), json!({ "q1": { "answers": ["0"] } }));
-        assert_eq!(question_answers(&qs, " maybe \nlater"), json!({ "q1": { "answers": ["maybe \nlater"] } }));
-        let two = vec![json!({ "id": "a", "options": null }), json!({ "id": "b", "options": [{ "label": "X" }] })];
-        assert_eq!(question_answers(&two, "first\n\n1"), json!({ "a": { "answers": ["first"] }, "b": { "answers": ["X"] } }));
-        assert_eq!(question_answers(&two, "only one"), json!({ "a": { "answers": ["only one"] }, "b": { "answers": [""] } }));
+        assert_eq!(question_answers(&qs, "2"), Ok(json!({ "q1": { "answers": ["No"] } })));
+        assert_eq!(question_answers(&qs, "7"), Ok(json!({ "q1": { "answers": ["7"] } })));
+        assert_eq!(question_answers(&qs, "0"), Ok(json!({ "q1": { "answers": ["0"] } })));
+        assert_eq!(question_answers(&qs, " maybe \nlater"), Ok(json!({ "q1": { "answers": ["maybe \nlater"] } })));
+        let two = vec![json!({ "id": "a", "question": "Name?", "options": null }), json!({ "id": "b", "question": "Pick", "options": [{ "label": "X" }] })];
+        assert_eq!(question_answers(&two, "first\n\n1"), Ok(json!({ "a": { "answers": ["first"] }, "b": { "answers": ["X"] } })));
+        // Too few lines: nothing is answered, the missing questions come back.
+        assert_eq!(question_answers(&two, "only one"), Err(vec!["Pick".to_string()]));
     }
 
     #[test]
@@ -1530,7 +2088,7 @@ mod tests {
         assert!(!b.needs_codex(&Cmd::Use { no: 99, force: false }, &m));
         assert!(b.needs_codex(&Cmd::Use { no: 3, force: false }, &m));
         assert!(!b.needs_codex(&Cmd::To { no: 99, force: false, text: "x".into() }, &m));
-        assert!(!b.needs_codex(&Cmd::Help, &m) && !b.needs_codex(&Cmd::Status, &m));
+        assert!(!b.needs_codex(&Cmd::Help(None), &m) && !b.needs_codex(&Cmd::Status, &m));
         // Text with no session to go to is answered with a hint, without Codex.
         assert!(!b.needs_codex(&Cmd::Text("x".into()), &m));
         b.saved.current = Some("t3".into());
