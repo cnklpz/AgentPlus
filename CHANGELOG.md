@@ -2,6 +2,32 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.5
+
+Claw 接入大幅增强：新命令、长任务进度、审批模式、桌面会话完成提醒，还能把图片发给 Codex。
+
+- 新命令：/now 把消息直接插入正在进行的这一轮（只发 /now 会把排队的消息发过去），/last 重发上次回复，/queue 查看或清空排队的消息，/stop all 中断全部，/diff 查看会话目录的改动，/cwd 查看目录，/rename 改名，/archive 归档；#编号 /命令 可以对指定会话执行命令，不会再被当成普通消息发给 Codex
+- 命令写错时会给出用法或最接近的命令，/help 命令 查看详细说明
+- 长任务：运行期间一直显示「正在输入」，满 5 分钟后每 10 分钟发一条进度；页面上可以打开「发送过程消息」，把 Codex 的中间回复也发过来
+- 审批模式：/mode ask / auto / full / readonly 设置会话无需询问可以做的事，页面上可以给新会话设默认模式；a编号 现在也覆盖权限申请
+- 桌面会话完成提醒（页面开关）：Codex 桌面版或命令行里的会话跑完一轮时，在微信里提醒，发 #编号! 可以接着聊
+- 图片：微信里发的图片会和消息一起交给 Codex；只引用消息的一部分时，选中的文字也会带给 Codex
+- 动态记录保存 14 天，可以按会话筛选、导出
+- 更可靠：发送失败会重试并提示 /last；Codex 报错、无法处理的请求、文件和视频、没有转写的语音都会在微信里说明；重启后第一次回复被微信拒收时，会等你发一条消息后补发
+- 修复 macOS 上找不到 Codex 命令行程序、Claw 接入无法启动 Codex 的问题
+
+The Claw bridge gets much more: new commands, progress on long turns, approval modes, notices for desktop sessions, and pictures for Codex.
+
+- New commands: /now adds a message to the running turn (/now alone sends what is queued), /last sends the last reply again, /queue shows or clears queued messages, /stop all stops everything, /diff shows changes in the session's folder, /cwd shows the folder, /rename and /archive; #N /command runs a command for session N instead of sending it to Codex as text
+- A mistyped command gets its usage or the closest command; /help command gives details
+- Long turns: "typing" stays on, and a progress note comes 5 minutes in and every 10 minutes after; "Send progress messages" on the page also relays Codex's intermediate replies
+- Approval modes: /mode ask / auto / full / readonly sets what a session may do without asking, with a default for new sessions on the page; aN now covers permission requests too
+- Desktop session notices (a page switch): when a turn finishes in Codex desktop or the CLI, WeChat says so, and #N! continues it
+- Pictures sent in WeChat go to Codex with the message; quoting part of a message passes the selected text on
+- Activity is kept for 14 days, can be filtered by session and exported
+- More reliable: failed sends are retried and point to /last; Codex errors, requests it can't handle, files and videos, and voice without text are reported in WeChat; when WeChat refuses the first reply after a restart, it is sent once you write to the bot
+- Fixes the Claw bridge not finding Codex's command-line program on macOS
+
 ## 0.4.4
 
 支持 Antigravity，并可以把它自己的界面汉化。
