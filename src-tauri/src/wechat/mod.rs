@@ -314,6 +314,38 @@ fn prune_log(dir: &std::path::Path, today: chrono::NaiveDate) {
     }
 }
 
+/// Pictures received in WeChat, for Codex to read: `~/.agentplus/wechat-media/YYYY-MM-DD/`.
+fn media_dir() -> PathBuf {
+    crate::util::agentplus_dir().join("wechat-media")
+}
+
+/// Days pictures are kept.
+const MEDIA_DAYS: u64 = 7;
+
+/// Writes a received file under today's folder; returns its path.
+pub(crate) fn save_media(data: &[u8], ext: &str) -> Result<PathBuf> {
+    let dir = media_dir().join(chrono::Local::now().format("%Y-%m-%d").to_string());
+    crate::util::ensure_private_dir(&media_dir())?;
+    crate::util::ensure_private_dir(&dir)?;
+    let mut id = [0u8; 6];
+    let _ = getrandom::getrandom(&mut id);
+    let name = format!("{}-{}.{ext}", chrono::Local::now().format("%H%M%S"), id.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    let path = dir.join(name);
+    crate::util::write_private_atomic(&path, data)?;
+    Ok(path)
+}
+
+/// Removes the days' folders from before the last `MEDIA_DAYS` days.
+fn prune_media(dir: &std::path::Path, today: chrono::NaiveDate) {
+    let first = today - chrono::Days::new(MEDIA_DAYS - 1);
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if chrono::NaiveDate::parse_from_str(&name, "%Y-%m-%d").is_ok_and(|d| d < first) {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 /// All kept activity in one text file (Downloads, else `~/.agentplus/exports`); returns its path.
 pub fn log_export() -> Result<PathBuf> {
     let mut out = String::new();
@@ -420,6 +452,7 @@ fn start_locked(ctl: &mut Option<mpsc::Sender<Event>>) -> Result<()> {
     }
     let run = RUN.fetch_add(1, Ordering::SeqCst) + 1;
     prune_log(&log_dir(), chrono::Local::now().date_naive());
+    prune_media(&media_dir(), chrono::Local::now().date_naive());
     let saved = load_saved();
     let Some(acc) = saved.account.clone() else {
         set_state("off", None);
@@ -791,6 +824,21 @@ mod tests {
         assert_eq!(load_saved().options.default_mode.as_deref(), Some("auto"));
         assert!(load_saved().options.relay_progress);
         assert!(set_options(Options { default_mode: Some("yolo".into()), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn pictures_are_kept_a_week() {
+        let h = TestHome::new("wechat-media");
+        let p = save_media(b"img", "png").unwrap();
+        assert!(p.starts_with(media_dir()) && p.extension().is_some_and(|e| e == "png"));
+        assert_eq!(std::fs::read(&p).unwrap(), b"img");
+        let dir = h.0.join("m");
+        for d in ["2026-10-01", "2026-10-10", "notes"] {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        prune_media(&dir, chrono::NaiveDate::from_ymd_opt(2026, 10, 16).unwrap());
+        assert!(!dir.join("2026-10-01").exists());
+        assert!(dir.join("2026-10-10").exists() && dir.join("notes").exists());
     }
 
     #[test]

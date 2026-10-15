@@ -45,6 +45,8 @@ const DIFF_LINES: usize = 30;
 const DESKTOP_EVERY: Duration = Duration::from_secs(15);
 /// Characters of Codex's last message in a desktop notice.
 const NOTICE_CHARS: usize = 300;
+/// The text sent with a picture that came alone (request content: not translated).
+const IMAGE_ONLY: &str = "(See the attached picture.)";
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -60,6 +62,8 @@ struct Live {
     loaded: bool,
     turn: Option<Turn>,
     queue: Vec<String>,
+    /// Pictures sent with the queued messages.
+    queue_images: Vec<std::path::PathBuf>,
     /// As Codex last reported them.
     model: String,
     effort: String,
@@ -150,6 +154,8 @@ pub struct Bridge {
     desktop_at: Option<Instant>,
     /// Notices waiting for a reply context: the latest per session only.
     held_notices: std::collections::BTreeMap<String, String>,
+    /// Pictures of the message being handled, for the turn it starts.
+    attach: Vec<std::path::PathBuf>,
 }
 
 /// A numbered list the bot just showed.
@@ -180,7 +186,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false, desktop: desktop::Watch::default(), desktop_at: None, held_notices: Default::default() }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false, desktop: desktop::Watch::default(), desktop_at: None, held_notices: Default::default(), attach: vec![] }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -710,6 +716,7 @@ impl Bridge {
         if let Some(live) = self.live.get_mut(thread) {
             if live.turn.is_some() {
                 live.queue.push(text);
+                live.queue_images.append(&mut self.attach);
                 let n = live.queue.len();
                 self.say(tr!("Queued for #{no} ({n} waiting); it runs when the current turn ends. /stop {no} interrupts.", "已排队到 #{no}（共 {n} 条），当前这轮结束后发送。/stop {no} 可中断。"));
                 return Ok(());
@@ -731,7 +738,9 @@ impl Bridge {
     }
 
     fn start_turn(&mut self, thread: &str, text: String) -> Result<()> {
-        let mut params = json!({ "threadId": thread, "input": [{ "type": "text", "text": text, "text_elements": [] }] });
+        let mut input = vec![json!({ "type": "text", "text": text, "text_elements": [] })];
+        input.extend(std::mem::take(&mut self.attach).into_iter().map(|p| json!({ "type": "localImage", "path": p })));
+        let mut params = json!({ "threadId": thread, "input": input });
         let next = self.saved.next.get(thread).cloned().unwrap_or_default();
         if let Some(m) = &next.model {
             params["model"] = json!(m);
@@ -1134,18 +1143,28 @@ impl Bridge {
             }
         }
         self.flush_unsent();
-        log("in", if m.text.is_empty() && m.media { l("[media]", "[媒体]") } else { m.text.as_str() });
+        let mut m = m;
+        let shown = match (m.text.trim().is_empty(), m.images.is_empty(), m.media) {
+            (true, false, _) => trn!(m.images.len(), "[{n} picture]", "[{n} pictures]", "[{n} 张图片]"),
+            (true, true, true) => l("[media]", "[媒体]").to_string(),
+            _ => m.text.clone(),
+        };
+        log("in", shown);
         if m.voice_blank {
             self.say(l("WeChat sent no text for that voice message. Say it again, or type it.", "微信没有给出这条语音的文字，请重说一遍或直接打字。"));
         }
         if m.text.trim().is_empty() {
-            if m.media {
-                self.say(l("Only text and voice messages can be passed to Codex for now.", "目前只能把文字和语音消息转给 Codex。"));
+            if m.images.is_empty() {
+                if m.media {
+                    self.say(l("Only text, voice and pictures can be passed to Codex for now.", "目前只能把文字、语音和图片转给 Codex。"));
+                }
+                return;
             }
-            return;
+            // A picture alone goes to the current session with a line for Codex.
+            m.text = IMAGE_ONLY.to_string();
         }
         if m.media {
-            self.say(l("The file or picture in that message can't be passed to Codex yet; only its text is sent.", "这条消息里的文件或图片暂时无法转给 Codex，只发送了文字部分。"));
+            self.say(l("Files and videos can't be passed to Codex yet; the rest of that message is sent.", "文件和视频暂时无法转给 Codex，这条消息的其他内容已发送。"));
         }
         let (cmd, target) = self.resolve(&m.text);
         if !self.codex.as_ref().is_some_and(|c| c.alive()) {
@@ -1231,6 +1250,14 @@ impl Bridge {
     /// `target`: the session a model picked from `/model`'s list is for.
     fn handle(&mut self, m: Inbound, cmd: Cmd, target: Option<String>) {
         let quoted = self.session_of_quote(&m);
+        // Pictures go with the text of this message; a command doesn't use them.
+        self.attach.clear();
+        if !m.images.is_empty() && matches!(cmd, Cmd::Text(_) | Cmd::To { .. } | Cmd::Approve { .. }) {
+            self.attach = self.fetch_images(&m.images);
+            if self.attach.is_empty() {
+                return;
+            }
+        }
         let r = match cmd {
             Cmd::To { no, force, text } => match self.thread_of(no) {
                 // `#3 /stop`: a command for that session; it never goes to Codex as text.
@@ -1258,6 +1285,30 @@ impl Bridge {
             Ok(None) => {}
             Err(e) => self.say(format!("❗ {e:#}")),
         }
+    }
+
+    /// Downloads a message's pictures into `~/.agentplus/wechat-media`; says which failed.
+    fn fetch_images(&mut self, images: &[ilink::ImageRef]) -> Vec<std::path::PathBuf> {
+        let mut paths = vec![];
+        let mut failed = 0;
+        for img in images {
+            match ilink::download_image(img).and_then(|data| super::save_media(&data, ilink::image_ext(&data))) {
+                Ok(p) => paths.push(p),
+                Err(e) => {
+                    failed += 1;
+                    crate::applog::warn("wechat", format!("picture: {e:#}"));
+                    log("error", format!("{e:#}"));
+                }
+            }
+        }
+        if failed > 0 {
+            self.say(if paths.is_empty() {
+                l("❗ The picture couldn't be downloaded from WeChat; nothing was sent. Send it again.", "❗ 无法从微信下载图片，消息没有发送，请重发。").to_string()
+            } else {
+                trn!(failed, "❗ {n} picture couldn't be downloaded; the rest was sent.", "❗ {n} pictures couldn't be downloaded; the rest was sent.", "❗ 有 {n} 张图片下载失败，其余内容已发送。")
+            });
+        }
+        paths
     }
 
     /// A command. `session`: the one it is aimed at (`#3 /stop`, a quoted message), else the
@@ -1506,6 +1557,7 @@ impl Bridge {
         live.last_reply = Some(body.clone());
         live.last_files = turn.stats.files.iter().cloned().collect();
         let queued = std::mem::take(&mut live.queue);
+        let images = std::mem::take(&mut live.queue_images);
         self.pending.retain(|p| p.thread != thread);
         let t = thread.to_string();
         self.save(|s| {
@@ -1513,8 +1565,11 @@ impl Bridge {
         });
         self.say_from(thread, &body);
         if !queued.is_empty() {
+            self.attach = images.clone();
             if let Err(e) = self.start_turn(thread, queued.join("\n\n")) {
-                self.live.entry(thread.to_string()).or_default().queue = queued;
+                let live = self.live.entry(thread.to_string()).or_default();
+                live.queue = queued;
+                live.queue_images = images;
                 self.say(format!("❗ {e:#}"));
             }
         }
@@ -1691,6 +1746,7 @@ fn help_text() -> String {
          /mode [N] ask|auto|full|readonly what it may do without asking\n\
          /model [N] see or switch the model · /effort [level] reasoning effort\n\
          y N / a N / n N allow / allow for session / decline\n\
+         Text, voice and pictures go to Codex; files and videos not yet.\n\
          /help command for details. Reply to (quote) a bot message to answer that session; other text goes to the current session.",
         "AgentPlus · 微信使用 Codex\n\
          /ls [数量] 最近的会话 · /use 编号 切换 · /status 运行情况\n\
@@ -1702,6 +1758,7 @@ fn help_text() -> String {
          /mode [编号] ask|auto|full|readonly 无需询问可做的事\n\
          /model [编号] 查看或切换模型 · /effort [强度] 推理强度\n\
          y编号 / a编号 / n编号 允许 / 本会话都允许 / 拒绝\n\
+         文字、语音和图片会转给 Codex，文件和视频暂不支持。\n\
          /help 命令 查看详细说明。引用机器人的某条消息回复，会发给那条消息的会话；其他消息发给当前会话。",
     )
     .to_string()
