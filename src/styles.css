@@ -773,4 +773,9 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .wx-tile.bad .wx-tile-n { color: var(--del); }
 .wx-exe { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wx-aside .wx-log { flex-grow: 1; min-height: 0; max-height: none; padding: 0 0 14px; }
+.wx-log-head { display: flex; align-items: center; gap: 8px; padding: 14px 18px 8px; }
+.wx-log-head > .btn { margin-left: auto; }
+/* Session filter: compact, inside the pane's gutter, scrolls sideways when there are many. */
+.wx-log-filter { margin: 0 18px 8px; max-width: calc(100% - 36px); overflow-x: auto; flex-shrink: 0; scrollbar-width: none; }
+.wx-log-filter button { height: 24px; padding: 0 10px; font-size: 12px; }
 .wx-aside .wx-line { grid-template-columns: 58px 12px minmax(0, 1fr); padding: 3px 18px; font-size: 12px; }
