@@ -326,7 +326,7 @@ fn buffered(msg: &Value) -> bool {
     msg.get("method").and_then(|m| m.as_str()) == Some("Fetch.requestPaused")
 }
 
-struct Session {
+pub(crate) struct Session {
     ws: WebSocket<MaybeTlsStream<TcpStream>>,
     next: u64,
     events: VecDeque<Value>,
@@ -337,7 +337,7 @@ impl Session {
     /// port's answer names it: whatever took the port could name any address). The connect and
     /// the handshake are bounded too, so a renderer that accepts but never answers can't hang
     /// a restart.
-    fn open(url: &str, port: u16) -> Result<Self> {
+    pub(crate) fn open(url: &str, port: u16) -> Result<Self> {
         let u = url::Url::parse(url)?;
         let local = matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
         if u.scheme() != "ws" || !local || u.port() != Some(port) {
@@ -364,7 +364,7 @@ impl Session {
         }
     }
 
-    fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+    pub(crate) fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = self.next;
         self.next += 1;
         self.ws.send(Message::Text(json!({ "id": id, "method": method, "params": params }).to_string()))?;
@@ -402,17 +402,27 @@ impl Session {
     }
 }
 
-fn page_targets(port: u16) -> Result<Vec<Value>> {
+/// `GET /json/<what>` on a debug port.
+fn json_endpoint(port: u16, what: &str) -> Result<Value> {
     // Never through a proxy (HTTP_PROXY, the system setting): it would ask the proxy for its own loopback.
-    let resp = reqwest::blocking::Client::builder().no_proxy().build()?.get(format!("http://127.0.0.1:{port}/json/list")).timeout(Duration::from_secs(2)).send()?;
-    let v: Value = serde_json::from_str(&resp.text()?)?;
-    Ok(v.as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|t| t.get("type").and_then(|x| x.as_str()) == Some("page"))
-        .filter(|t| t.get("url").and_then(|x| x.as_str()).map(|u| u.starts_with("app://")).unwrap_or(false))
-        .collect())
+    let resp = reqwest::blocking::Client::builder().no_proxy().build()?.get(format!("http://127.0.0.1:{port}/json/{what}")).timeout(Duration::from_secs(2)).send()?;
+    Ok(serde_json::from_str(&resp.text()?)?)
+}
+
+/// What the browser on a debug port says it is (`Browser`, `User-Agent`…).
+pub(crate) fn browser(port: u16) -> Result<Value> {
+    json_endpoint(port, "version")
+}
+
+/// The pages (windows) on a debug port.
+pub(crate) fn targets(port: u16) -> Result<Vec<Value>> {
+    let v = json_endpoint(port, "list")?;
+    Ok(v.as_array().cloned().unwrap_or_default().into_iter().filter(|t| t.get("type").and_then(|x| x.as_str()) == Some("page")).collect())
+}
+
+/// Codex's windows.
+fn page_targets(port: u16) -> Result<Vec<Value>> {
+    Ok(targets(port)?.into_iter().filter(|t| t.get("url").and_then(|x| x.as_str()).map(|u| u.starts_with("app://")).unwrap_or(false)).collect())
 }
 
 /// The bundle a script URL belongs to. Only `.js` counts: each bundle has a same-named

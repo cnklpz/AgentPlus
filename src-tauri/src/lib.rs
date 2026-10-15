@@ -1,6 +1,7 @@
 #[macro_use]
 mod i18n;
 mod adapters;
+mod agzh;
 mod asar;
 mod attribution;
 mod applog;
@@ -1000,6 +1001,7 @@ pub fn run() {
             setup_links(app);
             // Off the startup path: binding the port and stopping an old listener can wait.
             std::thread::spawn(gateway::server::autostart);
+            std::thread::spawn(agzh::watch);
             std::thread::spawn(wechat::autostart);
             // macOS: ask the login shell for PATH now, before the first detection needs it.
             std::thread::spawn(process::search_path);
