@@ -197,7 +197,9 @@ mod tests {
             .find_map(|exe| match AppServer::spawn(exe, tx.clone(), 1) {
                 Ok(s) => Some((exe, s)),
                 Err(e) => {
-                    failures.push(format!("{}: {e:#}", exe.display()));
+                    let failure = format!("{}: {e:#}", exe.display());
+                    println!("handshake failed via {failure}");
+                    failures.push(failure);
                     None
                 }
             })
