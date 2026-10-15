@@ -891,6 +891,20 @@ async fn wechat_unbind() -> Result<wechat::Status, String> {
 }
 
 #[tauri::command]
+async fn wechat_set_options(options: wechat::Options) -> Result<wechat::Status, String> {
+    blocking(move || {
+        wechat::set_options(options)?;
+        Ok(wechat::status())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn wechat_log_export() -> Result<String, String> {
+    blocking(|| wechat::log_export().map(|p| p.to_string_lossy().into_owned())).await
+}
+
+#[tauri::command]
 async fn wechat_set_default_cwd(path: Option<String>) -> Result<wechat::Status, String> {
     blocking(move || {
         wechat::set_default_cwd(path)?;
@@ -1135,6 +1149,8 @@ pub fn run() {
             wechat_start_codex,
             wechat_unbind,
             wechat_set_default_cwd,
+            wechat_set_options,
+            wechat_log_export,
             update::update_check,
             update::update_install
         ])
