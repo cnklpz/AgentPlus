@@ -12,6 +12,7 @@
 //!   `#3! text` or `/use 3!` sends anyway.
 
 use super::appserver::AppServer;
+use super::desktop;
 use super::command::{self, Cmd, Decision, ModelCmd, Spec};
 use super::format::{self, TurnStats};
 use super::ilink::{self, Inbound};
@@ -40,6 +41,10 @@ const SEND_TRIES: u32 = 3;
 const QUOTE_CHARS: usize = 500;
 /// Lines `/diff` shows.
 const DIFF_LINES: usize = 30;
+/// How often sessions outside the bridge are checked for finished turns.
+const DESKTOP_EVERY: Duration = Duration::from_secs(15);
+/// Characters of Codex's last message in a desktop notice.
+const NOTICE_CHARS: usize = 300;
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -140,6 +145,11 @@ pub struct Bridge {
     typed_at: Option<Instant>,
     /// A message didn't fully arrive: the next one says so.
     lost: bool,
+    /// Sessions running outside the bridge, for "finished" notices.
+    desktop: desktop::Watch,
+    desktop_at: Option<Instant>,
+    /// Notices waiting for a reply context: the latest per session only.
+    held_notices: std::collections::BTreeMap<String, String>,
 }
 
 /// A numbered list the bot just showed.
@@ -170,7 +180,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None, typed_at: None, lost: false, desktop: desktop::Watch::default(), desktop_at: None, held_notices: Default::default() }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -364,6 +374,9 @@ impl Bridge {
             for (texts, no) in std::mem::take(&mut self.unsent) {
                 self.send(texts, no);
             }
+            for (thread, body) in std::mem::take(&mut self.held_notices) {
+                self.note(&thread, &body);
+            }
         }
     }
 
@@ -414,6 +427,10 @@ impl Bridge {
     /// Timers between events: keeps "typing…" on during turns and sends heartbeats for
     /// long ones.
     fn tick(&mut self) {
+        if self.saved.options.notify_desktop && self.desktop_at.is_none_or(|t| t.elapsed() >= DESKTOP_EVERY) {
+            self.desktop_at = Some(Instant::now());
+            self.check_desktop();
+        }
         if !self.live.values().any(|l| l.turn.is_some()) {
             return;
         }
@@ -442,7 +459,35 @@ impl Bridge {
     }
 
     fn set_options(&mut self, o: Options) {
+        if o.notify_desktop && !self.saved.options.notify_desktop {
+            // Start from what the files hold now: nothing that ended before is reported.
+            self.desktop = desktop::Watch::default();
+            self.desktop_at = None;
+        }
         self.saved.options = o;
+    }
+
+    /// Tells WeChat about turns that ended in sessions the bridge isn't driving.
+    fn check_desktop(&mut self) {
+        if crate::env::is_wsl() {
+            return;
+        }
+        let live = &self.live;
+        let ends = self.desktop.check(|t| live.get(t).is_some_and(|l| l.loaded || l.turn.is_some()));
+        for e in ends {
+            let live = self.live.entry(e.thread.clone()).or_default();
+            if !e.title.is_empty() {
+                live.title = e.title.clone();
+            }
+            live.updated = now();
+            let body = desktop_notice(&e);
+            if self.reply_context().is_some() {
+                self.note(&e.thread, &body);
+            } else {
+                self.number(&e.thread);
+                self.held_notices.insert(e.thread, body);
+            }
+        }
     }
 
     // ------------------------------------------------------------ sessions
@@ -1613,6 +1658,20 @@ impl Bridge {
     }
 }
 
+/// "✅ Finished in Codex · 2m 50s", Codex's last words, and how to go on from here.
+fn desktop_notice(e: &desktop::Finished) -> String {
+    let mut head = if e.aborted { l("⏹ Stopped in Codex", "⏹ 已在 Codex 中停止").to_string() } else { l("✅ Finished in Codex", "✅ 已在 Codex 中完成").to_string() };
+    if let Some(ms) = e.duration_ms.filter(|ms| *ms >= 1000) {
+        head.push_str(&format!(" · {}", format::duration(ms)));
+    }
+    let mut lines = vec![head];
+    if let Some(m) = e.message.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        lines.push(crate::util::clip(&m.replace('\n', " "), NOTICE_CHARS));
+    }
+    lines.push(l("Reply to this message to continue the session here.", "引用这条消息回复，可以在微信里继续这个会话。").into());
+    lines.join("\n")
+}
+
 fn locked_text(no: u32, when: &str) -> String {
     tr!(
         "#{no} may be open in Codex desktop (it changed {when}). Writing to it from here could clash. Close it there, or send #{no}! text (or /use {no}!) to go ahead anyway.",
@@ -1935,6 +1994,29 @@ mod tests {
         assert!(sent(&mut b)[0].contains("readonly"));
         b.handle(msg("/use"), Cmd::Current, None);
         assert!(sent(&mut b)[0].contains("当前：【#1】"));
+    }
+
+    #[test]
+    fn desktop_notices_say_how_it_ended() {
+        let e = desktop::Finished { thread: "t".into(), title: "x".into(), turn: "1".into(), aborted: false, duration_ms: Some(170_966), message: Some("Line one\nline two".into()) };
+        let text = desktop_notice(&e);
+        assert!(text.starts_with("✅ 已在 Codex 中完成 · 2 分 50 秒\nLine one line two\n"), "{text}");
+        let stopped = desktop_notice(&desktop::Finished { aborted: true, message: None, duration_ms: None, ..e });
+        assert!(stopped.starts_with("⏹ 已在 Codex 中停止\n"), "{stopped}");
+    }
+
+    #[test]
+    fn notices_without_a_reply_context_keep_the_latest() {
+        let _h = crate::util::TestHome::new("wechat-held");
+        let mut b = bridge();
+        b.saved.context_token = None;
+        b.held_notices.insert("t1".into(), "first".into());
+        b.held_notices.insert("t1".into(), "second".into());
+        b.saved.context_token = Some("ctx".into());
+        b.flush_unsent();
+        let out = sent(&mut b);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].ends_with("second"), "{out:?}");
     }
 
     #[test]

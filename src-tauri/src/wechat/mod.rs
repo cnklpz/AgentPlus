@@ -11,6 +11,7 @@
 mod appserver;
 mod bridge;
 mod command;
+mod desktop;
 mod format;
 mod ilink;
 
