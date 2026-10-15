@@ -337,12 +337,21 @@ impl Bridge {
             return;
         }
         let mut ids = vec![];
-        for t in texts {
+        for (i, t) in texts.iter().enumerate() {
             let mut tries = 0;
             let sent = loop {
                 tries += 1;
-                match self.wx.send_text(&self.user, &t, Some(&ctx)) {
+                match self.wx.send_text(&self.user, t, Some(&ctx)) {
                     Ok(id) => break Some(id),
+                    // The saved reply context no longer works: retrying can't help. Hold this
+                    // part and the rest until the user's next message brings a new one.
+                    Err(e) if e.downcast_ref::<ilink::SendRefused>().is_some_and(|r| r.code == ilink::STALE_CONTEXT) => {
+                        crate::applog::warn("wechat", format!("send: {e:#}; reply context dropped"));
+                        self.save(|s| s.context_token = None);
+                        self.typing = None;
+                        self.send(texts[i..].to_vec(), no);
+                        break None;
+                    }
                     Err(e) if tries < SEND_TRIES => {
                         crate::applog::warn("wechat", format!("send (try {tries}): {e:#}"));
                         std::thread::sleep(Duration::from_secs(u64::from(tries)));
@@ -356,11 +365,13 @@ impl Bridge {
             };
             match sent {
                 Some(id) => {
-                    log("out", &t);
+                    log("out", t);
                     if let (Some(id), Some(no)) = (id, no) {
                         ids.push((id, no));
                     }
                 }
+                // Held for a new reply context: nothing is lost.
+                None if self.reply_context().is_none() => break,
                 None => {
                     // The rest would read as if this part was there; the next message says so.
                     self.lost = true;
