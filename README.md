@@ -72,7 +72,7 @@ Updates are checked on startup and installed from *Settings → General → Abou
 
 ## Supported agents
 
-AgentPlus recognizes 18 agents and reads and writes the following config files:
+AgentPlus recognizes 19 agents and reads and writes the following config files:
 
 | Agent | Config |
 |---|---|

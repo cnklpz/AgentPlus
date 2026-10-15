@@ -72,7 +72,7 @@ xattr -cr /Applications/AgentPlus.app
 
 ## 支持的 Agent
 
-AgentPlus 能识别 18 个 Agent，读取和写入这些配置文件：
+AgentPlus 能识别 19 个 Agent，读取和写入这些配置文件：
 
 | Agent | 配置文件 |
 |---|---|
