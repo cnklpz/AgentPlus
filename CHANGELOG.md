@@ -2,6 +2,20 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.4
+
+支持 Antigravity，并可以把它自己的界面汉化。
+
+- 新增 Antigravity：检测已安装的版本（1.x 和 2.x 并存时选正在运行或最新的那个），管理它的 MCP 服务器和技能。它只支持 Google 账号登录，没有供应商可以添加
+- 汉化 Antigravity 界面：在 Antigravity 页的「其他设置」里打开「汉化界面」。AgentPlus 运行期间，Antigravity 的菜单、按钮和设置会显示成中文，已打开的窗口几秒内生效，不用重启；关闭后恢复英文。对话、代码、终端，以及对话标题、项目名、文件名这些用户起的名字都不会被翻译
+- 内置约 2,900 条译文，也可以在「自定义译文」里每行写一条「英文 = 中文」补充或覆盖，{n} 匹配数字，{x} 匹配任意文字
+
+Supports Antigravity, with a Chinese UI for the app itself.
+
+- New agent Antigravity: AgentPlus detects it (picking the running or newest copy when 1.x and 2.x sit side by side) and manages its MCP servers and skills. It signs in with a Google account only, so there are no providers to add
+- Chinese UI for Antigravity: turn on "Chinese UI" under "Other settings" on the Antigravity page. While AgentPlus runs, Antigravity's menus, buttons and settings show in Chinese; open windows follow within seconds without a restart, and turning it off restores the English. Conversations, code, terminals and the names users give (conversation titles, projects, files) are never translated
+- About 2,900 built-in translations; add or override entries under "Custom translations", one "English = Chinese" per line, with {n} for a number and {x} for any text
+
 ## 0.4.3
 
 Codex 模型可以设置速度模式（Fast / Ultrafast）。
