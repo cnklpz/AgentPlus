@@ -93,10 +93,10 @@ pub const SPECS: &[Spec] = &[
     Spec { names: &["cwd", "pwd", "路径"], usage: ("/cwd [N]", "/cwd [编号]"), about: ("The session's folder.", "会话所在的目录。") },
     Spec {
         names: &["mode", "模式"],
-        usage: ("/mode [N] [ask | auto | full | readonly]", "/mode [编号] [ask | auto | full | readonly]"),
+        usage: ("/mode [N] [ask | auto | full | readonly | default]", "/mode [编号] [ask | auto | full | readonly | default]"),
         about: (
-            "How much the session may do without asking. ask: asks for anything not known safe · auto: works in its folder, asks for more · full: no sandbox, never asks · readonly: reads only.",
-            "会话无需询问可以做多少事。ask：不确定安全的都问 · auto：在目录内自由工作，超出才问 · full：无沙箱、从不询问 · readonly：只读。",
+            "How much the session may do without asking. ask: asks for anything not known safe · auto: works in its folder, asks for more · full: no sandbox, never asks · readonly: reads only · default: stop choosing it from WeChat.",
+            "会话无需询问可以做多少事。ask：不确定安全的都问 · auto：在目录内自由工作，超出才问 · full：无沙箱、从不询问 · readonly：只读 · default：不再由微信指定。",
         ),
     },
     Spec { names: &["model", "m", "模型"], usage: ("/model [N | name | default [N]]", "/model [编号 | 名称 | default [编号]]"), about: ("See or switch the session's model; default changes the default for new sessions.", "查看或切换会话的模型；default 修改新会话的默认模型。") },
@@ -247,7 +247,8 @@ fn command(name: &str, arg: &str) -> Cmd {
             let (no, rest) = split_session(arg);
             match rest.to_lowercase().as_str() {
                 "" => Cmd::Mode { no, mode: None },
-                m @ ("ask" | "auto" | "full" | "readonly") => Cmd::Mode { no, mode: Some(m.to_string()) },
+                m @ ("ask" | "auto" | "full" | "readonly" | "default") => Cmd::Mode { no, mode: Some(m.to_string()) },
+                "默认" => Cmd::Mode { no, mode: Some("default".into()) },
                 _ => usage,
             }
         }
@@ -369,6 +370,7 @@ mod tests {
         assert_eq!(parse("/mode 2 ReadOnly"), Cmd::Mode { no: Some(2), mode: Some("readonly".into()) });
         assert_eq!(parse("/mode full"), Cmd::Mode { no: None, mode: Some("full".into()) });
         assert_eq!(parse("/mode yolo"), usage("mode"));
+        assert_eq!(parse("/模式 3 默认"), Cmd::Mode { no: Some(3), mode: Some("default".into()) });
     }
 
     #[test]

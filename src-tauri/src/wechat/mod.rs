@@ -42,6 +42,9 @@ pub enum Event {
     CodexExited { generation: u64 },
     /// The page changed the options.
     Options(Options),
+    /// The pictures of a message were downloaded (in the background): their files, and how
+    /// many couldn't be fetched.
+    Pictures { message: ilink::Inbound, paths: Vec<PathBuf>, failed: usize },
     Stop,
 }
 

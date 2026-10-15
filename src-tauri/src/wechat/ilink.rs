@@ -253,7 +253,7 @@ fn image_ref(img: &Value) -> Option<ImageRef> {
 fn decrypt_ecb(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     use aes::cipher::{BlockDecrypt, KeyInit};
     if data.is_empty() || !data.len().is_multiple_of(16) {
-        bail!("encrypted picture has {} bytes, not whole blocks", data.len());
+        bail!("{}", tr!("The picture from WeChat is damaged ({n} bytes)", "微信发来的图片已损坏（{n} 字节）", n = data.len()));
     }
     let cipher = aes::Aes128::new(key.into());
     let mut out = data.to_vec();
@@ -262,7 +262,7 @@ fn decrypt_ecb(data: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     }
     let pad = usize::from(*out.last().expect("not empty"));
     if pad == 0 || pad > 16 || out[out.len() - pad..].iter().any(|b| usize::from(*b) != pad) {
-        bail!("bad padding in decrypted picture");
+        bail!("{}", l("The picture from WeChat couldn't be decrypted", "微信发来的图片无法解密"));
     }
     out.truncate(out.len() - pad);
     Ok(out)
@@ -283,13 +283,13 @@ pub fn image_ext(data: &[u8]) -> &'static str {
 pub fn download_image(img: &ImageRef) -> Result<Vec<u8>> {
     use std::io::Read;
     if !trusted_base(&img.url) {
-        bail!("refusing to download a picture from {}", img.url);
+        bail!("{}", tr!("Refusing to download a picture from {url}", "拒绝从 {url} 下载图片", url = img.url));
     }
     let http = reqwest::blocking::Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::none()).build()?;
     let resp = http.get(&img.url).timeout(CDN_TIMEOUT).send()?;
     let status = resp.status();
     if !status.is_success() {
-        bail!("picture download: HTTP {}", status.as_u16());
+        bail!("{}", tr!("Downloading the picture failed: HTTP {code}", "下载图片失败：HTTP {code}", code = status.as_u16()));
     }
     if resp.content_length().is_some_and(|n| n > IMAGE_MAX + 16) {
         bail!("{}", l("The picture is larger than 20 MB", "图片超过 20 MB"));
@@ -320,10 +320,14 @@ pub struct Inbound {
     pub quote_id: Option<String>,
     /// The quoted message's text (title and body), when the relay includes it.
     pub quote_text: Option<String>,
+    /// The part of the quoted message the user selected, when they quoted only a part.
+    pub quote_part: Option<String>,
     /// It carried a file, a video, or a picture that can't be fetched (not passed on).
     pub media: bool,
     /// Pictures to download and pass on.
     pub images: Vec<ImageRef>,
+    /// The pictures once downloaded.
+    pub pictures: Vec<std::path::PathBuf>,
     /// It carried a voice message WeChat gave no text for.
     pub voice_blank: bool,
 }
@@ -335,6 +339,40 @@ fn item_text(item: &Value) -> Option<String> {
         Some(3) => item["voice_item"]["text"].as_str().filter(|s| !s.is_empty()).map(String::from),
         _ => None,
     }
+}
+
+/// The start of the `n`th (from 0) `needle` in `text` at or after `from`.
+fn nth_index(text: &str, needle: &str, n: u64, from: usize) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let mut pos = from;
+    for i in 0..=n {
+        pos += text.get(pos..)?.find(needle)?;
+        if i < n {
+            pos += needle.len();
+        }
+    }
+    Some(pos)
+}
+
+/// The selected part of a quoted message (`ref_msg.partial_text`: where it starts and ends,
+/// as text and which occurrence). Like the channel without its MD5 check: the end counted
+/// over the whole text first, then from the start. Without the full text, the two ends.
+fn partial_quote(full: &str, p: &Value) -> Option<String> {
+    let (start, end) = (p["start"].as_str().unwrap_or(""), p["end"].as_str().unwrap_or(""));
+    if start.is_empty() || end.is_empty() {
+        return None;
+    }
+    let (si, ei) = (p["startindex"].as_u64().unwrap_or(0), p["endindex"].as_u64().unwrap_or(0));
+    let found = nth_index(full, start, si, 0).and_then(|s| {
+        [nth_index(full, end, ei, 0), nth_index(full, end, ei, s + start.len())]
+            .into_iter()
+            .flatten()
+            .find(|e| *e >= s)
+            .map(|e| full[s..e + end.len()].to_string())
+    });
+    Some(found.unwrap_or_else(|| if start == end { start.to_string() } else { format!("{start}…{end}") }))
 }
 
 /// A `getupdates` message, or None for anything that isn't a finished direct message from a user.
@@ -349,7 +387,7 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
     let mut texts: Vec<String> = vec![];
     let (mut media, mut voice_blank) = (false, false);
     let mut images = vec![];
-    let (mut quote_id, mut quote_text) = (None, None);
+    let (mut quote_id, mut quote_text, mut quote_part) = (None, None, None);
     for item in &items {
         if let Some(t) = item_text(item) {
             texts.push(t);
@@ -376,6 +414,9 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
             if !parts.is_empty() {
                 quote_text = Some(parts.join(" | "));
             }
+            if r["partial_text"].is_object() {
+                quote_part = partial_quote(&item_text(&r["message_item"]).unwrap_or_default(), &r["partial_text"]);
+            }
         }
     }
     Some(Inbound {
@@ -384,8 +425,10 @@ pub fn parse_message(m: &Value) -> Option<Inbound> {
         context_token: m["context_token"].as_str().filter(|s| !s.is_empty()).map(String::from),
         quote_id,
         quote_text,
+        quote_part,
         media,
         images,
+        pictures: vec![],
         voice_blank,
     })
 }
@@ -438,6 +481,23 @@ mod tests {
         let i = parse_message(&two).unwrap();
         assert_eq!(i.text, "a\nb");
         assert!(i.voice_blank && !i.media);
+    }
+
+    #[test]
+    fn finds_the_selected_part_of_a_quote() {
+        let full = "one two three two four";
+        let p = |s: &str, si: u64, e: &str, ei: u64| json!({ "start": s, "end": e, "startindex": si, "endindex": ei });
+        assert_eq!(partial_quote(full, &p("two", 0, "four", 0)).as_deref(), Some("two three two four"));
+        assert_eq!(partial_quote(full, &p("two", 1, "four", 0)).as_deref(), Some("two four"));
+        // `endindex` counted from the start when the global count lands before it.
+        assert_eq!(partial_quote(full, &p("three", 0, "two", 0)).as_deref(), Some("three two"));
+        assert_eq!(partial_quote("一二三四", &p("二", 0, "三", 0)).as_deref(), Some("二三"));
+        // Not in the text the relay sent: the two ends.
+        assert_eq!(partial_quote("", &p("alpha", 0, "omega", 0)).as_deref(), Some("alpha…omega"));
+        assert_eq!(partial_quote(full, &json!({ "start": "", "end": "x" })), None);
+        let m = json!({ "message_type": 1, "from_user_id": "u", "item_list": [{ "type": 1, "text_item": { "text": "why?" },
+            "ref_msg": { "message_item": { "type": 1, "text_item": { "text": full } }, "partial_text": p("three", 0, "four", 0) } }] });
+        assert_eq!(parse_message(&m).unwrap().quote_part.as_deref(), Some("three two four"));
     }
 
     #[test]

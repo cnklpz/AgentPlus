@@ -25,12 +25,16 @@ pub struct Finished {
     pub duration_ms: Option<u64>,
     /// Codex's last message of the turn, when the file has one.
     pub message: Option<String>,
+    /// When it ended (Unix seconds), when the file says.
+    pub at: Option<i64>,
 }
 
 #[derive(Default)]
 pub struct Watch {
     /// Thread id → the file being followed.
     files: HashMap<String, Followed>,
+    /// When the first check ran (Unix seconds).
+    since: Option<i64>,
 }
 
 struct Followed {
@@ -39,7 +43,16 @@ struct Followed {
     offset: u64,
     /// Codex's last message so far in the turn being read (it may end in a later check).
     last: Option<String>,
+    /// When the session was last in the recent list (Unix seconds).
+    seen: i64,
 }
+
+/// A session out of the recent list is still followed this long, so coming back it goes on
+/// from where it was rather than being read again.
+const KEEP_SECS: i64 = 24 * 60 * 60;
+/// A session seen for the first time reports a turn that ended this recently: it ended
+/// between two checks (they are 15 s apart, more when the bridge was busy).
+const LATE_SECS: i64 = 5 * 60;
 
 impl Watch {
     /// The turns that ended since the last check, in sessions `skip` doesn't exclude.
@@ -55,16 +68,37 @@ impl Watch {
     }
 
     pub fn check_threads(&mut self, threads: &[RecentThread], skip: impl Fn(&str) -> bool) -> Vec<Finished> {
+        self.check_at(threads, skip, chrono::Utc::now().timestamp())
+    }
+
+    fn check_at(&mut self, threads: &[RecentThread], skip: impl Fn(&str) -> bool, now: i64) -> Vec<Finished> {
         let mut out = vec![];
-        self.files.retain(|id, _| threads.iter().any(|t| &t.id == id));
+        let first = self.since.is_none();
+        let since = *self.since.get_or_insert(now);
+        self.files.retain(|_, f| now - f.seen < KEEP_SECS);
         for t in threads {
             let len = crate::util::file_len(&t.rollout);
             let Some(f) = self.files.get_mut(&t.id) else {
-                self.files.insert(t.id.clone(), Followed { path: t.rollout.clone(), offset: len, last: None });
+                if first {
+                    self.files.insert(t.id.clone(), Followed { path: t.rollout.clone(), offset: len, last: None, seen: now });
+                    continue;
+                }
+                // New in the list since the watch started: its turn may already have ended
+                // between two checks. Report that end, from the file's tail.
+                let start = len.saturating_sub(MAX_READ);
+                let mut last = None;
+                let (ends, read) = read_ends(&t.rollout, start, &mut last);
+                self.files.insert(t.id.clone(), Followed { path: t.rollout.clone(), offset: start + read, last, seen: now });
+                if !skip(&t.id) {
+                    if let Some(e) = ends.into_iter().rfind(|e| e.at.is_some_and(|a| a >= since && a >= now - LATE_SECS)) {
+                        out.push(Finished { thread: t.id.clone(), title: t.title.clone(), ..e });
+                    }
+                }
                 continue;
             };
+            f.seen = now;
             if f.path != t.rollout || len < f.offset {
-                *f = Followed { path: t.rollout.clone(), offset: len, last: None };
+                *f = Followed { path: t.rollout.clone(), offset: len, last: None, seen: now };
                 continue;
             }
             if len == f.offset {
@@ -121,6 +155,7 @@ pub fn turn_ends(text: &str, last: &mut Option<String>) -> Vec<Finished> {
                     turn: p["turn_id"].as_str().unwrap_or("").to_string(),
                     aborted: kind == "turn_aborted",
                     duration_ms: p["duration_ms"].as_u64(),
+                    at: p["completed_at"].as_i64(),
                     message: if kind == "turn_aborted" { None } else { message },
                 });
                 *last = None;
@@ -174,8 +209,31 @@ mod tests {
         writeln!(f, "{DONE}").unwrap();
         assert!(w.check_threads(&threads, |_| true).is_empty());
         assert!(w.check_threads(&threads, |_| false).is_empty());
-        // Gone from the recent list: forgotten.
-        w.check_threads(&[], |_| false);
+        // Out of the recent list for a while, then back with nothing new: nothing is repeated.
+        let now = chrono::Utc::now().timestamp();
+        w.check_at(&[], |_| false, now + 3600);
+        assert_eq!(w.files.len(), 1, "still followed");
+        assert!(w.check_at(&threads, |_| false, now + 7200).is_empty());
+        // Out of it for a day: forgotten.
+        w.check_at(&[], |_| false, now + 7200 + KEEP_SECS);
         assert!(w.files.is_empty());
+    }
+
+    #[test]
+    fn a_session_first_seen_later_reports_a_turn_that_already_ended() {
+        let h = crate::util::TestHome::new("wechat-desktop-late");
+        let path = h.0.join("late.jsonl");
+        let ended = |turn: &str, at: i64| format!(r#"{{"type":"event_msg","payload":{{"type":"task_complete","turn_id":"{turn}","last_agent_message":"m","completed_at":{at}}}}}"#);
+        let mut w = Watch::default();
+        assert!(w.check_threads(&[], |_| false).is_empty());
+        let since = w.since.unwrap();
+        std::fs::write(&path, format!("{}\n{}\n{}\n", ended("old", since - 3600), ended("a", since + 1), ended("b", since + 2))).unwrap();
+        let threads = vec![RecentThread { id: "x".into(), title: "T".into(), cwd: String::new(), rollout: path }];
+        let got = w.check_threads(&threads, |_| false);
+        assert_eq!(got.iter().map(|e| e.turn.as_str()).collect::<Vec<_>>(), ["b"], "only the latest end after the watch started");
+        assert!(w.check_threads(&threads, |_| false).is_empty());
+        // Forgotten after a day and back: an end from long ago isn't news.
+        w.check_at(&[], |_| false, since + KEEP_SECS + 10);
+        assert!(w.check_at(&threads, |_| false, since + KEEP_SECS + 20).is_empty());
     }
 }
