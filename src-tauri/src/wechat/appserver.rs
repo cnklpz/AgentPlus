@@ -181,6 +181,33 @@ mod tests {
         assert_eq!(classify("{}"), None);
     }
 
+    /// Checks local CLI detection and the real bridge handshake without a model request:
+    /// `cargo test real_codex_start -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_codex_start() {
+        let _home = crate::util::TestHome::new("codex-start");
+        std::fs::create_dir_all(crate::adapters::codex::codex_home()).unwrap();
+        let exes = crate::process::codex_clis();
+        assert!(!exes.is_empty(), "no installed Codex CLI found");
+        let (tx, _rx) = mpsc::channel();
+        let mut failures = vec![];
+        let (exe, s) = exes
+            .iter()
+            .find_map(|exe| match AppServer::spawn(exe, tx.clone(), 1) {
+                Ok(s) => Some((exe, s)),
+                Err(e) => {
+                    failures.push(format!("{}: {e:#}", exe.display()));
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("no Codex CLI completed the handshake: {}", failures.join("; ")));
+        println!("Codex app-server via {}", exe.display());
+        let threads = s.request("thread/list", json!({ "limit": 1 }), Duration::from_secs(30)).unwrap();
+        assert!(threads["data"].as_array().is_some_and(Vec::is_empty), "expected no sessions in the isolated home");
+        assert!(s.alive());
+    }
+
     /// Runs one real turn (one model request) in a throwaway session:
     /// `CODEX_EXE=<codex.exe> cargo test real_codex_turn -- --ignored`.
     #[test]
