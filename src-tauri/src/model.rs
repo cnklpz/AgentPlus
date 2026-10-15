@@ -47,6 +47,8 @@ pub struct AgentState {
     pub issues: Vec<Issue>,
     /// Codex: how it is signed in ("chatgpt" | "apikey" | "none" | "unknown").
     pub sign_in: Option<String>,
+    /// The agent only uses its own account (Antigravity): no providers can be added.
+    pub account_only: bool,
 }
 
 /// Something in an agent's config that differs from how AgentPlus writes it (edited by hand

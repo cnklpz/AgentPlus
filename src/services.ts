@@ -414,7 +414,7 @@ export function apiFor(agent: AgentId, api: ApiKind): ApiKind {
 export const AGENT_NAME: Record<AgentId, string> = {
   codex: "Codex", claude: "Claude Code", opencode: "OpenCode", zcode: "ZCode", mimo: "MiMo Desktop",
   hermes: "Hermes", gemini: "Gemini CLI", pi: "pi", openclaw: "OpenClaw", qwen: "Qwen Code", kimi: "Kimi Code",
-  droid: "Droid", codebuddy: "CodeBuddy", workbuddy: "WorkBuddy", "workbuddy-ai": "WorkBuddy AI", kilo: "Kilo Code", dsh: "DeepSeek Harness", trae: "Trae",
+  droid: "Droid", codebuddy: "CodeBuddy", workbuddy: "WorkBuddy", "workbuddy-ai": "WorkBuddy AI", kilo: "Kilo Code", dsh: "DeepSeek Harness", antigravity: "Antigravity", trae: "Trae",
 };
 
 /** Product name of an agent id; anything else (e.g. "codex@wsl") as it is. */

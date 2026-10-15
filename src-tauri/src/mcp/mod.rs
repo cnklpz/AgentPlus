@@ -11,6 +11,8 @@
 //! - OpenClaw: `openclaw.json` (JSON5) → `mcp.servers`. ZCode: `~/.zcode/cli/config.json` →
 //!   `mcp.servers` (its engine's config, not the `v2` provider files).
 //! - DeepSeek Harness: `@deepseek-ai/dsh-mcp-client` rows in its patch layers (see `dsh`).
+//! - Antigravity: `mcp_config.json` → `mcpServers` (Claude Code's format; `url` is streamable
+//!   HTTP, `serverUrl` the older spelling), no per-server switch.
 //! - pi has no MCP support.
 //!
 //! Secrets never reach the UI (see `mask`); servers are compared across agents by `sig`.
@@ -23,7 +25,7 @@ pub mod parse;
 pub mod probe;
 pub mod write;
 
-use crate::adapters::{self, claude, codebuddy, codex, droid, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, qwen, zcode};
+use crate::adapters::{self, antigravity, claude, codebuddy, codex, droid, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, qwen, zcode};
 use crate::model::key_fingerprint;
 use crate::store;
 use crate::util::{display_path, home, read_text, strip_jsonc};
@@ -178,6 +180,7 @@ pub fn source(agent: &str) -> Option<(Family, PathBuf)> {
         codebuddy::ID => (Family::Claude, codebuddy_json()),
         droid::ID => (Family::Claude, droid::dir().join("mcp.json")),
         kimi::ID => (Family::Claude, kimi::dir().join("mcp.json")),
+        antigravity::ID => (Family::Claude, antigravity::mcp_path()),
         gemini::ID => (Family::Gemini, gemini::settings_path()),
         qwen::ID => (Family::Gemini, qwen::settings_path()),
         opencode::ID => (Family::OpenCode, opencode::config_path()),

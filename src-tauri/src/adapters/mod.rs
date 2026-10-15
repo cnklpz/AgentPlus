@@ -1,3 +1,4 @@
+pub mod antigravity;
 pub mod claude;
 pub mod codebuddy;
 pub mod codex;
@@ -149,7 +150,7 @@ macro_rules! ext {
 /// Every agent, in sidebar order.
 pub const EXT: &[Ext] = &[
     ext!(codex), ext!(claude), ext!(opencode), ext!(zcode), ext!(mimo),
-    ext!(hermes), ext!(gemini), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(workbuddy), ext!(workbuddy_ai), ext!(qwen), ext!(kimi), ext!(dsh),
+    ext!(hermes), ext!(gemini), ext!(antigravity), ext!(pi), ext!(openclaw), ext!(droid), ext!(kilo), ext!(codebuddy), ext!(workbuddy), ext!(workbuddy_ai), ext!(qwen), ext!(kimi), ext!(dsh),
 ];
 
 /// The ids of [`EXT`], in the same order.
@@ -425,7 +426,7 @@ fn official_probe(agent: &str, id: &str) -> Option<&'static str> {
     let signed_in = match (agent, id) {
         (codex::ID, "openai") => Some("https://chatgpt.com/backend-api/codex"),
         (claude::ID, "official") => Some("https://api.anthropic.com/v1"),
-        (gemini::ID, "google") => Some("https://cloudcode-pa.googleapis.com/v1internal"),
+        (gemini::ID | antigravity::ID, "google") => Some("https://cloudcode-pa.googleapis.com/v1internal"),
         (qwen::ID, "qwen-oauth") => Some("https://portal.qwen.ai/v1"),
         (mimo::ID, "account") => Some("https://api.xiaomimimo.com/v1"),
         (zcode::ID, "builtin:zai-coding-plan") => Some("https://api.z.ai/api/coding/paas/v4"),
@@ -737,7 +738,7 @@ mod tests {
         }
         // The Windows desktop apps.
         let desktop: Vec<&str> = EXT.iter().filter(|e| !in_wsl(e)).map(|e| e.id).collect();
-        assert_eq!(desktop, [zcode::ID, mimo::ID, workbuddy::ID, workbuddy_ai::ID]);
+        assert_eq!(desktop, [zcode::ID, mimo::ID, antigravity::ID, workbuddy::ID, workbuddy_ai::ID]);
     }
 
     #[test]

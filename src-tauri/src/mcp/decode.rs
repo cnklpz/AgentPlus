@@ -22,7 +22,7 @@ pub struct Raw {
 }
 
 /// Fields the common shape covers; everything else is kept in `extra`.
-const KNOWN: [&str; 14] = ["type", "transport", "command", "args", "cwd", "url", "httpUrl", "env", "environment", "headers", "http_headers", "enabled", "disabled", "enable"];
+const KNOWN: [&str; 15] = ["type", "transport", "command", "args", "cwd", "url", "httpUrl", "serverUrl", "env", "environment", "headers", "http_headers", "enabled", "disabled", "enable"];
 
 fn text(v: &Value) -> Option<String> {
     match v {
@@ -70,7 +70,8 @@ pub fn decode(fam: Family, def: &Value) -> Raw {
         None => (None, vec![]),
     };
     args.extend(texts(o.get("args")));
-    let url = s("httpUrl").or_else(|| s("url"));
+    // `serverUrl`: an older spelling Antigravity still reads.
+    let url = s("httpUrl").or_else(|| s("url")).or_else(|| s("serverUrl"));
     let declared = o.get("type").or_else(|| o.get("transport")).and_then(Value::as_str).and_then(transport);
     let transport = declared.unwrap_or(match (&command, &url) {
         (None, Some(_)) if o.contains_key("httpUrl") => "http",

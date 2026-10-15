@@ -158,6 +158,7 @@ export function AgentPage(props: Props) {
                 {st.mode === "single"
                   ? t(st.id === "codex" ? "agentPage.singleNoteCodex" : st.id === "claude" ? "agentPage.singleNoteClaude" : "agentPage.singleNote", { name: st.name })
                   : project ? t("agentPage.projectNote")
+                  : st.accountOnly ? t("agentPage.accountOnlyNote", { name: st.name })
                   : t("agentPage.multiNote", { name: st.name })}
                 {st.fixedPending && fixedSetting && settingValue(fixedSetting, draft) !== true && (
                   <>
@@ -187,8 +188,8 @@ export function AgentPage(props: Props) {
                   onTest={() => { const u = testUrl(p); if (u) props.onTestOne(u); }}
                 />
               ))}
-              <button className="pcard-add" disabled={st.readonly} onClick={props.onAddProvider}><Icon.plus size={18} />{t("common.addProvider")}</button>
-              {props.onCopyProvider && (
+              {!st.accountOnly && <button className="pcard-add" disabled={st.readonly} onClick={props.onAddProvider}><Icon.plus size={18} />{t("common.addProvider")}</button>}
+              {props.onCopyProvider && !st.accountOnly && (
                 <button className="pcard-add" disabled={st.readonly} onClick={props.onCopyProvider}><Icon.copy size={18} />{t("agentPage.copyProvider")}<span className="tiny hint">{t("agentPage.copyProviderHint")}</span></button>
               )}
             </div>

@@ -9,7 +9,7 @@
 
 use super::decode::{self, Raw};
 use super::{load, mask, pointer, source, toml_item, Family, KvIn, McpInput, LIBRARY, STASH_KEY};
-use crate::adapters::{claude, codebuddy, codex, display_name, droid, dsh, gemini, hermes, kilo, mimo, msg, opencode, qwen, zcode, Plan};
+use crate::adapters::{antigravity, claude, codebuddy, codex, display_name, droid, dsh, gemini, hermes, kilo, mimo, msg, opencode, qwen, zcode, Plan};
 use crate::i18n::l;
 use crate::model::{Diff, Op};
 use crate::store;
@@ -34,7 +34,7 @@ enum Off {
 
 fn off_style(agent: &str) -> Off {
     match agent {
-        claude::ID | codebuddy::ID => Off::Stash,
+        claude::ID | codebuddy::ID | antigravity::ID => Off::Stash,
         droid::ID => Off::Field("disabled", true),
         gemini::ID | qwen::ID => Off::Excluded,
         _ => Off::Field("enabled", false),
@@ -46,14 +46,14 @@ fn transports(agent: &str) -> &'static [&'static str] {
     match agent {
         claude::ID => &["stdio", "http", "sse", "ws"],
         opencode::ID | kilo::ID | mimo::ID => &["stdio", "remote"],
-        codex::ID | dsh::ID => &["stdio", "http"],
+        codex::ID | dsh::ID | antigravity::ID => &["stdio", "http"],
         _ => &["stdio", "http", "sse"],
     }
 }
 
 /// Agents whose stdio servers take a working folder.
 fn has_cwd(agent: &str) -> bool {
-    !matches!(agent, claude::ID | codebuddy::ID | droid::ID | hermes::ID)
+    !matches!(agent, claude::ID | codebuddy::ID | droid::ID | hermes::ID | antigravity::ID)
 }
 
 /// Protocol names: not translated.
@@ -741,7 +741,7 @@ mod tests {
     fn stdio_server_in_every_format() {
         let h = TestHome::new("mcp-write-formats");
         let i = json!({ "name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "@m/fs"], "env": [{ "key": "TOKEN", "value": "${TOKEN}" }] });
-        for a in [claude::ID, codebuddy::ID, droid::ID, kimi::ID, gemini::ID, qwen::ID, opencode::ID, kilo::ID, mimo::ID, codex::ID, hermes::ID, openclaw::ID, zcode::ID] {
+        for a in [claude::ID, codebuddy::ID, droid::ID, kimi::ID, gemini::ID, qwen::ID, opencode::ID, kilo::ID, mimo::ID, codex::ID, hermes::ID, openclaw::ID, zcode::ID, antigravity::ID] {
             run(a, vec![upsert(i.clone())]).unwrap_or_else(|e| panic!("{a}: {e}"));
             let got = super::super::read(a);
             let s = got.servers.iter().find(|s| s.name == "fs").unwrap_or_else(|| panic!("{a}: {:?}", got));
@@ -783,6 +783,33 @@ mod tests {
         // Codex can't expand a variable that isn't the whole value.
         let bad = json!({ "name": "b", "transport": "stdio", "command": "x", "env": [{ "key": "A", "value": "pre-${B}" }] });
         assert!(run(codex::ID, vec![upsert(bad)]).unwrap_err().to_string().starts_with("Codex 不会展开"));
+    }
+
+    #[test]
+    fn antigravity_writes_untyped_servers_and_stashes_switched_off_ones() {
+        let _h = TestHome::new("mcp-write-antigravity");
+        let path = antigravity::mcp_path();
+        // Antigravity creates the file empty.
+        write(&path, "");
+        let http = json!({ "name": "h", "transport": "http", "url": "https://h/mcp", "headers": [{ "key": "Authorization", "value": "Bearer ${T}" }] });
+        run(antigravity::ID, vec![upsert(http)]).unwrap();
+        let sse = json!({ "name": "s", "transport": "sse", "url": "https://h/sse" });
+        assert_eq!(run(antigravity::ID, vec![upsert(sse)]).unwrap_err().to_string(), "Antigravity 不支持 SSE 类型的 MCP 服务器");
+        let cwd = json!({ "name": "c", "transport": "stdio", "command": "x", "cwd": "/tmp" });
+        assert!(run(antigravity::ID, vec![upsert(cwd)]).is_err());
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["mcpServers"]["h"], json!({ "url": "https://h/mcp", "headers": { "Authorization": "Bearer ${T}" } }));
+        // No switch of its own: an off server waits in the AgentPlus store.
+        run(antigravity::ID, vec![json!({ "op": "set_mcp_enabled", "name": "h", "enabled": false })]).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(v["mcpServers"].get("h").is_none());
+        let got = super::super::read(antigravity::ID);
+        assert_eq!(got.servers.iter().map(|s| (s.name.as_str(), s.enabled, s.stashed)).collect::<Vec<_>>(), [("h", false, true)]);
+        // The older `serverUrl` spelling reads as streamable HTTP.
+        write(&path, r#"{"mcpServers":{"old":{"serverUrl":"https://o/mcp"}}}"#);
+        let got = super::super::read(antigravity::ID);
+        let old = got.servers.iter().find(|s| s.name == "old").unwrap();
+        assert_eq!((old.transport.as_str(), old.url.as_deref()), ("http", Some("https://o/mcp")));
     }
 
     #[test]

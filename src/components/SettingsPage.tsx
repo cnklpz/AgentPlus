@@ -465,6 +465,7 @@ const SUPPORTED: { id: AgentId; kind: TKey }[] = [
   { id: "mimo", kind: "settingsPage.kindDesktop" },
   { id: "hermes", kind: "settingsPage.kindCli" },
   { id: "gemini", kind: "settingsPage.kindCli" },
+  { id: "antigravity", kind: "settingsPage.kindDesktop" },
   { id: "codebuddy", kind: "settingsPage.kindIdeCli" },
   { id: "workbuddy", kind: "settingsPage.kindDesktop" },
   { id: "workbuddy-ai", kind: "settingsPage.kindDesktop" },

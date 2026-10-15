@@ -886,6 +886,42 @@ pub(crate) fn detect_dsh_desktop() -> Option<DesktopCopy> {
     (cfg!(windows) && exe.is_file()).then_some(DesktopCopy { exe, version: None, running: false })
 }
 
+/// Every installed copy of the Antigravity desktop app (electron-builder, per-user NSIS on
+/// Windows): its bundles on macOS; on Windows its uninstall entries ("Antigravity <version>";
+/// Antigravity 1.x, the VS Code fork, registers under the same name and can sit beside it),
+/// else the installer's default folder.
+fn antigravity_copies() -> Vec<DesktopCopy> {
+    const MAIN: &str = "Antigravity.exe";
+    let mut copies = app_bundles(&["com.google.antigravity", "Antigravity.app"]);
+    // Other tools named "Antigravity …" register with their own program.
+    copies.extend(desktop_copies("Antigravity", MAIN).into_iter().filter(|c| c.exe.file_name().is_some_and(|n| n.eq_ignore_ascii_case(MAIN))));
+    if copies.is_empty() && cfg!(windows) {
+        if let Some(exe) = dirs::data_local_dir().map(|d| d.join("Programs").join("Antigravity").join(MAIN)).filter(|p| p.is_file()) {
+            copies.push(DesktopCopy { exe, version: None, running: false });
+        }
+    }
+    copies
+}
+
+/// Antigravity: the copy picked in settings, else the one running, else the newest.
+pub(crate) fn detect_antigravity() -> Install {
+    let mut inst = Install::default();
+    let mut copies = antigravity_copies();
+    if copies.is_empty() {
+        return inst;
+    }
+    let sys = processes();
+    for c in &mut copies {
+        c.running = app_dir(&c.exe).is_some_and(|d| !app_processes(&sys, &d, Some(&c.exe)).is_empty());
+    }
+    let preferred = crate::store::get_str(&crate::store::load(), crate::adapters::antigravity::ID, DESKTOP_EXE_STORE_KEY).filter(|s| !s.is_empty());
+    let c = &copies[choose_copy(&copies, preferred.as_deref())];
+    use_copy(&mut inst, c);
+    inst.running = c.running;
+    inst.copies = copies;
+    inst
+}
+
 /// Newest version folder of the Claude Code that Claude Desktop keeps for itself
 /// (`<app data>/Claude/claude-code/<version>/`).
 fn desktop_claude_code(app_data: &Path) -> Option<String> {

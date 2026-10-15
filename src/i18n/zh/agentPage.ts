@@ -30,6 +30,7 @@ const zh: typeof en = {
   singleNoteClaude: "{name} 同一时间只用一个供应商。只支持 Anthropic 协议，其他协议可以经本地网关。",
   projectNote: "项目自己的供应商可以单独编辑；带「全局」标记的是从全局 OpenCode 继承来的，在这个项目里可以单独停用。",
   multiNote: "{name} 可以同时启用多个供应商，它们的模型会一起出现在选择器里。",
+  accountOnlyNote: "{name} 用自己的账号登录，模型由它自己提供，没有可添加的供应商。",
   fixedOffNote: "当前没开固定 ID，切换后另一个供应商的会话在 Codex 里可能看不到。",
   enableFixed: "开启固定 ID",
   testAll: "全部测速",

@@ -28,6 +28,7 @@ export default {
   singleNoteClaude: "{name} uses one provider at a time. Only the Anthropic protocol is supported; other protocols can go through the local gateway.",
   projectNote: "The project's own providers can be edited here. Providers marked \"Global\" are inherited from the global OpenCode config and can be disabled for this project only.",
   multiNote: "{name} can use several providers at once; their models all appear in the model picker.",
+  accountOnlyNote: "{name} signs in with its own account and picks the models itself; there are no providers to add.",
   fixedOffNote: "Fixed ID is off, so after switching, sessions from the other provider may not show up in Codex.",
   enableFixed: "Turn on fixed ID",
   testAll: "Test all",

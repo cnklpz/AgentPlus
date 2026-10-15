@@ -18,6 +18,8 @@ import piSvg from "../assets/pi.svg";
 import opencodeSvg from "../assets/opencode.svg";
 import droidSvg from "../assets/droid.svg";
 import dshSvg from "../assets/dsh.svg";
+// Antigravity: the mark from its own splash screen.
+import antigravitySvg from "../assets/antigravity.svg";
 import type { AgentId } from "../api";
 
 /** A letter tile, for vendors without an icon of their own. */
@@ -56,6 +58,7 @@ const AGENT_ICONS: Record<AgentId, Tile> = {
   trae: { src: traeSvg, bg: "#0B0B0C", scale: 72 },
   opencode: { src: opencodeSvg, bg: "#131010", scale: 78, ring: DARK_RING },
   dsh: { src: dshSvg, bg: "#4D6BFE", scale: 72 },
+  antigravity: { src: antigravitySvg, bg: "#131313", scale: 66, ring: DARK_RING },
 };
 
 export function AgentIcon({ id, size }: { id: AgentId; size: number }) {

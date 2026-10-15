@@ -24,7 +24,7 @@ pub mod write;
 
 pub use scan::{content, SkillCopy};
 
-use crate::adapters::{self, claude, codebuddy, codex, droid, dsh, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
+use crate::adapters::{self, antigravity, claude, codebuddy, codex, droid, dsh, gemini, hermes, kilo, kimi, mimo, openclaw, opencode, pi, qwen, zcode};
 use crate::util::{display_path, home, read_text, strip_jsonc};
 use serde::Serialize;
 use serde_json::Value;
@@ -173,6 +173,7 @@ pub fn roots(agent: &str) -> Option<Vec<(PathBuf, Kind)>> {
             v
         }
         gemini::ID => vec![own(gemini::dir().join("skills")), (shared(), Shared)],
+        antigravity::ID => vec![own(antigravity::skills_dir()), (antigravity::builtin_skills_dir(), Builtin)],
         qwen::ID => vec![own(qwen::dir().join("skills")), (shared(), Shared)],
         droid::ID => vec![own(droid::dir().join("skills")), (shared(), Shared), (home().join(".agent").join("skills"), Shared)],
         kimi::ID => {
