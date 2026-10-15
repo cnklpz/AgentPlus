@@ -236,14 +236,18 @@ impl Bridge {
     // ------------------------------------------------------------ sending
 
     fn send(&mut self, texts: Vec<String>, no: Option<u32>) {
+        // A fresh connection has no reply context until the user sends a message.
+        let Some(ctx) = self.saved.context_token.clone().filter(|ctx| !ctx.trim().is_empty()) else {
+            log("info", l("Send a message to the bot in WeChat before it can reply.", "请先在微信里给机器人发一条消息，机器人才能回复。"));
+            return;
+        };
         if let Some(out) = &mut self.outbox {
             out.extend(texts);
             return;
         }
-        let ctx = self.saved.context_token.clone();
         let mut ids = vec![];
         for t in texts {
-            match self.wx.send_text(&self.user, &t, ctx.as_deref()) {
+            match self.wx.send_text(&self.user, &t, Some(&ctx)) {
                 Ok(id) => {
                     log("out", &t);
                     if let (Some(id), Some(no)) = (id, no) {
@@ -838,6 +842,7 @@ impl Bridge {
                 // Starting Codex is retryable; keep the messages that were waiting for it.
                 self.deferred = deferred;
                 self.retry = retry;
+                log("error", format!("{e:#}"));
                 self.say(format!("❗ {e:#}"));
             }
         }
@@ -1418,7 +1423,8 @@ mod tests {
     fn bridge() -> Bridge {
         let wx = ilink::Client::new("http://127.0.0.1:9", None).unwrap();
         let (tx, _rx) = mpsc::channel();
-        let mut b = Bridge::new(wx, "me".into(), Saved::default(), tx);
+        let saved = Saved { context_token: Some("test-context".into()), ..Default::default() };
+        let mut b = Bridge::new(wx, "me".into(), saved, tx);
         b.outbox = Some(vec![]);
         b
     }
@@ -1429,6 +1435,37 @@ mod tests {
 
     fn sent(b: &mut Bridge) -> Vec<String> {
         std::mem::take(b.outbox.as_mut().unwrap())
+    }
+
+    #[test]
+    fn messages_wait_for_a_usable_reply_context() {
+        let _h = crate::util::TestHome::new("wechat-reply-context");
+        let mut b = bridge();
+        for ctx in [None, Some(String::new()), Some(" \t\n".into())] {
+            b.saved.context_token = ctx;
+            b.say("Codex started.");
+            assert!(sent(&mut b).is_empty());
+        }
+        b.saved.context_token = Some("test-context".into());
+        b.say("Codex started.");
+        assert_eq!(sent(&mut b), ["Codex started."]);
+    }
+
+    #[test]
+    fn only_the_connected_users_message_enables_replies() {
+        let _h = crate::util::TestHome::new("wechat-inbound-context");
+        let mut b = bridge();
+        b.saved.context_token = None;
+        b.on_inbound(Inbound { from: "other".into(), text: "/help".into(), context_token: Some("other-context".into()), ..Default::default() });
+        assert!(b.saved.context_token.is_none() && sent(&mut b).is_empty());
+        for ctx in ["first-context", "next-context"] {
+            b.on_inbound(Inbound { context_token: Some(ctx.into()), ..msg("/help") });
+            assert_eq!(b.saved.context_token.as_deref(), Some(ctx));
+            assert!(sent(&mut b)[0].contains("/model"));
+        }
+        b.on_inbound(msg("/help"));
+        assert_eq!(b.saved.context_token.as_deref(), Some("next-context"));
+        assert!(!sent(&mut b).is_empty());
     }
 
     #[test]
