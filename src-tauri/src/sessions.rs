@@ -263,6 +263,53 @@ pub fn list() -> Result<SessionList> {
     })
 }
 
+/// A session updated lately, for watching its rollout file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentThread {
+    pub id: String,
+    pub title: String,
+    pub cwd: String,
+    pub rollout: PathBuf,
+}
+
+/// User sessions (not archived, not subagents) updated since `since_ms`, newest first.
+/// Lighter than [`list`]: no file sizes, no process or config checks.
+pub fn recent_threads(since_ms: i64) -> Result<Vec<RecentThread>> {
+    let conn = open_ro(&state_path())?;
+    let cols: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('threads')")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(|c| c.ok())
+        .collect();
+    let has = |c: &str| cols.iter().any(|x| x == c);
+    let col = |c: &str| if has(c) { format!("coalesce({c},'')") } else { "''".into() };
+    let updated = match (has("updated_at_ms"), has("updated_at")) {
+        (true, true) => "coalesce(updated_at_ms, updated_at*1000, 0)",
+        (true, false) => "coalesce(updated_at_ms, 0)",
+        (false, true) => "coalesce(updated_at*1000, 0)",
+        (false, false) => return Ok(vec![]),
+    };
+    let archived = if has("archived") { "archived" } else { "0" };
+    let sql = format!(
+        "SELECT id, {}, {}, {}, {}, {}, {}, {} FROM threads WHERE {updated} >= ?1 AND {archived} = 0 ORDER BY {updated} DESC LIMIT 50",
+        col("name"), col("title"), col("preview"), col("cwd"), col("source"), col("thread_source"), col("rollout_path"),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([since_ms], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?))
+    })?;
+    let mut out = vec![];
+    for row in rows {
+        let (id, name, title, preview, cwd, source, tsrc, rollout) = row?;
+        if !matches!(kind_of(&source, &tsrc), "user" | "automation") || rollout.is_empty() {
+            continue;
+        }
+        let title = [name, title, preview].into_iter().find(|s| !s.trim().is_empty()).unwrap_or_default();
+        out.push(RecentThread { id, title: title.lines().next().unwrap_or("").to_string(), cwd: norm_path(&cwd), rollout: PathBuf::from(local_path(&rollout)) });
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------- health
 
 #[derive(Serialize)]
@@ -775,6 +822,18 @@ mod tests {
     use super::*;
 
     const REPAIR_ID: &str = "01a07797-7b0f-78d3-84b0-b7a65f7a6632";
+
+    /// Reads this machine's Codex database: `cargo test real_recent_threads -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_recent_threads() {
+        let week = chrono::Utc::now().timestamp_millis() - 7 * 86_400_000;
+        let threads = recent_threads(week).unwrap();
+        for t in &threads {
+            println!("{} {:?} exists={}", t.id, t.title, t.rollout.exists());
+        }
+        assert!(threads.iter().all(|t| t.rollout.is_absolute()));
+    }
 
     fn repair_fixture() -> (TestHome, Connection, PathBuf, String) {
         let h = TestHome::new("repair-atomic");
