@@ -100,6 +100,9 @@ pub struct Bridge {
     dirty: bool,
     /// Tests: messages are kept here instead of being sent.
     outbox: Option<Vec<String>>,
+    /// Messages held until the user's first message gives a reply context, with their
+    /// session numbers.
+    unsent: Vec<(Vec<String>, Option<u32>)>,
     /// Codex's `model/list`, read once per Codex start.
     models: Option<Vec<Value>>,
 }
@@ -132,7 +135,7 @@ fn thread_title(t: &Value) -> String {
 
 impl Bridge {
     pub fn new(wx: ilink::Client, user: String, saved: Saved, events: mpsc::Sender<Event>) -> Bridge {
-        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, models: None }
+        Bridge { wx, user, saved, events, codex: None, generation: 0, live: HashMap::new(), pending: vec![], changes: HashMap::new(), typing: None, run: 0, deferred: vec![], retry: vec![], pick: None, dirs: vec![], dirty: false, outbox: None, unsent: vec![], models: None }
     }
 
     pub fn run(&mut self, rx: mpsc::Receiver<Event>, run: u64) {
@@ -236,9 +239,16 @@ impl Bridge {
     // ------------------------------------------------------------ sending
 
     fn send(&mut self, texts: Vec<String>, no: Option<u32>) {
-        // A fresh connection has no reply context until the user sends a message.
-        let Some(ctx) = self.saved.context_token.clone().filter(|ctx| !ctx.trim().is_empty()) else {
-            log("info", l("Send a message to the bot in WeChat before it can reply.", "请先在微信里给机器人发一条消息，机器人才能回复。"));
+        // A fresh connection has no reply context until the user sends a message; hold the
+        // messages until one arrives.
+        let Some(ctx) = self.reply_context() else {
+            if self.unsent.is_empty() {
+                log("info", l("Send a message to the bot in WeChat before it can reply.", "请先在微信里给机器人发一条消息，机器人才能回复。"));
+            }
+            for t in &texts {
+                log("info", t);
+            }
+            self.unsent.push((texts, no));
             return;
         };
         if let Some(out) = &mut self.outbox {
@@ -271,6 +281,20 @@ impl Bridge {
         }
     }
 
+    /// The context token replies echo; None until the user has sent a message.
+    fn reply_context(&self) -> Option<String> {
+        self.saved.context_token.clone().filter(|ctx| !ctx.trim().is_empty())
+    }
+
+    /// Sends what was held for a reply context, once there is one.
+    fn flush_unsent(&mut self) {
+        if self.reply_context().is_some() {
+            for (texts, no) in std::mem::take(&mut self.unsent) {
+                self.send(texts, no);
+            }
+        }
+    }
+
     /// The bridge's own text, a line per paragraph.
     fn say(&mut self, text: impl AsRef<str>) {
         self.send(format::plain(&format::breaks(text.as_ref())), None);
@@ -290,7 +314,8 @@ impl Bridge {
 
     fn start_typing(&mut self) {
         if self.typing.is_none() {
-            self.typing = self.wx.typing_ticket(&self.user, self.saved.context_token.as_deref()).ok().flatten();
+            let Some(ctx) = self.reply_context() else { return };
+            self.typing = self.wx.typing_ticket(&self.user, Some(&ctx)).ok().flatten();
         }
         if let Some(t) = &self.typing {
             let _ = self.wx.send_typing(&self.user, t, true);
@@ -759,6 +784,7 @@ impl Bridge {
                 self.save(|s| s.context_token = Some(ctx));
             }
         }
+        self.flush_unsent();
         log("in", if m.text.is_empty() && m.media { l("[media]", "[媒体]") } else { m.text.as_str() });
         if m.text.trim().is_empty() {
             if m.media {
@@ -842,7 +868,6 @@ impl Bridge {
                 // Starting Codex is retryable; keep the messages that were waiting for it.
                 self.deferred = deferred;
                 self.retry = retry;
-                log("error", format!("{e:#}"));
                 self.say(format!("❗ {e:#}"));
             }
         }
@@ -1446,7 +1471,12 @@ mod tests {
             b.say("Codex started.");
             assert!(sent(&mut b).is_empty());
         }
-        b.saved.context_token = Some("test-context".into());
+        assert_eq!(b.unsent.len(), 3, "held, not dropped");
+        b.on_inbound(Inbound { context_token: Some("test-context".into()), ..msg("/help") });
+        let out = sent(&mut b);
+        assert_eq!(out[..3], ["Codex started.", "Codex started.", "Codex started."], "held messages go first, in order");
+        assert!(out[3].contains("/model"));
+        assert!(b.unsent.is_empty());
         b.say("Codex started.");
         assert_eq!(sent(&mut b), ["Codex started."]);
     }
