@@ -132,7 +132,7 @@ fn replace_once(src: &str, re: &Regex, rep: impl regex::Replacer) -> Option<Stri
 /// the first release it is for (oldest first): a release uses the newest shape that is not
 /// newer than it, until the next shape. Only when the version is unknown is every shape
 /// tried, oldest first.
-fn by_version<T>(version: Option<[u32; 2]>, shapes: &[([u32; 2], T)], apply: impl Fn(&T) -> Option<String>) -> Option<String> {
+pub(crate) fn by_version<T, R>(version: Option<[u32; 2]>, shapes: &[([u32; 2], T)], apply: impl Fn(&T) -> Option<R>) -> Option<R> {
     match version {
         Some(v) => shapes.iter().rev().find(|(since, _)| *since <= v).and_then(|(_, s)| apply(s)),
         None => shapes.iter().find_map(|(_, s)| apply(s)),
@@ -924,7 +924,7 @@ mod tests {
             let seen = std::cell::RefCell::new(vec![]);
             by_version(v, &shapes, |s| {
                 seen.borrow_mut().push(*s);
-                None
+                None::<()>
             });
             seen.into_inner()
         };
