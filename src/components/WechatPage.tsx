@@ -44,6 +44,7 @@ const COMMANDS: [string | { k: TKey }, TKey][] = [
   ["/stop all", "wechatPage.cmdStopAll"],
   ["/status", "wechatPage.cmdStatus"],
   ["/last", "wechatPage.cmdLast"],
+  ["/now …", "wechatPage.cmdNow"],
   ["/queue 3", "wechatPage.cmdQueue"],
   ["/diff", "wechatPage.cmdDiff"],
   ["/rename 3 …", "wechatPage.cmdRename"],

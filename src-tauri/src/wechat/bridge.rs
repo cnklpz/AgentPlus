@@ -742,7 +742,7 @@ impl Bridge {
                 live.queue.push(text);
                 live.queue_images.append(&mut self.attach);
                 let n = live.queue.len();
-                self.say(tr!("Queued for #{no} ({n} waiting); it runs when the current turn ends. /stop {no} interrupts.", "已排队到 #{no}（共 {n} 条），当前这轮结束后发送。/stop {no} 可中断。"));
+                self.say(tr!("Queued for #{no} ({n} waiting); it runs when the current turn ends. #{no} /now sends it into this turn now · /stop {no} interrupts.", "已排队到 #{no}（共 {n} 条），当前这轮结束后发送。#{no} /now 立即插入这一轮 · /stop {no} 中断。"));
                 return Ok(());
             }
         }
@@ -888,6 +888,44 @@ impl Bridge {
         }
         lines.push(tr!("/queue {no} clear drops them", "/queue {no} clear 清空"));
         Ok(lines.join("\n"))
+    }
+
+    /// `/now`: `text` (or, without text, what is queued) goes into the running turn of the
+    /// session right away (`turn/steer`). Without a running turn, `text` starts one.
+    fn now(&mut self, no: Option<u32>, text: Option<String>) -> Result<Option<String>> {
+        let thread = self.session(no)?;
+        let no = self.number(&thread);
+        let turn = self.live.get(&thread).and_then(|l| l.turn.as_ref()).map(|t| t.id.clone());
+        let (text, from_queue) = match text {
+            Some(t) => (t, false),
+            None => {
+                let queue = self.live.get(&thread).map(|l| l.queue.clone()).unwrap_or_default();
+                if queue.is_empty() {
+                    return Ok(Some(tr!("Nothing is queued for #{no}. /now text adds a message to its running turn.", "#{no} 没有排队的消息。发 /now 消息 可以插入到正在进行的这一轮。")));
+                }
+                (queue.join("\n\n"), true)
+            }
+        };
+        let turn_id = match turn {
+            None => {
+                self.send_to(&thread, text, false)?;
+                return Ok(None);
+            }
+            Some(None) => bail!("{}", tr!("#{no} is just starting; send it again in a moment.", "#{no} 刚开始运行，请稍后再发。")),
+            Some(Some(id)) => id,
+        };
+        let images = if from_queue { self.live.get(&thread).map(|l| l.queue_images.clone()).unwrap_or_default() } else { vec![] };
+        let mut input = vec![json!({ "type": "text", "text": text, "text_elements": [] })];
+        input.extend(images.iter().map(|p| json!({ "type": "localImage", "path": p })));
+        self.codex()?.request("turn/steer", json!({ "threadId": thread, "expectedTurnId": turn_id, "input": input }), CALL)?;
+        let live = self.live.entry(thread.clone()).or_default();
+        let sent = if from_queue {
+            live.queue_images.clear();
+            std::mem::take(&mut live.queue).len()
+        } else {
+            1
+        };
+        Ok(Some(trn!(sent, "Added {n} message to #{no}'s running turn.", "Added {n} messages to #{no}'s running turn.", "已把 {n} 条消息插入 #{no} 正在进行的这一轮。")))
     }
 
     fn rename(&mut self, no: Option<u32>, title: String) -> Result<String> {
@@ -1325,7 +1363,7 @@ impl Bridge {
     fn needs_codex(&self, cmd: &Cmd, m: &Inbound) -> bool {
         match cmd {
             Cmd::Help(_) | Cmd::Status | Cmd::Unknown(..) | Cmd::Usage(_) | Cmd::Stop(_) | Cmd::StopAll | Cmd::Current | Cmd::Last(_) | Cmd::Queue { .. } | Cmd::Mode { .. } => false,
-            Cmd::List(_) | Cmd::Dirs | Cmd::New(_) | Cmd::Model(_) | Cmd::Effort(_) | Cmd::Rename { .. } | Cmd::Archive(_) | Cmd::Diff(_) | Cmd::Cwd(_) => true,
+            Cmd::List(_) | Cmd::Dirs | Cmd::New(_) | Cmd::Model(_) | Cmd::Effort(_) | Cmd::Rename { .. } | Cmd::Archive(_) | Cmd::Diff(_) | Cmd::Cwd(_) | Cmd::Now { .. } => true,
             // A session number that doesn't exist fails without Codex.
             Cmd::Use { no, .. } | Cmd::To { no, .. } => self.thread_of(*no).is_some(),
             // Text only goes somewhere with a session to go to.
@@ -1424,6 +1462,10 @@ impl Bridge {
             Cmd::Queue { no, clear } => {
                 let no = no_of(self, no);
                 self.queue(no, clear).map(Some)
+            }
+            Cmd::Now { no, text } => {
+                let no = no_of(self, no);
+                self.now(no, text)
             }
             Cmd::Rename { no, title } => {
                 let no = no_of(self, no);
@@ -1830,6 +1872,7 @@ fn help_text() -> String {
          /dirs recent folders · /new [folder | N] start a session\n\
          #N text send to session N once · #N /command a command for session N\n\
          /stop [N | all] interrupt · /queue [N] [clear] waiting messages\n\
+         /now [text] add to the running turn instead of queuing\n\
          /last [N] the last reply again · /diff [N] changes · /cwd [N] folder\n\
          /rename [N] title · /archive N\n\
          /mode [N] ask|auto|full|readonly what it may do without asking\n\
@@ -1842,6 +1885,7 @@ fn help_text() -> String {
          /dirs 最近的目录 · /new [目录 | 编号] 新建会话\n\
          #编号 消息 临时发给某个会话 · #编号 /命令 对该会话执行命令\n\
          /stop [编号 | all] 中断 · /queue [编号] [clear] 排队的消息\n\
+         /now [消息] 不排队，直接插入正在进行的这一轮\n\
          /last [编号] 重发上次回复 · /diff [编号] 改动 · /cwd [编号] 目录\n\
          /rename [编号] 标题 改名 · /archive 编号 归档\n\
          /mode [编号] ask|auto|full|readonly 无需询问可做的事\n\
@@ -2194,6 +2238,24 @@ mod tests {
         let out = sent(&mut b);
         assert_eq!(out.len(), 1);
         assert!(out[0].ends_with("second"), "{out:?}");
+    }
+
+    #[test]
+    fn now_explains_when_it_has_nothing_to_add() {
+        let _h = crate::util::TestHome::new("wechat-now");
+        let mut b = bridge();
+        b.saved.numbers.insert(3, "t3".into());
+        b.saved.current = Some("t3".into());
+        b.live.insert("t3".into(), Live { turn: Some(Turn::new(None)), ..Default::default() });
+        b.handle(msg("/now"), command::parse("/now"), None);
+        assert!(sent(&mut b)[0].contains("#3 没有排队的消息"));
+        // Codex hasn't named the turn yet: it can't be steered.
+        b.handle(msg("#3 /now go on"), command::parse("#3 /now go on"), None);
+        assert!(sent(&mut b)[0].contains("#3 刚开始运行"));
+        // While a turn runs, the queue notice points to /now.
+        b.live.get_mut("t3").unwrap().turn.as_mut().unwrap().id = Some("turn".into());
+        b.send_to("t3", "later".into(), false).unwrap();
+        assert!(sent(&mut b)[0].contains("#3 /now 立即插入"));
     }
 
     #[test]
