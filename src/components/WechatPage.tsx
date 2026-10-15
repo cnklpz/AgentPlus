@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
-import { type WechatSession, type WechatStatus, api } from "../api";
+import { type WechatMode, type WechatOptions, type WechatSession, type WechatStatus, api } from "../api";
 import { Icon } from "./icons";
-import { ErrorBox, SettingRow, Switch } from "./controls";
+import { ErrorBox, Seg, SettingRow, Switch } from "./controls";
 import { ask } from "./Confirm";
 import { locale, t, type TKey, tn, useLang } from "../i18n";
 import { scrub } from "../privacy";
@@ -39,13 +39,29 @@ const COMMANDS: [string | { k: TKey }, TKey][] = [
   ["/new 2", "wechatPage.cmdNewPick"],
   [{ k: "wechatPage.cmdNewSyntax" }, "wechatPage.cmdNew"],
   ["#3 …", "wechatPage.cmdTo"],
+  ["#3 /stop", "wechatPage.cmdToCmd"],
   ["/stop 3", "wechatPage.cmdStop"],
+  ["/stop all", "wechatPage.cmdStopAll"],
   ["/status", "wechatPage.cmdStatus"],
+  ["/last", "wechatPage.cmdLast"],
+  ["/queue 3", "wechatPage.cmdQueue"],
+  ["/diff", "wechatPage.cmdDiff"],
+  ["/rename 3 …", "wechatPage.cmdRename"],
+  ["/archive 3", "wechatPage.cmdArchive"],
+  ["/mode auto", "wechatPage.cmdMode"],
   ["/model 2", "wechatPage.cmdModel"],
   ["/effort high", "wechatPage.cmdEffort"],
   ["/model default 2", "wechatPage.cmdModelDefault"],
   ["y3 · a3 · n3", "wechatPage.cmdApprove"],
+  ["/help stop", "wechatPage.cmdHelp"],
 ];
+
+const MODES: Record<WechatMode, TKey> = {
+  ask: "wechatPage.modeAsk",
+  auto: "wechatPage.modeAuto",
+  full: "wechatPage.modeFull",
+  readonly: "wechatPage.modeReadonly",
+};
 
 const time = (ms: number) => new Date(ms).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
@@ -86,6 +102,16 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
       await run(() => api.wechatUnbind());
     }
   };
+  const setOptions = (o: Partial<WechatOptions>) => { if (st) void run(() => api.wechatSetOptions({ ...st.options, ...o })); };
+  const setDefaultMode = async (m: WechatMode | "codex") => {
+    if (m === "full" && !await ask({ title: t("wechatPage.modeFullTitle"), message: t("wechatPage.modeFullMsg"), danger: true, confirmText: t("wechatPage.modeFull") })) return;
+    setOptions({ defaultMode: m === "codex" ? null : m });
+  };
+  const exportLog = () => run(async () => {
+    const path = await api.wechatLogExport();
+    flash(t("wechatPage.logExported", { path: scrub(path) ?? path }));
+    api.revealPath(path).catch(() => undefined);
+  });
   const browse = () => run(async () => {
     const p = await api.pickFolder(st?.defaultCwd ?? null, "wechat");
     if (p) return api.wechatSetDefaultCwd(p);
@@ -170,6 +196,7 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
                       <span className="mono strong">#{s.no}</span>
                       <span className="grow minw0 ellipsis" title={scrub(s.cwd) ?? undefined}>{s.title || "—"}</span>
                       {s.current && <span className="chip-muted">{t("wechatPage.current")}</span>}
+                      {s.mode && <span className={s.mode === "full" ? "chip-bad" : "chip-muted"}>{t(MODES[s.mode])}</span>}
                       {s.queued > 0 && <span className="muted tiny">{tn("wechatPage.queued", s.queued)}</span>}
                       <span className={`wx-state ${s.state}`}>{t(SESSION[s.state])}</span>
                     </div>
@@ -181,6 +208,23 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
               {st?.state === "running" && !st.codexReady && <span className="muted tiny hint">{t("wechatPage.codexOff")}</span>}
             </div>
           </section>
+
+          {st?.bound && (
+            <section className="sgroup">
+              <h2>{t("wechatPage.behavior")}</h2>
+              <SettingRow label={t("wechatPage.relayProgress")} desc={t("wechatPage.relayProgressDesc")}>
+                <Switch on={st.options.relayProgress} disabled={busy} label={t("wechatPage.relayProgress")} onChange={(v) => setOptions({ relayProgress: v })} />
+              </SettingRow>
+              <SettingRow label={t("wechatPage.notifyDesktop")} desc={t("wechatPage.notifyDesktopDesc")}>
+                <Switch on={st.options.notifyDesktop} disabled={busy} label={t("wechatPage.notifyDesktop")} onChange={(v) => setOptions({ notifyDesktop: v })} />
+              </SettingRow>
+              <SettingRow label={t("wechatPage.defaultMode")} desc={t("wechatPage.defaultModeDesc")}>
+                <Seg<WechatMode | "codex"> value={st.options.defaultMode ?? "codex"} label={t("wechatPage.defaultMode")} onChange={(v) => { void setDefaultMode(v); }}
+                  options={[{ value: "codex", label: t("wechatPage.modeCodex"), disabled: busy },
+                    ...(Object.keys(MODES) as WechatMode[]).map((m) => ({ value: m, label: t(MODES[m]), disabled: busy }))]} />
+              </SettingRow>
+            </section>
+          )}
 
           <section className="sgroup">
             <h2>{t("wechatPage.commands")}</h2>
@@ -195,7 +239,7 @@ export function WechatPage({ flash, onAside }: { flash: Flash; onAside: (on: boo
         </div>
       </div>
     </main>
-    {aside && st && <WechatAside st={st} busy={busy} onStartCodex={() => run(async () => { await api.wechatStartCodex(); })} />}
+    {aside && st && <WechatAside st={st} busy={busy} onStartCodex={() => run(async () => { await api.wechatStartCodex(); })} onExport={exportLog} />}
     </>
   );
 }
@@ -217,8 +261,13 @@ function Tile({ k, n, tone }: { k: TKey; n: number; tone?: "bad" | "warn" }) {
 }
 
 /** Right pane once connected: the connection, this run's counters, Codex, and recent activity. */
-function WechatAside({ st, busy, onStartCodex }: { st: WechatStatus; busy: boolean; onStartCodex: () => void }) {
+/** Whether a log line is about session `no`: its tag `【#N`, or `#N` in a command or note. */
+export const aboutSession = (text: string, no: number) => new RegExp(`#${no}(?![0-9])`).test(text);
+
+function WechatAside({ st, busy, onStartCodex, onExport }: { st: WechatStatus; busy: boolean; onStartCodex: () => void; onExport: () => void }) {
+  const [only, setOnly] = useState<number | null>(null);
   const s = st.stats;
+  const log = only === null ? st.log : st.log.filter((l) => aboutSession(l.text, only));
   const never = t("wechatPage.never");
   const running = st.sessions.filter((x) => x.state === "running").length;
   const waiting = st.sessions.filter((x) => x.state === "waiting").length;
@@ -263,10 +312,15 @@ function WechatAside({ st, busy, onStartCodex }: { st: WechatStatus; busy: boole
       </section>
       <div className="sync-history-head">
         <h2>{t("wechatPage.activity")}</h2>
-        <span className="count">{st.log.length}</span>
+        <span className="count">{log.length}</span>
+        <button className="btn small" disabled={busy} onClick={onExport} title={t("wechatPage.exportLog")}><Icon.download size={12} />{t("wechatPage.exportLog")}</button>
       </div>
+      {st.sessions.length > 0 && (
+        <Seg<number> className="wx-log-filter" value={only ?? 0} label={t("wechatPage.logFilter")} onChange={(v) => setOnly(v === 0 ? null : v)}
+          options={[{ value: 0, label: t("wechatPage.logAll") }, ...st.sessions.map((x) => ({ value: x.no, label: `#${x.no}`, title: x.title }))]} />
+      )}
       <div className="wx-log">
-        {st.log.length ? st.log.map((l, i) => (
+        {log.length ? log.map((l, i) => (
           <div key={`${l.at}-${i}`} className={`wx-line ${l.kind}`}>
             <span className="wx-time mono tiny muted">{time(l.at)}</span>
             <span className="wx-dir" aria-hidden>{l.kind === "in" ? "←" : l.kind === "out" ? "→" : l.kind === "error" ? "!" : "·"}</span>

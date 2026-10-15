@@ -39,6 +39,8 @@ pub enum Event {
     CodexNotify { generation: u64, method: String, params: Value },
     CodexRequest { generation: u64, id: Value, method: String, params: Value },
     CodexExited { generation: u64 },
+    /// The page changed the options.
+    Options(Options),
     Stop,
 }
 
@@ -77,6 +79,22 @@ pub struct Saved {
     /// Model / effort chosen from WeChat, sent with the session's next turn: thread id →
     /// override. Codex keeps them for the session from then on.
     pub next: BTreeMap<String, NextTurn>,
+    /// `/mode` per session: thread id → "ask" | "auto" | "full" | "readonly". Sessions not
+    /// listed keep Codex's own setting.
+    pub modes: BTreeMap<String, String>,
+    /// Set on the page; the bridge never writes them back.
+    pub options: Options,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Options {
+    /// Send Codex's messages during a turn too, not only its final answer.
+    pub relay_progress: bool,
+    /// Tell WeChat when a session running in Codex desktop or the CLI finishes a turn.
+    pub notify_desktop: bool,
+    /// `/mode` for sessions started from WeChat; None keeps Codex's own setting.
+    pub default_mode: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
@@ -94,7 +112,18 @@ fn saved_path() -> PathBuf {
 static FILE: Mutex<()> = Mutex::new(());
 
 pub fn load_saved() -> Saved {
-    std::fs::read_to_string(saved_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    let path = saved_path();
+    let Ok(text) = std::fs::read_to_string(&path) else { return Saved::default() };
+    match serde_json::from_str(&text) {
+        Ok(s) => s,
+        Err(e) => {
+            // Keep the broken file for a look rather than overwriting it with an empty state.
+            let bad = path.with_file_name(format!("wechat.json.bad-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+            let kept = std::fs::rename(&path, &bad).is_ok();
+            crate::applog::warn("wechat", format!("wechat.json unreadable ({e}); {}", if kept { "kept as wechat.json.bad-*" } else { "could not be moved" }));
+            Saved::default()
+        }
+    }
 }
 
 fn write_saved(s: &Saved) -> Result<()> {
@@ -138,6 +167,8 @@ pub struct SessionView {
     pub next_model: Option<String>,
     pub next_effort: Option<String>,
     pub current: bool,
+    /// `/mode`; None: Codex's own setting.
+    pub mode: Option<String>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -186,6 +217,7 @@ pub struct Status {
     pub sessions: Vec<SessionView>,
     pub log: Vec<LogLine>,
     pub stats: Stats,
+    pub options: Options,
 }
 
 #[derive(Default)]
@@ -203,14 +235,111 @@ static SHARED: Mutex<Option<Shared>> = Mutex::new(None);
 
 fn shared<T>(f: impl FnOnce(&mut Shared) -> T) -> T {
     let mut g = lock(&SHARED);
-    f(g.get_or_insert_with(|| Shared { state: "off".into(), ..Default::default() }))
+    f(g.get_or_insert_with(|| Shared { state: "off".into(), log: if cfg!(test) { VecDeque::new() } else { read_log_tail(&log_dir(), LOG_LINES) }, ..Default::default() }))
 }
 
 const LOG_LINES: usize = 80;
+/// Characters of a line shown on the page; the file keeps up to `LOG_FILE_CHARS`.
+const LOG_PAGE_CHARS: usize = 300;
+const LOG_FILE_CHARS: usize = 4000;
+/// Days of activity kept on disk.
+const LOG_DAYS: u64 = 14;
+
+/// `~/.agentplus/wechat-log/YYYY-MM-DD.jsonl`: what went in and out, one JSON line each,
+/// scrubbed like the diagnostic log.
+fn log_dir() -> PathBuf {
+    crate::util::agentplus_dir().join("wechat-log")
+}
+
+fn log_kind(k: &str) -> &'static str {
+    match k {
+        "in" => "in",
+        "out" => "out",
+        "error" => "error",
+        _ => "info",
+    }
+}
+
+/// The days' files in `dir`, oldest first.
+fn log_files(dir: &std::path::Path) -> Vec<(PathBuf, chrono::NaiveDate)> {
+    let mut v: Vec<(PathBuf, chrono::NaiveDate)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let day = chrono::NaiveDate::parse_from_str(name.strip_suffix(".jsonl")?, "%Y-%m-%d").ok()?;
+            Some((e.path(), day))
+        })
+        .collect();
+    v.sort_by_key(|(_, d)| *d);
+    v
+}
+
+fn append_log(dir: &std::path::Path, day: chrono::NaiveDate, line: &LogLine) {
+    use std::io::Write;
+    if crate::util::ensure_private_dir(dir).is_err() {
+        return;
+    }
+    let rec = serde_json::json!({ "at": line.at, "kind": line.kind, "text": crate::util::clip(&crate::applog::scrub(&line.text), LOG_FILE_CHARS) });
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join(format!("{}.jsonl", day.format("%Y-%m-%d")))) {
+        let _ = writeln!(f, "{rec}");
+    }
+}
+
+/// The last `n` lines over the newest files, newest last.
+fn read_log_tail(dir: &std::path::Path, n: usize) -> VecDeque<LogLine> {
+    let mut out = VecDeque::new();
+    for (p, _) in log_files(dir).into_iter().rev() {
+        let text = std::fs::read_to_string(&p).unwrap_or_default();
+        for l in text.lines().rev() {
+            if out.len() >= n {
+                return out;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+            out.push_front(LogLine { at: v["at"].as_i64().unwrap_or(0), kind: log_kind(v["kind"].as_str().unwrap_or("")), text: crate::util::clip(v["text"].as_str().unwrap_or(""), LOG_PAGE_CHARS) });
+        }
+    }
+    out
+}
+
+/// Removes the files from before the last `LOG_DAYS` days.
+fn prune_log(dir: &std::path::Path, today: chrono::NaiveDate) {
+    let first = today - chrono::Days::new(LOG_DAYS - 1);
+    for (p, d) in log_files(dir) {
+        if d < first {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// All kept activity in one text file (Downloads, else `~/.agentplus/exports`); returns its path.
+pub fn log_export() -> Result<PathBuf> {
+    let mut out = String::new();
+    for (p, day) in log_files(&log_dir()) {
+        out.push_str(&format!("===== {day} =====\n"));
+        for l in std::fs::read_to_string(&p).unwrap_or_default().lines() {
+            let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+            let at = chrono::DateTime::from_timestamp_millis(v["at"].as_i64().unwrap_or(0)).map(|t| t.with_timezone(&chrono::Local).format("%H:%M:%S").to_string()).unwrap_or_default();
+            out.push_str(&format!("{at} {:<5} {}\n", v["kind"].as_str().unwrap_or(""), v["text"].as_str().unwrap_or("").replace('\n', "\n      ")));
+        }
+    }
+    if out.is_empty() {
+        bail!("{}", l("No WeChat activity recorded yet", "还没有微信活动记录"));
+    }
+    let target = dirs::download_dir().filter(|d| d.is_dir()).unwrap_or_else(|| crate::util::agentplus_dir().join("exports"));
+    std::fs::create_dir_all(&target)?;
+    let path = target.join(format!("AgentPlus-wechat-{}.txt", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    std::fs::write(&path, out)?;
+    Ok(path)
+}
 
 pub(crate) fn log(kind: &'static str, text: impl AsRef<str>) {
     let at = chrono::Utc::now().timestamp_millis();
-    let line = LogLine { at, kind, text: crate::util::clip(text.as_ref(), 300) };
+    if !cfg!(test) {
+        append_log(&log_dir(), chrono::Local::now().date_naive(), &LogLine { at, kind, text: text.as_ref().to_string() });
+    }
+    let line = LogLine { at, kind, text: crate::util::clip(text.as_ref(), LOG_PAGE_CHARS) };
     shared(|s| {
         match kind {
             "in" => {
@@ -270,6 +399,7 @@ pub fn status() -> Status {
         sessions: s.sessions.clone(),
         log: s.log.iter().rev().cloned().collect(),
         stats: s.stats.clone(),
+        options: saved.options.clone(),
     })
 }
 
@@ -288,6 +418,7 @@ fn start_locked(ctl: &mut Option<mpsc::Sender<Event>>) -> Result<()> {
         let _ = tx.send(Event::Stop);
     }
     let run = RUN.fetch_add(1, Ordering::SeqCst) + 1;
+    prune_log(&log_dir(), chrono::Local::now().date_naive());
     let saved = load_saved();
     let Some(acc) = saved.account.clone() else {
         set_state("off", None);
@@ -436,6 +567,20 @@ pub fn start_codex() -> Result<()> {
 /// DocumentsAgentPlus (created when first used).
 pub fn fallback_cwd() -> PathBuf {
     dirs::document_dir().unwrap_or_else(crate::util::home).join("AgentPlus")
+}
+
+/// Saves the page's options and hands them to the running bridge.
+pub fn set_options(o: Options) -> Result<()> {
+    if let Some(m) = &o.default_mode {
+        if !["ask", "auto", "full", "readonly"].contains(&m.as_str()) {
+            bail!("{}", tr!("Unknown mode {m}", "未知的模式 {m}"));
+        }
+    }
+    update_saved(|s| s.options = o.clone())?;
+    if let Some(tx) = lock(&CONTROL).as_ref() {
+        let _ = tx.send(Event::Options(o));
+    }
+    Ok(())
 }
 
 pub fn set_default_cwd(path: Option<String>) -> Result<()> {
@@ -626,10 +771,44 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_file_reads_as_empty() {
+    fn unreadable_file_reads_as_empty_and_is_kept() {
         let h = TestHome::new("wechat-bad");
-        std::fs::create_dir_all(h.0.join(".agentplus")).unwrap();
-        std::fs::write(h.0.join(".agentplus").join("wechat.json"), "{ not json").unwrap();
+        let dir = h.0.join(".agentplus");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("wechat.json"), "{ not json").unwrap();
         assert!(load_saved().account.is_none());
+        assert!(!dir.join("wechat.json").exists());
+        let kept: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).filter(|n| n.starts_with("wechat.json.bad-")).collect();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(std::fs::read_to_string(dir.join(&kept[0])).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn options_survive_and_are_checked() {
+        let _h = TestHome::new("wechat-options");
+        set_options(Options { relay_progress: true, notify_desktop: false, default_mode: Some("auto".into()) }).unwrap();
+        assert_eq!(load_saved().options.default_mode.as_deref(), Some("auto"));
+        assert!(load_saved().options.relay_progress);
+        assert!(set_options(Options { default_mode: Some("yolo".into()), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn activity_log_is_kept_by_day() {
+        let h = TestHome::new("wechat-log");
+        let dir = h.0.join("wechat-log");
+        let day = |d: u32| chrono::NaiveDate::from_ymd_opt(2026, 10, d).unwrap();
+        for i in 0..5 {
+            append_log(&dir, day(1), &LogLine { at: i, kind: "in", text: format!("old {i}") });
+        }
+        append_log(&dir, day(16), &LogLine { at: 10, kind: "out", text: "x".repeat(LOG_PAGE_CHARS * 2) });
+        append_log(&dir, day(16), &LogLine { at: 11, kind: "weird", text: "new".into() });
+        let tail = read_log_tail(&dir, 3);
+        assert_eq!(tail.iter().map(|l| l.at).collect::<Vec<_>>(), [4, 10, 11]);
+        assert!(tail[1].text.chars().count() <= LOG_PAGE_CHARS + 1, "clipped for the page");
+        assert_eq!(tail[2].kind, "info");
+        prune_log(&dir, day(16));
+        assert_eq!(log_files(&dir).len(), 1, "2026-10-01 is older than 14 days");
+        prune_log(&dir, day(29));
+        assert_eq!(log_files(&dir).len(), 1, "2026-10-16 is still within 14 days");
     }
 }
