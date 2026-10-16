@@ -445,16 +445,25 @@ fn read_env() -> (Vec<String>, TextMeta) {
     read_env_checked().unwrap_or((vec![], TextMeta::NEW))
 }
 
+/// Whether dotenvy (Codex's .env loader) parses `name` as a key: a letter or `_` first, then
+/// letters, digits, `_` or `.`. It skips any other line, `1_API_KEY=…` among them.
+fn dotenvy_key(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+}
+
 /// Codex skips ~/.codex/.env keys whose ASCII-uppercased name starts with `CODEX_`
-/// (codex-rs/arg0 `load_dotenv`), so such an env_key only works from the process environment.
+/// (codex-rs/arg0 `load_dotenv`), and dotenvy those it can't parse, so such an env_key only
+/// works from the process environment.
 fn codex_ignores_in_file(name: &str) -> bool {
-    name.to_ascii_uppercase().starts_with("CODEX_")
+    name.to_ascii_uppercase().starts_with("CODEX_") || !dotenvy_key(name)
 }
 
 /// An env_key as Codex sees it, and whether it comes from ~/.codex/.env. Codex sets every
 /// pair of that file into its environment in order, so the file beats the process
 /// environment (an assignment there wins even when empty) and the last assignment of a key
-/// wins — except for `CODEX_` names, which it never reads from the file.
+/// wins — except for `CODEX_` names and ones dotenvy can't parse, which it never reads from
+/// the file.
 fn env_lookup(name: &str) -> Option<(String, bool)> {
     let file = if codex_ignores_in_file(name) {
         None
@@ -487,8 +496,9 @@ fn new_env_key(doc: &DocumentMut, lines: &[String], id: &str) -> String {
             }
         }
     }
-    // Codex skips CODEX_ variables in .env; use a prefix it will load.
-    let base = format!("{}_API_KEY", id.to_uppercase().replace('-', "_"));
+    // Only letters, digits and `_`; Codex skips CODEX_ variables and ones starting with a digit
+    // (a provider named "1") in .env, so those get a prefix it will load.
+    let base = crate::adapters::pimodels::dsh_key_ref(id);
     let base = if codex_ignores_in_file(&base) { format!("AGENTPLUS_{base}") } else { base };
     let mut name = base.clone();
     let mut suffix = 2;
@@ -705,6 +715,7 @@ fn moved_from(source: &KeySource) -> &'static str {
     match source {
         KeySource::Bearer => l("from experimental_bearer_token in config.toml", "来自 config.toml 的 experimental_bearer_token"),
         KeySource::Header => l("from the Authorization header in config.toml", "来自 config.toml 的 Authorization 请求头"),
+        KeySource::Env { .. } => l("moved from a variable name Codex can't read in ~/.codex/.env", "移自 ~/.codex/.env 里 Codex 读不到的变量名"),
         _ => l("copied from Codex's API key sign-in (~/.codex/auth.json, left as it is)", "复制自 Codex 的 API Key 登录（~/.codex/auth.json 保持不变）"),
     }
 }
@@ -1249,9 +1260,16 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                     None => unique_id(&slug(&p.name), |c| c == "openai" || c == FIXED_ID || provider_item(&doc, c).is_some()),
                 };
                 let is_new = p.id.is_none();
+                let own_env = provider_str(&doc, &id, "env_key").filter(|k| !k.trim().is_empty());
+                // A variable dotenvy can't parse (`1_API_KEY`, which older releases gave a provider
+                // named "1") is never read from ~/.codex/.env: its key moves to a readable one.
+                let unreadable = own_env.as_deref().map(str::trim).filter(|k| !dotenvy_key(k));
                 // A key Codex takes from somewhere else (hand edits, other tools) moves to ~/.codex/.env.
                 let moved = if is_new {
                     None
+                } else if let Some(k) = unreadable.and_then(|k| dotenv::get_last(&env_lines.join("
+"), k)).filter(|v| !v.trim().is_empty()) {
+                    Some((k, KeySource::Env { from_file: true }))
                 } else {
                     let found = key_info(&doc, &id, id == before, &auth);
                     match found.source {
@@ -1261,11 +1279,10 @@ pub fn plan(ops: &[Op], dry_run: bool) -> Result<Plan> {
                 };
                 let typed = p.api_key.as_deref().map(str::trim).filter(|k| !k.is_empty());
                 let key_coming = typed.is_some() || moved.is_some();
-                let own_env = provider_str(&doc, &id, "env_key").filter(|k| !k.trim().is_empty());
                 // A variable another provider reads too gets no new key: that provider would send
                 // it to its own address. This one moves to a variable of its own instead.
                 let env_key = match own_env.clone() {
-                    Some(k) if !(key_coming && env_shared(&doc, &id, &k, &p.base_url)) => k,
+                    Some(k) if !(key_coming && (unreadable.is_some() || env_shared(&doc, &id, &k, &p.base_url))) => k,
                     _ => new_env_key(&doc, &env_lines, &id),
                 };
                 if is_new {
@@ -2047,6 +2064,48 @@ http_headers = { X = \"1\" }
         assert_eq!(provider_str(&doc, "codex-relay", "env_key").as_deref(), Some("AGENTPLUS_CODEX_RELAY_API_KEY"));
         assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "AGENTPLUS_CODEX_RELAY_API_KEY=\"sk-\\$new\"\n", "a `$` is escaped for dotenvy");
         assert_eq!(env_value("AGENTPLUS_CODEX_RELAY_API_KEY").as_deref(), Some("sk-$new"));
+    }
+
+    #[test]
+    fn dotenvy_key_matches_what_codex_parses() {
+        for ok in ["A", "_1", "RELAY_API_KEY", "a.b", "x9"] {
+            assert!(dotenvy_key(ok), "{ok}");
+        }
+        for bad in ["", "1_API_KEY", "9", "MY-RELAY", "A B", "密钥", ".A"] {
+            assert!(!dotenvy_key(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn digit_named_provider_gets_a_readable_env_key() {
+        let _h = codex_home_with("codex-digit-new", "", None);
+        plan(&[Op::UpsertProvider { provider: relay_input(None, "1", "sk-one") }], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "1", "env_key").as_deref(), Some("AGENTPLUS_1_API_KEY"));
+        assert_eq!(std::fs::read_to_string(env_path()).unwrap(), "AGENTPLUS_1_API_KEY=sk-one\n");
+        assert_eq!(env_value("AGENTPLUS_1_API_KEY").as_deref(), Some("sk-one"));
+    }
+
+    #[test]
+    fn unreadable_env_key_moves_to_a_readable_one_on_edit() {
+        let cfg = "[model_providers.1]\nname = \"1\"\nbase_url = \"https://r/v1\"\nenv_key = \"1_API_KEY\"\n";
+        let _h = codex_home_with("codex-digit-edit", cfg, Some("1_API_KEY=sk-old\n"));
+        crate::env::set_test_vars(&[]);
+        assert_eq!(env_value("1_API_KEY"), None, "dotenvy skips the line");
+        assert_eq!(key_status("1_API_KEY"), "未找到，请求会失败");
+        // An edit without a new key keeps the old one, under a name Codex reads.
+        let mut input = relay_input(Some("1"), "1", "");
+        input.api_key = None;
+        plan(&[Op::UpsertProvider { provider: input }], false).unwrap();
+        let doc = load_doc().unwrap().0;
+        assert_eq!(provider_str(&doc, "1", "env_key").as_deref(), Some("AGENTPLUS_1_API_KEY"));
+        assert_eq!(env_value("AGENTPLUS_1_API_KEY").as_deref(), Some("sk-old"));
+        // A typed key goes to the readable name too.
+        std::fs::write(config_path(), cfg).unwrap();
+        std::fs::write(env_path(), "1_API_KEY=sk-old\n").unwrap();
+        plan(&[Op::UpsertProvider { provider: relay_input(Some("1"), "1", "sk-new") }], false).unwrap();
+        assert_eq!(provider_str(&load_doc().unwrap().0, "1", "env_key").as_deref(), Some("AGENTPLUS_1_API_KEY"));
+        assert_eq!(env_value("AGENTPLUS_1_API_KEY").as_deref(), Some("sk-new"));
     }
 
     #[test]
