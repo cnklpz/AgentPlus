@@ -62,6 +62,9 @@ const BUNDLE_HINTS: [&str; 2] = ["app-initial-", "app-primary-"];
 /// How long after a reload the first bundle request may take, and on the second try.
 const FIRST_BUNDLE: Duration = Duration::from_secs(10);
 const FIRST_BUNDLE_RETRY: Duration = Duration::from_secs(30);
+/// Largest DevTools message read. A response body comes base64-encoded in one frame, and
+/// Codex's bundle outgrew tungstenite's 16 MiB frame default (~19 MB encoded).
+const MAX_MESSAGE: usize = 256 << 20;
 
 /// Which UI patches to apply.
 #[derive(Clone, Copy, Default)]
@@ -347,7 +350,13 @@ impl Session {
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-        let (ws, _) = tungstenite::client(url, MaybeTlsStream::Plain(stream)).map_err(|e| anyhow!("{e}"))?;
+        let config = tungstenite::protocol::WebSocketConfig {
+            max_message_size: Some(MAX_MESSAGE),
+            max_frame_size: Some(MAX_MESSAGE),
+            ..Default::default()
+        };
+        let (ws, _) = tungstenite::client::client_with_config(url, MaybeTlsStream::Plain(stream), Some(config))
+            .map_err(|e| anyhow!("{e}"))?;
         if let MaybeTlsStream::Plain(s) = ws.get_ref() {
             s.set_read_timeout(Some(Duration::from_millis(400)))?;
         }
@@ -686,6 +695,25 @@ mod tests {
 
     fn free_port() -> u16 {
         std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn a_reply_larger_than_16_mib_is_read() {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let body = "A".repeat(20 << 20);
+        let sent = body.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let req: Value = serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
+            let reply = json!({ "id": req["id"], "result": { "body": sent } });
+            ws.send(Message::Text(reply.to_string())).unwrap();
+        });
+        let mut s = Session::open(&format!("ws://127.0.0.1:{port}/devtools/page/x"), port).unwrap();
+        let got = s.call("Fetch.getResponseBody", json!({})).unwrap();
+        assert_eq!(got["body"].as_str().map(str::len), Some(body.len()));
+        server.join().unwrap();
     }
 
     #[test]
