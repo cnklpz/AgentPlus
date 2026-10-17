@@ -2,6 +2,20 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.6
+
+适配 Codex 26.1013。
+
+- 修复 Codex 更新后注入界面补丁失败，提示「Message too long」
+- 修复 Codex 26.1013 上「隐藏用量提示横幅」提示没找到注入位置
+- 修复名称以数字开头的 Codex 供应商被 Codex 报告缺少密钥：新建时环境变量名会加上 AGENTPLUS_ 前缀，编辑已有的供应商时会把密钥移到 Codex 能读取的名字下
+
+Adapts to Codex 26.1013.
+
+- Fixes UI patches failing with "Message too long" after Codex updated
+- Fixes "Hide usage banners" not finding where to patch on Codex 26.1013
+- Fixes Codex reporting a missing key for providers whose name starts with a digit: new ones get an env variable prefixed with AGENTPLUS_, and editing an existing one moves its key to a name Codex can read
+
 ## 0.4.5
 
 Claw 接入大幅增强：新命令、长任务进度、审批模式、桌面会话完成提醒，还能把图片发给 Codex。
