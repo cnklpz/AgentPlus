@@ -218,10 +218,16 @@ fn patch_quota(src: &str) -> Option<String> {
 ///   usageBannerProps:{canShowUsageBanners:Kt&&Un==null,…  →  canShowUsageBanners:!1&&Kt&&Un==null
 /// The app-primary component is still used elsewhere (with `canShowUsageBanners:!0`), so it
 /// keeps its patch too.
+/// Since 26.1013 the React compiler memoizes those props, so they are built on their own and
+/// passed as `usageBannerProps:$f`:
+///   ($f={canShowUsageBanners:Xf,workCreditConversationId:Zf,…  →  canShowUsageBanners:!1&&Xf,…
+/// Only that object literal is assigned (`={`); the component's destructuring follows a comma
+/// and its other use passes `canShowUsageBanners:!0` as a JSX prop.
 fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static SLOT: OnceLock<Regex> = OnceLock::new();
     static COMPONENT: OnceLock<Regex> = OnceLock::new();
     static PROPS: OnceLock<Regex> = OnceLock::new();
+    static MEMO_PROPS: OnceLock<Regex> = OnceLock::new();
     enum Shape {
         /// Up to 26.924: the slot's early return, then the helper call (memoized since 26.924).
         Slot,
@@ -229,12 +235,15 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
         Component,
         /// Since 26.1007: the component, and the props of its copy in the `usage` chunk.
         Props,
+        /// Since 26.1013: the component, and the memoized props object of its copy.
+        MemoProps,
     }
     let component = |src: &str| {
         let re = cached(&COMPONENT, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
         replace_once(src, re, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};"))
     };
-    by_version(version, &[([0, 0], Shape::Slot), ([26, 928], Shape::Component), ([26, 1007], Shape::Props)], |shape| match shape {
+    let shapes = [([0, 0], Shape::Slot), ([26, 928], Shape::Component), ([26, 1007], Shape::Props), ([26, 1013], Shape::MemoProps)];
+    by_version(version, &shapes, |shape| match shape {
         Shape::Slot => {
             let re = cached(&SLOT, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
             replace_once(src, re, format!("if(!0)return ${{1}}{BANNER_MARK};${{2}}"))
@@ -244,6 +253,11 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
             let src = component(src)?;
             let re = cached(&PROPS, r"usageBannerProps:\{canShowUsageBanners:");
             replace_once(&src, re, format!("usageBannerProps:{{canShowUsageBanners:!1{BANNER_MARK}&&"))
+        }
+        Shape::MemoProps => {
+            let src = component(src)?;
+            let re = cached(&MEMO_PROPS, r"=\{canShowUsageBanners:([\w$]+),");
+            replace_once(&src, re, format!("={{canShowUsageBanners:!1{BANNER_MARK}&&${{1}},"))
         }
     })
 }
@@ -927,6 +941,21 @@ mod tests {
         // Older releases keep their shape and leave the props alone.
         let old = patch_source(&new, on("26.1001.1.0")).0.unwrap();
         assert!(old.contains("if(!0)return c/*agentplus-banner*/;") && old.contains("canShowUsageBanners:Kt&&"), "{old}");
+        // Codex 26.1013: the props are memoized into their own object; the destructuring and the
+        // other JSX use of the component keep their key.
+        let memo = "function X4e(e){let t=(0,DH.c)(26),{canShowUsageBanners:n,hostId:r}=e;}\
+                    t[520]!==Qf?($f={canShowUsageBanners:Xf,workCreditConversationId:Zf,imageGenerationLimit:ln},t[512]=ln):$f=t[521];\
+                    usageBannerProps:$f}),c=(0,SEt.jsx)(X4e,{canShowUsageBanners:!0,imageGenerationLimit:null})";
+        let new = format!("{comp}{memo}");
+        let out = patch_source(&new, on("26.1013.4894.0")).0.unwrap();
+        assert!(out.contains("D=J(Jy,f);if(!0)return c/*agentplus-banner*/;"), "{out}");
+        assert!(out.contains("($f={canShowUsageBanners:!1/*agentplus-banner*/&&Xf,workCreditConversationId:"), "{out}");
+        assert!(out.contains("{canShowUsageBanners:n,hostId:r}=e") && out.contains("X4e,{canShowUsageBanners:!0,"), "{out}");
+        assert_eq!(patch_source(&out, on("26.1013.4894.0")), (None, vec![]));
+        assert_eq!(patch_source(memo, on("26.1013.4894.0")).1.len(), 1);
+        // 26.1007 doesn't take the memoized shape, 26.1013 not the inline one.
+        assert_eq!(patch_source(&new, on("26.1007.2314.0")).1.len(), 1);
+        assert_eq!(patch_source(&format!("{comp}{props}"), on("26.1013.4894.0")).1.len(), 1);
         // Version unknown: every shape, oldest first.
         let out = patch_source(&both, BANNER).0.unwrap();
         assert!(out.contains("if(!0)return u/*agentplus-banner*/;let P=i!=null"), "{out}");
