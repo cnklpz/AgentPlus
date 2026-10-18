@@ -8,7 +8,7 @@
 
 ## Checklist
 
-- [ ] `npm run check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` pass
+- [ ] `bun run check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` pass
 - [ ] Commit subjects follow `type(scope): description` ([CONTRIBUTING.md](https://github.com/cnklpz/AgentPlus/blob/main/CONTRIBUTING.md))
 - [ ] New or changed text is in both `en` and `zh` (or I've noted which strings need Chinese)
 - [ ] Logic changes have unit tests

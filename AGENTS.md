@@ -2,7 +2,9 @@
 
 Tauri 2 (Rust, `src-tauri/`) + React 18 + TypeScript (`src/`).
 
-Checks: frontend `npm run check` (`tsc --noEmit` + `vitest run`); backend, from `src-tauri/`,
+The package manager is Bun (`bun install`, `bun run …`; the lockfile is `bun.lock`).
+
+Checks: frontend `bun run check` (`tsc --noEmit` + `vitest run`); backend, from `src-tauri/`,
 `cargo clippy --all-targets` (keep it at zero warnings) and `cargo test`. When you change
 logic, add unit tests for the edge cases.
 
@@ -46,7 +48,8 @@ Both `type` and `scope` are required lower-case ASCII kebab-case.
 - One change per commit; split unrelated changes.
 - Reference issues in the body: `Fixes #12` / `Refs #12`.
 - No `Co-Authored-By` or any other AI attribution.
-- Releases: `npm version x.y.z` commits as `chore(release): x.y.z` (set in `.npmrc`); the
+- Releases: `npm version x.y.z` (still npm: `bun pm version` can't find `git` from the
+  `version` hook) commits as `chore(release): x.y.z` (set in `.npmrc`); the
   changelog commit before it is `docs(changelog): add x.y.z notes`.
 - Never rewrite history that has been pushed.
 

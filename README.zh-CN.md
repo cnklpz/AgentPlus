@@ -169,24 +169,24 @@ agentplus://v1/import?resource=provider&app=claude&name=My%20Relay&endpoint=http
 
 ## 从源码构建
 
-AgentPlus 基于 [Tauri 2](https://tauri.app)：前端是 `src/` 下的 React + TypeScript，后端是 `src-tauri/` 下的 Rust。需要 Node.js 18+、Rust 1.88+ 和 [Tauri 系统依赖](https://tauri.app/start/prerequisites/)。
+AgentPlus 基于 [Tauri 2](https://tauri.app)：前端是 `src/` 下的 React + TypeScript，后端是 `src-tauri/` 下的 Rust。需要 Bun 1.3+、Node.js 18+、Rust 1.88+ 和 [Tauri 系统依赖](https://tauri.app/start/prerequisites/)。
 
 安装依赖并启动开发环境：
 
 ```bash
-npm install
-npm run tauri dev
+bun install
+bun run tauri dev
 ```
 
 打包与检查：
 
 ```bash
-npm run tauri build    # 生成安装包
-npm run check          # 前端类型检查和测试
+bun run tauri build    # 生成安装包
+bun run check          # 前端类型检查和测试
 cd src-tauri && cargo clippy --all-targets && cargo test
 ```
 
-想在浏览器里预览界面（用的是演示数据）可以跑 `npm run dev`。
+想在浏览器里预览界面（用的是演示数据）可以跑 `bun run dev`。
 
 ## 许可证
 
