@@ -110,9 +110,24 @@ fn pyproject_version(p: &Path) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-/// `<HERMES_HOME>/hermes-agent` and its venv (`venv\Scripts\hermes.exe` on Windows,
-/// `venv/bin/hermes` elsewhere); version from pyproject.toml (no Python start-up). A CLI,
-/// so `exe` stays None.
+/// The placeholder version pyproject.toml carries from 0.22 on.
+const PLACEHOLDER_VERSION: &str = "0.0.0";
+
+/// `<agent>/install-stamp.json`, written by the installer from 0.22 on.
+fn stamp_version(p: &Path) -> Option<String> {
+    let v: J = serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()?;
+    ["displayVersion", "baseVersion"].iter().find_map(|k| v.get(*k)?.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from))
+}
+
+/// The version of `<HERMES_HOME>/hermes-agent`: its install stamp (0.22+), else pyproject.toml
+/// (older releases; 0.22+ leaves the placeholder there).
+fn agent_version(agent: &Path) -> Option<String> {
+    stamp_version(&agent.join("install-stamp.json")).or_else(|| pyproject_version(&agent.join("pyproject.toml")).filter(|v| v != PLACEHOLDER_VERSION))
+}
+
+/// `<HERMES_HOME>/hermes-agent` with its venv (`venv\Scripts\hermes.exe` on Windows,
+/// `venv/bin/hermes` elsewhere; before 0.22), or the `<HERMES_HOME>/bin` launcher (0.22+).
+/// Version from the files (no Python start-up). A CLI, so `exe` stays None.
 pub fn detect() -> Install {
     let mut inst = Install::default();
     let mut roots = vec![default_dir()];
@@ -123,10 +138,14 @@ pub fn detect() -> Install {
         let agent = root.join("hermes-agent");
         let venv = agent.join("venv");
         let exe = if cfg!(windows) { venv.join("Scripts").join("hermes.exe") } else { venv.join("bin").join("hermes") };
-        if exe.exists() || agent.join("pyproject.toml").exists() {
+        let launcher = root.join("bin").join(crate::process::exe("hermes"));
+        if exe.exists() || launcher.exists() || agent.join("pyproject.toml").exists() {
             inst.installed = true;
-            inst.version = pyproject_version(&agent.join("pyproject.toml"));
-            inst.dir = Some(agent);
+            inst.version = agent_version(&agent);
+            if inst.version.is_none() && launcher.exists() {
+                inst.version = crate::process::cli_version(&launcher);
+            }
+            inst.dir = Some(if agent.is_dir() { agent } else { root });
             break;
         }
     }
@@ -2010,6 +2029,49 @@ hooks:
         };
         assert!(apply(vec![Op::UpsertProvider { provider: pi(None, "N", "https://n/v1", "chat", None, &[]) }]).is_ok());
         assert!(fs::read_to_string(t2.0.join("config.yaml")).unwrap().contains("  # the relay\n"));
+    }
+
+    #[test]
+    fn version_from_install_stamp_or_pyproject() {
+        let home = TestHome::new("hermes");
+        let agent = home.0.join("hermes-agent");
+        fs::create_dir_all(&agent).unwrap();
+        // Before 0.22: pyproject.toml.
+        fs::write(agent.join("pyproject.toml"), "[project]\nname = \"hermes-agent\"\nversion = \"0.12.0\"\n").unwrap();
+        assert_eq!(agent_version(&agent).as_deref(), Some("0.12.0"));
+        // 0.22+: a placeholder there, the version in install-stamp.json.
+        fs::write(agent.join("pyproject.toml"), "[project]\nversion = \"0.0.0\"\n").unwrap();
+        assert_eq!(agent_version(&agent), None);
+        fs::write(agent.join("install-stamp.json"), r#"{"baseVersion": "0.22.1", "displayVersion": "0.22.2"}"#).unwrap();
+        assert_eq!(agent_version(&agent).as_deref(), Some("0.22.2"));
+        fs::write(agent.join("install-stamp.json"), r#"{"baseVersion": "0.22.1", "displayVersion": ""}"#).unwrap();
+        assert_eq!(agent_version(&agent).as_deref(), Some("0.22.1"));
+    }
+
+    #[test]
+    fn detects_venv_and_launcher_layouts() {
+        crate::env::force(crate::env::Target::Windows);
+        let _home = TestHome::new("hermes");
+        let root = default_dir();
+        let agent = root.join("hermes-agent");
+        // Before 0.22: the venv's hermes.
+        let venv_bin = if cfg!(windows) { agent.join("venv").join("Scripts") } else { agent.join("venv").join("bin") };
+        fs::create_dir_all(&venv_bin).unwrap();
+        fs::write(venv_bin.join(crate::process::exe("hermes")), "").unwrap();
+        fs::write(agent.join("pyproject.toml"), "[project]\nversion = \"0.12.0\"\n").unwrap();
+        let inst = detect();
+        assert!(inst.installed);
+        assert_eq!(inst.version.as_deref(), Some("0.12.0"));
+        assert_eq!(inst.dir.as_deref(), Some(agent.as_path()));
+        // 0.22+: no venv or pyproject.toml needed, the launcher is in <HERMES_HOME>/bin.
+        fs::remove_dir_all(&agent).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join("bin").join(crate::process::exe("hermes")), "").unwrap();
+        fs::create_dir_all(&agent).unwrap();
+        fs::write(agent.join("install-stamp.json"), r#"{"displayVersion": "0.22.2"}"#).unwrap();
+        let inst = detect();
+        assert!(inst.installed);
+        assert_eq!(inst.version.as_deref(), Some("0.22.2"));
     }
 
     #[test]
