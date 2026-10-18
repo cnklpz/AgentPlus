@@ -12,7 +12,9 @@
 //! Writing: serde_yaml drops comments and styling, so the file is split into top-level
 //! blocks and only the changed `model` / `providers` / `custom_providers` blocks are
 //! re-emitted (in Hermes' own PyYAML style); everything else stays byte-for-byte. A changed
-//! block that contains comments or anchors is refused.
+//! mapping block with comments (the 0.22+ installer writes a fully commented `model:`) gets
+//! only its changed entries rewritten, keeping the comments; one with anchors or tags, or a
+//! commented list, is refused.
 
 
 use super::msg;
@@ -255,23 +257,38 @@ fn blocks(lines: &[&str]) -> Vec<Block> {
 
 /// Comments, anchors / aliases or tags inside a block (re-emitting it would lose them).
 pub(crate) fn has_extras(lines: &[&str]) -> bool {
-    static ANCHOR: OnceLock<Regex> = OnceLock::new();
-    let anchor = ANCHOR.get_or_init(|| Regex::new(r"(^\s*|:\s+|-\s+)[&*!][^\s]").unwrap());
-    lines.iter().any(|l| l.trim_start().starts_with('#') || anchor.is_match(l) || has_comment(l))
+    has_anchors(lines) || lines.iter().any(|l| l.trim_start().starts_with('#') || has_comment(l))
 }
 
-/// A `#` after whitespace, outside quoted scalars. A quote only opens a scalar where one can
-/// begin (the start of the line, after `: `, `- `, `? `, or `[` `{` `,` in a flow collection);
-/// anywhere else it is a literal character, as in `name: Bob's relay  # main`.
+/// Anchors / aliases or tags inside a block (outside comments).
+fn has_anchors(lines: &[&str]) -> bool {
+    static ANCHOR: OnceLock<Regex> = OnceLock::new();
+    let anchor = ANCHOR.get_or_init(|| Regex::new(r"(^\s*|:\s+|-\s+)[&*!][^\s]").unwrap());
+    lines.iter().filter(|l| !is_gap(l)).any(|l| anchor.is_match(&l[..comment_at(l).unwrap_or(l.len())]))
+}
+
+/// A blank or comment-only line.
+fn is_gap(l: &str) -> bool {
+    let t = l.trim();
+    t.is_empty() || t.starts_with('#')
+}
+
 fn has_comment(l: &str) -> bool {
-    let is_ws = |c: Option<&char>| c.is_none_or(|c| *c == ' ' || *c == '\t');
-    let mut chars = l.chars().peekable();
+    comment_at(l).is_some()
+}
+
+/// Byte offset of a `#` after whitespace, outside quoted scalars. A quote only opens a scalar
+/// where one can begin (the start of the line, after `: `, `- `, `? `, or `[` `{` `,` in a flow
+/// collection); anywhere else it is a literal character, as in `name: Bob's relay  # main`.
+fn comment_at(l: &str) -> Option<usize> {
+    let is_ws = |c: Option<&(usize, char)>| c.is_none_or(|(_, c)| *c == ' ' || *c == '\t');
+    let mut chars = l.char_indices().peekable();
     let (mut quote, mut at_start, mut prev_ws, mut flow) = (None::<char>, true, true, 0usize);
-    while let Some(c) = chars.next() {
+    while let Some((i, c)) = chars.next() {
         match quote {
             Some('\'') => {
                 // `''` is an escaped quote inside a single-quoted scalar.
-                if c == '\'' && chars.next_if_eq(&'\'').is_none() {
+                if c == '\'' && chars.next_if(|(_, n)| *n == '\'').is_none() {
                     quote = None;
                 }
             }
@@ -284,7 +301,7 @@ fn has_comment(l: &str) -> bool {
             }
             None => match c {
                 ' ' | '\t' => {}
-                '#' if prev_ws => return true,
+                '#' if prev_ws => return Some(i),
                 '\'' | '"' if at_start => {
                     quote = Some(c);
                     at_start = false;
@@ -302,7 +319,7 @@ fn has_comment(l: &str) -> bool {
         }
         prev_ws = quote.is_none() && (c == ' ' || c == '\t');
     }
-    false
+    None
 }
 
 /// Replaces (Some) or removes (None) top-level blocks, leaving every other line as it was.
@@ -323,21 +340,23 @@ pub(crate) fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<Stri
         match found.first() {
             Some(b) => {
                 if has_extras(&lines[b.start..b.end]) {
-                    return Err(anyhow!(tr!(
-                        "The {key}: block in config.yaml has comments (or anchors); not writing it so they aren't lost. Remove them by hand first",
-                        "config.yaml 的 {key}: 段里有注释（或锚点），为避免丢失不写入；请先手动删掉这些注释"
-                    )));
+                    // Keep the comments: change only the lines of the entries that changed.
+                    let Some(patched) = v.and_then(|v| patch_block(&lines, b, v)) else {
+                        return Err(anyhow!(tr!(
+                            "The {key}: block in config.yaml has comments (or anchors); not writing it so they aren't lost. Remove them by hand first",
+                            "config.yaml 的 {key}: 段里有注释（或锚点），为避免丢失不写入；请先手动删掉这些注释"
+                        )));
+                    };
+                    edits.extend(patched);
+                } else {
+                    edits.push((b.start, b.end, new_lines));
                 }
-                edits.push((b.start, b.end, new_lines));
             }
             None => appended.extend(new_lines),
         }
     }
-    edits.sort_by_key(|e| std::cmp::Reverse(e.0));
     let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-    for (s, e, new) in edits {
-        out.splice(s..e, new);
-    }
+    apply_edits(&mut out, edits, 0);
     if !appended.is_empty() {
         while out.last().map(|l| l.is_empty()).unwrap_or(false) {
             out.pop();
@@ -346,6 +365,142 @@ pub(crate) fn rewrite(text: &str, changes: &[(&str, Option<&Y>)]) -> Result<Stri
         out.push(String::new());
     }
     Ok(out.join("\n"))
+}
+
+/// Lines [start, end) of the file and what replaces them.
+type LineEdit = (usize, usize, Vec<String>);
+
+/// Applies edits to lines that start at line `base` of the file.
+fn apply_edits(out: &mut Vec<String>, edits: Vec<LineEdit>, base: usize) {
+    use std::cmp::Reverse;
+    // Back to front. At one line, a replacement goes before an insertion so both stay, and
+    // insertions in reverse order, so an entry added to a nested mapping (pushed first) stays
+    // above one added to its parent.
+    let mut edits: Vec<(usize, LineEdit)> = edits.into_iter().enumerate().collect();
+    edits.sort_by_key(|(i, e)| (Reverse(e.0), Reverse(e.1), Reverse(*i)));
+    for (_, (s, e, new)) in edits {
+        out.splice(s - base..e - base, new);
+    }
+}
+
+fn indent_of(l: &str) -> usize {
+    l.len() - l.trim_start_matches(' ').len()
+}
+
+/// The entries of a block mapping in lines [s, e): their indent, and each key with its lines
+/// [start, end), trailing blank and comment lines left out. None if it isn't one.
+fn map_entries(lines: &[&str], s: usize, e: usize) -> Option<(usize, Vec<(String, usize, usize)>)> {
+    let first = (s..e).find(|&i| !is_gap(lines[i]))?;
+    let indent = indent_of(lines[first]);
+    let mut out: Vec<(String, usize, usize)> = vec![];
+    for (i, l) in lines.iter().enumerate().take(e).skip(first) {
+        if is_gap(l) {
+            continue;
+        }
+        let at = indent_of(l);
+        if at < indent {
+            return None;
+        }
+        if at == indent {
+            // A `- item` at this indent (a list, not a mapping) has no key.
+            out.push((top_key(&l[indent..])?, i, e));
+        }
+    }
+    let starts: Vec<usize> = out.iter().map(|x| x.1).collect();
+    for (j, x) in out.iter_mut().enumerate() {
+        let mut end = starts.get(j + 1).copied().unwrap_or(e);
+        while end > x.1 + 1 && is_gap(lines[end - 1]) {
+            end -= 1;
+        }
+        x.2 = end;
+    }
+    Some((indent, out))
+}
+
+/// `key: value` lines in place of the entry at [start, end), keeping the trailing comment of
+/// its first line. None when comments further inside the entry would be lost.
+fn replace_entry(lines: &[&str], start: usize, end: usize, indent: usize, k: &Y, v: &Y) -> Option<Vec<String>> {
+    if has_extras(&lines[start + 1..end]) {
+        return None;
+    }
+    let mut out = vec![];
+    emit_entry(&mut out, indent, k, v).ok()?;
+    let head = lines[start];
+    if let Some(at) = comment_at(head) {
+        let from = head[..at].trim_end().len();
+        out[0].push_str(&head[from..]);
+    }
+    Some(out)
+}
+
+/// Edits that turn the block mapping in lines [s, e) from `old` into `new`, touching only the
+/// entries that changed (recursing into changed mappings), adding new ones after the last.
+fn patch_map(lines: &[&str], s: usize, e: usize, old: &Mapping, new: &Mapping, edits: &mut Vec<LineEdit>) -> Option<()> {
+    let (indent, kids) = map_entries(lines, s, e)?;
+    if kids.len() != old.len() {
+        return None;
+    }
+    let span = |k: &Y| {
+        let ks = key_str(k)?;
+        kids.iter().find(|c| c.0 == ks).map(|c| (c.1, c.2))
+    };
+    let mut added = vec![];
+    for (k, nv) in new {
+        match old.get(k) {
+            Some(ov) if ov == nv => {}
+            Some(ov) => {
+                let (start, end) = span(k)?;
+                match (ov, nv) {
+                    (Y::Mapping(om), Y::Mapping(nm)) if !om.is_empty() && !nm.is_empty() && end > start + 1 => patch_map(lines, start + 1, end, om, nm, edits)?,
+                    _ => edits.push((start, end, replace_entry(lines, start, end, indent, k, nv)?)),
+                }
+            }
+            None => emit_entry(&mut added, indent, k, nv).ok()?,
+        }
+    }
+    for (k, _) in old.iter().filter(|(k, _)| !new.contains_key(*k)) {
+        let (start, end) = span(k)?;
+        if has_extras(&lines[start + 1..end]) {
+            return None;
+        }
+        edits.push((start, end, vec![]));
+    }
+    if !added.is_empty() {
+        let at = kids.last()?.2;
+        edits.push((at, at, added));
+    }
+    Some(())
+}
+
+/// Edits that turn a block with comments into `new` and keep its comments, as long as it is a
+/// mapping without anchors, the changes miss the comments, and the result reads back as `new`.
+fn patch_block(lines: &[&str], b: &Block, new: &Y) -> Option<Vec<LineEdit>> {
+    let body = &lines[b.start..b.end];
+    if has_anchors(body) {
+        return None;
+    }
+    // `key:` with its entries on the lines below (a trailing comment is fine).
+    let head = lines[b.start];
+    if !head[..comment_at(head).unwrap_or(head.len())].trim_end().ends_with(':') {
+        return None;
+    }
+    let old: Y = serde_yaml::from_str(&body.join("\n")).ok()?;
+    let (Some(Y::Mapping(old)), Y::Mapping(new_map)) = (old.get(b.key.as_str()), new) else {
+        return None;
+    };
+    let mut edits = vec![];
+    patch_map(lines, b.start + 1, b.end, old, new_map, &mut edits)?;
+    let mut out: Vec<String> = body.iter().map(|s| s.to_string()).collect();
+    apply_edits(&mut out, edits.clone(), b.start);
+    let back: Y = serde_yaml::from_str(&out.join("\n")).ok()?;
+    (back.get(b.key.as_str()) == Some(new)).then_some(edits)
+}
+
+/// A block whose comments or anchors would be lost on write: [`patch_block`] keeps comments
+/// only in a mapping without anchors or tags (a list such as `custom_providers:` is re-emitted
+/// whole). `v` is the block's value.
+fn loses_extras(lines: &[&str], v: Option<&Y>) -> bool {
+    has_extras(lines) && (has_anchors(lines) || !matches!(v, Some(Y::Mapping(m)) if !m.is_empty()))
 }
 
 // ---------------------------------------------------------------- YAML: emitter (PyYAML style)
@@ -1044,9 +1199,10 @@ pub fn state(inst: &Install) -> AgentState {
         }
     }
 
-    // Comments inside the blocks AgentPlus rewrites make it read-only (elsewhere they are kept).
+    // Comments that a write of the blocks AgentPlus rewrites would lose make it read-only
+    // (elsewhere they are kept).
     let lines: Vec<&str> = text.split('\n').collect();
-    let commented: Vec<String> = blocks(&lines).iter().filter(|b| BLOCKS.contains(&b.key.as_str()) && has_extras(&lines[b.start..b.end])).map(|b| format!("{}:", b.key)).collect();
+    let commented: Vec<String> = blocks(&lines).iter().filter(|b| BLOCKS.contains(&b.key.as_str()) && loses_extras(&lines[b.start..b.end], cfg.get(b.key.as_str()))).map(|b| format!("{}:", b.key)).collect();
     if !commented.is_empty() {
         st.readonly = true;
         st.notes.push(tr!(
@@ -2014,11 +2170,24 @@ hooks:
     }
 
     #[test]
-    fn comments_in_changed_block_refuse_write() {
-        let yaml = SAMPLE.replace("  default: deepseek-v4-flash\n", "  default: deepseek-v4-flash  # the model\n");
+    fn comments_in_changed_block() {
+        // A mapping block keeps its comments: only the entries that changed are rewritten.
+        let yaml = SAMPLE.replace("  default: deepseek-v4-flash\n", "  # the model\n  default: deepseek-v4-flash  # the model\n");
         let t = setup(&yaml);
         let st = state(&Install::default());
-        assert!(st.readonly);
+        assert!(!st.readonly, "{:?}", st.notes);
+        apply(vec![Op::SetCurrentProvider { provider: "opencode".into() }]).unwrap();
+        let (text, v) = read_cfg(&t);
+        assert_eq!(v["model"]["provider"].as_str(), Some("custom:opencode"));
+        assert!(text.contains("model:\n  # the model\n  default: deepseek-v4-flash  # the model\n"), "{text}");
+        assert_eq!(untouched(&text), untouched(&yaml));
+        // Anchors still make it read-only and refuse the write.
+        let yaml = SAMPLE.replace("  api_mode: chat_completions\n", "  api_mode: &m chat_completions  # c\n");
+        let t = {
+            drop(t);
+            setup(&yaml)
+        };
+        assert!(state(&Install::default()).readonly);
         assert!(apply(vec![Op::SetCurrentProvider { provider: "opencode".into() }]).is_err());
         assert_eq!(fs::read_to_string(t.0.join("config.yaml")).unwrap(), yaml);
         // Comments in other blocks are fine (database has one), and in untouched target blocks too.
@@ -2029,6 +2198,67 @@ hooks:
         };
         assert!(apply(vec![Op::UpsertProvider { provider: pi(None, "N", "https://n/v1", "chat", None, &[]) }]).is_ok());
         assert!(fs::read_to_string(t2.0.join("config.yaml")).unwrap().contains("  # the relay\n"));
+    }
+
+    #[test]
+    fn commented_block_patch_changes_only_its_entries() {
+        let text = "model:  # head\n  # c1\n  a: 1  # keep\n  n:\n    # c2\n    x: 1\n    y: 2\n  gone: 1\n\n  # tail\nother: 1\n";
+        let new: Y = serde_yaml::from_str("a: 2\nn: {x: 1, y: 3, z: 4}\nb: new\n").unwrap();
+        let out = rewrite(text, &[("model", Some(&new))]).unwrap();
+        // The entry added to `n` stays above the one added to `model`.
+        assert_eq!(out, "model:  # head\n  # c1\n  a: 2  # keep\n  n:\n    # c2\n    x: 1\n    y: 3\n    z: 4\n  b: new\n\n  # tail\nother: 1\n");
+        // An entry with a comment inside can't be replaced or removed without losing it.
+        let text = "model:\n  # c\n  n:\n    # inner\n    x: 1\n  k: v\n";
+        for new in ["n: 5\nk: v\n", "k: v\n"] {
+            let new: Y = serde_yaml::from_str(new).unwrap();
+            assert!(rewrite(text, &[("model", Some(&new))]).is_err(), "{new:?}");
+        }
+        // A commented list is re-emitted whole, so it is refused.
+        let new: Y = serde_yaml::from_str("[b]").unwrap();
+        assert!(rewrite("custom_providers:\n  # c\n  - a\n", &[("custom_providers", Some(&new))]).is_err());
+        assert!(loses_extras(&["custom_providers:", "  # c", "  - a"], Some(&Y::Sequence(vec![yk("a")]))));
+        assert!(!loses_extras(&["model:", "  # c", "  a: 1"], serde_yaml::from_str::<Y>("a: 1").ok().as_ref()));
+        // Removing a commented block isn't patched either.
+        assert!(rewrite("model:\n  # c\n  a: 1\n", &[("model", None)]).is_err());
+    }
+
+    /// The 0.22+ installer writes config.yaml from the commented example: model: is all comments.
+    #[test]
+    fn installer_commented_model_block_is_writable() {
+        let yaml = "\
+_config_version: 50
+model:
+  # Default model to use (can be overridden with --model flag)
+  default: \"anthropic/claude-opus-4.6\"
+  \n  # Inference provider selection:
+  #   \"auto\"         - Auto-detect from credentials (default)
+  provider: \"auto\"
+  \n  # API configuration (falls back to OPENROUTER_API_KEY env var)
+  # api_key: \"your-key-here\"
+  base_url: \"https://openrouter.ai/api/v1\"
+
+  # streaming: true
+  # entra:
+  #   scope: \"https://ai.azure.com/.default\"
+
+terminal:
+  backend: local
+";
+        let t = setup(yaml);
+        assert!(!state(&Install::default()).readonly);
+        apply(vec![Op::UpsertProvider { provider: pi(None, "Relay", "https://r/v1", "chat", Some("sk-r-7777"), &["m1"]) }, Op::SetCurrentProvider { provider: "relay".into() }]).unwrap();
+        let (text, v) = read_cfg(&t);
+        assert_eq!(v["model"]["provider"].as_str(), Some("custom:relay"));
+        assert_eq!(v["model"]["default"].as_str(), Some("m1"));
+        for l in yaml.lines().filter(|l| l.trim_start().starts_with('#')) {
+            assert!(text.contains(l), "lost {l:?}:\n{text}");
+        }
+        assert!(text.contains("terminal:\n  backend: local\n"), "{text}");
+        // And back to the built-in provider it started on.
+        apply(vec![Op::SetCurrentProvider { provider: "builtin:auto".into() }]).unwrap();
+        let (_, v) = read_cfg(&t);
+        assert_eq!(v["model"]["provider"].as_str(), Some("auto"));
+        assert_eq!(v["model"]["default"].as_str(), Some("anthropic/claude-opus-4.6"));
     }
 
     #[test]
