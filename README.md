@@ -169,24 +169,24 @@ A link only fills in the dialog: nothing is saved until you click Add.
 
 ## Building from source
 
-AgentPlus is built on [Tauri 2](https://tauri.app): React and TypeScript in `src/`, Rust in `src-tauri/`. You'll need Node.js 18+, Rust 1.88+ and the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+AgentPlus is built on [Tauri 2](https://tauri.app): React and TypeScript in `src/`, Rust in `src-tauri/`. You'll need Bun 1.3+, Node.js 18+, Rust 1.88+ and the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
 Install dependencies and start the development app:
 
 ```bash
-npm install
-npm run tauri dev
+bun install
+bun run tauri dev
 ```
 
 Build and run checks:
 
 ```bash
-npm run tauri build    # Build the installer
-npm run check          # Frontend type checks and tests
+bun run tauri build    # Build the installer
+bun run check          # Frontend type checks and tests
 cd src-tauri && cargo clippy --all-targets && cargo test
 ```
 
-To preview the interface in a browser with demo data, run `npm run dev`.
+To preview the interface in a browser with demo data, run `bun run dev`.
 
 ## License
 

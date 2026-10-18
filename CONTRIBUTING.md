@@ -6,21 +6,21 @@ sent), open an issue first so we can agree on the approach before you write it.
 
 ## Setup
 
-You'll need Node.js 18+, Rust 1.88+ and the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+You'll need Bun 1.3+, Node.js 18+, Rust 1.88+ and the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
 
 ```bash
-npm install
-npm run tauri dev
+bun install
+bun run tauri dev
 ```
 
-`npm run dev` previews the interface in a browser with demo data.
+`bun run dev` previews the interface in a browser with demo data.
 
 ## Before you open a pull request
 
 Run the same checks as CI (it runs them on Windows and macOS):
 
 ```bash
-npm run check
+bun run check
 cd src-tauri && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 

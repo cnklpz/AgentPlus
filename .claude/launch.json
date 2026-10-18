@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "agentplus-web",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "dev"],
       "port": 1420
     }
