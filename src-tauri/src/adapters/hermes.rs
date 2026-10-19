@@ -387,12 +387,15 @@ fn indent_of(l: &str) -> usize {
     l.len() - l.trim_start_matches(' ').len()
 }
 
-/// The entries of a block mapping in lines [s, e): their indent, and each key with its lines
-/// [start, end), trailing blank and comment lines left out. None if it isn't one.
-fn map_entries(lines: &[&str], s: usize, e: usize) -> Option<(usize, Vec<(String, usize, usize)>)> {
+/// A mapping entry: its key and its lines [start, end).
+type MapEntry = (String, usize, usize);
+
+/// The entries of a block mapping in lines [s, e): their indent, and each entry, trailing
+/// blank and comment lines left out. None if it isn't one.
+fn map_entries(lines: &[&str], s: usize, e: usize) -> Option<(usize, Vec<MapEntry>)> {
     let first = (s..e).find(|&i| !is_gap(lines[i]))?;
     let indent = indent_of(lines[first]);
-    let mut out: Vec<(String, usize, usize)> = vec![];
+    let mut out: Vec<MapEntry> = vec![];
     for (i, l) in lines.iter().enumerate().take(e).skip(first) {
         if is_gap(l) {
             continue;
