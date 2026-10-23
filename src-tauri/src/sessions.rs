@@ -1,6 +1,6 @@
 //! Codex sessions: browse, health check, safe cleanup and provider repair.
 //!
-//! Sources of truth: `state_5.sqlite` (`threads`, schema v55) plus rollout files
+//! Sources of truth: `state_5.sqlite` (`threads`, schema v55–v61) plus rollout files
 //! `sessions/YYYY/MM/DD/rollout-*-<id>[_<segment>].jsonl`. Writes only happen with
 //! Codex closed, after a backup, and repairs keep an undo log.
 
@@ -20,8 +20,9 @@ use std::path::{Path, PathBuf};
 const STATE_DB: &str = "state_5.sqlite";
 const LOGS_DB: &str = "logs_2.sqlite";
 const HISTORY_DB: &str = "thread_history_1.sqlite";
-/// Schema versions this code was written against; anything else is read-only.
-const STATE_VERSION: i64 = 55;
+/// Schema versions this code was checked against; anything else is read-only. Writes only
+/// touch `threads.model_provider`; v56–v61 add columns and tables that leave it as it was.
+const STATE_VERSIONS: std::ops::RangeInclusive<i64> = 55..=61;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +117,15 @@ fn deny_wsl() -> Result<()> {
 
 fn migration_version(conn: &Connection) -> Option<i64> {
     conn.query_row("SELECT max(version) FROM _sqlx_migrations", [], |r| r.get::<_, Option<i64>>(0)).ok().flatten()
+}
+
+fn verified(version: Option<i64>) -> bool {
+    version.is_some_and(|v| STATE_VERSIONS.contains(&v))
+}
+
+/// The verified versions for messages, `55–61`.
+fn verified_range() -> String {
+    format!("{}–{}", STATE_VERSIONS.start(), STATE_VERSIONS.end())
 }
 
 fn norm_path(p: &str) -> String {
@@ -250,7 +260,7 @@ pub fn list() -> Result<SessionList> {
     }
     let mut providers: Vec<(String, usize)> = counts.into_iter().collect();
     providers.sort_by_key(|p| std::cmp::Reverse(p.1));
-    let writable = version == Some(STATE_VERSION) && !crate::env::is_wsl();
+    let writable = verified(version) && !crate::env::is_wsl();
     Ok(SessionList {
         sessions,
         current_provider: cur,
@@ -258,7 +268,7 @@ pub fn list() -> Result<SessionList> {
         targets: defined_providers(),
         codex_running: codex_busy(),
         writable,
-        note: if writable { None } else if crate::env::is_wsl() { Some(l("Sessions in WSL can only be browsed: Windows can't lock the databases in WSL, so repair, migration and cleanup aren't available.", "WSL 里的会话只能浏览：Windows 侧无法对 WSL 里的数据库加锁，修复、迁移和清理暂不提供。").into()) } else { Some(tr!("state_5.sqlite is version {version:?}, not the verified {STATE_VERSION}; shown read-only.", "state_5.sqlite 版本是 {version:?}，不是已验证的 {STATE_VERSION}，只读显示。")) },
+        note: if writable { None } else if crate::env::is_wsl() { Some(l("Sessions in WSL can only be browsed: Windows can't lock the databases in WSL, so repair, migration and cleanup aren't available.", "WSL 里的会话只能浏览：Windows 侧无法对 WSL 里的数据库加锁，修复、迁移和清理暂不提供。").into()) } else { let range = verified_range(); Some(tr!("state_5.sqlite is version {version:?}, not a verified one ({range}); shown read-only.", "state_5.sqlite 版本是 {version:?}，不在已验证的 {range} 之内，只读显示。")) },
         last_repair: last_repair(),
     })
 }
@@ -350,10 +360,9 @@ pub fn health() -> Result<Vec<HealthItem>> {
     // Schema versions
     let state = open_ro(&state_path())?;
     let v = migration_version(&state);
-    out.push(if v == Some(STATE_VERSION) {
-        item("schema", l("Database version", "数据库版本"), "ok", tr!("state_5 v{STATE_VERSION}, verified", "state_5 v{STATE_VERSION}，已验证"))
-    } else {
-        item("schema", l("Database version", "数据库版本"), "warn", tr!("state_5 version {v:?} is unverified; write operations are disabled", "state_5 版本 {v:?} 未验证，写入类操作已禁用"))
+    out.push(match v {
+        Some(n) if STATE_VERSIONS.contains(&n) => item("schema", l("Database version", "数据库版本"), "ok", tr!("state_5 v{n}, verified", "state_5 v{n}，已验证")),
+        _ => item("schema", l("Database version", "数据库版本"), "warn", tr!("state_5 version {v:?} is unverified; write operations are disabled", "state_5 版本 {v:?} 未验证，写入类操作已禁用")),
     });
 
     // Integrity (quick_check is read-only)
@@ -717,7 +726,7 @@ pub fn repair(ids: &[String], target: &str) -> Result<String> {
 fn repair_in(ids: &[String], target: &str) -> Result<String> {
     let db = state_path();
     let conn = Connection::open(&db)?;
-    if migration_version(&conn) != Some(STATE_VERSION) {
+    if !verified(migration_version(&conn)) {
         return Err(anyhow!(l("state_5.sqlite version is unverified; not modifying it", "state_5.sqlite 版本未验证，不修改")));
     }
     let dir = new_backup_dir("codex-repair")?;
@@ -822,6 +831,18 @@ mod tests {
     use super::*;
 
     const REPAIR_ID: &str = "01a07797-7b0f-78d3-84b0-b7a65f7a6632";
+
+    #[test]
+    fn verified_state_versions() {
+        // v55 stays writable alongside the newer ones; outside the range is read-only.
+        for v in [55, 58, 61] {
+            assert!(verified(Some(v)), "{v}");
+        }
+        for v in [Some(54), Some(62), None] {
+            assert!(!verified(v), "{v:?}");
+        }
+        assert_eq!(verified_range(), "55–61");
+    }
 
     /// Reads this machine's Codex database: `cargo test real_recent_threads -- --ignored --nocapture`.
     #[test]
