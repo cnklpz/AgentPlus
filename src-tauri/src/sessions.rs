@@ -795,6 +795,9 @@ fn undo_repair_in(stamp: &str) -> Result<String> {
         return Err(anyhow!(l("This repair has already been undone", "这次修复已经撤销过了")));
     }
     let conn = Connection::open(state_path())?;
+    if !verified(migration_version(&conn)) {
+        return Err(anyhow!(l("state_5.sqlite version is unverified; not modifying it", "state_5.sqlite 版本未验证，不修改")));
+    }
     let tx = conn.unchecked_transaction()?;
     let mut n = 0;
     // (path, the line it had before this undo), to put back on failure.
@@ -981,6 +984,24 @@ mod tests {
         repair_in(&[REPAIR_ID.into()], "new").unwrap();
         assert_eq!(last_repair().unwrap().stamp, summary.stamp);
         assert_eq!(fs::read_dir(repairs_dir()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn undo_refuses_an_unverified_database() {
+        let (_h, conn, path, original) = repair_fixture();
+        repair_in(&[REPAIR_ID.into()], "new").unwrap();
+        let stamp = last_repair().unwrap().stamp;
+        // Codex moved on to a schema this code hasn't been checked against.
+        conn.execute("INSERT INTO _sqlx_migrations VALUES (62)", []).unwrap();
+        assert!(undo_repair_in(&stamp).is_err());
+        assert_eq!(repaired_provider(&conn), "new");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original.replace("\"old\"", "\"new\""));
+        assert!(!last_repair().unwrap().undone);
+        // A verified newer schema can be undone.
+        conn.execute("UPDATE _sqlx_migrations SET version = 61 WHERE version = 62", []).unwrap();
+        undo_repair_in(&stamp).unwrap();
+        assert_eq!(repaired_provider(&conn), "old");
+        assert_eq!(fs::read_to_string(path).unwrap(), original);
     }
 
     #[test]
