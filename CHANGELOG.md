@@ -2,6 +2,24 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.7
+
+适配 Codex 26.1016 和 Hermes 0.22。
+
+- 修复 Codex 26.1016 上注入界面补丁时提示「没找到：Fast」
+- 修复 Codex 更新数据库后会话页提示「state_5.sqlite 版本是 Some(61)，不是已验证的 55，只读显示」，修复供应商等操作无法使用
+- 撤销修复前也会检查数据库版本，版本未验证时不再写入
+- 修复 Hermes 0.22 检测不到安装或版本显示为 0.0.0
+- 修复 Hermes 0.22 的 config.yaml 因带注释被整体设为只读、无法配置供应商；修改时保留原有注释
+
+Adapts to Codex 26.1016 and Hermes 0.22.
+
+- Fixes UI patches reporting "Not found: Fast" on Codex 26.1016
+- Fixes the Sessions page showing "state_5.sqlite is version Some(61), not the verified 55; shown read-only" after Codex updated its database, which blocked provider repair
+- Undoing a repair checks the database version too, and no longer writes to an unverified one
+- Fixes Hermes 0.22 installs not being detected or showing version 0.0.0
+- Fixes Hermes 0.22's commented config.yaml being read-only so providers couldn't be configured; changes now keep its comments
+
 ## 0.4.6
 
 适配 Codex 26.1013。
