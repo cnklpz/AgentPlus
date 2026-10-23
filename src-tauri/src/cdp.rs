@@ -5,7 +5,8 @@
 //! - Fast: Codex's UI hides the Fast option unless the auth method is "chatgpt":
 //!   `isServiceTierAllowed = authMethod==="chatgpt" && !loading && requirements?.featureRequirements?.fast_mode!==false`
 //!   We drop the auth check, keeping the admin switch (`fast_mode === false`) intact.
-//!   Since 26.1007 the check is in the UI hook and in the request (see `patch_fast`).
+//!   Since 26.1007 the check is in the UI hook and in the request (see `patch_fast`);
+//!   since 26.1016 both accept more sign-ins.
 //! - Full model names: the model-name formatter takes `stripGptPrefix` and turns
 //!   "GPT-6 Sol" into "6 Sol" unless a Statsig gate (only granted to ChatGPT accounts)
 //!   is on. We make it always return the full name.
@@ -151,17 +152,24 @@ pub(crate) fn by_version<T, R>(version: Option<[u32; 2]>, shapes: &[([u32; 2], T
 /// Both drop the sign-in check; the requirements (`configRequirements/read`, the admin
 /// switch) are read for any sign-in. Either one alone would show Fast without sending it,
 /// or the other way round, so it is both or nothing.
+/// Since 26.1016 both checks accept more sign-ins, e.g. `||i?.authMethod===`amazonBedrock``
+/// in the hook and `&&n!==`amazonBedrock`` in the request; any number of them is taken.
 fn patch_fast(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static GATE: OnceLock<Regex> = OnceLock::new();
     static HOOK: OnceLock<Regex> = OnceLock::new();
     static REQUEST: OnceLock<Regex> = OnceLock::new();
+    static HOOK_LIST: OnceLock<Regex> = OnceLock::new();
+    static REQUEST_LIST: OnceLock<Regex> = OnceLock::new();
     enum Shape {
         /// Up to 26.1001: one expression with the auth check and `fast_mode`.
         Gate,
         /// Since 26.1007: the UI hook and the request check the sign-in on their own.
         Access,
+        /// Since 26.1016: the same two checks, each with a longer list of sign-ins.
+        AccessList,
     }
-    by_version(version, &[([0, 0], Shape::Gate), ([26, 1007], Shape::Access)], |shape| match shape {
+    let shapes = [([0, 0], Shape::Gate), ([26, 1007], Shape::Access), ([26, 1016], Shape::AccessList)];
+    by_version(version, &shapes, |shape| match shape {
         Shape::Gate => {
             let re = cached(&GATE, r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1");
             replace_once(src, re, format!("${{1}}=!${{2}}&&${{3}}?.requirements?.featureRequirements?.fast_mode!==!1{FAST_MARK}"))
@@ -174,6 +182,18 @@ fn patch_fast(src: &str, version: Option<[u32; 2]>) -> Option<String> {
             let request = cached(
                 &REQUEST,
                 r"if\([\w$]+!==`chatgpt`&&[\w$]+!==`personalAccessToken`\)return null;(let [\w$]+=await [\w$]+\([^;]{0,80};return [\w$]+\.query\.setData\()",
+            );
+            let src = replace_once(src, hook, format!("${{1}}=!0{FAST_MARK}${{2}}"))?;
+            replace_once(&src, request, format!("if(!1)return null{FAST_MARK};${{1}}"))
+        }
+        Shape::AccessList => {
+            let hook = cached(
+                &HOOK_LIST,
+                r"([\w$]+)=[\w$]+\?\.authMethod===`chatgpt`(?:\|\|[\w$]+\?\.authMethod===`\w+`)+(,[\w$]+=[\w$]+\?\.authMethod\?\?null)",
+            );
+            let request = cached(
+                &REQUEST_LIST,
+                r"if\([\w$]+!==`chatgpt`(?:&&[\w$]+!==`\w+`)+\)return null;(let [\w$]+=await [\w$]+\([^;]{0,80};return [\w$]+\.query\.setData\()",
             );
             let src = replace_once(src, hook, format!("${{1}}=!0{FAST_MARK}${{2}}"))?;
             replace_once(&src, request, format!("if(!1)return null{FAST_MARK};${{1}}"))
@@ -819,6 +839,29 @@ mod tests {
         // A similar sign-in check elsewhere (app-primary) is left alone.
         let other = "k=(l===`local`||u?.authMethod===`chatgpt`||u?.authMethod===`personalAccessToken`)&&s!=null";
         assert_eq!(patch_source(other, FAST).0, None);
+    }
+
+    #[test]
+    fn patches_fast_access_list_since_26_1016() {
+        // Codex 26.1016 app-initial bundle: both checks also accept `amazonBedrock`.
+        let hook = "r=e?.hostId??n,i=OT(r),a=i?.authMethod===`chatgpt`||i?.authMethod===`personalAccessToken`||i?.authMethod===`amazonBedrock`,o=i?.authMethod??null,s;t[0]!==r||t[1]!==o?(s={authMethod:o,hostId:r},t[0]=r,t[1]=o,t[2]=s):s=t[2];";
+        let request = "async function t8s(e,t){let n=await Z6s(e,t);if(n!==`chatgpt`&&n!==`personalAccessToken`&&n!==`amazonBedrock`)return null;let r=await Hwn(e,t,{priority:`critical`});return e.query.setData(xC,{authMethod:n,hostId:t},r),fCe(r)}";
+        let src = format!("{hook}{request}");
+        let on = |v: &str| Patches { version: codex_version(v), ..FAST };
+        for want in [on("26.1016.8622.0"), on("27.1.0.0"), FAST] {
+            let (out, missing) = patch_source(&src, want);
+            let out = out.unwrap();
+            assert!(missing.is_empty());
+            assert!(out.contains("i=OT(r),a=!0/*agentplus-fast*/,o=i?.authMethod??null,s;"), "{out}");
+            assert!(out.contains("let n=await Z6s(e,t);if(!1)return null/*agentplus-fast*/;let r=await Hwn("), "{out}");
+            assert_eq!(patch_source(&out, want), (None, vec![]));
+        }
+        // Both or nothing.
+        assert_eq!(patch_source(hook, on("26.1016.8622.0")), (None, vec!["Fast"]));
+        assert_eq!(patch_source(request, on("26.1016.8622.0")), (None, vec!["Fast"]));
+        // The 26.1007 shape doesn't take the longer list, and 26.1016 doesn't take the gate.
+        assert_eq!(patch_source(&src, on("26.1007.2314.0")), (None, vec!["Fast"]));
+        assert_eq!(patch_source(GATE, on("26.1016.8622.0")), (None, vec!["Fast"]));
     }
 
     #[test]
