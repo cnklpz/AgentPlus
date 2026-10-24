@@ -2,6 +2,16 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.4.8
+
+适配 Codex 26.1021。
+
+- 修复 Codex 26.1021 上注入界面补丁时提示「没找到：隐藏用量提示横幅」
+
+Adapts to Codex 26.1021.
+
+- Fixes UI patches reporting "Not found: Hide usage banners" on Codex 26.1021
+
 ## 0.4.7
 
 适配 Codex 26.1016 和 Hermes 0.22。
