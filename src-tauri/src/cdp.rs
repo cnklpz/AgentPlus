@@ -17,7 +17,8 @@
 //!   (server-sent `rate_limit_upsell` ones like "You're out of Codex and Work usage", and
 //!   the app's own warnings). Those are about the ChatGPT quota, not the relay, so we
 //!   make the slot always show what it would without them. Since 26.1007 the thread
-//!   composer's banners come from a lazily loaded chunk; we switch them off in its props.
+//!   composer's banners come from a lazily loaded chunk; we switch them off in its props,
+//!   and since 26.1021 make the app-primary pieces it draws them with render nothing.
 //! - Short model names: the opposite of full names, for the official sign-in mix. Signed
 //!   in with ChatGPT, the Statsig gate above is on and names keep "GPT-"; we make every
 //!   read of that gate false, so names are shortened just as with custom providers.
@@ -243,11 +244,27 @@ fn patch_quota(src: &str) -> Option<String> {
 ///   ($f={canShowUsageBanners:Xf,workCreditConversationId:Zf,…  →  canShowUsageBanners:!1&&Xf,…
 /// Only that object literal is assigned (`={`); the component's destructuring follows a comma
 /// and its other use passes `canShowUsageBanners:!0` as a JSX prop.
+/// Since 26.1021 those props are built in lazily loaded chunks too (`composer-content`,
+/// `chatgpt-announcement-candidates`), which load long after the interception ends. The
+/// `usage` copy still draws its banners with components from app-primary, so we make those
+/// render nothing, right after their props are read (the memo-cache hook before it always runs).
+/// The server banner only does so where it's inline, with no `source` and no `renderContent`
+/// (the sidebar alert passes `source:`sidebar_usage_alert``, the usage modal and popover
+/// `renderContent`):
+///   {banner:n,…,renderContent:u,…,source:f,…}=e,h=…,g=f===void 0?`rate_limit_upsell_banner`:f
+///   → …}=e;if(f===void 0&&u==null)return null;let h=…
+/// The running-low warning and the model-fallback notice are only used by the composer's
+/// banners, so they always do:
+///   {rateLimit:n,warningThreshold:r}=e,…  →  …=e;return null;let …
+///   {banner:n,bannerKey:r,blockedModel:i,…}=e,…  →  the same
 fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static SLOT: OnceLock<Regex> = OnceLock::new();
     static COMPONENT: OnceLock<Regex> = OnceLock::new();
     static PROPS: OnceLock<Regex> = OnceLock::new();
     static MEMO_PROPS: OnceLock<Regex> = OnceLock::new();
+    static UPSELL: OnceLock<Regex> = OnceLock::new();
+    static WARNING: OnceLock<Regex> = OnceLock::new();
+    static FALLBACK: OnceLock<Regex> = OnceLock::new();
     enum Shape {
         /// Up to 26.924: the slot's early return, then the helper call (memoized since 26.924).
         Slot,
@@ -257,12 +274,20 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
         Props,
         /// Since 26.1013: the component, and the memoized props object of its copy.
         MemoProps,
+        /// Since 26.1021: the component, and the app-primary pieces its copy draws with.
+        Pieces,
     }
     let component = |src: &str| {
         let re = cached(&COMPONENT, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
         replace_once(src, re, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};"))
     };
-    let shapes = [([0, 0], Shape::Slot), ([26, 928], Shape::Component), ([26, 1007], Shape::Props), ([26, 1013], Shape::MemoProps)];
+    let shapes = [
+        ([0, 0], Shape::Slot),
+        ([26, 928], Shape::Component),
+        ([26, 1007], Shape::Props),
+        ([26, 1013], Shape::MemoProps),
+        ([26, 1021], Shape::Pieces),
+    ];
     by_version(version, &shapes, |shape| match shape {
         Shape::Slot => {
             let re = cached(&SLOT, r"if\(![\w$]+\)return ([\w$]+);(let [^{}]{0,300}?[\w$]+\(\{hasImageGenerationLimit:)");
@@ -278,6 +303,19 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
             let src = component(src)?;
             let re = cached(&MEMO_PROPS, r"=\{canShowUsageBanners:([\w$]+),");
             replace_once(&src, re, format!("={{canShowUsageBanners:!1{BANNER_MARK}&&${{1}},"))
+        }
+        Shape::Pieces => {
+            let src = component(src)?;
+            let upsell = cached(
+                &UPSELL,
+                r"(\{banner:[\w$]+,[^{}]*?renderContent:([\w$]+),[^{}]*?source:([\w$]+),[^{}]*\}=[\w$]+),([^;]{0,80}?===void 0\?`rate_limit_upsell_banner`:)",
+            );
+            let src = replace_once(&src, upsell, format!("${{1}};if(${{3}}===void 0&&${{2}}==null)return null{BANNER_MARK};let ${{4}}"))?;
+            let nothing = format!("${{1}};return null{BANNER_MARK};let ");
+            let warning = cached(&WARNING, r"(\{rateLimit:[\w$]+,warningThreshold:[\w$]+\}=[\w$]+),");
+            let src = replace_once(&src, warning, nothing.as_str())?;
+            let fallback = cached(&FALLBACK, r"(\{banner:[\w$]+,bannerKey:[\w$]+,blockedModel:[\w$]+,[^{}]*\}=[\w$]+),");
+            replace_once(&src, fallback, nothing.as_str())
         }
     })
 }
@@ -999,6 +1037,33 @@ mod tests {
         // 26.1007 doesn't take the memoized shape, 26.1013 not the inline one.
         assert_eq!(patch_source(&new, on("26.1007.2314.0")).1.len(), 1);
         assert_eq!(patch_source(&format!("{comp}{props}"), on("26.1013.4894.0")).1.len(), 1);
+        // Codex 26.1021: the props moved to lazily loaded chunks; the pieces the copy draws with
+        // (server banner, running-low warning, model-fallback notice) render nothing.
+        let upsell = "function RR(e){let t=(0,m0t.c)(27),{banner:n,fallbackContent:r,lastImpressionKeyRef:i,onDismiss:a,onShown:o,\
+                      onOwnerRequestComplete:s,presentationKey:c,rateLimitStatus:l,renderContent:u,sendBlocked:d,source:f,\
+                      trackUsageLimitEvents:p,workCreditConversationId:m}=e,h=d!==void 0&&d,g=f===void 0?`rate_limit_upsell_banner`:f,_=p===void 0||p;}";
+        let warning = "function ZXt(e){let t=(0,QXt.c)(39),{rateLimit:n,warningThreshold:r}=e,i=Jd(B_),{email:a}=rw();}";
+        let fallback = "function g0t(e){let t=(0,_0t.c)(37),{banner:n,bannerKey:r,blockedModel:i,children:a,fallbackContent:o,hostId:s,\
+                        rateLimitStatus:c,selectedModel:l}=e,u=Jd(B_),d;}";
+        let pieces = format!("{comp}{upsell}{warning}{fallback}");
+        let out = patch_source(&pieces, on("26.1021.2667.0")).0.unwrap();
+        assert!(out.contains("D=J(Jy,f);if(!0)return c/*agentplus-banner*/;"), "{out}");
+        assert!(out.contains("workCreditConversationId:m}=e;if(f===void 0&&u==null)return null/*agentplus-banner*/;let h=d!==void 0&&d,g=f===void 0?"), "{out}");
+        assert!(out.contains("{rateLimit:n,warningThreshold:r}=e;return null/*agentplus-banner*/;let i=Jd(B_),"), "{out}");
+        assert!(out.contains("selectedModel:l}=e;return null/*agentplus-banner*/;let u=Jd(B_),d;"), "{out}");
+        assert_eq!(patch_source(&out, on("26.1021.2667.0")), (None, vec![]));
+        // All or nothing: any piece left draws its banners.
+        for (i, part) in [comp, upsell, warning, fallback].into_iter().enumerate() {
+            let partial = pieces.replacen(part, "", 1);
+            assert_eq!(patch_source(&partial, on("26.1021.2667.0")), (None, vec![Patches::names()[3]]), "without part {i}");
+        }
+        // 26.1013 leaves the pieces alone (and misses its props); 26.1021 doesn't look for them.
+        assert_eq!(patch_source(&pieces, on("26.1013.4894.0")).1.len(), 1);
+        let out = patch_source(&format!("{pieces}{memo}"), on("26.1021.2667.0")).0.unwrap();
+        assert!(out.contains("($f={canShowUsageBanners:Xf,"), "{out}");
+        // A server banner with no source and no renderContent key isn't the one.
+        let other = pieces.replacen("renderContent:u,", "", 1);
+        assert_eq!(patch_source(&other, on("26.1021.2667.0")).0, None);
         // Version unknown: every shape, oldest first.
         let out = patch_source(&both, BANNER).0.unwrap();
         assert!(out.contains("if(!0)return u/*agentplus-banner*/;let P=i!=null"), "{out}");
