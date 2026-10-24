@@ -193,3 +193,12 @@ To preview the interface in a browser with demo data, run `bun run dev`.
 [AGPL-3.0-only](LICENSE). Copyright (C) 2026 cnklpz.
 
 For uses outside the AGPL's terms, such as closed-source distribution, contact the author for a commercial license.
+
+## Star history
+
+<a href="https://www.star-history.com/#cnklpz/AgentPlus&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&type=Date&theme=dark" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&type=Date" />
+  </picture>
+</a>

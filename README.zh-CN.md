@@ -193,3 +193,12 @@ cd src-tauri && cargo clippy --all-targets && cargo test
 [AGPL-3.0-only](LICENSE)。Copyright (C) 2026 cnklpz。
 
 如需在 AGPL 条款之外使用（例如闭源分发），请联系作者获取商业授权。
+
+## Star 历史
+
+<a href="https://www.star-history.com/#cnklpz/AgentPlus&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&type=Date&theme=dark" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&type=Date" />
+  </picture>
+</a>
