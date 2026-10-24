@@ -198,7 +198,7 @@ cd src-tauri && cargo clippy --all-targets && cargo test
 
 <a href="https://www.star-history.com/#cnklpz/AgentPlus&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&type=Date&theme=dark" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/agentplus&type=Date&theme=dark" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cnklpz/agentplus&type=Date" />
   </picture>
 </a>
