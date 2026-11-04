@@ -46,6 +46,7 @@ import restartDialog from "./restartDialog";
 import format from "./format";
 import errorBoundary from "./errorBoundary";
 import wechatPage from "./wechatPage";
+import notifyPage from "./notifyPage";
 
 export default {
   common,
@@ -95,4 +96,5 @@ export default {
   format,
   errorBoundary,
   wechatPage,
+  notifyPage,
 };

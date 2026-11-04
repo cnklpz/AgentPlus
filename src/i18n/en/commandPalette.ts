@@ -15,6 +15,8 @@ export default {
   skillsHint: "Agent Skills of every agent",
   history: "History & rollback",
   historyHint: "Backups & rollback",
+  notify: "Completion notifications",
+  notifyHint: "Push to Bark, ntfy and more when an agent finishes",
   sync: "Multi-device sync",
   syncHint: "Export / import",
   settings: "AgentPlus settings",

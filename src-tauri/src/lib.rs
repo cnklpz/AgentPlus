@@ -19,6 +19,7 @@ mod plugins;
 mod mfields;
 mod modelinfo;
 mod net;
+mod notify;
 mod official;
 mod process;
 mod projects;
@@ -843,6 +844,33 @@ async fn pick_folder(window: tauri::WebviewWindow, start: Option<String>, purpos
 }
 
 #[tauri::command]
+async fn notify_status() -> Result<notify::Status, String> {
+    blocking(|| Ok(notify::status())).await
+}
+
+#[tauri::command]
+async fn notify_set_config(config: notify::Config) -> Result<notify::Status, String> {
+    blocking(move || notify::set_config(config)).await
+}
+
+/// Sends a sample message through one channel with the settings as typed.
+#[tauri::command]
+async fn notify_test(config: notify::Config, channel: String) -> Result<(), String> {
+    blocking(move || notify::test(&config, &channel)).await
+}
+
+/// Summarizes a sample reply with the summary settings as typed; returns the summary.
+#[tauri::command]
+async fn notify_test_summary(config: notify::Config) -> Result<String, String> {
+    blocking(move || notify::test_summary(&config)).await
+}
+
+#[tauri::command]
+async fn notify_clear_recent() -> Result<notify::Status, String> {
+    blocking(|| Ok(notify::clear_recent())).await
+}
+
+#[tauri::command]
 async fn wechat_status() -> Result<wechat::Status, String> {
     blocking(|| Ok(wechat::status())).await
 }
@@ -1017,6 +1045,7 @@ pub fn run() {
             std::thread::spawn(gateway::server::autostart);
             std::thread::spawn(agzh::watch);
             std::thread::spawn(wechat::autostart);
+            std::thread::spawn(notify::autostart);
             // macOS: ask the login shell for PATH now, before the first detection needs it.
             std::thread::spawn(process::search_path);
             // models.dev's catalog, for filling in new models' settings (refreshed weekly).
@@ -1151,6 +1180,11 @@ pub fn run() {
             wechat_set_default_cwd,
             wechat_set_options,
             wechat_log_export,
+            notify_status,
+            notify_set_config,
+            notify_test,
+            notify_test_summary,
+            notify_clear_recent,
             update::update_check,
             update::update_install
         ])

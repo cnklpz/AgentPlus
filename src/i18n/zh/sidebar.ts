@@ -10,6 +10,7 @@ const zh: typeof en = {
   history: "历史与回滚",
   sync: "多设备同步",
   wechat: "Claw 接入",
+  notify: "完成通知",
   nav: "导航",
   agents: "AGENT",
   fastBadge: "FAST",

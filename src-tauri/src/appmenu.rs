@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Wry};
 pub const GITHUB_URL: &str = "https://github.com/cnklpz/AgentPlus";
 
 /// Item ids the page acts on (App.tsx listens for them), from the menu bar or the tray.
-const PAGE_ITEMS: &[&str] = &["settings", "check-update", "search", "reload", "privacy", "providers", "gateway", "history"];
+const PAGE_ITEMS: &[&str] = &["settings", "check-update", "search", "reload", "privacy", "providers", "gateway", "history", "notify"];
 
 fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let item = |id: &'static str, (en, zh): (&'static str, &'static str), keys: Option<&'static str>| MenuItem::with_id(app, id, l(en, zh), true, keys);

@@ -44,11 +44,12 @@ interface Props {
   onClose: () => void;
   /** Whether the MCP and skills pages are offered (Settings → Interface). */
   showMcp: boolean;
+  showNotify: boolean;
   showSkills: boolean;
 }
 
 /** Ctrl+K: search agents, providers, models, settings, pages and Codex sessions. */
-export function CommandPalette({ agents, onGo, onClose, showMcp, showSkills }: Props) {
+export function CommandPalette({ agents, onGo, onClose, showMcp, showSkills, showNotify }: Props) {
   const [q, setQ] = useState("");
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const input = useRef<HTMLInputElement>(null);
@@ -69,6 +70,7 @@ export function CommandPalette({ agents, onGo, onClose, showMcp, showSkills }: P
       ...(showMcp ? [{ label: t("commandPalette.mcp"), hint: t("commandPalette.mcpHint"), group: "page" as const, icon: <Icon.plug size={14} />, target: { kind: "page", page: "mcp" } as Target, haystack: "mcp 服务器 server 工具 tools 插件 model context protocol" }] : []),
       ...(showSkills ? [{ label: t("commandPalette.skills"), hint: t("commandPalette.skillsHint"), group: "page" as const, icon: <Icon.book size={14} />, target: { kind: "page", page: "skills" } as Target, haystack: "skills skill 技能 SKILL.md 能力 agent skills" }] : []),
       { label: t("commandPalette.gateway"), hint: t("commandPalette.gatewayHint"), group: "page", icon: <Icon.gateway size={14} />, target: { kind: "page", page: "gateway" }, haystack: "网关 gateway 转换 协议 代理 proxy 中转 relay protocol convert" },
+      ...(showNotify ? [{ label: t("commandPalette.notify"), hint: t("commandPalette.notifyHint"), group: "page" as const, icon: <Icon.bell size={14} />, target: { kind: "page", page: "notify" } as Target, haystack: "通知 推送 完成 提醒 notification notify push bark ntfy server酱 serverchan webhook 微信" }] : []),
       { label: t("commandPalette.history"), hint: t("commandPalette.historyHint"), group: "page", icon: <Icon.history size={14} />, target: { kind: "page", page: "history" }, haystack: "历史 回滚 备份 history backup rollback restore" },
       { label: t("commandPalette.sync"), hint: SYNC_ENABLED ? t("commandPalette.syncHint") : t("common.notAvailable"), group: "page", icon: <Icon.cloud size={14} />, target: { kind: "page", page: "sync" }, haystack: "同步 导出 导入 sync export import device", disabled: !SYNC_ENABLED },
       { label: t("commandPalette.settings"), hint: t("commandPalette.settingsHint"), group: "page", icon: <Icon.gear size={14} />, target: { kind: "page", page: "settings" }, haystack: "设置 settings 环境 wsl windows 动画 测速 environment animation latency language 语言" },
@@ -100,7 +102,7 @@ export function CommandPalette({ agents, onGo, onClose, showMcp, showSkills }: P
       out.push({ label: s.title, hint: t("commandPalette.sessionHint", { provider: s.provider, cwd: s.cwd }), group: "session", agent: "codex", target: { kind: "agent", agent: "codex", tab: "sessions", query: s.id }, haystack: `${s.title} ${s.cwd} ${s.id}` });
     }
     return out;
-  }, [agents, sessions, lang, privacy, showMcp, showSkills]);
+  }, [agents, sessions, lang, privacy, showMcp, showSkills, showNotify]);
 
   const results = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);

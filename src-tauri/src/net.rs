@@ -221,6 +221,9 @@ pub struct TestResult {
     pub url: String,
     /// First part of the model's answer.
     pub reply: Option<String>,
+    /// The whole answer (for `ask`; not sent to the page).
+    #[serde(skip)]
+    pub full_reply: Option<String>,
     pub error: Option<String>,
     /// Tokens reported by the server (input, output).
     pub usage: Option<(u64, u64)>,
@@ -230,7 +233,9 @@ pub struct TestResult {
 /// test only needs one word back, and thinking would eat the small token budget and
 /// time); each field is one that some servers reject as unknown, so on HTTP 400/422
 /// the next body is tried, ending with the plain request.
-fn test_bodies(api: &str, model: &str, prompt: &str) -> Vec<serde_json::Value> {
+/// Request bodies to try in turn (with thinking off, then plain). `out`: the output token
+/// limit, when more than a test's few words are wanted.
+fn test_bodies(api: &str, model: &str, prompt: &str, out: Option<u32>) -> Vec<serde_json::Value> {
     use serde_json::json;
     let with = |base: &serde_json::Value, extra: serde_json::Value| {
         let mut b = base.clone();
@@ -241,21 +246,21 @@ fn test_bodies(api: &str, model: &str, prompt: &str) -> Vec<serde_json::Value> {
     };
     match api {
         "anthropic" => {
-            let plain = json!({ "model": model, "max_tokens": 32, "messages": [{ "role": "user", "content": prompt }] });
+            let plain = json!({ "model": model, "max_tokens": out.unwrap_or(32), "messages": [{ "role": "user", "content": prompt }] });
             vec![with(&plain, json!({ "thinking": { "type": "disabled" } })), plain]
         }
         "chat" => {
-            let plain = json!({ "model": model, "max_tokens": 32, "stream": false, "messages": [{ "role": "user", "content": prompt }] });
+            let plain = json!({ "model": model, "max_tokens": out.unwrap_or(32), "stream": false, "messages": [{ "role": "user", "content": prompt }] });
             // `thinking`: DeepSeek, GLM, Doubao, MiMo, Kimi…; `enable_thinking`: Qwen, SiliconFlow.
             vec![with(&plain, json!({ "thinking": { "type": "disabled" }, "enable_thinking": false })), plain]
         }
         "gemini" => {
             // Models that cannot disable thinking need room for thoughts before the reply.
-            let plain = json!({ "contents": [{ "role": "user", "parts": [{ "text": prompt }] }], "generationConfig": { "maxOutputTokens": 1024 } });
-            vec![with(&plain, json!({ "generationConfig": { "maxOutputTokens": 64, "thinkingConfig": { "thinkingBudget": 0 } } })), plain]
+            let plain = json!({ "contents": [{ "role": "user", "parts": [{ "text": prompt }] }], "generationConfig": { "maxOutputTokens": 1024 + out.unwrap_or(0) } });
+            vec![with(&plain, json!({ "generationConfig": { "maxOutputTokens": out.unwrap_or(64), "thinkingConfig": { "thinkingBudget": 0 } } })), plain]
         }
         _ => {
-            let plain = json!({ "model": model, "input": prompt, "max_output_tokens": 64, "stream": false });
+            let plain = json!({ "model": model, "input": prompt, "max_output_tokens": out.unwrap_or(64), "stream": false });
             // Newer OpenAI models take "none", older reasoning models only "minimal".
             vec![with(&plain, json!({ "reasoning": { "effort": "none" } })), with(&plain, json!({ "reasoning": { "effort": "minimal" } })), plain]
         }
@@ -339,6 +344,21 @@ pub(crate) fn http_error(status: reqwest::StatusCode, text: &str) -> String {
 /// Sends one tiny real request with the provider's key and model, so the address,
 /// key, protocol and model are all checked (the request uses a few tokens).
 pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> TestResult {
+    call(base_url, key, api, model, "Reply with exactly one word: pong", None, 45)
+}
+
+/// Sends one prompt and returns the model's whole answer (thinking turned off where the
+/// API allows). `out`: output token limit; `timeout_secs` per request.
+pub fn ask(base_url: &str, key: Option<&str>, api: &str, model: &str, prompt: &str, out: u32, timeout_secs: u64) -> Result<String, String> {
+    let r = call(base_url, key, api, model, prompt, Some(out), timeout_secs);
+    match (r.ok, r.full_reply, r.error) {
+        (true, Some(text), _) => Ok(text),
+        (_, _, Some(e)) => Err(e),
+        _ => Err(crate::i18n::l("No text in the response", "响应中没有文本").into()),
+    }
+}
+
+fn call(base_url: &str, key: Option<&str>, api: &str, model: &str, prompt: &str, out: Option<u32>, timeout_secs: u64) -> TestResult {
     let base = crate::util::api_base(base_url);
     let base = base.trim_end_matches('/');
     let url = match api {
@@ -347,17 +367,17 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
         "gemini" => gemini_url(base, Some(model)).map(|u| u.to_string()),
         _ => Ok(format!("{base}/responses")),
     };
-    let mut r = TestResult { ok: false, status: None, ms: 0, model: model.into(), url: base.into(), reply: None, error: None, usage: None };
+    let mut r = TestResult { ok: false, status: None, ms: 0, model: model.into(), url: base.into(), reply: None, full_reply: None, error: None, usage: None };
     let url = match url { Ok(url) => url, Err(e) => { r.error = Some(e); return r; } };
     r.url = url.clone();
-    let client = match client_with(Duration::from_secs(45)) {
+    let client = match client_with(Duration::from_secs(timeout_secs)) {
         Ok(c) => c,
         Err(e) => {
             r.error = Some(e);
             return r;
         }
     };
-    let mut bodies = test_bodies(api, model, "Reply with exactly one word: pong").into_iter().peekable();
+    let mut bodies = test_bodies(api, model, prompt, out).into_iter().peekable();
     // OpenCode Go refuses requests without a conversation id; each test is its own conversation.
     let session = crate::gateway::session::wants_session(base).then(|| format!("agp-test-{:x}", chrono::Utc::now().timestamp_micros()));
     let (status, text) = loop {
@@ -371,7 +391,7 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
             Ok(x) => x,
             Err(e) => {
                 r.ms = t0.elapsed().as_millis() as u64;
-                r.error = Some(if e.is_timeout() { crate::i18n::l("Request timed out (45 s)", "请求超时（45 秒）").into() } else if e.is_connect() { crate::i18n::l("Connection failed: URL unreachable", "连接失败：地址不可达").into() } else { tr!("Request failed: {e}", "请求失败：{e}") });
+                r.error = Some(if e.is_timeout() { tr!("Request timed out ({timeout_secs} s)", "请求超时（{timeout_secs} 秒）") } else if e.is_connect() { crate::i18n::l("Connection failed: URL unreachable", "连接失败：地址不可达").into() } else { tr!("Request failed: {e}", "请求失败：{e}") });
                 return r;
             }
         };
@@ -432,7 +452,8 @@ pub fn test_call(base_url: &str, key: Option<&str>, api: &str, model: &str) -> T
             })
         }),
     };
-    r.reply = reply.filter(|s| !s.trim().is_empty()).map(|s| clip(s.trim(), 80));
+    r.full_reply = reply.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    r.reply = r.full_reply.as_deref().map(|s| clip(s, 80));
     let u = v.get(if api == "gemini" { "usageMetadata" } else { "usage" });
     let num = |k: &[&str]| k.iter().find_map(|k| u.and_then(|u| u.get(*k)).and_then(|x| x.as_u64()));
     let (input, output): (&[&str], &[&str]) = if api == "gemini" { (&["promptTokenCount"], &["candidatesTokenCount"]) }
@@ -486,6 +507,14 @@ mod tests {
             s.write_all(resp.as_bytes()).unwrap();
         });
         format!("http://{addr}/v1")
+    }
+
+    #[test]
+    fn ask_returns_the_whole_reply() {
+        let long = r#"{"choices":[{"message":{"content":"  The login bug is fixed and all tests pass; nothing for you to do beyond reviewing the change.  "}}]}"#;
+        assert_eq!(ask(&serve(200, long), None, "chat", "m", "sum up", 400, 5).unwrap(), "The login bug is fixed and all tests pass; nothing for you to do beyond reviewing the change.");
+        assert!(ask(&serve(401, r#"{"error":{"message":"invalid api key"}}"#), None, "chat", "m", "x", 400, 5).unwrap_err().contains("invalid api key"));
+        assert!(ask(&serve(200, r#"{"choices":[{"message":{"content":""}}]}"#), None, "chat", "m", "x", 400, 5).is_err());
     }
 
     #[test]

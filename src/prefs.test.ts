@@ -51,7 +51,9 @@ describe("normalizePrefs", () => {
   });
 
   it("shows MCP, skills and plugins unless told not to", () => {
-    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true, showClaw: true });
+    expect(normalizePrefs(null)).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true, showClaw: true, showNotify: true });
+    expect(normalizePrefs({ showNotify: false })).toMatchObject({ showNotify: false });
+    expect(normalizePrefs({ showNotify: "no" })).toMatchObject({ showNotify: true });
     expect(normalizePrefs({ showMcp: false, showSkills: false, showPlugins: false, showClaw: false })).toMatchObject({ showMcp: false, showSkills: false, showPlugins: false, showClaw: false });
     expect(normalizePrefs({ showMcp: "no", showSkills: 0, showPlugins: null, showClaw: "off" })).toMatchObject({ showMcp: true, showSkills: true, showPlugins: true, showClaw: true });
   });

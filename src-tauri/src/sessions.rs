@@ -142,7 +142,7 @@ fn local_path(p: &str) -> String {
     p
 }
 
-fn kind_of(source: &str, thread_source: &str) -> &'static str {
+pub(crate) fn kind_of(source: &str, thread_source: &str) -> &'static str {
     match (source, thread_source) {
         (_, "guardian_review") => "review",
         (_, "subagent") => "subagent",

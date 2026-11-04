@@ -543,6 +543,38 @@ kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-da
 .sync-kept { cursor: pointer; margin-top: 2px; }
 .sync-kept input { accent-color: var(--accent); margin: 0; }
 .check-row input { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+/* Several checkboxes in one row (Settings → pages shown, notification agents). */
+.check-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.check-chip { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; cursor: pointer; background: var(--surface); }
+.check-chip:hover { border-color: var(--accent); }
+.check-chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.check-chip:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+.check-chip input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); flex-shrink: 0; }
+.check-chip.off > img, .check-chip.off > svg { opacity: .55; }
+/* Completion notifications page. */
+.notify-channel + .notify-channel { border-top: 1px solid var(--line2); }
+.notify-channel > .srow { border-bottom: 0; }
+.notify-fields { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 14px 48px; }
+.notify-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.notify-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.notify-record { align-items: flex-start; }
+.notify-body { white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.notify-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.notify-summary { padding-left: 16px; }
+.notify-field .dd-btn { width: 100%; max-width: none; height: 34px; font-family: var(--sans); }
+.notify-summary-out { padding: 8px 10px; border-radius: 8px; background: var(--sunken); color: var(--ink); white-space: pre-line; }
+.notify-agent-icons { display: inline-flex; gap: 6px; align-items: center; vertical-align: middle; }
+.notify-agent-icons > span { display: inline-flex; }
+.notify-chart { position: relative; padding: 6px 2px 18px; }
+.notify-chart svg { display: block; width: 100%; height: 96px; overflow: visible; }
+.notify-chart .t-a, .notify-chart .t-bad { fill: var(--c); }
+.notify-chart-base { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.notify-bar-hit { fill: transparent; }
+.notify-bar:hover .notify-bar-hit { fill: var(--sunken); }
+.notify-chart-x { position: absolute; left: 2px; right: 2px; bottom: 0; height: 14px; }
+.notify-chart-x > span { position: absolute; transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.notify-chart-x > span:first-child { transform: none; left: 0 !important; }
+.notify-chart-x > span:last-child { transform: translateX(-100%); left: 100% !important; }
 .sgroup h2.row { display: flex; }
 
 /* Right pane */
@@ -764,13 +796,13 @@ button.search:hover { border-color: var(--line-hover); background: var(--surface
 .wx-line.in .wx-dir { color: var(--ok); }
 .wx-line.error { color: var(--del); }
 .wx-aside .aside-cur { gap: 12px; }
-.wx-kvs { display: flex; flex-direction: column; gap: 7px; }
-.wx-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12.5px; }
-.wx-kv-v { min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-.wx-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.wx-tile { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--sunken); }
-.wx-tile-n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
-.wx-tile.bad .wx-tile-n { color: var(--del); }
+.info-list { display: flex; flex-direction: column; gap: 7px; }
+.info-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+.info-val { min-width: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.stat-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.stat-tile { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 10px; background: var(--sunken); }
+.stat-tile-n { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.stat-tile.bad .stat-tile-n { color: var(--del); }
 .wx-exe { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wx-aside .wx-log { flex-grow: 1; min-height: 0; max-height: none; padding: 0 0 14px; }
 .wx-log-head { display: flex; align-items: center; gap: 8px; padding: 14px 18px 8px; }

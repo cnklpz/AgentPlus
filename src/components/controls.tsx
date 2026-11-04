@@ -143,6 +143,16 @@ export function SettingRow({ label, desc, descClassName, keepDesc, note, lead, c
   );
 }
 
+/** One "name … value" line of a status list (`.info-list`), as in the right-hand panes. */
+export function Kv({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return <div className="info-row"><span className="muted">{label}</span><span className="info-val">{children}</span></div>;
+}
+
+/** A count in a row of tiles (`.stat-tiles`); `tone` colours it when above zero. */
+export function StatTile({ label, n, tone }: { label: ReactNode; n: number; tone?: "bad" | "warn" }) {
+  return <div className={`stat-tile${tone && n > 0 ? ` ${tone}` : ""}`}><span className="stat-tile-n">{n}</span><span className="muted tiny">{label}</span></div>;
+}
+
 /** An error message box. The text may carry addresses, keys or paths: masked in privacy mode. */
 export function ErrorBox({ text, className, alert }: { text: string; className?: string; alert?: boolean }) {
   return <div className={`err${className ? ` ${className}` : ""}`} role={alert ? "alert" : undefined}>{scrub(text)}</div>;

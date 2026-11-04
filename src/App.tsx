@@ -38,6 +38,7 @@ import { AgentMcpTab, McpPage } from "./components/McpPage";
 import { AgentSkillsTab, SkillsPage } from "./components/SkillsPage";
 import { SyncPage } from "./components/SyncPage";
 import { WechatPage } from "./components/WechatPage";
+import { NotifyPage } from "./components/NotifyPage";
 import { SYNC_ENABLED } from "./features";
 import { GatewayPage } from "./components/GatewayPage";
 import { CodexTimezone } from "./components/CodexTimezone";
@@ -88,6 +89,7 @@ export default function App() {
   const [page, setPage] = useState<Page | null>(null);
   // The WeChat page has a right pane only once connected.
   const [wechatAside, setWechatAside] = useState(false);
+  const [notifyAside, setNotifyAside] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [diff, setDiff] = useState<DiffGroup[]>([]);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -122,7 +124,7 @@ export default function App() {
     setPage("settings");
   };
   // The page settings was opened from may have been switched off there.
-  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) || (beforeSettings === "wechat" && !prefs.showClaw) ? null : beforeSettings);
+  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) || (beforeSettings === "wechat" && !prefs.showClaw) || (beforeSettings === "notify" && !prefs.showNotify) ? null : beforeSettings);
   const [hubSel, setHubSel] = useState<string | null>(null);
   const [hubDialog, setHubDialog] = useState<HubDialog>(undefined);
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
@@ -372,6 +374,8 @@ export default function App() {
     else if (id === "reload") refreshRef.current();
     else if (id === "privacy") togglePrivacy();
     else if (id === "providers" || id === "gateway" || id === "history") setPage(id);
+    // The page may be hidden: then Settings, where it can be shown again.
+    else if (id === "notify") { if (prefs.showNotify) setPage("notify"); else openSettings(); }
   };
   useEffect(() => {
     if (!inTauri) return;
@@ -1562,6 +1566,7 @@ export default function App() {
       ...(prefs.showSkills ? [{ label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") }] : []),
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
       ...(prefs.showClaw ? [{ label: t("app.navWechat"), icon: <Icon.chat size={13} />, disabled: page === "wechat", action: () => setPage("wechat") }] : []),
+      ...(prefs.showNotify ? [{ label: t("app.navNotify"), icon: <Icon.bell size={13} />, disabled: page === "notify", action: () => setPage("notify") }] : []),
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
       { label: t("app.navSettings"), icon: <Icon.gear size={13} />, disabled: page === "settings", action: openSettings },
       "sep",
@@ -1593,8 +1598,8 @@ export default function App() {
         </div>
       </header>
 
-      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : []), ...(wechatAside ? ["wechat"] : [])].includes(page) ? " wide" : ""}`}>
-        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showClaw={prefs.showClaw}
+      <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : []), ...(wechatAside ? ["wechat"] : []), ...(notifyAside ? ["notify"] : [])].includes(page) ? " wide" : ""}`}>
+        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showClaw={prefs.showClaw} showNotify={prefs.showNotify}
           onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
         {page === "providers" && (
@@ -1670,6 +1675,7 @@ export default function App() {
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "wechat" && prefs.showClaw && <WechatPage flash={flash} onAside={setWechatAside} />}
+        {page === "notify" && prefs.showNotify && <NotifyPage flash={flash} onAside={setNotifyAside} agents={shown} />}
         {page === "settings" && (
           <SettingsPage
             tab={settingsTab}
@@ -1785,7 +1791,7 @@ export default function App() {
       </div>
 
       {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} library={libOpen ? { groups: libGroups, onAdd: addFromLibrary } : undefined} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onCommitCatalog={commitCodexCatalog} flash={flash} onSave={saveProvider} onClose={() => setDialog(null)} />}
-      {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} />}
+      {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showNotify={prefs.showNotify} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} others={hubDialog.others}
         onReplace={(g) => {

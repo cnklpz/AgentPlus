@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 const STORE_KEY: &str = "trayIcon";
 const DARK_KEY: &str = "trayDark";
@@ -34,6 +34,8 @@ static DRAWN: AtomicU32 = AtomicU32::new(0);
 static SET_MONO: Mutex<()> = Mutex::new(());
 /// The gateway switch in the menu, rebuilt with it after a language switch.
 static GATEWAY_ITEM: Mutex<Option<CheckMenuItem<Wry>>> = Mutex::new(None);
+/// The completion notifications switch, likewise.
+static NOTIFY_ITEM: Mutex<Option<CheckMenuItem<Wry>>> = Mutex::new(None);
 
 fn main_tray(app: &AppHandle) -> Option<TrayIcon> {
     app.tray_by_id("main")
@@ -44,10 +46,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let sep = || PredefinedMenuItem::separator(app);
     let running = crate::gateway::server::running_port().is_some();
     let gateway = CheckMenuItem::with_id(app, "tray-gateway", l("Run local gateway", "运行本地网关"), true, running, None::<&str>)?;
+    let notify = CheckMenuItem::with_id(app, "tray-notify", l("Completion notifications", "完成通知"), true, crate::notify::config().enabled, None::<&str>)?;
     let menu = Menu::with_items(app, &[
         &item("tray-show", ("Show AgentPlus", "显示主窗口"))?,
         &sep()?,
         &gateway,
+        &notify,
         &sep()?,
         &item("providers", ("Providers", "供应商"))?,
         &item("gateway", ("Local gateway", "本地网关"))?,
@@ -60,12 +64,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &item("tray-quit", ("Quit AgentPlus", "退出 AgentPlus"))?,
     ])?;
     *crate::util::lock(&GATEWAY_ITEM) = Some(gateway);
+    *crate::util::lock(&NOTIFY_ITEM) = Some(notify);
     Ok(menu)
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let _ = APP.set(app.clone());
     crate::gateway::server::on_change(gateway_changed);
+    crate::notify::on_change(notify_changed);
     let root = crate::store::load();
     MONO.store(root.get(STORE_KEY).and_then(|v| v.as_str()) == Some("mono"), Ordering::Relaxed);
     DARK.store(root.get(DARK_KEY).and_then(|v| v.as_bool()).unwrap_or(false), Ordering::Relaxed);
@@ -78,6 +84,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, e| match e.id().as_ref() {
             "tray-show" => show_main(app),
             "tray-gateway" => toggle_gateway(app),
+            "tray-notify" => toggle_notify(app),
             "tray-quit" => app.exit(0),
             _ => {}
         })
@@ -122,6 +129,37 @@ fn toggle_gateway(app: &AppHandle) {
         }
         // The item ticked itself on the click; show what actually happened.
         gateway_changed();
+    });
+}
+
+/// Turns completion notifications on or off from the menu. Turned on with no agent or
+/// channel chosen yet, it opens the notifications page to finish the setup.
+fn toggle_notify(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let on = !crate::notify::config().enabled;
+        match crate::notify::set_enabled(on) {
+            Ok(st) if on && !crate::notify::ready(&st.config) => crate::appmenu::handle(&app, "notify"),
+            Ok(_) => {}
+            Err(e) => {
+                crate::applog::warn("tray", format!("notification switch failed: {e}"));
+                crate::appmenu::handle(&app, "notify");
+            }
+        }
+        // The item ticked itself on the click; show what was saved.
+        notify_changed();
+    });
+}
+
+/// Notification settings were saved (from the menu or the page): tick the menu's switch to
+/// match and tell an open notifications page.
+fn notify_changed() {
+    let Some(app) = APP.get() else { return };
+    let _ = app.emit("notify-changed", ());
+    let _ = app.run_on_main_thread(|| {
+        if let Some(item) = crate::util::lock(&NOTIFY_ITEM).as_ref() {
+            let _ = item.set_checked(crate::notify::config().enabled);
+        }
     });
 }
 

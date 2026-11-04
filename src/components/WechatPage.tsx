@@ -1,7 +1,7 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { type WechatMode, type WechatOptions, type WechatSession, type WechatStatus, api } from "../api";
 import { Icon } from "./icons";
-import { ErrorBox, Seg, SettingRow, Switch } from "./controls";
+import { ErrorBox, Kv, Seg, SettingRow, StatTile, Switch } from "./controls";
 import { ask } from "./Confirm";
 import { locale, t, type TKey, tn, useLang } from "../i18n";
 import { scrub } from "../privacy";
@@ -253,14 +253,6 @@ function modelText(s: WechatSession): string {
   return `${now} → ${next}`;
 }
 
-function Kv({ k, children }: { k: TKey; children: ReactNode }) {
-  return <div className="wx-kv"><span className="muted">{t(k)}</span><span className="wx-kv-v">{children}</span></div>;
-}
-
-function Tile({ k, n, tone }: { k: TKey; n: number; tone?: "bad" | "warn" }) {
-  return <div className={`wx-tile${tone && n > 0 ? ` ${tone}` : ""}`}><span className="wx-tile-n">{n}</span><span className="muted tiny">{t(k)}</span></div>;
-}
-
 /** Right pane once connected: the connection, this run's counters, Codex, and recent activity. */
 /** Whether a log line is about session `no`: its tag `【#N`, or `#N` in a command or note. */
 export const aboutSession = (text: string, no: number) => new RegExp(`#${no}(?![0-9])`).test(text);
@@ -278,33 +270,33 @@ function WechatAside({ st, busy, onStartCodex, onExport }: { st: WechatStatus; b
     <aside className="aside wx-aside" aria-label={t("wechatPage.asideLabel")}>
       <section className="aside-cur">
         <h2>{t("wechatPage.connection")}</h2>
-        <div className="wx-kvs">
-          <Kv k="wechatPage.bot"><span className="mono">{scrub(st.botId ?? "")}</span></Kv>
-          <Kv k="wechatPage.user"><span className="mono">{scrub(st.userId ?? "")}</span></Kv>
-          <Kv k="wechatPage.runningSince">{s.since ? fmtAgo(s.since) : "—"}</Kv>
-          <Kv k="wechatPage.lastIn">{s.lastIn ? fmtAgo(s.lastIn) : never}</Kv>
-          <Kv k="wechatPage.lastOut">{s.lastOut ? fmtAgo(s.lastOut) : never}</Kv>
+        <div className="info-list">
+          <Kv label={t("wechatPage.bot")}><span className="mono">{scrub(st.botId ?? "")}</span></Kv>
+          <Kv label={t("wechatPage.user")}><span className="mono">{scrub(st.userId ?? "")}</span></Kv>
+          <Kv label={t("wechatPage.runningSince")}>{s.since ? fmtAgo(s.since) : "—"}</Kv>
+          <Kv label={t("wechatPage.lastIn")}>{s.lastIn ? fmtAgo(s.lastIn) : never}</Kv>
+          <Kv label={t("wechatPage.lastOut")}>{s.lastOut ? fmtAgo(s.lastOut) : never}</Kv>
         </div>
       </section>
       <section className="aside-cur">
         <h2>{t("wechatPage.thisRun")}</h2>
-        <div className="wx-tiles">
-          <Tile k="wechatPage.received" n={s.received} />
-          <Tile k="wechatPage.sent" n={s.sent} />
-          <Tile k="wechatPage.turnsDone" n={s.turnsDone} />
-          <Tile k="wechatPage.turnsFailed" n={s.turnsFailed} tone="bad" />
-          <Tile k="wechatPage.approvals" n={s.approvals} />
-          <Tile k="wechatPage.errors" n={s.errors} tone="bad" />
+        <div className="stat-tiles">
+          <StatTile label={t("wechatPage.received")} n={s.received} />
+          <StatTile label={t("wechatPage.sent")} n={s.sent} />
+          <StatTile label={t("wechatPage.turnsDone")} n={s.turnsDone} />
+          <StatTile label={t("wechatPage.turnsFailed")} n={s.turnsFailed} tone="bad" />
+          <StatTile label={t("wechatPage.approvals")} n={s.approvals} />
+          <StatTile label={t("wechatPage.errors")} n={s.errors} tone="bad" />
         </div>
       </section>
       <section className="aside-cur">
         <h2 className="row between">{t("wechatPage.codex")}<span className={st.codexReady ? "chip-ok" : "chip-muted"}>{t(st.codexReady ? "wechatPage.codexOn" : "wechatPage.codexIdle")}</span></h2>
-        <div className="wx-kvs">
-          <Kv k="wechatPage.currentSession">{current ? `#${current.no} ${current.title}` : "—"}</Kv>
-          {current && <Kv k="wechatPage.model">{modelText(current)}</Kv>}
-          <Kv k="wechatPage.runningTurns">{running}</Kv>
-          <Kv k="wechatPage.waitingTurns">{waiting}</Kv>
-          <Kv k="wechatPage.queuedMsgs">{queued}</Kv>
+        <div className="info-list">
+          <Kv label={t("wechatPage.currentSession")}>{current ? `#${current.no} ${current.title}` : "—"}</Kv>
+          {current && <Kv label={t("wechatPage.model")}>{modelText(current)}</Kv>}
+          <Kv label={t("wechatPage.runningTurns")}>{running}</Kv>
+          <Kv label={t("wechatPage.waitingTurns")}>{waiting}</Kv>
+          <Kv label={t("wechatPage.queuedMsgs")}>{queued}</Kv>
         </div>
         {s.codexExe && <div className="mono tiny muted wx-exe" title={scrub(s.codexExe)}>{scrub(s.codexExe)}</div>}
         {!st.codexReady && st.state === "running" && (

@@ -356,6 +356,75 @@ export interface WechatSession {
 export type WechatMode = "ask" | "auto" | "full" | "readonly";
 
 /** Set on the page. */
+/** Agents the completion watcher can follow. */
+export type NotifyAgent = "codex" | "claude" | "opencode" | "zcode";
+/** Push channels for completion notifications. */
+export type NotifyChannel = "bark" | "ntfy" | "gotify" | "serverchan" | "webhook";
+
+export interface NotifyConfig {
+  enabled: boolean;
+  agents: NotifyAgent[];
+  channels: NotifyChannel[];
+  /** Turns shorter than this many seconds aren't reported (0 = all). */
+  minSecs: number;
+  /** Put the agent's reply in the message (off by default: it goes to the push service). */
+  includeReply: boolean;
+  /** With `includeReply`: a model's summary of the reply instead of its first lines. */
+  summary: boolean;
+  /** Where the summarizing provider is configured: an agent id, or "library". */
+  summaryAgent: string;
+  /** That provider's id. */
+  summaryProvider: string;
+  summaryModel: string;
+  settings: {
+    bark: { server: string; key: string; sound: string };
+    ntfy: { server: string; topic: string; token: string };
+    /** `priority`: 0–10 as typed; blank = 5. */
+    gotify: { server: string; token: string; priority: string };
+    serverchan: { key: string };
+    webhook: { url: string };
+  };
+}
+
+export interface NotifyRecord {
+  atMs: number;
+  agent: NotifyAgent;
+  project: string;
+  title: string;
+  body: string;
+  /** One per channel; `error` null = delivered. */
+  sent: { channel: NotifyChannel; error: string | null }[];
+}
+
+/** Turns reported in one hour. */
+export interface NotifyHour {
+  /** Start of the hour (Unix seconds). */
+  t: number;
+  turns: number;
+  /** Turns at least one channel failed to deliver. */
+  failed: number;
+  agents: Partial<Record<NotifyAgent, number>>;
+  /** When the hour's last turn ended (ms). */
+  lastMs: number;
+}
+
+export interface NotifyStatus {
+  config: NotifyConfig;
+  /** `found`: the agent's session records exist on this machine. */
+  agents: { id: NotifyAgent; found: boolean }[];
+  /** Newest first; kept in memory only. */
+  recent: NotifyRecord[];
+  /** On, with at least one agent and one channel. */
+  watching: boolean;
+  /** When the watcher started following (ms), while it does. */
+  sinceMs: number | null;
+  /** The last 7 days, oldest first; hours without turns are left out. */
+  hours: NotifyHour[];
+  /** When the last reported turn ended (ms); kept across restarts. */
+  lastMs: number | null;
+  nowMs: number;
+}
+
 export interface WechatOptions {
   /** Send Codex's messages during a turn too, not only its final answer. */
   relayProgress: boolean;
@@ -1127,6 +1196,13 @@ const real = {
   wechatSetOptions: (options: WechatOptions) => invoke<WechatStatus>("wechat_set_options", { options }),
   /** Writes the kept WeChat activity to one text file; returns its path. */
   wechatLogExport: () => invoke<string>("wechat_log_export"),
+  notifyStatus: () => invoke<NotifyStatus>("notify_status"),
+  notifySetConfig: (config: NotifyConfig) => invoke<NotifyStatus>("notify_set_config", { config }),
+  /** Sends a sample message through one channel, with the settings as typed. */
+  notifyTest: (config: NotifyConfig, channel: NotifyChannel) => invoke<void>("notify_test", { config, channel }),
+  notifyClearRecent: () => invoke<NotifyStatus>("notify_clear_recent"),
+  /** Summarizes a sample reply with the summary settings as typed; returns the summary. */
+  notifyTestSummary: (config: NotifyConfig) => invoke<string>("notify_test_summary", { config }),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
   gatewaySaveRoute: (route: GatewayRoute, oldId: string | null) => invoke<GatewayStatus>("gateway_save_route", { route, oldId }),
@@ -1337,6 +1413,27 @@ const demoWechat: WechatStatus = {
   options: { relayProgress: false, notifyDesktop: true, defaultMode: "auto" },
 };
 
+const demoNotify: NotifyStatus = {
+  config: {
+    enabled: true, agents: ["codex", "claude", "opencode", "zcode"], channels: ["bark"], minSecs: 60, includeReply: true, summary: false, summaryAgent: "", summaryProvider: "", summaryModel: "",
+    settings: { bark: { server: "", key: "Xk2demoKey", sound: "" }, ntfy: { server: "", topic: "", token: "" }, gotify: { server: "", token: "", priority: "" }, serverchan: { key: "" }, webhook: { url: "" } },
+  },
+  agents: [{ id: "codex", found: true }, { id: "claude", found: true }, { id: "opencode", found: false }, { id: "zcode", found: true }],
+  recent: [
+    { atMs: Date.now() - 4 * 60_000, agent: "claude", project: "agentplus", title: "Claude Code 已完成 · agentplus", body: "用时 6 分 12 秒\n测试全部通过。", sent: [{ channel: "bark", error: null }] },
+    { atMs: Date.now() - 52 * 60_000, agent: "codex", project: "web", title: "Codex 已完成 · web", body: "用时 2 分 40 秒", sent: [{ channel: "bark", error: "请求失败：timed out" }] },
+  ],
+  watching: true,
+  sinceMs: Date.now() - 3 * 3600_000,
+  lastMs: Date.now() - 4 * 60_000,
+  hours: Array.from({ length: 40 }, (_, i) => {
+    const t = Math.floor(Date.now() / 3600_000) * 3600 - i * 4 * 3600;
+    const turns = (i * 7) % 5 + 1;
+    return { t, turns, failed: i % 6 === 1 ? 1 : 0, agents: i % 3 ? { claude: turns } : { codex: turns - 1, zcode: 1 }, lastMs: t * 1000 + 1_800_000 };
+  }).reverse(),
+  nowMs: Date.now(),
+};
+
 const demo: typeof real = {
   listAgents: fixture,
   getAgent: async (agent) => (isProjectId(agent) ? demoProject(agent) : (await fixture()).find((a) => a.id === agent)!),
@@ -1398,6 +1495,11 @@ const demo: typeof real = {
   fetchModels: async () => ["gpt-5.6-sol", "gpt-5.6-luna", "deepseek-v4-pro", "kimi-k3", "glm-5.3", "qwen3.8-max"],
   fetchModelsUrl: async () => ["deepseek-v4-pro", "kimi-k3", "glm-5.3"],
   fetchModelsLib: async () => ["glm-5", "glm-5.3", "kimi-k3"],
+  notifyStatus: async () => demoNotify,
+  notifySetConfig: async (config) => { demoNotify.config = config; demoNotify.watching = config.enabled && config.agents.length > 0 && config.channels.length > 0; return demoNotify; },
+  notifyTest: async () => undefined,
+  notifyClearRecent: async () => { demoNotify.recent = []; return demoNotify; },
+  notifyTestSummary: async () => "（演示）修复了登录缓存问题，214 个测试全部通过；可删除 settings.json 里的旧缓存开关。",
   wechatStatus: async () => demoWechat,
   wechatSetEnabled: async (on) => { demoWechat.enabled = on; demoWechat.state = on ? "running" : "off"; return demoWechat; },
   wechatLoginStart: async () => demoWechat,

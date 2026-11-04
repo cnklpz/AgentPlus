@@ -8,6 +8,7 @@ export default {
   history: "History & rollback",
   sync: "Multi-device sync",
   wechat: "Claw bridge",
+  notify: "Notifications",
   nav: "Navigation",
   agents: "AGENTS",
   fastBadge: "FAST",

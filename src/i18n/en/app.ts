@@ -145,6 +145,7 @@ export default {
   gatewayTurnOn: "Turn on local gateway",
   navGateway: "Local gateway",
   navWechat: "Claw bridge",
+  navNotify: "Completion notifications",
   navHistory: "History & rollback",
   navSettings: "AgentPlus settings",
   privacyOnToast: "Privacy mode on",

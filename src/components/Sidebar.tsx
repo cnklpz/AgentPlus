@@ -9,7 +9,7 @@ import { flushSync } from "react-dom";
 import { dragSort, markReordered } from "../dragSort";
 import { moveItem } from "../order";
 
-export type Page = "providers" | "mcp" | "skills" | "gateway" | "wechat" | "history" | "sync" | "settings";
+export type Page = "providers" | "mcp" | "skills" | "gateway" | "wechat" | "notify" | "history" | "sync" | "settings";
 
 interface Props {
   agents: AgentState[];
@@ -27,6 +27,8 @@ interface Props {
   showSkills: boolean;
   /** Whether the Claw bridge link is shown (Settings → Interface). */
   showClaw: boolean;
+  /** Whether the completion notifications link is shown (Settings → Interface). */
+  showNotify: boolean;
 }
 
 function subline(a: AgentState, d: Draft): string {
@@ -37,7 +39,7 @@ function subline(a: AgentState, d: Draft): string {
   return `${tn("common.providerCount", on)} · ${tn("common.modelCount", n)}`;
 }
 
-export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway, onReorder, showMcp, showSkills, showClaw }: Props) {
+export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gateway, onReorder, showMcp, showSkills, showClaw, showNotify }: Props) {
   const detected = agents.filter((a) => a.installed).length;
   const ids = agents.map((a) => a.id);
   const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, i: number) => {
@@ -55,6 +57,7 @@ export function Sidebar({ agents, drafts, selected, page, onSelect, onPage, gate
     ...(showSkills ? [["skills", "sidebar.skills", <Icon.book key="s" />] as [Page, TKey, JSX.Element]] : []),
     ["gateway", "sidebar.gateway", <Icon.gateway key="g" />],
     ...(showClaw ? [["wechat", "sidebar.wechat", <Icon.chat key="w" />] as [Page, TKey, JSX.Element]] : []),
+    ...(showNotify ? [["notify", "sidebar.notify", <Icon.bell key="n" />] as [Page, TKey, JSX.Element]] : []),
     ["history", "sidebar.history", <Icon.history key="h" />],
     ["sync", "sidebar.sync", <Icon.cloud key="c" />],
   ];
