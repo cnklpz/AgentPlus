@@ -36,6 +36,12 @@
 //! reaches the interception. When no bundle request shows up the window is reloaded once
 //! more with a longer wait. (Live-editing the loaded scripts is no option: Codex's
 //! Chromium answers `Debugger.setScriptSource` with "functionality no longer available".)
+//!
+//! Since 26.1029 the UI is built with Rspack (see `Layout::Chunked`): a few entry chunks
+//! and thousands of numbered chunks in `assets/async/`, imported as needed, with the code
+//! the patches look for spread over several of them. Every chunk is intercepted, and once
+//! the window has settled the connection stays open, so chunks imported later (opening a
+//! thread, the settings) are patched too.
 
 use crate::i18n::join;
 use crate::process::Progress;
@@ -61,9 +67,13 @@ const BANNER_MARK: &str = "/*agentplus-banner*/";
 const SHORT_MARK: &str = "/*agentplus-short*/";
 const SMOOTH_MARK: &str = "/*agentplus-smooth*/";
 const BUNDLE_HINTS: [&str; 2] = ["app-initial-", "app-primary-"];
+/// The first release with the chunked layout, for a window whose scripts don't tell yet.
+const CHUNKED_SINCE: [u32; 2] = [26, 1029];
 /// How long after a reload the first bundle request may take, and on the second try.
 const FIRST_BUNDLE: Duration = Duration::from_secs(10);
 const FIRST_BUNDLE_RETRY: Duration = Duration::from_secs(30);
+/// Chunked layout: the window has settled once no chunk was requested for this long.
+const QUIET: Duration = Duration::from_secs(3);
 /// Largest DevTools message read. A response body comes base64-encoded in one frame, and
 /// Codex's bundle outgrew tungstenite's 16 MiB frame default (~19 MB encoded).
 const MAX_MESSAGE: usize = 256 << 20;
@@ -133,6 +143,19 @@ fn replace_once(src: &str, re: &Regex, rep: impl regex::Replacer) -> Option<Stri
     }
 }
 
+/// Every match of each regex replaced, or None when none of them matches. For the chunked
+/// layout, where the pieces of one patch sit in different chunks: each chunk gets the
+/// pieces it has.
+fn replace_each(src: &str, edits: &[(&Regex, &str)]) -> Option<String> {
+    let mut out: Option<String> = None;
+    for (re, rep) in edits {
+        if let Cow::Owned(s) = re.replace_all(out.as_deref().unwrap_or(src), *rep) {
+            out = Some(s);
+        }
+    }
+    out
+}
+
 /// Adapting a patch to a new Codex release adds a shape and keeps the older ones, each with
 /// the first release it is for (oldest first): a release uses the newest shape that is not
 /// newer than it, until the next shape. Only when the version is unknown is every shape
@@ -155,12 +178,20 @@ pub(crate) fn by_version<T, R>(version: Option<[u32; 2]>, shapes: &[([u32; 2], T
 /// or the other way round, so it is both or nothing.
 /// Since 26.1016 both checks accept more sign-ins, e.g. `||i?.authMethod===`amazonBedrock``
 /// in the hook and `&&n!==`amazonBedrock`` in the request; any number of them is taken.
+/// Since 26.1029 (chunked layout) strings are in double quotes and the request compares the
+/// other way round:
+///   p=h?.authMethod==="chatgpt"||h?.authMethod==="personalAccessToken"||…,g=h?.authMethod??null
+///   if("chatgpt"!==n&&"personalAccessToken"!==n&&…)return null;let i=await (0,l.Wr)(e,t,…);return e.query.setData(
+/// The hook is copied into many chunks and the request is in another one, so each is
+/// patched wherever it is.
 fn patch_fast(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static GATE: OnceLock<Regex> = OnceLock::new();
     static HOOK: OnceLock<Regex> = OnceLock::new();
     static REQUEST: OnceLock<Regex> = OnceLock::new();
     static HOOK_LIST: OnceLock<Regex> = OnceLock::new();
     static REQUEST_LIST: OnceLock<Regex> = OnceLock::new();
+    static HOOK_CHUNK: OnceLock<Regex> = OnceLock::new();
+    static REQUEST_CHUNK: OnceLock<Regex> = OnceLock::new();
     enum Shape {
         /// Up to 26.1001: one expression with the auth check and `fast_mode`.
         Gate,
@@ -168,8 +199,10 @@ fn patch_fast(src: &str, version: Option<[u32; 2]>) -> Option<String> {
         Access,
         /// Since 26.1016: the same two checks, each with a longer list of sign-ins.
         AccessList,
+        /// Since 26.1029: the same two checks, in separate chunks.
+        Chunked,
     }
-    let shapes = [([0, 0], Shape::Gate), ([26, 1007], Shape::Access), ([26, 1016], Shape::AccessList)];
+    let shapes = [([0, 0], Shape::Gate), ([26, 1007], Shape::Access), ([26, 1016], Shape::AccessList), (CHUNKED_SINCE, Shape::Chunked)];
     by_version(version, &shapes, |shape| match shape {
         Shape::Gate => {
             let re = cached(&GATE, r"([\w$]+)=[\w$]+&&!([\w$]+)&&([\w$]+)!=null&&[\w$]+\?\.requirements\?\.featureRequirements\?\.fast_mode!==!1");
@@ -199,25 +232,41 @@ fn patch_fast(src: &str, version: Option<[u32; 2]>) -> Option<String> {
             let src = replace_once(src, hook, format!("${{1}}=!0{FAST_MARK}${{2}}"))?;
             replace_once(&src, request, format!("if(!1)return null{FAST_MARK};${{1}}"))
         }
+        Shape::Chunked => {
+            let hook = cached(
+                &HOOK_CHUNK,
+                r#"([\w$]+)=[\w$]+\?\.authMethod==="chatgpt"(?:\|\|[\w$]+\?\.authMethod==="\w+")+(,[\w$]+=[\w$]+\?\.authMethod\?\?null)"#,
+            );
+            let request = cached(
+                &REQUEST_CHUNK,
+                r#"if\("chatgpt"!==[\w$]+(?:&&"\w+"!==[\w$]+)+\)return null;(let [\w$]+=await (?:\(0,[\w$.]+\)|[\w$]+)\([^;]{0,80};return [\w$]+\.query\.setData\()"#,
+            );
+            let hook_rep = format!("${{1}}=!0{FAST_MARK}${{2}}");
+            let request_rep = format!("if(!1)return null{FAST_MARK};${{1}}");
+            replace_each(src, &[(hook, &hook_rep), (request, &request_rep)])
+        }
     })
 }
 
 /// Makes the model-name formatter ignore `stripGptPrefix`:
 ///   return t?r.replace(/^GPT-/iu,``):r  →  return r
+/// Since 26.1029 the empty string is `""`.
 fn patch_names(src: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = cached(&RE, r"return [\w$]+\?[\w$]+\.replace\(/\^GPT-/iu,``\):([\w$]+)");
+    let re = cached(&RE, r#"return [\w$]+\?[\w$]+\.replace\(/\^GPT-/iu,(?:``|"")\):([\w$]+)"#);
     replace_once(src, re, format!("return ${{1}}{NAMES_MARK}"))
 }
 
 /// Makes the "rate limit reached, block sending" atom return false up front:
 ///   ({get:e})=>{let t=e(Zx),n=e(iT).data;if(t.authMethod!==`chatgpt`||…||n.rate_limit?.allowed!==!1||…)return!1;…
 ///   → ({get:e})=>{return!1;let t=…
+/// Since 26.1029 the atoms are module members and the check is the other way round:
+///   ({get:e})=>{let t=e(a.PO),n=e(d.Ix).data;if("chatgpt"!==t.authMethod||…
 fn patch_quota(src: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = cached(
         &RE,
-        r"\(\{get:([\w$]+)\}\)=>\{(let [\w$]+=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\([\w$]+\)\.data;if\([\w$]+\.authMethod!==`chatgpt`[^;{}]{0,400}?\.rate_limit\?\.allowed!==!1)",
+        r#"\(\{get:([\w$]+)\}\)=>\{(let [\w$]+=[\w$]+\([\w$.]+\),[\w$]+=[\w$]+\([\w$.]+\)\.data;if\((?:[\w$]+\.authMethod!==`chatgpt`|"chatgpt"!==[\w$]+\.authMethod)[^;{}]{0,400}?\.rate_limit\?\.allowed!==!1)"#,
     );
     replace_once(src, re, format!("({{get:${{1}}}})=>{{return!1{QUOTA_MARK};${{2}}"))
 }
@@ -257,6 +306,11 @@ fn patch_quota(src: &str) -> Option<String> {
 /// banners, so they always do:
 ///   {rateLimit:n,warningThreshold:r}=e,…  →  …=e;return null;let …
 ///   {banner:n,bannerKey:r,blockedModel:i,…}=e,…  →  the same
+/// Since 26.1029 (chunked layout) the component and the pieces are in separate chunks, and
+/// strings are in double quotes:
+///   H=R?.rate_limit_upsell?.banner_type==="image_generation_limit_reached",z=…;if(!g)return k;
+///   …,source:x,…}=e,R=void 0!==v&&v,I=…,M=void 0===x?"rate_limit_upsell_banner":x
+/// so each one is patched wherever it is.
 fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static SLOT: OnceLock<Regex> = OnceLock::new();
     static COMPONENT: OnceLock<Regex> = OnceLock::new();
@@ -265,6 +319,8 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
     static UPSELL: OnceLock<Regex> = OnceLock::new();
     static WARNING: OnceLock<Regex> = OnceLock::new();
     static FALLBACK: OnceLock<Regex> = OnceLock::new();
+    static COMPONENT_CHUNK: OnceLock<Regex> = OnceLock::new();
+    static UPSELL_CHUNK: OnceLock<Regex> = OnceLock::new();
     enum Shape {
         /// Up to 26.924: the slot's early return, then the helper call (memoized since 26.924).
         Slot,
@@ -276,7 +332,11 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
         MemoProps,
         /// Since 26.1021: the component, and the app-primary pieces its copy draws with.
         Pieces,
+        /// Since 26.1029: the component and the pieces, in separate chunks.
+        Chunked,
     }
+    let warning = || cached(&WARNING, r"(\{rateLimit:[\w$]+,warningThreshold:[\w$]+\}=[\w$]+),");
+    let fallback = || cached(&FALLBACK, r"(\{banner:[\w$]+,bannerKey:[\w$]+,blockedModel:[\w$]+,[^{}]*\}=[\w$]+),");
     let component = |src: &str| {
         let re = cached(&COMPONENT, r"(`image_generation_limit_reached`[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);");
         replace_once(src, re, format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};"))
@@ -287,6 +347,7 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
         ([26, 1007], Shape::Props),
         ([26, 1013], Shape::MemoProps),
         ([26, 1021], Shape::Pieces),
+        (CHUNKED_SINCE, Shape::Chunked),
     ];
     by_version(version, &shapes, |shape| match shape {
         Shape::Slot => {
@@ -312,10 +373,19 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
             );
             let src = replace_once(&src, upsell, format!("${{1}};if(${{3}}===void 0&&${{2}}==null)return null{BANNER_MARK};let ${{4}}"))?;
             let nothing = format!("${{1}};return null{BANNER_MARK};let ");
-            let warning = cached(&WARNING, r"(\{rateLimit:[\w$]+,warningThreshold:[\w$]+\}=[\w$]+),");
-            let src = replace_once(&src, warning, nothing.as_str())?;
-            let fallback = cached(&FALLBACK, r"(\{banner:[\w$]+,bannerKey:[\w$]+,blockedModel:[\w$]+,[^{}]*\}=[\w$]+),");
-            replace_once(&src, fallback, nothing.as_str())
+            let src = replace_once(&src, warning(), nothing.as_str())?;
+            replace_once(&src, fallback(), nothing.as_str())
+        }
+        Shape::Chunked => {
+            let component = cached(&COMPONENT_CHUNK, r#"("image_generation_limit_reached"[^;{}]{0,120};)if\(![\w$]+\)return ([\w$]+);"#);
+            let upsell = cached(
+                &UPSELL_CHUNK,
+                r#"(\{banner:[\w$]+,[^{}]*?renderContent:([\w$]+),[^{}]*?source:([\w$]+),[^{}]*\}=[\w$]+),([^;]{0,120}?void 0===[\w$]+\?"rate_limit_upsell_banner":)"#,
+            );
+            let component_rep = format!("${{1}}if(!0)return ${{2}}{BANNER_MARK};");
+            let upsell_rep = format!("${{1}};if(${{3}}===void 0&&${{2}}==null)return null{BANNER_MARK};let ${{4}}");
+            let nothing = format!("${{1}};return null{BANNER_MARK};let ");
+            replace_each(src, &[(component, &component_rep), (upsell, &upsell_rep), (warning(), &nothing), (fallback(), &nothing)])
         }
     })
 }
@@ -324,9 +394,11 @@ fn patch_banner(src: &str, version: Option<[u32; 2]>) -> Option<String> {
 /// hook call so the component's hook order stays the same:
 ///   l=Y(Zd,`3849065407`)  →  l=(Y(Zd,`3849065407`),!1)
 ///   I=Y(b?Zd:!1,`3849065407`)  →  I=(Y(b?Zd:!1,`3849065407`),!1)
+/// Since 26.1029 the hook is a module member:
+///   l3=(0,s._U)(er.JW,"3849065407")  →  l3=((0,s._U)(er.JW,"3849065407"),!1)
 fn patch_short(src: &str) -> Option<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = cached(&RE, r"[\w$]+\([^(),]{1,40},`3849065407`\)");
+    let re = cached(&RE, r#"(?:\(0,[\w$]+\.[\w$]+\)|[\w$]+)\([^(),]{1,40},(?:`3849065407`|"3849065407")\)"#);
     match re.replace_all(src, format!("($0,!1{SHORT_MARK})")) {
         Cow::Borrowed(_) => None,
         Cow::Owned(s) => Some(s),
@@ -517,8 +589,84 @@ fn bundle_of(url: &str) -> Option<&'static str> {
     BUNDLE_HINTS.into_iter().find(|h| file.starts_with(h))
 }
 
-/// Patches one paused bundle response and lets it through. Returns the patches not found in it.
-fn fulfill(s: &mut Session, p: &Value, want: Patches) -> Result<Vec<&'static str>> {
+/// How a Codex release ships its UI scripts.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Layout {
+    /// Up to 26.1021 (Vite): two named bundles, `app-initial-*` and `app-primary-*`.
+    Named,
+    /// Since 26.1029 (Rspack): a few entry chunks in `assets/`, and thousands of numbered
+    /// chunks in `assets/async/` (and workers in `assets/workers/`) imported as needed.
+    Chunked,
+}
+
+impl Layout {
+    /// The layout a window's script URLs show, None when they show neither.
+    fn of(urls: &[String]) -> Option<Layout> {
+        if !bundles_in(urls).is_empty() {
+            Some(Layout::Named)
+        } else if urls.iter().any(|u| chunk_of(u).is_some()) {
+            Some(Layout::Chunked)
+        } else {
+            None
+        }
+    }
+
+    /// The layout of a Codex release (None = unknown: the named one, as before).
+    fn of_version(version: Option<[u32; 2]>) -> Layout {
+        if version.is_some_and(|v| v >= CHUNKED_SINCE) {
+            Layout::Chunked
+        } else {
+            Layout::Named
+        }
+    }
+}
+
+/// A chunk of the chunked layout, named `<id>.<hash>.js` (`782259.9dd29a0a62.js`):
+/// `Some(true)` for an entry chunk (right in `assets/`), `Some(false)` for one in
+/// `assets/async/`. Other scripts (workers, `dotnet.js`, the named layout's
+/// `detachedWindow-*.js`) aren't chunks.
+fn chunk_of(url: &str) -> Option<bool> {
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let (_, rest) = path.split_once("/assets/")?;
+    let (dir, file) = rest.rsplit_once('/').unwrap_or(("", rest));
+    let mut parts = file.split('.');
+    let named = matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some(id), Some(hash), Some("js"), None)
+            if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) && !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit())
+    );
+    match dir {
+        _ if !named => None,
+        "" => Some(true),
+        "async" => Some(false),
+        _ => None,
+    }
+}
+
+/// The patches for one chunk: smooth scrolling only goes into the entry chunks (it adds a
+/// style sheet; the window loads them all, so one of them is enough).
+fn for_chunk(want: Patches, entry: bool) -> Patches {
+    Patches { smooth_scroll: want.smooth_scroll && entry, ..want }
+}
+
+/// Patches one paused chunk response and lets it through. Returns None when the request
+/// isn't a chunk (let through as it is), else whether it was patched and the patches not
+/// found in it (smooth scrolling counts as not found in an async chunk).
+fn pass_chunk(s: &mut Session, p: &Value, want: Patches) -> Result<Option<(bool, Vec<&'static str>)>> {
+    let Some(entry) = chunk_of(p["request"]["url"].as_str().unwrap_or("")) else {
+        s.call("Fetch.continueRequest", json!({ "requestId": p["requestId"] }))?;
+        return Ok(None);
+    };
+    let (patched, mut miss) = fulfill(s, p, for_chunk(want, entry))?;
+    if want.smooth_scroll && !entry {
+        miss.push(Patches::names()[5]);
+    }
+    Ok(Some((patched, miss)))
+}
+
+/// Patches one paused bundle response and lets it through. Returns whether it was patched,
+/// and the patches not found in it.
+fn fulfill(s: &mut Session, p: &Value, want: Patches) -> Result<(bool, Vec<&'static str>)> {
     let rid = p["requestId"].as_str().unwrap_or_default().to_string();
     let body = s.call("Fetch.getResponseBody", json!({ "requestId": rid }))?;
     let raw = body["body"].as_str().unwrap_or_default();
@@ -528,6 +676,7 @@ fn fulfill(s: &mut Session, p: &Value, want: Patches) -> Result<Vec<&'static str
         raw.to_string()
     };
     let (patched, missing) = patch_source(&text, want);
+    let changed = patched.is_some();
     match patched {
         Some(patched) => {
             let headers: Vec<Value> = p["responseHeaders"]
@@ -548,7 +697,7 @@ fn fulfill(s: &mut Session, p: &Value, want: Patches) -> Result<Vec<&'static str
             s.call("Fetch.continueRequest", json!({ "requestId": rid }))?;
         }
     }
-    Ok(missing)
+    Ok((changed, missing))
 }
 
 /// The outcome in one window.
@@ -570,13 +719,84 @@ fn bundles_in(urls: &[String]) -> Vec<&'static str> {
     out
 }
 
-/// The UI bundles the window has loaded so far: its scripts, and the modules it imported
-/// (each gets a `modulepreload` link).
-fn loaded_bundles(s: &mut Session) -> Result<Vec<&'static str>> {
+/// The scripts the window has loaded so far: its script elements, and the modules it
+/// imported (each gets a `modulepreload` link).
+fn loaded_scripts(s: &mut Session) -> Result<Vec<String>> {
     let expr = "[...document.scripts].map(s=>s.src).concat([...document.querySelectorAll('link[rel=modulepreload]')].map(l=>l.href))";
     let r = s.call("Runtime.evaluate", json!({ "expression": expr, "returnByValue": true }))?;
-    let urls: Vec<String> = serde_json::from_value(r["result"]["value"].clone()).unwrap_or_default();
-    Ok(bundles_in(&urls))
+    Ok(serde_json::from_value(r["result"]["value"].clone()).unwrap_or_default())
+}
+
+/// Intercepts the responses matching `patterns` and reloads the window, bypassing the cache
+/// (see the module docs).
+fn intercept_and_reload(s: &mut Session, patterns: Vec<Value>) -> Result<()> {
+    s.call("Fetch.enable", json!({ "patterns": patterns }))?;
+    s.call("Network.enable", json!({}))?;
+    s.call("Network.setCacheDisabled", json!({ "cacheDisabled": true }))?;
+    s.call("Page.reload", json!({ "ignoreCache": true }))?;
+    Ok(())
+}
+
+fn stop_intercepting(s: &mut Session) {
+    let _ = s.call("Fetch.disable", json!({}));
+    let _ = s.call("Network.setCacheDisabled", json!({ "cacheDisabled": false }));
+    let _ = s.call("Network.disable", json!({}));
+}
+
+/// Chunked layout: `Ok(None)` when no chunk request was seen within `first`. After the
+/// first one (calling `waiting`), patches chunks until none was requested for `QUIET`, or
+/// for `lazy` at most. The interception stays on when something was seen: the caller hands
+/// the session to `keep_patching`.
+fn via_fetch_chunks(s: &mut Session, want: Patches, first: Duration, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
+    // `*.js*`: a query string may follow. Other files it matches (`.json`) are let through.
+    intercept_and_reload(s, vec![json!({ "urlPattern": "*/assets/*.js*", "requestStage": "Response" })])?;
+    let mut deadline = Instant::now() + first;
+    let mut cap = None;
+    let mut missing: Option<Vec<&'static str>> = None;
+    let (mut seen, mut patched) = (0, 0);
+    let result = (|| -> Result<()> {
+        while let Some(ev) = s.next_event("Fetch.requestPaused", deadline)? {
+            let Some((changed, miss)) = pass_chunk(s, &ev["params"], want)? else { continue };
+            seen += 1;
+            patched += usize::from(changed);
+            missing = Some(still_missing(missing.take(), miss));
+            let cap = *cap.get_or_insert_with(|| {
+                waiting();
+                Instant::now() + lazy
+            });
+            deadline = (Instant::now() + QUIET).min(cap);
+        }
+        Ok(())
+    })();
+    if result.is_err() || missing.is_none() {
+        stop_intercepting(s);
+    }
+    result?;
+    crate::applog::info("inject", format!("{seen} chunk(s) loaded, {patched} patched"));
+    // Not complete: another window loads chunks of its own, so it gets the full wait too.
+    Ok(missing.map(|missing| Patched { missing, complete: false }))
+}
+
+/// Chunked layout: keeps patching the chunks the window imports later (opening a thread,
+/// the settings…) and on its own reloads, until the window or Codex closes and with it the
+/// connection. Any error ends it, and closing the connection lets paused requests through.
+fn keep_patching(mut s: Session, want: Patches, url: String) {
+    let mut patched = 0;
+    let end = loop {
+        match s.next_event("Fetch.requestPaused", Instant::now() + Duration::from_secs(60)) {
+            Ok(Some(ev)) => match pass_chunk(&mut s, &ev["params"], want) {
+                Ok(Some((true, _))) => {
+                    patched += 1;
+                    crate::applog::info("inject", format!("{url}: patched a chunk loaded later ({})", ev["params"]["request"]["url"].as_str().unwrap_or("")));
+                }
+                Ok(_) => {}
+                Err(e) => break e,
+            },
+            Ok(None) => {}
+            Err(e) => break e,
+        }
+    };
+    crate::applog::info("inject", format!("{url}: stopped patching chunks loaded later ({patched} patched): {end:#}"));
 }
 
 /// `Ok(None)` when no bundle request was seen within `first`. Stops once every bundle in
@@ -585,10 +805,7 @@ fn loaded_bundles(s: &mut Session) -> Result<Vec<&'static str>> {
 fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, first: Duration, lazy: Duration, waiting: &dyn Fn()) -> Result<Option<Patched>> {
     let expect = expect.unwrap_or(&BUNDLE_HINTS);
     let patterns: Vec<Value> = BUNDLE_HINTS.iter().map(|h| json!({ "urlPattern": format!("*{h}*.js*"), "requestStage": "Response" })).collect();
-    s.call("Fetch.enable", json!({ "patterns": patterns }))?;
-    s.call("Network.enable", json!({}))?;
-    s.call("Network.setCacheDisabled", json!({ "cacheDisabled": true }))?;
-    s.call("Page.reload", json!({ "ignoreCache": true }))?;
+    intercept_and_reload(s, patterns)?;
     let mut deadline = Instant::now() + first;
     let mut seen: Vec<&str> = vec![];
     let mut missing: Option<Vec<&'static str>> = None;
@@ -609,14 +826,12 @@ fn via_fetch(s: &mut Session, want: Patches, expect: Option<&[&str]>, first: Dur
                     waiting();
                 }
             }
-            let miss = fulfill(s, p, want)?;
+            let (_, miss) = fulfill(s, p, want)?;
             missing = Some(still_missing(missing.take(), miss));
         }
         Ok(())
     })();
-    let _ = s.call("Fetch.disable", json!({}));
-    let _ = s.call("Network.setCacheDisabled", json!({ "cacheDisabled": false }));
-    let _ = s.call("Network.disable", json!({}));
+    stop_intercepting(s);
     result?;
     Ok(missing.map(|missing| Patched { missing, complete: seen.len() == BUNDLE_HINTS.len() }))
 }
@@ -707,29 +922,40 @@ pub fn inject(port: u16, port_wait: Duration, want: Patches, on: &dyn Fn(Progres
         let url = page["url"].as_str().unwrap_or_default();
         let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("Debug target has no WebSocket URL", "调试目标缺少 WebSocket 地址")))?;
         let mut s = Session::open(ws, port)?;
+        let main = !url.contains('?');
+        let scripts = loaded_scripts(&mut s)?;
+        // The main window may not show its scripts yet: then the release tells.
+        let Some(layout) = Layout::of(&scripts).or(main.then(|| Layout::of_version(want.version))) else {
+            crate::applog::info("inject", format!("{url}: no UI script loaded, skipped"));
+            continue;
+        };
         // A secondary window (overlay, detached) only ever loads what it has already: reload it
         // just for those, and not at all without any. Waiting for the rest took 5-10 s each.
         // The main window may not have imported app-primary yet, so it waits for both.
-        let expect = if url.contains('?') { Some(loaded_bundles(&mut s)?) } else { None };
-        if expect.as_ref().is_some_and(|e| e.is_empty()) {
-            crate::applog::info("inject", format!("{url}: no UI bundle loaded, skipped"));
-            continue;
-        }
+        let expect = if main { None } else { Some(bundles_in(&scripts)) };
         let waiting = || on(Progress::step("patch", "active", Some(tr!("Window {}/{}: waiting for the rest of the UI scripts", "窗口 {}/{}：等待其余界面脚本加载", i + 1, total))));
-        let mut fetched = via_fetch(&mut s, want, expect.as_deref(), FIRST_BUNDLE, lazy, &waiting)?;
+        let fetch = |s: &mut Session, first| match layout {
+            Layout::Named => via_fetch(s, want, expect.as_deref(), first, lazy, &waiting),
+            Layout::Chunked => via_fetch_chunks(s, want, first, lazy, &waiting),
+        };
+        let mut fetched = fetch(&mut s, FIRST_BUNDLE)?;
         if fetched.is_none() {
-            let loaded = loaded_bundles(&mut s)?;
-            if loaded.is_empty() {
-                crate::applog::info("inject", format!("{url}: no bundle request seen and no UI bundle loaded, skipped"));
+            let loaded = Layout::of(&loaded_scripts(&mut s)?);
+            if loaded.is_none() {
+                crate::applog::info("inject", format!("{url}: no bundle request seen and no UI script loaded, skipped"));
                 continue;
             }
             // A busy renderer (right after Codex starts, on a slow machine) can take longer
             // than FIRST_BUNDLE to request the bundles again: reload once more, waiting longer.
-            crate::applog::warn("inject", format!("{url}: no bundle request seen within {}s of the reload (loaded: {}), reloading again", FIRST_BUNDLE.as_secs(), loaded.join(", ")));
+            crate::applog::warn("inject", format!("{url}: no bundle request seen within {}s of the reload ({loaded:?} layout), reloading again", FIRST_BUNDLE.as_secs()));
             on(Progress::step("patch", "active", Some(tr!("Window {}/{}: reloading again", "窗口 {}/{}：再次重新加载", i + 1, total))));
-            fetched = via_fetch(&mut s, want, expect.as_deref(), FIRST_BUNDLE_RETRY, lazy, &waiting)?;
+            fetched = fetch(&mut s, FIRST_BUNDLE_RETRY)?;
         }
-        crate::applog::info("inject", format!("{url}: {} in {:.1}s", if fetched.is_some() { "patched" } else { "no bundle request seen" }, t1.elapsed().as_secs_f32()));
+        crate::applog::info("inject", format!("{url}: {} in {:.1}s ({layout:?} layout)", if fetched.is_some() { "patched" } else { "no bundle request seen" }, t1.elapsed().as_secs_f32()));
+        if layout == Layout::Chunked && fetched.is_some() {
+            let url = url.to_string();
+            std::thread::spawn(move || keep_patching(s, want, url));
+        }
         let Some(r) = fetched else {
             return Err(anyhow!(tr!(
                 "Codex didn't reload its UI scripts within {}s, so the UI couldn't be patched. Restart Codex to try again",
@@ -859,7 +1085,7 @@ mod tests {
         let request = "async function bga(e,t){let n=await _ga(e,t);if(n!==`chatgpt`&&n!==`personalAccessToken`)return null;let r=await KPe(e,t,{priority:`critical`});return e.query.setData(Hd,{authMethod:n,hostId:t},r),oee(r)}";
         let src = format!("{hook}{request}");
         let on = |v: &str| Patches { version: codex_version(v), ..FAST };
-        for want in [on("26.1007.2314.0"), on("27.1.0.0"), FAST] {
+        for want in [on("26.1007.2314.0"), on("26.1013.4894.0"), FAST] {
             let (out, missing) = patch_source(&src, want);
             let out = out.unwrap();
             assert!(missing.is_empty());
@@ -886,7 +1112,7 @@ mod tests {
         let request = "async function t8s(e,t){let n=await Z6s(e,t);if(n!==`chatgpt`&&n!==`personalAccessToken`&&n!==`amazonBedrock`)return null;let r=await Hwn(e,t,{priority:`critical`});return e.query.setData(xC,{authMethod:n,hostId:t},r),fCe(r)}";
         let src = format!("{hook}{request}");
         let on = |v: &str| Patches { version: codex_version(v), ..FAST };
-        for want in [on("26.1016.8622.0"), on("27.1.0.0"), FAST] {
+        for want in [on("26.1016.8622.0"), on("26.1021.2667.0"), FAST] {
             let (out, missing) = patch_source(&src, want);
             let out = out.unwrap();
             assert!(missing.is_empty());
@@ -900,6 +1126,118 @@ mod tests {
         // The 26.1007 shape doesn't take the longer list, and 26.1016 doesn't take the gate.
         assert_eq!(patch_source(&src, on("26.1007.2314.0")), (None, vec!["Fast"]));
         assert_eq!(patch_source(GATE, on("26.1016.8622.0")), (None, vec!["Fast"]));
+    }
+
+    #[test]
+    fn patches_fast_in_chunks_since_26_1029() {
+        // Codex 26.1029: the hook is copied into many chunks, the request is in another one.
+        let hook = r#"h=(0,l.tn)(m),p=h?.authMethod==="chatgpt"||h?.authMethod==="personalAccessToken"||h?.authMethod==="amazonBedrock",g=h?.authMethod??null;u[0]!==m||u[1]!==g?(t={authMethod:g,hostId:m},u[0]=m):t=u[2];"#;
+        let request = r#"async function p(e,t){let n=await (0,o.s)(e,t);if("chatgpt"!==n&&"personalAccessToken"!==n&&"amazonBedrock"!==n)return null;let i=await (0,l.Wr)(e,t,{priority:"critical"});return e.query.setData(l.b9,{authMethod:n,hostId:t},i),(0,r.W6)(i)}"#;
+        let on = |v: &str| Patches { version: codex_version(v), ..FAST };
+        for want in [on("26.1029.7803.0"), on("27.1.0.0"), FAST] {
+            let out = patch_source(hook, want).0.unwrap();
+            assert!(out.contains("h=(0,l.tn)(m),p=!0/*agentplus-fast*/,g=h?.authMethod??null;"), "{out}");
+            assert_eq!(patch_source(&out, want), (None, vec![]));
+            let out = patch_source(request, want).0.unwrap();
+            assert!(out.contains(r#"let n=await (0,o.s)(e,t);if(!1)return null/*agentplus-fast*/;let i=await (0,l.Wr)("#), "{out}");
+            assert_eq!(patch_source(&out, want), (None, vec![]));
+            let both = patch_source(&format!("{hook}{request}"), want).0.unwrap();
+            assert_eq!(both.matches(FAST_MARK).count(), 2, "{both}");
+        }
+        // 26.1021 keeps the backtick shape.
+        assert_eq!(patch_source(&format!("{hook}{request}"), on("26.1021.2667.0")), (None, vec!["Fast"]));
+        // A similar sign-in check (no `authMethod??null` after it) is left alone.
+        let other = r#"c=("local"===J||K?.authMethod==="chatgpt"||K?.authMethod==="personalAccessToken")&&null!=Z"#;
+        assert_eq!(patch_source(other, on("26.1029.7803.0")).0, None);
+    }
+
+    #[test]
+    fn patches_the_rest_in_chunks_since_26_1029() {
+        let on = |p: Patches| Patches { version: codex_version("26.1029.7803.0"), ..p };
+        // Names: the empty string is in double quotes; the ChatGPT model menu's own replace is left alone.
+        let strip = r#"replace(/^GPT (?=\d)/u,"GPT-")).join("");return t?i.replace(/^GPT-/iu,""):i}n.d(t,{K:()=>r})"#;
+        let out = patch_source(strip, on(NAMES)).0.unwrap();
+        assert!(out.contains(r#".join("");return i/*agentplus-names*/}n.d("#), "{out}");
+        assert_eq!(patch_source(r#"label:ts&&!tq?t.label.replace(/^GPT-/iu,""):t.label"#, on(NAMES)).0, None);
+        // Quota: module-member atoms and a reversed comparison.
+        let block = r#"let u=(0,o.un)(r.u,({get:e})=>{let t=e(a.PO),n=e(d.Ix).data;if("chatgpt"!==t.authMethod||t.authLoading||t.accountLoading||null==t.authenticatedAccountId||n.plan_type!==t.plan||n.rate_limit?.allowed!==!1||(0,i.Hw)(n))return!1;"#;
+        let out = patch_source(block, on(QUOTA)).0.unwrap();
+        assert!(out.starts_with(r#"let u=(0,o.un)(r.u,({get:e})=>{return!1/*agentplus-quota*/;let t=e(a.PO),"#), "{out}");
+        assert_eq!(patch_source(&out, on(QUOTA)), (None, vec![]));
+        // Short names: the hook is a module member.
+        let gate = r#"l2=(0,p.A)(),l3=(0,s._U)(er.JW,"3849065407"),l5=(0,s.Ul)(j.B);let ej=(0,a._U)(v.JW,"3849065407"),x=(0,a._U)(v.JW,"1234567890")"#;
+        let out = patch_source(gate, on(SHORT)).0.unwrap();
+        assert_eq!(
+            out,
+            r#"l2=(0,p.A)(),l3=((0,s._U)(er.JW,"3849065407"),!1/*agentplus-short*/),l5=(0,s.Ul)(j.B);let ej=((0,a._U)(v.JW,"3849065407"),!1/*agentplus-short*/),x=(0,a._U)(v.JW,"1234567890")"#
+        );
+        assert_eq!(patch_source(&out, on(SHORT)), (None, vec![]));
+    }
+
+    #[test]
+    fn hides_usage_banners_in_chunks_since_26_1029() {
+        let on = |v: &str| Patches { version: codex_version(v), ..BANNER };
+        let v = "26.1029.7803.0";
+        // Codex 26.1029: the component, the server banner, the warning and the fallback notice,
+        // each in some chunk.
+        let comp = r#"R=null==b||S?x:B??x,H=R?.rate_limit_upsell?.banner_type==="image_generation_limit_reached",z=(0,r._U)(d.qM,j);if(!g)return k;f[11]!==k||f[12]!==x?(h=1):h=f[14];"#;
+        let upsell = r#"d=(0,r.c)(29),{banner:_,fallbackContent:m,lastImpressionKeyRef:p,onDismiss:f,onShown:g,presentationKey:y,rateLimitStatus:b,renderContent:w,sendBlocked:v,requireEnabledNewChat:C,source:x,trackUsageLimitEvents:k,workCreditConversationId:A}=e,R=void 0!==v&&v,I=void 0!==C&&C,M=void 0===x?"rate_limit_upsell_banner":x,E=(0,i.useRef)(null);"#;
+        let warning = "C=(0,a.c)(39),{rateLimit:S,warningThreshold:A}=e,I=(0,r.gh)(g.PR),{email:T}=(0,s.As)();";
+        let fallback = "_=(0,a.c)(37),{banner:x,bannerKey:w,blockedModel:k,children:C,fallbackContent:S,hostId:A,rateLimitStatus:I,selectedModel:T}=e,j=(0,r.gh)(p.PR);";
+        let out = patch_source(comp, on(v)).0.unwrap();
+        assert!(out.contains("z=(0,r._U)(d.qM,j);if(!0)return k/*agentplus-banner*/;f[11]"), "{out}");
+        let out = patch_source(upsell, on(v)).0.unwrap();
+        assert!(
+            out.contains(r#"workCreditConversationId:A}=e;if(x===void 0&&w==null)return null/*agentplus-banner*/;let R=void 0!==v&&v,I=void 0!==C&&C,M=void 0===x?"#),
+            "{out}"
+        );
+        let out = patch_source(warning, on(v)).0.unwrap();
+        assert!(out.contains("{rateLimit:S,warningThreshold:A}=e;return null/*agentplus-banner*/;let I=(0,r.gh)(g.PR),"), "{out}");
+        let out = patch_source(fallback, on(v)).0.unwrap();
+        assert!(out.contains("selectedModel:T}=e;return null/*agentplus-banner*/;let j=(0,r.gh)(p.PR);"), "{out}");
+        let all = format!("{comp}{upsell}{warning}{fallback}");
+        let out = patch_source(&all, on(v)).0.unwrap();
+        assert_eq!(out.matches(BANNER_MARK).count(), 4, "{out}");
+        assert_eq!(patch_source(&out, on(v)), (None, vec![]));
+        // The JSX that draws the pieces isn't their props.
+        let jsx = r#"(0,o.jsx)(l.r,{rateLimit:x,warningThreshold:E}),(0,o.jsx)(u.x,{banner:p,bannerKey:C,blockedModel:p.blocked_model_slug,fallbackContent:f})"#;
+        assert_eq!(patch_source(jsx, on(v)).0, None);
+        // A copy of the component without the early return is left alone.
+        let copy = r#"z=K?.rate_limit_upsell?.banner_type==="image_generation_limit_reached",N=(0,l._U)(h.qM,V),H=K?.rate_limit_upsell;x[11]!==K?(v=1):v=x[17];"#;
+        assert_eq!(patch_source(copy, on(v)).0, None);
+        // 26.1021 needs all its pieces in one bundle and backticks.
+        assert_eq!(patch_source(&all, on("26.1021.2667.0")).1.len(), 1);
+    }
+
+    #[test]
+    fn chunks_of_the_chunked_layout() {
+        assert_eq!(chunk_of("app://-/assets/782259.9dd29a0a62.js"), Some(true));
+        assert_eq!(chunk_of("app://-/assets/async/24191.589dcc9878.js?v=1"), Some(false));
+        // Not chunks: other files, workers and other scripts, the named layout's bundles.
+        for url in [
+            "app://-/assets/async/24191.589dcc9878.js.map",
+            "app://-/assets/payment-success-celebration.e523af5278.json",
+            "app://-/assets/async/24191.589dcc9878.css",
+            "app://-/assets/workers/12.cadc9555.js",
+            "app://-/assets/dotnet.js",
+            "app://-/assets/dotnet.native.inc43q60w4.js",
+            "app://-/assets/app-initial-ff48311587c5.js",
+            "app://-/assets/detachedWindow-104b953a28b0.js",
+            "app://-/index.html",
+        ] {
+            assert_eq!(chunk_of(url), None, "{url}");
+        }
+        let urls = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(Layout::of(&urls(&["app://-/assets/782259.9dd29a0a62.js", "app://-/assets/async/24191.589dcc9878.js"])), Some(Layout::Chunked));
+        assert_eq!(Layout::of(&urls(&["app://-/assets/app-initial-ff48311587c5.js", "app://-/assets/index-90c6cda9bd3d.js"])), Some(Layout::Named));
+        // 26.924's detached window has neither.
+        assert_eq!(Layout::of(&urls(&["app://-/assets/detachedWindow-104b953a28b0.js", ""])), None);
+        assert_eq!(Layout::of_version(Some([26, 1029])), Layout::Chunked);
+        assert_eq!(Layout::of_version(Some([26, 1021])), Layout::Named);
+        assert_eq!(Layout::of_version(None), Layout::Named);
+        // Smooth scrolling only goes into entry chunks.
+        assert!(for_chunk(SMOOTH, true).smooth_scroll && !for_chunk(SMOOTH, false).smooth_scroll);
+        assert!(for_chunk(Patches { fast: true, ..SMOOTH }, false).fast);
     }
 
     #[test]
@@ -1119,12 +1457,36 @@ mod tests {
         let version = std::env::var("CODEX_VERSION").ok().as_deref().and_then(codex_version);
         let all = Patches { fast: true, full_names: true, quota: true, usage_banner: true, short_names: false, smooth_scroll: true, version };
         let short = Patches { short_names: true, version, ..Patches::default() };
+        // The chunked layout (26.1029+) has its chunks in `async/` too, and every one is
+        // patched, as on a restart.
+        let async_dir = std::path::Path::new(&dir).join("async");
+        let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+        if async_dir.is_dir() {
+            files.extend(std::fs::read_dir(&async_dir).unwrap().map(|e| e.unwrap().path()));
+        }
+        // Which files each mark went into, to check a patch didn't land somewhere unexpected.
+        let mut landed: Vec<(String, &str)> = vec![];
         for (set, want) in [all, short].into_iter().enumerate() {
             let mut missing = None;
-            for e in std::fs::read_dir(&dir).unwrap() {
-                let path = e.unwrap().path();
-                if bundle_of(&path.to_string_lossy().replace('\\', "/")).is_some() {
-                    let (patched, miss) = patch_source(&std::fs::read_to_string(&path).unwrap(), want);
+            for path in &files {
+                let url = path.to_string_lossy().replace('\\', "/");
+                let here = match (bundle_of(&url), chunk_of(&url)) {
+                    (Some(_), _) => want,
+                    (None, Some(entry)) => for_chunk(want, entry),
+                    (None, None) => continue,
+                };
+                {
+                    let (patched, mut miss) = patch_source(&std::fs::read_to_string(path).unwrap(), here);
+                    // As on a restart: smooth scrolling counts as not found in an async chunk.
+                    if want.smooth_scroll && !here.smooth_scroll {
+                        miss.push(Patches::names()[5]);
+                    }
+                    for mark in [FAST_MARK, NAMES_MARK, QUOTA_MARK, BANNER_MARK, SHORT_MARK] {
+                        let n = patched.as_deref().map_or(0, |p| p.matches(mark).count());
+                        if n > 0 {
+                            landed.push((format!("{}: {n}", path.file_name().unwrap().to_string_lossy()), mark));
+                        }
+                    }
                     missing = Some(still_missing(missing, miss));
                     if let (true, Some(src)) = (node, patched) {
                         // .mjs: the bundles are ES modules.
@@ -1136,6 +1498,9 @@ mod tests {
                 }
             }
             assert_eq!(missing, Some(vec![]));
+        }
+        for (file, mark) in &landed {
+            eprintln!("{mark} {file}");
         }
         let _ = std::fs::remove_dir_all(&out);
     }
