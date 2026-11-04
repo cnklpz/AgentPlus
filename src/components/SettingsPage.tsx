@@ -58,14 +58,23 @@ const HINTS: { v: Hints; label: TKey }[] = [
   { v: "brief", label: "settingsPage.hintsBrief" },
 ];
 
-const CLOSE_ACTIONS: { v: CloseAction; label: TKey; hint: TKey }[] = isMac ? [
-  { v: "ask", label: "settingsPage.closeAsk", hint: "settingsPage.closeAskHintMac" },
-  { v: "tray", label: "common.minimizeToMenuBar", hint: "settingsPage.closeTrayHintMac" },
-  { v: "quit", label: "common.quitApp", hint: "settingsPage.closeQuitHint" },
+const CLOSE_ACTIONS: { v: CloseAction; label: TKey }[] = isMac ? [
+  { v: "ask", label: "settingsPage.closeAsk" },
+  { v: "tray", label: "common.minimizeToMenuBar" },
+  { v: "quit", label: "common.quitApp" },
 ] : [
-  { v: "ask", label: "settingsPage.closeAsk", hint: "settingsPage.closeAskHint" },
-  { v: "tray", label: "common.minimizeToTray", hint: "settingsPage.closeTrayHint" },
-  { v: "quit", label: "common.quitApp", hint: "settingsPage.closeQuitHint" },
+  { v: "ask", label: "settingsPage.closeAsk" },
+  { v: "tray", label: "common.minimizeToTray" },
+  { v: "quit", label: "common.quitApp" },
+];
+
+/** Pages and agent tabs that can be hidden (display only: what they run keeps running). */
+const PAGES: { key: "showMcp" | "showSkills" | "showPlugins" | "showClaw" | "showNotify"; label: TKey; icon: React.ReactNode }[] = [
+  { key: "showMcp", label: "settingsPage.pageMcp", icon: <Icon.plug size={13} /> },
+  { key: "showSkills", label: "settingsPage.pageSkills", icon: <Icon.book size={13} /> },
+  { key: "showPlugins", label: "settingsPage.pagePlugins", icon: <Icon.layers size={13} /> },
+  { key: "showClaw", label: "settingsPage.pageClaw", icon: <Icon.chat size={13} /> },
+  { key: "showNotify", label: "settingsPage.pageNotify", icon: <Icon.bell size={13} /> },
 ];
 
 /** AgentPlus's own settings (top-right gear): general options and agent detection. */
@@ -82,7 +91,6 @@ export function SettingsPage(props: Props) {
           <span className="page-icon"><Icon.gear size={20} /></span>
           <div className="page-title">
             <h1>{t("settingsPage.title")}</h1>
-            <span className="muted small hint">{t("settingsPage.subtitle")}</span>
           </div>
           <button className="icon-btn" aria-label={t("settingsPage.closeSettings")} title={t("settingsPage.closeEsc")} onClick={props.onClose}><Icon.close /></button>
         </div>
@@ -128,15 +136,15 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
 
       <section className="sgroup">
         <h2>{t("settingsPage.uiTitle")}</h2>
-        <SettingRow label={t("settingsPage.theme")} desc={t("settingsPage.themeHint")}>
+        <SettingRow label={t("settingsPage.theme")}>
           <Seg value={prefs.theme} onChange={(v) => setPrefs({ ...prefs, theme: v })} label={t("settingsPage.theme")}
             options={THEMES.map((m) => ({ value: m.v, label: <>{m.icon}{t(m.label)}</> }))} />
         </SettingRow>
-        <SettingRow label={t("settingsPage.language")} desc={t("settingsPage.languageHint")}>
+        <SettingRow label={t("settingsPage.language")}>
           <Seg value={prefs.lang} onChange={(v) => setPrefs({ ...prefs, lang: v })} label={t("settingsPage.language")}
             options={[{ value: "auto" as LangPref, label: t("settingsPage.langAuto") }, ...LANGS.map((l) => ({ value: l.id, label: l.label, lang: l.id }))]} />
         </SettingRow>
-        <SettingRow label={t("settingsPage.motion")} desc={t("settingsPage.motionHint", { hint: t(MOTION.find((m) => m.v === prefs.motion)?.hint ?? "settingsPage.motionFullHint") })}>
+        <SettingRow label={t("settingsPage.motion")} desc={t("settingsPage.motionHint")}>
           <Seg value={prefs.motion} onChange={(v) => setPrefs({ ...prefs, motion: v })} label={t("settingsPage.motion")}
             options={MOTION.map((m) => ({ value: m.v, label: t(m.label), title: t(m.hint) }))} />
         </SettingRow>
@@ -147,28 +155,29 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
         <SettingRow label={t("settingsPage.autoLatency")} desc={t("settingsPage.autoLatencyHint")}>
           <Switch on={prefs.autoLatency} onChange={(v) => setPrefs({ ...prefs, autoLatency: v })} label={t("settingsPage.autoLatency")} />
         </SettingRow>
-        <SettingRow label={t("settingsPage.restartProgress")}
-          desc={t("settingsPage.restartProgressHint", { hint: t(RESTART_PROGRESS.find((m) => m.v === prefs.restartProgress)?.hint ?? "settingsPage.restartDialogHint") })}>
+        <SettingRow label={t("settingsPage.restartProgress")}>
           <Seg value={prefs.restartProgress} onChange={(v) => setPrefs({ ...prefs, restartProgress: v })} label={t("settingsPage.restartProgress")}
-            options={RESTART_PROGRESS.map((m) => ({ value: m.v, label: t(m.label) }))} />
+            options={RESTART_PROGRESS.map((m) => ({ value: m.v, label: t(m.label), title: t(m.hint) }))} />
         </SettingRow>
         <SettingRow label={t("settingsPage.privacy")} desc={t("settingsPage.privacyHint", { keys: shortcut("H", true, "+") })}>
           <Switch on={prefs.privacy} onChange={(v) => setPrefs({ ...prefs, privacy: v })} label={t("settingsPage.privacy")} />
         </SettingRow>
-        <SettingRow label={t("settingsPage.showMcp")} desc={t("settingsPage.showMcpHint")}>
-          <Switch on={prefs.showMcp} onChange={(v) => setPrefs({ ...prefs, showMcp: v })} label={t("settingsPage.showMcp")} />
-        </SettingRow>
-        <SettingRow label={t("settingsPage.showSkills")} desc={t("settingsPage.showSkillsHint")}>
-          <Switch on={prefs.showSkills} onChange={(v) => setPrefs({ ...prefs, showSkills: v })} label={t("settingsPage.showSkills")} />
-        </SettingRow>
-        <SettingRow label={t("settingsPage.showPlugins")} desc={t("settingsPage.showPluginsHint")}>
-          <Switch on={prefs.showPlugins} onChange={(v) => setPrefs({ ...prefs, showPlugins: v })} label={t("settingsPage.showPlugins")} />
-        </SettingRow>
-        <SettingRow label={t("settingsPage.showClaw")} desc={t("settingsPage.showClawHint")}>
-          <Switch on={prefs.showClaw} onChange={(v) => setPrefs({ ...prefs, showClaw: v })} label={t("settingsPage.showClaw")} />
-        </SettingRow>
+        <div className="srow stacked">
+          <div>
+            <div className="slabel">{t("settingsPage.pages")}</div>
+            <div className="muted small hint">{t("settingsPage.pagesHint")}</div>
+          </div>
+          <div className="check-chips" role="group" aria-label={t("settingsPage.pages")}>
+            {PAGES.map((p) => (
+              <label key={p.key} className="check-chip">
+                <input type="checkbox" checked={prefs[p.key]} onChange={(e) => setPrefs({ ...prefs, [p.key]: e.target.checked })} />
+                {p.icon}<span>{t(p.label)}</span>
+              </label>
+            ))}
+          </div>
+        </div>
         <SettingRow label={t("settingsPage.closeAction")}
-          desc={t(isMac ? "settingsPage.closeActionHintMac" : "settingsPage.closeActionHint", { hint: t(CLOSE_ACTIONS.find((m) => m.v === prefs.closeAction)?.hint ?? "settingsPage.closeAskHint") })}>
+          desc={t(isMac ? "settingsPage.closeActionHintMac" : "settingsPage.closeActionHint")}>
           <Seg value={prefs.closeAction} onChange={(v) => setPrefs({ ...prefs, closeAction: v })} label={t("settingsPage.closeAction")}
             options={CLOSE_ACTIONS.map((m) => ({ value: m.v, label: t(m.label) }))} />
         </SettingRow>
@@ -189,7 +198,7 @@ function General({ prefs, setPrefs, envs, switching, onEnv, onHistory, flash }: 
 
       <section className="sgroup">
         <h2>{t("settingsPage.aboutTitle")}</h2>
-        <SettingRow label={version ? t("settingsPage.aboutVersion", { version }) : "AgentPlus"} desc={t("settingsPage.aboutHint")} />
+        <SettingRow label={version ? t("settingsPage.aboutVersion", { version }) : "AgentPlus"} />
         <UpdateRow flash={flash} />
         <SettingRow label={t("settingsPage.autoUpdate")} desc={t("settingsPage.autoUpdateHint")}>
           <Switch on={prefs.autoUpdate} onChange={(v) => setPrefs({ ...prefs, autoUpdate: v })} label={t("settingsPage.autoUpdate")} />
@@ -216,7 +225,7 @@ function TrayIconRow({ flash }: { flash: Flash }) {
     api.setTrayMono(on).then(setMono).catch((e) => flash(errText(e), true)).finally(() => setBusy(false));
   };
   return (
-    <SettingRow label={label} desc={t(isMac ? "settingsPage.trayIconHintMac" : "settingsPage.trayIconHint")}>
+    <SettingRow label={label}>
       <Seg value={mono ? "mono" : "color"} onChange={(v) => set(v === "mono")} label={label}
         options={[{ value: "color", label: t("settingsPage.trayColor"), disabled: busy }, { value: "mono", label: t("settingsPage.trayMono"), disabled: busy }]} />
     </SettingRow>
@@ -389,7 +398,7 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
   return (
     <div className="settings">
       <div className="row between">
-        <span className="muted small hint">{t("settingsPage.detectIntro", { env: envLabel })}</span>
+        <span className="muted small">{t("settingsPage.detectIntro", { env: envLabel })}</span>
         <span className="row gap6 noshrink">
           <button className="btn small" onClick={() => setShowAll(true)}><Icon.layers size={12} />{t("settingsPage.supportedAgents")}</button>
           <button className="btn small" onClick={() => { void load(true); }}><Icon.refresh size={12} />{t("settingsPage.redetect")}</button>
@@ -418,7 +427,6 @@ function Detection({ envLabel, onChanged, flash, prefs, setPrefs }: {
               <label className="srow detect-show">
                 <span className="grow minw0">
                   <span className="small strong">{t("settingsPage.showInSidebar")}</span>
-                  <span className="block tiny muted hint">{t("settingsPage.showInSidebarHint")}</span>
                 </span>
                 <Switch on={!hidden.has(d.id)} onChange={() => toggleShown(d.id)} label={t("settingsPage.showInSidebarAria", { name: d.name })} />
               </label>
@@ -495,7 +503,6 @@ function SupportedAgents({ found, onClose }: { found: Set<AgentId>; onClose: () 
           </div>
         ))}
       </div>
-      <span className="tiny muted hint">{t("settingsPage.supportedHint")}</span>
     </Modal>
   );
 }
