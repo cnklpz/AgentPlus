@@ -2,6 +2,28 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.5.0
+
+新增完成通知，并适配 Codex 26.1029。
+
+- 新增「完成通知」页：Codex、Claude Code、OpenCode、ZCode 完成一轮任务后推送消息到 Bark、ntfy、Gotify、Server 酱或 Webhook。通过读取各 Agent 本机的会话记录实现，不改动 Agent 的配置
+- 可设置最短用时，用时更短的回合不推送；可选附带回复内容，或用 Agent 或供应商库里的模型把回复总结成一两句话
+- 开启后右侧显示监听状态、24 小时和 7 天的推送统计图，以及按 Agent 的完成数
+- 托盘右键菜单新增「完成通知」开关
+- 推送渠道的 Key 和令牌加密保存，不参与同步
+- 设置里的 MCP、技能、插件、Claw 接入、完成通知改为一行复选框，并精简了重复的说明文字
+- 修复 Codex 26.1029 改用分块加载界面后界面补丁无法注入
+
+Adds completion notifications and adapts to Codex 26.1029.
+
+- New Completion notifications page: when Codex, Claude Code, OpenCode or ZCode finishes a turn, AgentPlus pushes a message to Bark, ntfy, Gotify, ServerChan or a webhook. It reads each agent's local session records and leaves agent settings unchanged
+- A minimum turn length skips shorter turns; the message can include the reply, or a one- or two-sentence summary written by a model from an agent's providers or the provider library
+- While on, a side panel shows the watcher's status, 24-hour and 7-day push charts and finished turns per agent
+- The tray menu gets a Completion notifications switch
+- Channel keys and tokens are stored encrypted and are not synced
+- In Settings, the MCP, skills, plugins, Claw bridge and notifications switches become one row of checkboxes, and descriptions that repeated their option's name are gone
+- Fixes UI patches failing on Codex 26.1029, which now loads its UI in chunks
+
 ## 0.4.8
 
 适配 Codex 26.1021。
