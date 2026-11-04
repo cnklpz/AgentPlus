@@ -10,6 +10,7 @@
   <a href="#install"><img src="https://img.shields.io/badge/macOS-11%2B%20experimental-68708A?style=flat-square" alt="macOS 11+, experimental" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-68708A?style=flat-square" alt="AGPL-3.0-only" /></a>
   <a href="https://github.com/cnklpz/AgentPlus/stargazers"><img src="https://img.shields.io/github/stars/cnklpz/AgentPlus?style=flat-square&amp;color=5364DA" alt="GitHub stars" /></a>
+  <a href="https://t.me/AgentPlusGroup"><img src="https://img.shields.io/badge/Telegram-Join%20group-26A5E4?style=flat-square&amp;logo=telegram&amp;logoColor=white" alt="Join the Telegram group" /></a>
 </p>
 
 <p align="center">
@@ -18,7 +19,7 @@
   <a href="#screenshots">Screenshots</a> ·
   <a href="#supported-agents">Supported agents</a> ·
   <a href="#star-history">Star history</a> ·
-  <a href="https://t.me/AgentPlusGroup">Telegram</a>
+  <a href="https://t.me/AgentPlusGroup">Telegram group</a>
 </p>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
@@ -208,4 +209,3 @@ For uses outside the AGPL's terms, such as closed-source distribution, contact t
     <img src="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&amp;type=Date" width="100%" alt="AgentPlus star history chart" />
   </picture>
 </a>
-
