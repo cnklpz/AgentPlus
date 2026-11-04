@@ -1,25 +1,31 @@
-<div align="center">
+<p align="center">
+  <img src="docs/images/readme-banner.svg" width="100%" alt="AgentPlus — API settings and model lists for coding agents" />
+</p>
 
-<img src="docs/images/logo.png" width="88" alt="">
+<p align="center">Manage API settings and model lists across your coding agents.</p>
 
-# AgentPlus
+<p align="center">
+  <a href="https://github.com/cnklpz/AgentPlus/releases/latest"><img src="https://img.shields.io/github/v/release/cnklpz/AgentPlus?style=flat-square&amp;color=5364DA" alt="Latest release" /></a>
+  <a href="https://github.com/cnklpz/AgentPlus/releases/latest"><img src="https://img.shields.io/badge/Windows-10%20%7C%2011-5364DA?style=flat-square" alt="Windows 10 / 11" /></a>
+  <a href="#install"><img src="https://img.shields.io/badge/macOS-11%2B%20experimental-68708A?style=flat-square" alt="macOS 11+, experimental" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-68708A?style=flat-square" alt="AGPL-3.0-only" /></a>
+  <a href="https://github.com/cnklpz/AgentPlus/stargazers"><img src="https://img.shields.io/github/stars/cnklpz/AgentPlus?style=flat-square&amp;color=5364DA" alt="GitHub stars" /></a>
+</p>
 
-Manage API settings and model lists across your coding agents.
+<p align="center">
+  <a href="https://agent-plus.org">Website</a> ·
+  <a href="https://github.com/cnklpz/AgentPlus/releases/latest"><strong>Download</strong></a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="#supported-agents">Supported agents</a> ·
+  <a href="#star-history">Star history</a> ·
+  <a href="https://t.me/AgentPlusGroup">Telegram</a>
+</p>
 
-[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
-[![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
-[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Telegram](https://img.shields.io/badge/Telegram-Join%20the%20group-26A5E4?logo=telegram&logoColor=white)](https://t.me/AgentPlusGroup)
-
-English | [简体中文](README.zh-CN.md)
-
-</div>
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/codex-dark-en.png">
-  <img src="docs/images/codex-en.png" alt="AgentPlus main window">
+  <img src="docs/images/codex-en.png" width="100%" alt="AgentPlus main window">
 </picture>
 
 ## Features
@@ -196,9 +202,10 @@ For uses outside the AGPL's terms, such as closed-source distribution, contact t
 
 ## Star history
 
-<a href="https://www.star-history.com/#cnklpz/AgentPlus&Date">
+<a href="https://www.star-history.com/#cnklpz/AgentPlus&amp;Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/agentplus&type=Date&theme=dark" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cnklpz/agentplus&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&amp;type=Date&amp;theme=dark" />
+    <img src="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&amp;type=Date" width="100%" alt="AgentPlus star history chart" />
   </picture>
 </a>
+

@@ -1,25 +1,31 @@
-<div align="center">
+<p align="center">
+  <img src="docs/images/readme-banner.svg" width="100%" alt="AgentPlus — 编程 Agent 的 API 配置和模型列表管理" />
+</p>
 
-<img src="docs/images/logo.png" width="88" alt="">
+<p align="center">统一管理编程 Agent 的 API 配置和模型列表。</p>
 
-# AgentPlus
+<p align="center">
+  <a href="https://github.com/cnklpz/AgentPlus/releases/latest"><img src="https://img.shields.io/github/v/release/cnklpz/AgentPlus?style=flat-square&amp;color=5364DA" alt="最新版本" /></a>
+  <a href="https://github.com/cnklpz/AgentPlus/releases/latest"><img src="https://img.shields.io/badge/Windows-10%20%7C%2011-5364DA?style=flat-square" alt="Windows 10 / 11" /></a>
+  <a href="#安装"><img src="https://img.shields.io/badge/macOS-11%2B%20experimental-68708A?style=flat-square" alt="macOS 11+，实验性支持" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-68708A?style=flat-square" alt="AGPL-3.0-only" /></a>
+  <a href="https://github.com/cnklpz/AgentPlus/stargazers"><img src="https://img.shields.io/github/stars/cnklpz/AgentPlus?style=flat-square&amp;color=5364DA" alt="GitHub stars" /></a>
+</p>
 
-统一管理编程 Agent 的 API 配置和模型列表。
+<p align="center">
+  <a href="https://agent-plus.org">官网</a> ·
+  <a href="https://github.com/cnklpz/AgentPlus/releases/latest"><strong>下载安装</strong></a> ·
+  <a href="#截图">界面预览</a> ·
+  <a href="#支持的-agent">支持的 Agent</a> ·
+  <a href="#star-历史">Star 历史</a> ·
+  <a href="https://t.me/AgentPlusGroup">Telegram</a>
+</p>
 
-[![Release](https://img.shields.io/github/v/release/cnklpz/AgentPlus?color=2F54EB)](https://github.com/cnklpz/AgentPlus/releases/latest)
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
-[![macOS](https://img.shields.io/badge/macOS-11%2B-000000?logo=apple&logoColor=white)](https://github.com/cnklpz/AgentPlus/releases/latest)
-[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Telegram](https://img.shields.io/badge/Telegram-加入群组-26A5E4?logo=telegram&logoColor=white)](https://t.me/AgentPlusGroup)
-
-[English](README.md) | 简体中文
-
-</div>
+<p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/codex-dark-zh.png">
-  <img src="docs/images/codex-zh.png" alt="AgentPlus 主界面">
+  <img src="docs/images/codex-zh.png" width="100%" alt="AgentPlus 主界面">
 </picture>
 
 ## 主要功能
@@ -196,9 +202,10 @@ cd src-tauri && cargo clippy --all-targets && cargo test
 
 ## Star 历史
 
-<a href="https://www.star-history.com/#cnklpz/AgentPlus&Date">
+<a href="https://www.star-history.com/#cnklpz/AgentPlus&amp;Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/agentplus&type=Date&theme=dark" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=cnklpz/agentplus&type=Date" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&amp;type=Date&amp;theme=dark" />
+    <img src="https://api.star-history.com/svg?repos=cnklpz/AgentPlus&amp;type=Date" width="100%" alt="AgentPlus Star 历史曲线" />
   </picture>
 </a>
+
