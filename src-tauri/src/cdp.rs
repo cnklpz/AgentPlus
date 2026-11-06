@@ -499,8 +499,11 @@ impl Session {
             max_frame_size: Some(MAX_MESSAGE),
             ..Default::default()
         };
-        let (ws, _) = tungstenite::client::client_with_config(url, MaybeTlsStream::Plain(stream), Some(config))
-            .map_err(|e| anyhow!("{e}"))?;
+        let (ws, _) = tungstenite::client::client_with_config(url, MaybeTlsStream::Plain(stream), Some(config)).map_err(|e| match e {
+            // Chromium's answer to a target id it no longer has ("No such target id: …").
+            tungstenite::HandshakeError::Failure(tungstenite::Error::Http(r)) if r.status() == 500 => TargetGone.into(),
+            e => anyhow!("{e}"),
+        })?;
         if let MaybeTlsStream::Plain(s) = ws.get_ref() {
             s.set_read_timeout(Some(Duration::from_millis(400)))?;
         }
@@ -886,6 +889,46 @@ impl std::fmt::Display for PortTimeout {
 
 impl std::error::Error for PortTimeout {}
 
+/// The debug target closed between being listed and being connected to.
+#[derive(Debug)]
+pub(crate) struct TargetGone;
+
+impl std::fmt::Display for TargetGone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(crate::i18n::l(
+            "The Codex window closed before it could be patched. Restart Codex to try again",
+            "Codex 窗口在注入前关闭了。请重启 Codex 再试",
+        ))
+    }
+}
+
+impl std::error::Error for TargetGone {}
+
+/// Tries to connect this many times to a window that was replaced.
+const REOPEN_TRIES: u32 = 6;
+
+/// Connects to a window. One replaced since it was listed (Codex 26.1103 swaps its first
+/// window while starting, so the listed target id is gone) is looked up again by URL,
+/// skipping the targets in `taken`. `Ok(None)`: it stayed gone.
+fn open_window(port: u16, page: Value, taken: &[String], pause: Duration) -> Result<Option<(Session, Value)>> {
+    let mut page = page;
+    for _ in 0..REOPEN_TRIES {
+        let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("Debug target has no WebSocket URL", "调试目标缺少 WebSocket 地址")))?;
+        match Session::open(ws, port) {
+            Ok(s) => return Ok(Some((s, page))),
+            Err(e) if e.is::<TargetGone>() => {}
+            Err(e) => return Err(e),
+        }
+        crate::process::pause(pause)?;
+        // Between the old window closing and the new one being listed, try the old one again.
+        let url = page["url"].as_str().unwrap_or_default().to_string();
+        if let Some(p) = page_targets(port)?.into_iter().find(|p| p["url"].as_str() == Some(url.as_str()) && !taken.iter().any(|t| p["id"].as_str() == Some(t.as_str()))) {
+            page = p;
+        }
+    }
+    Ok(None)
+}
+
 /// Waits for Codex windows on the debug port and patches each one.
 pub fn inject(port: u16, port_wait: Duration, want: Patches, on: &dyn Fn(Progress)) -> Result<String> {
     on(Progress::step("port", "active", Some(port.to_string())));
@@ -906,23 +949,36 @@ pub fn inject(port: u16, port_wait: Duration, want: Patches, on: &dyn Fn(Progres
     // Let the first render settle before reloading.
     on(Progress::step("patch", "active", Some(crate::i18n::l("Waiting for the UI to load", "等待界面加载").into())));
     crate::process::pause(Duration::from_secs(2))?;
+    // Windows may have been replaced or opened meanwhile (Codex 26.1103 swaps its first one).
+    let mut pages = match page_targets(port) {
+        Ok(p) if !p.is_empty() => p,
+        _ => pages,
+    };
     // Main windows first: overlay windows never load app-primary, so once a main window
     // has had every bundle there's no point waiting long for it elsewhere.
-    let mut pages = pages;
     pages.sort_by_key(|p| p["url"].as_str().unwrap_or("").contains('?'));
     let mut lazy = Duration::from_secs(40);
     let total = pages.len();
     let mut done = vec![];
+    let mut taken: Vec<String> = vec![];
     let mut missing: Option<Vec<&'static str>> = None;
     for (i, page) in pages.into_iter().enumerate() {
         // A window being patched is finished first: its requests are paused until then.
         crate::process::check_cancel()?;
         let t1 = Instant::now();
         on(Progress::step("patch", "active", Some(tr!("Window {}/{}", "窗口 {}/{}", i + 1, total))));
+        let main = !page["url"].as_str().unwrap_or_default().contains('?');
+        let listed = page["url"].as_str().unwrap_or_default().to_string();
+        let Some((mut s, page)) = open_window(port, page, &taken, Duration::from_millis(500))? else {
+            // A secondary window may close on its own; the main one is needed.
+            if main {
+                return Err(TargetGone.into());
+            }
+            crate::applog::info("inject", format!("{listed}: window closed before it could be patched, skipped"));
+            continue;
+        };
+        taken.extend(page["id"].as_str().map(str::to_string));
         let url = page["url"].as_str().unwrap_or_default();
-        let ws = page["webSocketDebuggerUrl"].as_str().ok_or_else(|| anyhow!(crate::i18n::l("Debug target has no WebSocket URL", "调试目标缺少 WebSocket 地址")))?;
-        let mut s = Session::open(ws, port)?;
-        let main = !url.contains('?');
         let scripts = loaded_scripts(&mut s)?;
         // The main window may not show its scripts yet: then the release tells.
         let Some(layout) = Layout::of(&scripts).or(main.then(|| Layout::of_version(want.version))) else {
@@ -1012,6 +1068,82 @@ mod tests {
         let got = s.call("Fetch.getResponseBody", json!({})).unwrap();
         assert_eq!(got["body"].as_str().map(str::len), Some(body.len()));
         server.join().unwrap();
+    }
+
+    /// A debug port whose `/json/list` answers `list()` (asked again on every request) and
+    /// whose WebSocket handshake succeeds only for target ids in `live()`.
+    fn fake_debug_port(list: impl Fn() -> Vec<&'static str> + Send + 'static, live: impl Fn(&str) -> bool + Send + 'static) -> u16 {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut head = [0u8; 512];
+                let n = stream.peek(&mut head).unwrap();
+                let line = String::from_utf8_lossy(&head[..n]).lines().next().unwrap_or_default().to_string();
+                let path = line.split(' ').nth(1).unwrap_or_default().to_string();
+                if path == "/json/list" {
+                    let pages: Vec<Value> = list()
+                        .into_iter()
+                        .map(|id| json!({ "id": id, "type": "page", "url": "app://-/index.html", "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/{id}") }))
+                        .collect();
+                    let body = Value::from(pages).to_string();
+                    let _ = std::io::Read::read(&mut stream, &mut head);
+                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                } else if let Some(id) = path.strip_prefix("/devtools/page/") {
+                    if live(id) {
+                        std::thread::spawn(move || {
+                            let mut ws = tungstenite::accept(stream).unwrap();
+                            while ws.read().is_ok() {}
+                        });
+                    } else {
+                        let _ = std::io::Read::read(&mut stream, &mut head);
+                        let body = format!("No such target id: {id}");
+                        let _ = write!(stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Length:{}\r\nContent-Type:text/html\r\n\r\n{body}", body.len());
+                    }
+                }
+            }
+        });
+        port
+    }
+
+    fn listed(port: u16, id: &str) -> Value {
+        json!({ "id": id, "url": "app://-/index.html", "webSocketDebuggerUrl": format!("ws://127.0.0.1:{port}/devtools/page/{id}") })
+    }
+
+    #[test]
+    fn a_gone_target_is_reported_as_such() {
+        let port = fake_debug_port(Vec::new, |_| false);
+        let e = Session::open(&format!("ws://127.0.0.1:{port}/devtools/page/OLD"), port).err().unwrap();
+        assert!(e.is::<TargetGone>(), "{e}");
+    }
+
+    #[test]
+    fn a_replaced_window_is_found_again_by_url() {
+        let port = fake_debug_port(|| vec!["NEW"], |id| id == "NEW");
+        let (_, page) = open_window(port, listed(port, "OLD"), &[], Duration::ZERO).unwrap().unwrap();
+        assert_eq!(page["id"], "NEW");
+    }
+
+    #[test]
+    fn a_window_listed_late_is_waited_for() {
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let n = asked.clone();
+        // Not listed yet the first two times.
+        let port = fake_debug_port(move || if n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2 { vec![] } else { vec!["NEW"] }, |id| id == "NEW");
+        let (_, page) = open_window(port, listed(port, "OLD"), &[], Duration::ZERO).unwrap().unwrap();
+        assert_eq!(page["id"], "NEW");
+        assert!(asked.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+    }
+
+    #[test]
+    fn a_closed_window_or_one_already_taken_is_not_opened() {
+        let port = fake_debug_port(Vec::new, |_| false);
+        assert!(open_window(port, listed(port, "OLD"), &[], Duration::ZERO).unwrap().is_none());
+        // The only window with that URL is one already patched in this run.
+        let port = fake_debug_port(|| vec!["DONE"], |id| id == "DONE");
+        assert!(open_window(port, listed(port, "OLD"), &["DONE".into()], Duration::ZERO).unwrap().is_none());
     }
 
     #[test]
