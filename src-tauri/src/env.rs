@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::process::output_within;
 use std::process::Command;
 use std::time::Duration;
-use std::sync::RwLock;
+use std::sync::{Mutex, RwLock};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
@@ -60,6 +60,24 @@ impl Target {
 }
 
 static CURRENT: RwLock<Option<Target>> = RwLock::new(None);
+/// An apply keeps its target from changing while it resolves keys and writes files.
+static OPERATIONS: Mutex<()> = Mutex::new(());
+
+pub fn with_target<T>(expected: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let _guard = crate::util::lock(&OPERATIONS);
+    require_target(expected, &id())?;
+    f()
+}
+
+fn require_target(expected: &str, actual: &str) -> Result<()> {
+    if expected != actual {
+        anyhow::bail!("{}", crate::i18n::l(
+            "The environment changed. Reload its configs before applying changes",
+            "环境已切换，请重新加载配置后再应用修改",
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +268,8 @@ pub fn set(id: &str) -> Result<()> {
     } else {
         return Err(anyhow!(tr!("Unknown environment {id}", "未知环境 {id}")));
     };
+    // Wait for an apply to finish resolving and writing in its original environment.
+    let _guard = crate::util::lock(&OPERATIONS);
     // Runs off the main thread (set_env is async), so load and save under the store lock.
     crate::store::update(|s| {
         s["env"] = match &target {
@@ -287,6 +307,27 @@ pub fn test_var(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writes_require_the_environment_that_supplied_the_draft() {
+        assert!(require_target("windows", "windows").is_ok());
+        assert!(require_target("wsl:Ubuntu", "wsl:Ubuntu").is_ok());
+        assert!(require_target("windows", "wsl:Ubuntu").is_err());
+        assert!(require_target("wsl:Ubuntu", "wsl:Debian").is_err());
+        assert!(require_target("", "windows").is_err());
+    }
+
+    #[test]
+    fn a_stale_target_never_runs_the_write() {
+        let _h = crate::util::TestHome::new("env-stale-write");
+        let wrote = std::cell::Cell::new(false);
+        let result = with_target("invalid-test-environment", || {
+            wrote.set(true);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(!wrote.get());
+    }
 
     #[test]
     fn agent_paths_round_trip_wsl_unc_aliases_without_folding_linux_case() {

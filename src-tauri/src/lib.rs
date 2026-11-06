@@ -101,8 +101,8 @@ async fn preview(agent: String, ops: Vec<Op>) -> Result<Vec<DiffGroup>, String> 
 }
 
 #[tauri::command]
-async fn apply(agent: String, ops: Vec<Op>) -> Result<ApplyResult, String> {
-    blocking(move || {
+async fn apply(agent: String, ops: Vec<Op>, environment: String) -> Result<ApplyResult, String> {
+    blocking(move || env::with_target(&environment, || {
         // Reading state spawns `--version` probes, WSL and PowerShell, so these commands run
         // on worker threads; the transaction keeps each write's store load/save atomic.
         let ops = adapters::resolve(&agent, &ops)?;
@@ -113,7 +113,7 @@ async fn apply(agent: String, ops: Vec<Op>) -> Result<ApplyResult, String> {
             files: files.iter().map(|f| util::display_path(f)).collect(),
             backup_dir: backup.map(|b| b.to_string_lossy().to_string()),
         })
-    })
+    }))
     .await
 }
 

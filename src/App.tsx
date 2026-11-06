@@ -113,6 +113,11 @@ export default function App() {
   const [lib, setLib] = useState<LibEntry[]>([]);
   const [envs, setEnvs] = useState<EnvInfo[]>([]);
   const [switching, setSwitching] = useState(false);
+  const switchingRef = useRef(false);
+  const envRevision = useRef(0);
+  const revision = envRevision.current;
+  // Async callbacks from the previous environment must not repopulate this one's UI.
+  const activeScope = () => !switchingRef.current && revision === envRevision.current;
   // main.tsx applied these before the first render (nothing sensitive is ever painted).
   const [prefs, setPrefsState] = useState<Prefs>(loadPrefs);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
@@ -232,14 +237,15 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const reload = () => api.listAgents().then(setAgents).catch((e) => setLoadError(errText(e)));
+  const reload = () => activeScope() ? api.listAgents().then((s) => { if (activeScope()) setAgents(s); }).catch((e) => { if (activeScope()) setLoadError(errText(e)); }) : Promise.resolve();
   const reloadLib = () => api.libraryList().then(setLib).catch(() => undefined);
-  const reloadEnvs = () => api.listEnvs().then(setEnvs).catch(() => undefined);
-  const reloadProjects = () => api.projectsList().then(setProjects).catch(() => undefined);
+  const reloadEnvs = () => activeScope() ? api.listEnvs().then((s) => { if (activeScope()) setEnvs(s); }).catch(() => undefined) : Promise.resolve();
+  const reloadProjects = () => activeScope() ? api.projectsList().then((s) => { if (activeScope()) setProjects(s); }).catch(() => undefined) : Promise.resolve();
   /** Re-reads the open project configs (a project closed meanwhile stays closed). */
   const reloadProjStates = () => {
+    if (!activeScope()) return;
     for (const id of Object.keys(projStates) as AgentId[]) {
-      api.getAgent(id).then((s) => setProjStates((m) => (m[id] ? { ...m, [id]: s } : m))).catch(() => undefined);
+      api.getAgent(id).then((s) => { if (activeScope()) setProjStates((m) => (m[id] ? { ...m, [id]: s } : m)); }).catch(() => undefined);
     }
   };
   const reloadGateway = () => api.gatewayStatus().then(setGateway).catch(() => undefined);
@@ -447,6 +453,7 @@ export default function App() {
   /** Sets an agent's draft. After an `await`, pass a function of the current draft: a value
    *  computed from the handler's `draft` would bring back ops written meanwhile. */
   const setDraftFor = (agent: string, next: Draft | ((cur: Draft) => Draft)) => {
+    if (!activeScope()) return;
     // Undoing a change that is being written would be lost: the file gets it anyway, and
     // afterwards no pending op would be left to show or revert it.
     const sending = inFlight.current[agent];
@@ -518,7 +525,7 @@ export default function App() {
     await api.codexBuiltinCommit();
     replaceAgent(await api.getAgent("codex"));
   };
-  const replaceAgent = (next: AgentState) => (isProjectId(next.id)
+  const replaceAgent = (next: AgentState) => activeScope() && (isProjectId(next.id)
     ? setProjStates((m) => ({ ...m, [next.id]: next }))
     : setAgents((list) => list.map((a) => (a.id === next.id ? next : a))));
 
@@ -635,10 +642,11 @@ export default function App() {
    * the agent reads changed.
    */
   const writeAgent = async (a: AgentState, sent: Draft, ops: Op[] = opsToWrite(a, sent), autoRestart = true): Promise<ApplyResult> => {
+    if (!activeScope() || !curEnv) throw new Error(t("app.loadingConfig"));
     inFlight.current[a.id] = sent;
     let r: ApplyResult;
     try {
-      r = await api.apply(a.id, ops);
+      r = await api.apply(a.id, ops, curEnv.id);
     } finally {
       delete inFlight.current[a.id];
     }
@@ -657,7 +665,7 @@ export default function App() {
   };
 
   const apply = async () => {
-    if (!st) return;
+    if (!st || !activeScope() || busy) return;
     setBusy(true);
     const sentOps = opsToWrite(st, draft);
     try {
@@ -675,6 +683,7 @@ export default function App() {
 
   /** Applies the given agents' pending changes one by one; true when all succeeded. */
   const applyAgents = async (ids: AgentId[], autoRestart = true): Promise<boolean> => {
+    if (!activeScope() || busy) return false;
     setBusy(true);
     const done: string[] = [];
     try {
@@ -699,27 +708,43 @@ export default function App() {
   /** Env switch with pending changes: ask which to apply, discard the rest, then switch. */
   const [envAsk, setEnvAsk] = useState<string | null>(null);
   const doSwitch = async (id: string) => {
+    if (switchingRef.current || Object.keys(inFlight.current).length) return;
+    switchingRef.current = true;
+    envRevision.current++;
     setSwitching(true);
+    setAgents([]);
+    setProjects([]);
+    setDrafts({});
+    setPicked({});
+    setRails({});
+    setHubSel(null);
+    setProjStates({});
+    setProjPath(null);
+    setDialog(null);
+    setHubDialog(undefined);
+    setCopyOpen(false);
+    setPalette(false);
+    setAttr(null);
+    setLoadError(null);
     try {
       await api.setEnv(id);
-      setDrafts({});
-      setPicked({});
-      setRails({});
-      setHubSel(null);
-      setProjStates({});
-      setProjPath(null);
-      reloadProjects();
-      setAgents(await api.listAgents());
-      const list = await api.listEnvs();
+      const [states, list, projectList] = await Promise.all([api.listAgents(), api.listEnvs(), api.projectsList().catch(() => [])]);
+      setAgents(states);
       setEnvs(list);
+      setProjects(projectList);
       flash(t("app.switchedTo", { env: list.find((e) => e.current)?.label ?? id }));
     } catch (e) {
+      // Keep the old configs out even if loading the new environment failed.
+      setLoadError(errText(e));
+      setEnvs(await api.listEnvs().catch(() => []));
       flash(t("app.switchFailed", { err: errText(e) }), true);
     } finally {
+      switchingRef.current = false;
       setSwitching(false);
     }
   };
   const switchEnv = (id: string) => {
+    if (!activeScope() || busy) return;
     if (totalPending) setEnvAsk(id);
     else doSwitch(id);
   };
@@ -736,6 +761,7 @@ export default function App() {
     try {
       const e = await api.projectOpen(path);
       const s = await api.getAgent(e.agent);
+      if (!activeScope()) return;
       setProjStates((m) => ({ ...m, [e.agent]: s }));
       setPage(null);
       setSelected("opencode");
@@ -1358,7 +1384,9 @@ export default function App() {
 
   // ------------------------------------------------------------ right-click menu
   const refreshAll = () => {
+    if (!activeScope()) return;
     reloadConfigs();
+    reloadEnvs();
     reloadGateway();
     flash(t("app.reloaded"));
   };
@@ -1577,7 +1605,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <ContextMenu build={buildMenu} />
+      {!switching && <ContextMenu build={buildMenu} />}
       <ConfirmHost />
       <header className="topbar" data-tauri-drag-region>
         {/* macOS shows neither app icon nor name in the title bar, only the traffic lights;
@@ -1588,7 +1616,7 @@ export default function App() {
         </button>
         <div className="top-end" data-tauri-drag-region>
         <div className="top-right" data-tauri-drag-region>
-          {!isMac && <EnvSwitch envs={envs} current={curEnv} switching={switching} onOpen={reloadEnvs} onPick={switchEnv} />}
+          {!isMac && <EnvSwitch envs={envs} current={curEnv} switching={switching} disabled={busy} onOpen={reloadEnvs} onPick={switchEnv} />}
           <button className="gear-btn" aria-label={t("app.navSettings")} aria-pressed={page === "settings"} title={update.kind === "available" ? t("app.updateDot") : undefined}
             onClick={() => (page === "settings" ? closeSettings() : openSettings())}>
             <span className="gear-ico"><Icon.gear />{update.kind === "available" && <span className="gear-dot" />}</span><span className="gear-label">{t("app.settings")}</span>
@@ -1599,6 +1627,7 @@ export default function App() {
       </header>
 
       <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : []), ...(wechatAside ? ["wechat"] : []), ...(notifyAside ? ["notify"] : [])].includes(page) ? " wide" : ""}`}>
+        {switching ? <main className="page"><div className="empty" role="status">{t("envSwitch.switching")}</div></main> : <>
         {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showClaw={prefs.showClaw} showNotify={prefs.showNotify}
           onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
@@ -1683,7 +1712,7 @@ export default function App() {
             prefs={prefs}
             setPrefs={setPrefs}
             envs={envs}
-            switching={switching}
+            switching={switching || busy}
             onEnv={switchEnv}
             onHistory={() => setPage("history")}
             onClose={closeSettings}
@@ -1788,6 +1817,7 @@ export default function App() {
             )}
           />
         )}
+        </>}
       </div>
 
       {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} library={libOpen ? { groups: libGroups, onAdd: addFromLibrary } : undefined} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onCommitCatalog={commitCodexCatalog} flash={flash} onSave={saveProvider} onClose={() => setDialog(null)} />}

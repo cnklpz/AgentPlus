@@ -1067,7 +1067,7 @@ const real = {
   listAgents: () => invoke<AgentState[]>("list_agents"),
   getAgent: (agent: AgentId) => invoke<AgentState>("get_agent", { agent }),
   preview: (agent: AgentId, ops: Op[]) => invoke<DiffGroup[]>("preview", { agent, ops }),
-  apply: (agent: AgentId, ops: Op[]) => invoke<ApplyResult>("apply", { agent, ops }),
+  apply: (agent: AgentId, ops: Op[], environment: string) => invoke<ApplyResult>("apply", { agent, ops, environment }),
   testLatency: (url: string) => invoke<number>("test_latency", { url }),
   /** Restarts the agent, or starts it when it isn't running; resolves with a summary. */
   restart: (agent: AgentId, onProgress?: (p: RestartProgress) => void, plain?: boolean) => {

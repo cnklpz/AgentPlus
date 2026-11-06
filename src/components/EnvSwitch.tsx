@@ -10,12 +10,13 @@ interface Props {
   envs: EnvInfo[];
   current: EnvInfo | undefined;
   switching: boolean;
+  disabled?: boolean;
   onOpen: () => void;
   onPick: (id: string) => void;
 }
 
 /** Top-bar picker for where configs are read and written: Windows or a WSL distro. */
-export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
+export function EnvSwitch({ envs, current, switching, disabled, onOpen, onPick }: Props) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
@@ -29,6 +30,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
         className={`env-btn${open ? " open" : ""}${wsl ? " wsl" : ""}`}
         aria-haspopup="menu"
         aria-expanded={open}
+        disabled={switching || disabled}
         title={t("envSwitch.switchTitle")}
         onClick={() => { if (!open) onOpen(); setOpen((o) => !o); }}
       >
@@ -36,7 +38,7 @@ export function EnvSwitch({ envs, current, switching, onOpen, onPick }: Props) {
         <span>{switching ? t("envSwitch.switching") : current?.label ?? localEnvLabel()}</span>
         <Icon.chevron />
       </button>
-      {open && (
+      {open && !switching && !disabled && (
         <div className="dd-menu env-menu" role="menu">
           <div className="env-menu-head tiny muted">{t("envSwitch.menuHead")}</div>
           {envs.map((e) => (
