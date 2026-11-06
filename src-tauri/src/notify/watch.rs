@@ -9,8 +9,8 @@
 //! - OpenCode and ZCode: their SQLite `message` table; an assistant message with
 //!   `finish: "stop"` in a top-level session ends a turn.
 //!
-//! Only turns that end after watching starts are reported: files already there are read from
-//! their end, and the databases from the current time.
+//! Only turns that end after watching starts are reported. Newly discovered files are read
+//! from the beginning, including resumed sessions, and their historical turns are filtered.
 
 use super::Done;
 use crate::util::home;
@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -86,12 +86,15 @@ pub struct Turn {
     /// Turn or message ids already reported.
     pub done: HashSet<String>,
     /// Claude Code: a finished message whose later entries (its text after its thinking)
-    /// may still follow; `flush` hands it over once the read is through.
+    /// may still follow; the file watcher waits for text and a quiet poll before flushing.
     pub pending: Option<(String, Done)>,
+    /// A thinking-only entry may be followed by text in a later append.
+    awaiting_text: bool,
 }
 
 /// The turn held back by the last lines read, if any.
 pub fn flush(t: &mut Turn) -> Option<Done> {
+    t.awaiting_text = false;
     t.pending.take().map(|p| p.1)
 }
 
@@ -172,14 +175,17 @@ pub fn claude_line(t: &mut Turn, line: &str) -> Option<Done> {
     match v["type"].as_str()? {
         "user" if is_prompt(&v) => {
             t.start_ms = ts_ms(&v["timestamp"]);
-            None
+            flush(t)
         }
+        "system" if v["subtype"] == "turn_duration" => flush(t),
         "assistant" if v["isSidechain"].as_bool() != Some(true) && v["message"]["stop_reason"] == "end_turn" => {
             let end = ts_ms(&v["timestamp"]).unwrap_or_else(now_ms);
             let id = v["message"]["id"].as_str().or(v["uuid"].as_str()).map(str::to_string).unwrap_or_else(|| end.to_string());
             let text = v["message"]["content"].as_array().map(|a| a.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+            let thinking_only = v["message"]["content"].as_array().is_some_and(|a| !a.is_empty() && a.iter().all(|b| b["type"] == "thinking" || b["type"] == "redacted_thinking"));
             // One message is written as several entries (thinking, then text): gather them.
             if let Some((_, d)) = t.pending.as_mut().filter(|(pid, _)| *pid == id) {
+                t.awaiting_text &= thinking_only;
                 // The same entry read twice (a file rewritten in place) adds nothing.
                 if !text.is_empty() && !d.message.ends_with(&text) {
                     d.message = if d.message.is_empty() { text } else { format!("{}\n{text}", d.message) };
@@ -190,6 +196,7 @@ pub fn claude_line(t: &mut Turn, line: &str) -> Option<Done> {
             if remember(t, id.clone()) {
                 let d = Done { agent: "claude", project: folder_name(&t.cwd), message: text, duration_ms: t.start_ms.map(|s| (end - s).max(0)), end_ms: end };
                 t.pending = Some((id, d));
+                t.awaiting_text = thinking_only;
             }
             before
         }
@@ -214,8 +221,8 @@ pub struct Files {
     /// By `path_key`, so one file reached by two spellings is followed once.
     files: HashMap<String, (PathBuf, Tracked)>,
     scanned: Option<std::time::Instant>,
-    /// When watching started: files created before it are read from their end.
-    started: SystemTime,
+    /// Historical turns read while catching up a resumed file must not be reported.
+    started_ms: i64,
     /// Codex rollouts from its database, and when they were read.
     threads: (Vec<PathBuf>, Option<std::time::Instant>),
 }
@@ -230,12 +237,6 @@ fn path_key(p: &Path) -> String {
     }
 }
 
-/// When a session file's first entry was written (both agents stamp their entries).
-fn first_entry_ms(line: &str) -> Option<i64> {
-    let v: Value = serde_json::from_str(line).ok()?;
-    ts_ms(&v["timestamp"]).or_else(|| ts_ms(&v["payload"]["timestamp"]))
-}
-
 /// Modified within `RECENT`. `fs::metadata` rather than the directory listing's copy: on
 /// Windows the listing can show a stale time for a file another process keeps open.
 fn recent(p: &Path) -> bool {
@@ -245,7 +246,7 @@ fn recent(p: &Path) -> bool {
 impl Files {
     pub fn new(agent: &'static str) -> Files {
         let parse = if agent == "codex" { codex_line } else { claude_line };
-        Files { agent, parse, files: HashMap::new(), scanned: None, started: SystemTime::now(), threads: (Vec::new(), None) }
+        Files { agent, parse, files: HashMap::new(), scanned: None, started_ms: now_ms(), threads: (Vec::new(), None) }
     }
 
     fn candidates(&mut self) -> Vec<PathBuf> {
@@ -289,35 +290,25 @@ impl Files {
                 if self.files.contains_key(&key) {
                     continue;
                 }
-                let mut turn = Turn::default();
-                // A file begun since watching started is read whole; an older one (a session
-                // resumed after a break) from its end, keeping what its first line says.
-                // Without a creation time (the WSL share) its first entry's time decides.
-                let meta = fs::metadata(&p).ok();
-                let first = File::open(&p).ok().and_then(|f| BufReader::new(f).lines().next()).and_then(Result::ok);
-                let started_ms = self.started.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-                let fresh = match meta.as_ref().map(|m| m.created()) {
-                    Some(Ok(c)) => c >= self.started,
-                    _ => first.as_deref().and_then(first_entry_ms).is_some_and(|t| t >= started_ms),
-                };
-                let offset = if fresh {
-                    0
-                } else {
-                    if let Some(first) = &first {
-                        let _ = (self.parse)(&mut turn, first);
-                    }
-                    meta.map(|m| m.len()).unwrap_or(0)
-                };
-                self.files.insert(key, (p, Tracked { offset, partial: Vec::new(), turn }));
+                // Creation time says nothing about when an old session resumed. Read its
+                // history in bounded batches, preserving metadata and filtering old turns.
+                self.files.insert(key, (p, Tracked { offset: 0, partial: Vec::new(), turn: Turn::default() }));
             }
             // Forget files that stopped changing long ago.
             self.files.retain(|_, (p, _)| fs::metadata(p).ok().and_then(|m| m.modified().ok()).and_then(|m| m.elapsed().ok()).is_some_and(|a| a < RECENT * 2));
         }
-        let cutoff = now_ms() - STALE_MS;
+        let cutoff = (now_ms() - STALE_MS).max(self.started_ms);
         for (p, f) in self.files.values_mut() {
+            let before = f.offset;
             let lines = read_new(p, f);
             let found: Vec<Done> = lines.iter().filter_map(|l| (self.parse)(&mut f.turn, l)).collect();
-            out.extend(found.into_iter().chain(flush(&mut f.turn)).filter(|d| d.end_ms >= cutoff));
+            // A read ending after thinking (or inside the next JSON line) is not the end
+            // of a message. Keep it across polls; text must arrive before an idle flush.
+            let ready = f.offset == before && f.partial.is_empty()
+                && fs::metadata(p).is_ok_and(|m| m.len() == f.offset)
+                && f.turn.pending.is_some() && !f.turn.awaiting_text;
+            let pending = if ready { flush(&mut f.turn) } else { None };
+            out.extend(found.into_iter().chain(pending).filter(|d| d.end_ms >= cutoff));
         }
     }
 }
@@ -365,14 +356,17 @@ pub struct Db {
     path: fn() -> PathBuf,
     /// Messages updated after this (ms) are looked at.
     since: i64,
-    seen: HashSet<String>,
+    seen: HashMap<String, i64>,
     stamp: Option<(SystemTime, Option<SystemTime>)>,
+    /// A stable tie-breaker while draining a page, without advancing the committed watermark.
+    cursor: Option<(i64, String)>,
+    scan_stamp: Option<(SystemTime, Option<SystemTime>)>,
 }
 
 impl Db {
     pub fn new(agent: &'static str) -> Db {
         let path = if agent == "opencode" { opencode_db } else { zcode_db };
-        Db { agent, path, since: now_ms(), seen: HashSet::new(), stamp: None }
+        Db { agent, path, since: now_ms(), seen: HashMap::new(), stamp: None, cursor: None, scan_stamp: None }
     }
 
     pub fn poll(&mut self, out: &mut Vec<Done>) -> Result<(), String> {
@@ -385,16 +379,31 @@ impl Db {
         }
         let conn = Connection::open_with_flags(&p, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| e.to_string())?;
         conn.busy_timeout(Duration::from_millis(500)).map_err(|e| e.to_string())?;
-        let found = query_done(&conn, self.agent, self.since).map_err(|e| e.to_string())?;
-        // A full page leaves rows for the next poll, even if the database doesn't change.
-        self.stamp = (found.len() < PAGE).then_some(stamp);
-        let cutoff = now_ms() - STALE_MS;
-        for (id, updated, d) in found {
-            self.since = self.since.max(updated);
-            if self.seen.len() > 512 {
-                self.seen.clear();
+        self.read_page(&conn, stamp, out).map_err(|e| e.to_string())
+    }
+
+    fn read_page(&mut self, conn: &Connection, stamp: (SystemTime, Option<SystemTime>), out: &mut Vec<Done>) -> rusqlite::Result<()> {
+        let found = query_page(conn, self.agent, self.since, self.cursor.as_ref())?;
+        let first_stamp = *self.scan_stamp.get_or_insert(stamp);
+        if let Some((id, updated, _)) = found.last() {
+            self.cursor = Some((*updated, id.clone()));
+        }
+        // Finish a sweep before committing its watermark. If the DB changed while paging,
+        // repeat from the old watermark so a row updated behind the cursor is not lost.
+        if found.len() < PAGE {
+            if first_stamp == stamp {
+                self.since = self.cursor.as_ref().map_or(self.since, |c| c.0);
+                self.stamp = Some(stamp);
             }
-            if !d.agent.is_empty() && d.end_ms >= cutoff && self.seen.insert(id) {
+            self.cursor = None;
+            self.scan_stamp = None;
+        } else {
+            self.stamp = None;
+        }
+        let cutoff = now_ms() - STALE_MS;
+        self.seen.retain(|_, ended| *ended >= cutoff);
+        for (id, _, d) in found {
+            if !d.agent.is_empty() && d.end_ms >= cutoff && self.seen.insert(id, d.end_ms).is_none() {
                 out.push(d);
             }
         }
@@ -407,17 +416,24 @@ const PAGE: usize = 500;
 
 /// Finished top-level assistant turns updated at or after `since` (rows sharing the last
 /// time seen are read again; `seen` drops the repeats): (message id, updated, turn).
-pub fn query_done(conn: &Connection, agent: &'static str, since: i64) -> rusqlite::Result<Vec<(String, i64, Done)>> {
+#[cfg(test)]
+fn query_done(conn: &Connection, agent: &'static str, since: i64) -> rusqlite::Result<Vec<(String, i64, Done)>> {
+    query_page(conn, agent, since, None)
+}
+
+fn query_page(conn: &Connection, agent: &'static str, since: i64, cursor: Option<&(i64, String)>) -> rusqlite::Result<Vec<(String, i64, Done)>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT m.id, m.time_updated, m.data, s.directory, s.parent_id FROM message m JOIN session s ON s.id = m.session_id \
-         WHERE m.time_updated >= ?1 ORDER BY m.time_updated LIMIT {PAGE}"
+         WHERE m.time_updated >= ?1 AND (?2 IS NULL OR m.time_updated > ?2 OR (m.time_updated = ?2 AND m.id > ?3)) \
+         ORDER BY m.time_updated, m.id LIMIT {PAGE}"
     ))?;
     let rows: Vec<(String, i64, String, String, Option<String>)> = stmt
-        .query_map(params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .query_map(params![since, cursor.map(|c| c.0), cursor.map(|c| c.1.as_str())], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let mut out = Vec::new();
     for (id, updated, data, dir, parent) in rows {
-        let Ok(v) = serde_json::from_str::<Value>(&data) else { continue };
+        // An invalid record still consumes its place in the page and advances the cursor.
+        let v = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
         let end = v["time"]["completed"].as_i64();
         if v["role"] != "assistant" || v["finish"] != "stop" || end.is_none() || parent.is_some_and(|p| !p.is_empty()) {
             // Still remember how far we got.
@@ -441,6 +457,170 @@ fn last_text(conn: &Connection, message_id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn append(path: &Path, value: Value) {
+        writeln!(File::options().create(true).append(true).open(path).unwrap(), "{value}").unwrap();
+    }
+
+    fn claude_entry(id: &str, ms: i64, content: Value) -> Value {
+        serde_json::json!({
+            "type": "assistant", "cwd": "/review",
+            "timestamp": chrono::DateTime::from_timestamp_millis(ms).unwrap().to_rfc3339(),
+            "message": {"id": id, "stop_reason": "end_turn", "content": content}
+        })
+    }
+
+    #[test]
+    fn resumed_files_report_new_turns_without_replaying_history() {
+        let _h = crate::util::TestHome::new("notify-resume");
+        let dir = claude_projects().join("review");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("old.jsonl");
+        let now = now_ms();
+        let text = serde_json::json!([{"type":"text","text":"Done"}]);
+        append(&path, claude_entry("old", now - 10_000, text.clone()));
+        File::options().write(true).open(&path).unwrap().set_times(
+            fs::FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(3600))
+        ).unwrap();
+        let mut watcher = Files::new("claude");
+        watcher.started_ms = now - 1000;
+        let mut out = Vec::new();
+        watcher.poll(&mut out);
+        assert!(watcher.files.is_empty(), "the inactive session was not tracked");
+        append(&path, claude_entry("new", now, text));
+        watcher.scanned = None;
+        watcher.poll(&mut out);
+        watcher.poll(&mut out);
+        assert_eq!(out.len(), 1, "only the turn completed after watching began is reported");
+        assert_eq!(out[0].end_ms, now);
+        watcher.poll(&mut out);
+        assert_eq!(out.len(), 1, "idle polls do not report again");
+    }
+
+    #[test]
+    fn claude_thinking_and_partial_text_survive_separate_polls() {
+        let _h = crate::util::TestHome::new("notify-poll-text");
+        let dir = claude_projects().join("review");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let mut watcher = Files::new("claude");
+        let now = now_ms();
+        append(&path, claude_entry("m1", now, serde_json::json!([{"type":"thinking"}])));
+        let mut out = Vec::new();
+        watcher.poll(&mut out);
+        watcher.poll(&mut out);
+        assert!(out.is_empty(), "thinking alone must not be dispatched, even while idle");
+        let text = claude_entry("m1", now, serde_json::json!([{"type":"text","text":"Fixed."}]));
+        let line = format!("{text}\n");
+        let half = line.len() / 2;
+        File::options().append(true).open(&path).unwrap().write_all(&line.as_bytes()[..half]).unwrap();
+        watcher.poll(&mut out);
+        watcher.poll(&mut out);
+        assert!(out.is_empty(), "a partial JSON line must not flush the thinking entry");
+        File::options().append(true).open(&path).unwrap().write_all(&line.as_bytes()[half..]).unwrap();
+        watcher.poll(&mut out);
+        append(&path, claude_entry("m1", now, serde_json::json!([{"type":"text","text":"Tests pass."}])));
+        watcher.poll(&mut out);
+        assert!(out.is_empty(), "wait until the file stops changing");
+        watcher.poll(&mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].message, "Fixed.\nTests pass.");
+        append(&path, text);
+        watcher.poll(&mut out);
+        watcher.poll(&mut out);
+        assert_eq!(out.len(), 1, "a repeated message must not dispatch twice");
+    }
+
+    #[test]
+    fn claude_empty_replies_still_report_and_explicit_turn_end_flushes_thinking() {
+        let _h = crate::util::TestHome::new("notify-empty-reply");
+        let dir = claude_projects().join("review");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+        let mut watcher = Files::new("claude");
+        let now = now_ms();
+        append(&path, claude_entry("empty", now, serde_json::json!([])));
+        let mut out = Vec::new();
+        watcher.poll(&mut out);
+        watcher.poll(&mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].message.is_empty());
+        append(&path, claude_entry("thinking", now, serde_json::json!([{"type":"thinking"}])));
+        watcher.poll(&mut out);
+        append(&path, serde_json::json!({"type":"system","subtype":"turn_duration"}));
+        watcher.poll(&mut out);
+        assert_eq!(out.len(), 2);
+    }
+
+    fn paging_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session (id text primary key, directory text, parent_id text);
+             CREATE TABLE message (id text primary key, session_id text, time_created integer, time_updated integer, data text);
+             CREATE TABLE part (id text, message_id text, time_created integer, data text);
+             INSERT INTO session VALUES ('s', '/review', NULL);"
+        ).unwrap();
+        conn
+    }
+
+    fn db_message(conn: &Connection, id: &str, at: i64, data: &str) {
+        conn.execute("INSERT OR REPLACE INTO message VALUES (?1, 's', ?2, ?2, ?3)", params![id, at, data]).unwrap();
+    }
+
+    fn completed(at: i64) -> String {
+        serde_json::json!({"role":"assistant","finish":"stop","time":{"completed":at}}).to_string()
+    }
+
+    #[test]
+    fn sqlite_pages_drain_timestamp_ties_and_keep_recent_deduplication() {
+        let conn = paging_db();
+        let now = now_ms();
+        for n in 0..1100 {
+            db_message(&conn, &format!("m{n:04}"), now, &completed(now));
+        }
+        // Invalid JSON still occupies a page slot; it must not terminate the sweep early.
+        db_message(&conn, "a-invalid", now, "broken");
+        let mut watcher = Db::new("opencode");
+        watcher.since = now;
+        let stamp = (SystemTime::now(), None);
+        let mut out = Vec::new();
+        for _ in 0..3 { watcher.read_page(&conn, stamp, &mut out).unwrap(); }
+        assert_eq!(out.len(), 1100);
+        assert_eq!(watcher.stamp, Some(stamp));
+        assert!(watcher.cursor.is_none());
+        // Revisit the timestamp boundary after the DB changes: no duplicates even beyond 512 ids.
+        db_message(&conn, "z-new", now, &completed(now));
+        let changed = (stamp.0 + Duration::from_secs(1), None);
+        for _ in 0..3 { watcher.read_page(&conn, changed, &mut out).unwrap(); }
+        assert_eq!(out.len(), 1101);
+    }
+
+    #[test]
+    fn sqlite_revisits_a_message_completed_behind_an_active_cursor() {
+        let conn = paging_db();
+        let now = now_ms();
+        for n in 0..501 {
+            db_message(&conn, &format!("m{n:04}"), now, r#"{"role":"assistant","time":{}}"#);
+        }
+        let mut watcher = Db::new("opencode");
+        watcher.since = now;
+        let stamp = (SystemTime::now(), None);
+        let mut out = Vec::new();
+        watcher.read_page(&conn, stamp, &mut out).unwrap();
+        // A previously unfinished row now completes with the same millisecond timestamp.
+        db_message(&conn, "m0000", now, &completed(now));
+        let changed = (stamp.0 + Duration::from_secs(1), None);
+        watcher.read_page(&conn, changed, &mut out).unwrap();
+        assert!(watcher.stamp.is_none(), "a changed DB requires another sweep");
+        watcher.read_page(&conn, changed, &mut out).unwrap();
+        watcher.read_page(&conn, changed, &mut out).unwrap();
+        assert_eq!(out.len(), 1);
+        // Later updates with newer timestamps are picked up too.
+        db_message(&conn, "m0001", now + 1, &completed(now + 1));
+        for _ in 0..2 { watcher.read_page(&conn, changed, &mut out).unwrap(); }
+        assert_eq!(out.len(), 2);
+    }
 
     fn feed(parse: fn(&mut Turn, &str) -> Option<Done>, lines: &[&str]) -> Vec<Done> {
         let mut t = Turn::default();
@@ -550,13 +730,10 @@ mod tests {
     }
 
     #[test]
-    fn path_keys_and_first_entries() {
+    fn path_keys() {
         if cfg!(windows) {
             assert_eq!(path_key(Path::new("C:/Users/Me/.codex/a.jsonl")), path_key(Path::new(r"c:\users\me\.codex\A.jsonl")));
         }
-        assert_eq!(first_entry_ms(r#"{"timestamp":"2026-11-04T07:38:39.268Z","type":"session_meta"}"#), Some(1_793_777_919_268));
-        assert_eq!(first_entry_ms(r#"{"type":"session_meta","payload":{"timestamp":"2026-11-04T07:38:39.268Z"}}"#), Some(1_793_777_919_268));
-        assert_eq!(first_entry_ms("not json"), None);
     }
 
     #[test]
