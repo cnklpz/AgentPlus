@@ -2,6 +2,16 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.5.1
+
+适配 Codex 26.1103。
+
+- 修复 Codex 26.1103 上注入界面补丁失败，提示「HTTP error: 500 Internal Server Error」
+
+Adapts to Codex 26.1103.
+
+- Fixes UI patches failing with "HTTP error: 500 Internal Server Error" on Codex 26.1103
+
 ## 0.5.0
 
 新增完成通知，并适配 Codex 26.1029。
