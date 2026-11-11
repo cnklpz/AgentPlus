@@ -346,6 +346,8 @@ export interface UsageReport {
   dedupedTokens: number;
   /** Records repeated across log files (forks, resumes), counted once. */
   repeatedRequests: number;
+  /** When the agents' logs were read (Unix seconds). */
+  scannedAt: number;
   /** First request in the gateway's usage ledger (Unix seconds). */
   ledgerSince: number | null;
   sources: { agent: string; files: number; path: string }[];
@@ -1265,8 +1267,9 @@ const real = {
   notifyClearRecent: () => invoke<NotifyStatus>("notify_clear_recent"),
   /** Summarizes a sample reply with the summary settings as typed; returns the summary. */
   notifyTestSummary: (config: NotifyConfig) => invoke<string>("notify_test_summary", { config }),
-  /** Token usage in [from, to) (Unix seconds), from agent logs and the gateway ledger. */
-  usageReport: (from: number, to: number, bucket: "hour" | "day") => invoke<UsageReport>("usage_report", { from, to, bucket }),
+  /** Token usage in [from, to) (Unix seconds), from agent logs and the gateway ledger; the logs
+   *  are read again unless a scan at most `maxAge` seconds old exists. */
+  usageReport: (from: number, to: number, bucket: "hour" | "day", maxAge = 0) => invoke<UsageReport>("usage_report", { from, to, bucket, maxAge }),
   usagePrices: () => invoke<UsagePrices>("usage_prices"),
   /** Sets a model's price; null goes back to the list price (or removes an added model). */
   usageSetPrice: (model: string, price: UsagePriceValue | null) => invoke<UsagePrices>("usage_set_price", { model, price }),
@@ -1429,7 +1432,7 @@ function demoUsage(from: number, to: number, bucket: "hour" | "day"): UsageRepor
     }
   }
   return {
-    from, to, bucket, cells, dedupedRequests: 312, dedupedTokens: 14_800_000, repeatedRequests: 41, ledgerSince: now - 20 * 86400,
+    from, to, bucket, cells, dedupedRequests: 312, dedupedTokens: 14_800_000, repeatedRequests: 41, ledgerSince: now - 20 * 86400, scannedAt: now,
     sources: [{ agent: "codex", files: 76, path: "~/.codex/sessions" }, { agent: "claude", files: 541, path: "~/.claude/projects" }, { agent: "gemini", files: 16, path: "~/.gemini/tmp" }],
     errors: [],
   };

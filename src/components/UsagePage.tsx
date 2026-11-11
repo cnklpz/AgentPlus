@@ -148,6 +148,16 @@ function fmtBucket(t: number, g: Group): string {
   return d.toLocaleDateString(locale(), { month: "short", day: "numeric" });
 }
 
+/** A scan of the logs at most this old (seconds) is reused when the page opens or the range changes. */
+const REUSE_SCAN = 600;
+/** A scan older than this (seconds) is read again in the background after it is shown. */
+const STALE_AFTER = 15;
+
+/** The logs behind a report were read more than `STALE_AFTER` seconds ago. */
+export function isStale(scannedAt: number, now = Date.now()): boolean {
+  return now / 1000 - scannedAt > STALE_AFTER;
+}
+
 /** The agents among `visible` (the sidebar's, in its order) that have usage in the cells. */
 export function agentsWithUsage(cells: { agent: string }[], visible: string[]): string[] {
   const used = new Set(cells.map((c) => c.agent));
@@ -173,20 +183,34 @@ export function UsagePage({ flash, visible }: { flash: Flash; visible: string[] 
   const [pricing, setPricing] = useState<string | null>(null);
   // Requests in flight (a range switch can overlap the minute refresh): the page shows it loads.
   const [pending, setPending] = useState(0);
+  // How old a scan of the logs may be for the next load (seconds), and whether that load runs
+  // without showing it. Opening the page and switching the range take the last scan (instant,
+  // even in WSL); `revalidate` then reads the logs again in the background.
+  const want = useRef({ maxAge: REUSE_SCAN, quiet: false });
   const { data: report, error, reload } = useLoad(() => {
     const w = range === "custom" ? customWindow(days) ?? rangeWindow("7d") : rangeWindow(range);
-    setPending((n) => n + 1);
-    return api.usageReport(w.from, w.to, w.bucket).finally(() => setPending((n) => n - 1));
+    const { maxAge, quiet } = want.current;
+    want.current = { maxAge: REUSE_SCAN, quiet: false };
+    if (!quiet) setPending((n) => n + 1);
+    return api.usageReport(w.from, w.to, w.bucket, maxAge).finally(() => { if (!quiet) setPending((n) => n - 1); });
   }, [range, days, lang]);
   const loading = pending > 0;
+  const load = (maxAge: number, quiet: boolean) => {
+    want.current = { maxAge, quiet };
+    return reload();
+  };
   const refresh = async () => {
-    await reload();
+    await load(0, false);
     flash(t("usagePage.refreshed"));
   };
   const { data: prices, reload: reloadPrices } = useLoad(() => api.usagePrices(), []);
+  // Shown from an older scan: read the logs again, quietly (the numbers just update).
+  useEffect(() => {
+    if (report && isStale(report.scannedAt)) void load(0, true);
+  }, [report?.scannedAt]);
   // Agents keep writing logs: refresh while the page is open.
   useEffect(() => {
-    const id = window.setInterval(() => void reload(), 60_000);
+    const id = window.setInterval(() => void load(0, true), 60_000);
     return () => window.clearInterval(id);
   }, [reload]);
 
@@ -208,7 +232,8 @@ export function UsagePage({ flash, visible }: { flash: Flash; visible: string[] 
   const barsKey = `${report?.from}|${report?.bucket}`;
   const priceChanged = () => {
     void reloadPrices();
-    void reload();
+    // New prices, same logs.
+    void load(REUSE_SCAN, false);
   };
 
   return (

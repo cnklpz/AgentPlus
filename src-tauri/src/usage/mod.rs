@@ -111,6 +111,8 @@ pub struct Report {
     pub ledger_since: Option<i64>,
     /// Agents whose logs were found, and how many files each.
     pub sources: Vec<SourceInfo>,
+    /// When the logs were read (Unix seconds): the page re-reads them when this is old.
+    pub scanned_at: i64,
     pub errors: Vec<String>,
 }
 
@@ -242,16 +244,18 @@ pub fn build(
     rep
 }
 
-/// The report for [from, to): scans the logs (cached per file) and reads the ledger.
-pub fn report(from: i64, to: i64, bucket: &str) -> anyhow::Result<Report> {
+/// The report for [from, to): the agents' logs (read again unless a scan at most `max_age`
+/// seconds old exists) and the gateway ledger.
+pub fn report(from: i64, to: i64, bucket: &str, max_age: u64) -> anyhow::Result<Report> {
     let bucket = Bucket::parse(bucket);
-    let scanned = scan::scan_all();
+    let scanned = scan::scan_cached(std::time::Duration::from_secs(max_age));
     let ledger = ledger::read_all();
     let prices = price::Table::load();
     let logs: Vec<(String, &[Rec])> = scanned.agents.iter().map(|(a, recs)| (a.clone(), recs.as_slice())).collect();
     let mut rep = build(from, to, bucket, &logs, &ledger.rows, &prices);
-    rep.sources = scanned.sources;
-    rep.errors = scanned.errors;
+    rep.sources = scanned.sources.clone();
+    rep.errors = scanned.errors.clone();
+    rep.scanned_at = scanned.at;
     rep.errors.extend(ledger.errors);
     if from >= to {
         rep.errors.push(l("The time range is empty", "时间范围为空").into());

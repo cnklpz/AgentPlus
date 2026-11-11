@@ -11,7 +11,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -101,51 +101,210 @@ pub struct Scanned {
     pub agents: Vec<(String, Vec<Rec>)>,
     pub sources: Vec<SourceInfo>,
     pub errors: Vec<String>,
+    /// When the scan ran (Unix seconds).
+    pub at: i64,
 }
 
-/// Files to read for each kind of log, sorted (Codex and Gemini names start with the date).
-fn files(kind: Kind) -> (PathBuf, Vec<PathBuf>) {
-    let mut out = vec![];
-    let root = match kind {
+/// Which files in a folder are logs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Pick {
+    Jsonl,
+    /// `chats/*.json` (Gemini CLI).
+    Chat,
+}
+
+impl Pick {
+    fn keep(self, p: &Path) -> bool {
+        match self {
+            Pick::Jsonl => ext_is(p, "jsonl"),
+            Pick::Chat => ext_is(p, "json") && p.parent().and_then(Path::file_name).is_some_and(|n| n == "chats"),
+        }
+    }
+
+    /// `find` tests for (at least) the same files; `keep` then has the last word.
+    fn find_test(self) -> &'static str {
+        match self {
+            Pick::Jsonl => "-name '*.jsonl'",
+            Pick::Chat => "-path '*/chats/*.json'",
+        }
+    }
+}
+
+/// Where one kind of log lives.
+struct Roots {
+    /// Shown on the page.
+    display: PathBuf,
+    /// Folders searched (all the way down) for logs.
+    dirs: Vec<(PathBuf, Pick)>,
+    /// Databases: each counts with its `-wal`.
+    dbs: Vec<PathBuf>,
+}
+
+fn roots(kind: Kind) -> Roots {
+    let dirs = |d: Vec<PathBuf>, pick: Pick| Roots { display: d[0].clone(), dirs: d.into_iter().map(|d| (d, pick)).collect(), dbs: vec![] };
+    let db = |p: PathBuf| Roots { display: p.clone(), dirs: vec![], dbs: vec![p] };
+    match kind {
         Kind::Codex => {
             let h = codex::codex_home();
-            walk(&h.join("sessions"), &mut out, &|p| ext_is(p, "jsonl"));
-            walk(&h.join("archived_sessions"), &mut out, &|p| ext_is(p, "jsonl"));
-            h.join("sessions")
+            dirs(vec![h.join("sessions"), h.join("archived_sessions")], Pick::Jsonl)
         }
         Kind::Claude => {
-            let mut roots = vec![claude::dir().join("projects")];
+            let mut r = vec![claude::dir().join("projects")];
             let alt = home().join(".config").join("claude").join("projects");
-            if !roots.contains(&alt) {
-                roots.push(alt);
+            if !r.contains(&alt) {
+                r.push(alt);
             }
-            for r in &roots {
-                walk(r, &mut out, &|p| ext_is(p, "jsonl"));
-            }
-            roots.swap_remove(0)
+            dirs(r, Pick::Jsonl)
         }
-        Kind::Gemini => {
-            let tmp = gemini::dir().join("tmp");
-            walk(&tmp, &mut out, &|p| ext_is(p, "json") && p.parent().and_then(Path::file_name).is_some_and(|n| n == "chats"));
-            tmp
-        }
-        Kind::OpenCode => one_file(&mut out, home().join(".local").join("share").join("opencode").join("opencode.db")),
+        Kind::Gemini => dirs(vec![gemini::dir().join("tmp")], Pick::Chat),
+        Kind::OpenCode => db(home().join(".local").join("share").join("opencode").join("opencode.db")),
         // The desktop app's folder is ~/.zcode/v2; its agent keeps usage in ~/.zcode/cli.
         Kind::ZCode => {
             let d = zcode::dir();
-            one_file(&mut out, d.parent().unwrap_or(&d).join("cli").join("db").join("db.sqlite"))
+            db(d.parent().unwrap_or(&d).join("cli").join("db").join("db.sqlite"))
         }
-        Kind::Hermes => one_file(&mut out, hermes::dir().join("state.db")),
-    };
-    out.sort();
-    (root, out)
+        Kind::Hermes => db(hermes::dir().join("state.db")),
+    }
 }
 
-fn one_file(out: &mut Vec<PathBuf>, p: PathBuf) -> PathBuf {
-    if p.is_file() {
-        out.push(p.clone());
+fn wal_of(p: &Path) -> PathBuf {
+    PathBuf::from(format!("{}-wal", p.display()))
+}
+
+/// Size and mtime (µs) of a file.
+type Stat = (u64, u64);
+
+/// One kind's logs: the files with their stats, sorted (Codex and Gemini names start with the
+/// date), and the folders and files they were looked for in.
+struct Found {
+    kind: Kind,
+    display: PathBuf,
+    files: Vec<(PathBuf, Stat)>,
+    /// Cache keys under these (folders end in a separator) belong to this scan.
+    scope: Vec<String>,
+}
+
+/// Every kind's files. On the WSL share, asking about each folder and file is a round trip
+/// to the VM (seconds for a few hundred logs), so one `find` inside the distro lists them all;
+/// elsewhere, or when that fails, the folders are walked.
+fn discover(kinds: &[Kind]) -> Vec<Found> {
+    let all: Vec<(Kind, Roots)> = kinds.iter().map(|&k| (k, roots(k))).collect();
+    // Every folder and database, numbered, with the distro and Linux path of those in WSL.
+    let mut wanted: Vec<(PathBuf, Option<Pick>)> = vec![];
+    for (_, r) in &all {
+        wanted.extend(r.dirs.iter().map(|(d, p)| (d.clone(), Some(*p))));
+        wanted.extend(r.dbs.iter().flat_map(|d| [d.clone(), wal_of(d)]).map(|d| (d, None)));
     }
-    p
+    let mut listed: HashMap<usize, Vec<(PathBuf, Stat)>> = HashMap::new();
+    let mut by_distro: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    for (i, (p, _)) in wanted.iter().enumerate() {
+        if let Some((distro, unix)) = crate::env::wsl_path(&p.to_string_lossy()) {
+            by_distro.entry(distro).or_default().push((i, unix));
+        }
+    }
+    for (distro, items) in &by_distro {
+        let script = find_script(&items.iter().map(|(i, unix)| (*i, unix.as_str(), wanted[*i].1)).collect::<Vec<_>>());
+        let Some(out) = crate::env::wsl_sh_in(distro, &script) else { continue };
+        let Some(parsed) = parse_listing(&out) else { continue };
+        for (i, unix) in items {
+            let base = &wanted[*i].0;
+            let entries = parsed.get(i).map(Vec::as_slice).unwrap_or_default();
+            let files = entries
+                .iter()
+                .filter_map(|(path, st)| {
+                    let rel = path.strip_prefix(unix.as_str())?;
+                    let p = rel.split('/').filter(|s| !s.is_empty()).fold(base.clone(), |p, part| p.join(part));
+                    Some((p, *st))
+                })
+                .collect();
+            listed.insert(*i, files);
+        }
+    }
+    let mut next = 0;
+    let mut take = |p: &Path, pick: Option<Pick>| -> Vec<(PathBuf, Stat)> {
+        let i = next;
+        next += 1;
+        if let Some(v) = listed.remove(&i) {
+            return v.into_iter().filter(|(f, _)| pick.is_none_or(|k| k.keep(f))).collect();
+        }
+        match pick {
+            Some(k) => {
+                let mut out = vec![];
+                walk(p, &mut out, &|f| k.keep(f));
+                out.into_iter().filter_map(|f| file_stat(&f).map(|st| (f, st))).collect()
+            }
+            None => file_stat(p).map(|st| vec![(p.to_path_buf(), st)]).unwrap_or_default(),
+        }
+    };
+    let sep = std::path::MAIN_SEPARATOR;
+    all.into_iter()
+        .map(|(kind, r)| {
+            let mut files: Vec<(PathBuf, Stat)> = r.dirs.iter().flat_map(|(d, p)| take(d, Some(*p))).collect();
+            for db in &r.dbs {
+                let main = take(db, None);
+                let wal = take(&wal_of(db), None);
+                if let Some((p, (len, t))) = main.into_iter().next() {
+                    // The database changes when its WAL does.
+                    let (wl, wt) = wal.first().map_or((0, 0), |(_, s)| *s);
+                    files.push((p, (len + wl, t.max(wt))));
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            let folder = |d: &Path| {
+                let s = d.display().to_string();
+                if s.ends_with(['\\', '/']) { s } else { format!("{s}{sep}") }
+            };
+            let scope = r.dirs.iter().map(|(d, _)| folder(d)).chain(r.dbs.iter().map(|d| d.display().to_string())).collect();
+            Found { kind, display: r.display, files, scope }
+        })
+        .collect()
+}
+
+/// A shell word holding `s` as is.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// One `find` per folder or file, each after a `@<index>` line, then `@end`. A `find`
+/// without `-printf` (BusyBox) makes it fail at once, and the caller walks instead.
+fn find_script(items: &[(usize, &str, Option<Pick>)]) -> String {
+    let mut s = String::from("find / -maxdepth 0 -printf '' >/dev/null 2>&1 || exit 3\n");
+    for (i, unix, pick) in items {
+        let q = sh_quote(unix);
+        let what = match pick {
+            Some(p) => format!("{q} -type f {}", p.find_test()),
+            None => format!("{q} -maxdepth 0 -type f"),
+        };
+        s.push_str(&format!("echo @{i}; find {what} -printf '%s\\t%T@\\t%p\\n' 2>/dev/null\n"));
+    }
+    s.push_str("echo @end\n");
+    s
+}
+
+/// `find_script`'s output: the files listed under each index (Linux path, size, mtime µs);
+/// None unless it ran to the end.
+fn parse_listing(out: &str) -> Option<HashMap<usize, Vec<(String, Stat)>>> {
+    let mut map: HashMap<usize, Vec<(String, Stat)>> = HashMap::new();
+    let mut cur: Option<usize> = None;
+    let mut ended = false;
+    for line in out.lines() {
+        if let Some(tag) = line.strip_prefix('@') {
+            if tag == "end" {
+                ended = true;
+                break;
+            }
+            cur = tag.parse().ok();
+            if let Some(i) = cur {
+                map.entry(i).or_default();
+            }
+            continue;
+        }
+        let (Some(i), mut parts) = (cur, line.splitn(3, '\t')) else { continue };
+        let (Some(size), Some(time), Some(path)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let (Ok(size), Ok(time)) = (size.parse::<u64>(), time.parse::<f64>()) else { continue };
+        map.entry(i).or_default().push((path.to_string(), (size, (time * 1e6) as u64)));
+    }
+    ended.then_some(map)
 }
 
 fn ext_is(p: &Path, ext: &str) -> bool {
@@ -165,20 +324,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>, keep: &dyn Fn(&Path) -> bool) {
     }
 }
 
-/// Size and mtime (µs) of a file; for OpenCode's database, of the database plus its WAL.
-fn stat(kind: Kind, p: &Path) -> Option<(u64, u64)> {
-    let one = |p: &Path| -> Option<(u64, u64)> {
-        let m = fs::metadata(p).ok()?;
-        Some((m.len(), m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_micros() as u64))
-    };
-    let (mut len, mut mtime) = one(p)?;
-    if matches!(kind, Kind::OpenCode | Kind::ZCode | Kind::Hermes) {
-        if let Some((l, t)) = one(&PathBuf::from(format!("{}-wal", p.display()))) {
-            len += l;
-            mtime = mtime.max(t);
-        }
-    }
-    Some((len, mtime))
+fn file_stat(p: &Path) -> Option<Stat> {
+    let m = fs::metadata(p).ok().filter(|m| m.is_file())?;
+    Some((m.len(), m.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_micros() as u64))
 }
 
 fn parse(kind: Kind, p: &Path) -> anyhow::Result<Vec<Rec>> {
@@ -642,23 +790,54 @@ fn hermes_db(p: &Path) -> anyhow::Result<Vec<Rec>> {
 
 static SCAN: Mutex<()> = Mutex::new(());
 
-/// Reads every agent's logs, parsing only files that changed since the last scan.
-pub fn scan_all() -> Scanned {
+/// The last scan, for the environment it read.
+struct Last {
+    at: std::time::Instant,
+    env: String,
+    scan: Arc<Scanned>,
+}
+
+static LAST: Mutex<Option<Last>> = Mutex::new(None);
+
+/// The last scan of the current environment if it is at most `max_age` old, else a new one.
+/// Switching the page's range or filters reuses it instead of reading every log again.
+pub fn scan_cached(max_age: std::time::Duration) -> Arc<Scanned> {
+    let recent = |since: Option<std::time::Instant>| {
+        let env = crate::env::id();
+        crate::util::lock(&LAST).as_ref().filter(|l| l.env == env && l.at.elapsed() <= max_age && since.is_none_or(|s| l.at >= s)).map(|l| l.scan.clone())
+    };
+    if let Some(s) = recent(None) {
+        return s;
+    }
+    let asked = std::time::Instant::now();
     let _one = crate::util::lock(&SCAN);
+    // Another caller may have scanned while this one waited: that scan is new enough.
+    recent(Some(asked)).unwrap_or_else(scan_locked)
+}
+
+/// Reads every agent's logs, parsing only files that changed since the last scan.
+pub fn scan_all() -> Arc<Scanned> {
+    let _one = crate::util::lock(&SCAN);
+    scan_locked()
+}
+
+fn scan_locked() -> Arc<Scanned> {
+    let env = crate::env::id();
     let mut guard = crate::util::lock(&CACHE);
     let cache = guard.get_or_insert_with(load_cache);
-    let mut out = Scanned { agents: vec![], sources: vec![], errors: vec![] };
+    let mut out = Scanned { agents: vec![], sources: vec![], errors: vec![], at: chrono::Local::now().timestamp() };
     let mut seen: std::collections::HashSet<String> = Default::default();
+    let mut scope: Vec<String> = vec![];
     let mut changed = false;
-    for kind in [Kind::Codex, Kind::Claude, Kind::Gemini, Kind::OpenCode, Kind::ZCode, Kind::Hermes] {
-        let (root, list) = files(kind);
+    for found in discover(&[Kind::Codex, Kind::Claude, Kind::Gemini, Kind::OpenCode, Kind::ZCode, Kind::Hermes]) {
+        let Found { kind, display: root, files: list, scope: s } = found;
+        scope.extend(s);
         let mut todo: Vec<Job> = vec![];
-        for p in &list {
+        for (p, st) in &list {
             let k = p.to_string_lossy().to_string();
             seen.insert(k.clone());
-            let Some(st) = stat(kind, p) else { continue };
-            if cache.files.get(&k).is_none_or(|c| (c.len, c.mtime) != st) {
-                todo.push((k, p.clone(), st));
+            if cache.files.get(&k).is_none_or(|c| (c.len, c.mtime) != *st) {
+                todo.push((k, p.clone(), *st));
             }
         }
         changed |= !todo.is_empty();
@@ -677,12 +856,14 @@ pub fn scan_all() -> Scanned {
         if list.is_empty() {
             continue;
         }
-        let recs: Vec<Rec> = list.iter().filter_map(|p| cache.files.get(&*p.to_string_lossy())).flat_map(|c| c.recs.iter().cloned()).collect();
+        let recs: Vec<Rec> = list.iter().filter_map(|(p, _)| cache.files.get(&*p.to_string_lossy())).flat_map(|c| c.recs.iter().cloned()).collect();
         out.sources.push(SourceInfo { agent: kind.agent().into(), files: list.len(), path: root.display().to_string() });
         out.agents.push((kind.agent().into(), recs));
     }
     let before = cache.files.len();
-    cache.files.retain(|k, _| seen.contains(k));
+    // Forget only files gone from the folders just read: the other environment's (Windows or
+    // a WSL distro) stay cached for when it is picked again.
+    cache.files.retain(|k, _| seen.contains(k) || !in_scope(k, &scope));
     // Agents append to their logs all the time: write the (multi-MB) cache at most once a minute
     // for that; a removed file or the first scan saves at once.
     let due = LAST_SAVE.lock().map(|t| t.is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(60))).unwrap_or(true);
@@ -690,7 +871,18 @@ pub fn scan_all() -> Scanned {
         *crate::util::lock(&LAST_SAVE) = Some(std::time::Instant::now());
         save_cache(cache);
     }
-    out
+    let scan = Arc::new(out);
+    *crate::util::lock(&LAST) = Some(Last { at: std::time::Instant::now(), env, scan: scan.clone() });
+    scan
+}
+
+/// Whether a cache key is a file of one of `scope`'s folders (ending in a separator) or files.
+fn in_scope(key: &str, scope: &[String]) -> bool {
+    let k = key.to_lowercase();
+    scope.iter().any(|s| {
+        let s = s.to_lowercase();
+        if s.ends_with(['\\', '/']) { k.starts_with(&s) } else { k == s }
+    })
 }
 
 /// A file to parse: cache key, path, (size, mtime).
@@ -872,6 +1064,112 @@ mod tests {
         assert!(r.official);
         assert_ne!(r.key, hermes_row("s1", "claude-opus-5-5", "anthropic", "compress", 1.0, 1, 1, 1, 0, 0).unwrap().key);
         assert!(hermes_row("s1", "m", "custom", "", 0.0, 1, 5, 5, 0, 0).is_none(), "no time");
+    }
+
+    #[test]
+    fn find_script_and_its_output() {
+        let s = find_script(&[(0, "/home/me/.codex/sessions", Some(Pick::Jsonl)), (3, "/home/o'b/x.db", None)]);
+        assert!(s.contains("echo @0; find '/home/me/.codex/sessions' -type f -name '*.jsonl' -printf"));
+        assert!(s.contains(r"echo @3; find '/home/o'\''b/x.db' -maxdepth 0 -type f -printf"));
+        assert!(s.trim_end().ends_with("echo @end"));
+        let out = "@0\n120\t1792178912.2394893370\t/home/me/.codex/sessions/2026/11/a.jsonl\n@3\n@end\n";
+        let m = parse_listing(out).unwrap();
+        assert_eq!(m[&0], vec![("/home/me/.codex/sessions/2026/11/a.jsonl".to_string(), (120, 1_792_178_912_239_489))]);
+        assert!(m[&3].is_empty(), "a missing file lists nothing");
+        assert!(parse_listing("@0\n1\t2\t/x\n").is_none(), "cut short: walk instead");
+        assert!(parse_listing("").is_none());
+    }
+
+    #[test]
+    fn gemini_pick_only_takes_chat_files() {
+        assert!(Pick::Chat.keep(Path::new("/h/.gemini/tmp/p/chats/session-1.json")));
+        assert!(!Pick::Chat.keep(Path::new("/h/.gemini/tmp/p/chats/sub/x.json")));
+        assert!(!Pick::Chat.keep(Path::new("/h/.gemini/tmp/p/logs.json")));
+    }
+
+    #[test]
+    fn cache_scope_spares_the_other_environment() {
+        let scope = vec![r"\\wsl.localhost\Ubuntu\home\me\.claude\projects\".to_string(), r"\\wsl.localhost\Ubuntu\home\me\x.db".to_string()];
+        assert!(in_scope(r"\\wsl.localhost\Ubuntu\home\me\.claude\projects\p\a.jsonl", &scope));
+        assert!(in_scope(r"\\WSL.localhost\Ubuntu\home\me\x.db", &scope));
+        assert!(!in_scope(r"C:\Users\me\.claude\projects\p\a.jsonl", &scope), "the Windows side's files stay cached");
+        assert!(!in_scope(r"\\wsl.localhost\Ubuntu\home\me\x.db-old", &scope));
+    }
+
+    /// Discovery by walking (Windows) finds the logs and folds a database's WAL into its stat.
+    #[test]
+    fn discover_walks_local_folders() {
+        let h = crate::util::TestHome::new("usage-discover");
+        let p = h.0.join(".codex").join("sessions").join("2026").join("11");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join("rollout-a.jsonl"), "x").unwrap();
+        fs::write(p.join("notes.txt"), "x").unwrap();
+        let db = h.0.join(".local").join("share").join("opencode");
+        fs::create_dir_all(&db).unwrap();
+        fs::write(db.join("opencode.db"), "1234").unwrap();
+        fs::write(db.join("opencode.db-wal"), "56").unwrap();
+        let found = discover(&[Kind::Codex, Kind::OpenCode]);
+        assert_eq!(found[0].files.len(), 1);
+        assert!(found[0].files[0].0.ends_with("rollout-a.jsonl"));
+        assert_eq!(found[1].files[0].1 .0, 6, "database plus WAL");
+        assert!(found[0].scope.iter().any(|s| s.ends_with(std::path::MAIN_SEPARATOR)));
+    }
+
+    /// Times each phase of a scan of a home folder (a WSL one over \\wsl.localhost, say):
+    /// `AGP_BENCH_HOME=\\wsl.localhost\Ubuntu\tmp\agp-bench cargo test --release bench_home -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_home() {
+        let Some(home) = std::env::var_os("AGP_BENCH_HOME").map(PathBuf::from) else { return };
+        // Same layout as an environment's home: point the agents' folders at it.
+        let base = home.to_string_lossy().to_string();
+        let roots_of = |k: Kind| match k {
+            Kind::Codex => Roots { display: home.join(".codex"), dirs: vec![(home.join(".codex").join("sessions"), Pick::Jsonl)], dbs: vec![] },
+            Kind::Claude => Roots { display: home.join(".claude"), dirs: vec![(home.join(".claude").join("projects"), Pick::Jsonl)], dbs: vec![] },
+            _ => Roots { display: home.clone(), dirs: vec![], dbs: vec![home.join(".local/share/opencode/opencode.db"), home.join(".zcode/cli/db/db.sqlite")] },
+        };
+        let t = std::time::Instant::now();
+        let mut files = vec![];
+        walk(&home.join(".codex").join("sessions"), &mut files, &|p| ext_is(p, "jsonl"));
+        walk(&home.join(".claude").join("projects"), &mut files, &|p| ext_is(p, "jsonl"));
+        let n = files.iter().filter(|p| file_stat(p).is_some()).count();
+        println!("walk + stat over the share: {n} files in {:?}", t.elapsed());
+        // The `find` listing, as discover() runs it.
+        let (distro, _) = crate::env::wsl_path(&base).expect("a WSL path");
+        let mut items = vec![];
+        for (i, k) in [Kind::Codex, Kind::Claude, Kind::OpenCode].into_iter().enumerate() {
+            let r = roots_of(k);
+            for (d, p) in r.dirs {
+                items.push((i * 10, crate::env::wsl_path(&d.to_string_lossy()).unwrap().1, Some(p)));
+            }
+            for d in r.dbs {
+                items.push((i * 10 + 1, crate::env::wsl_path(&d.to_string_lossy()).unwrap().1, None));
+            }
+        }
+        let t = std::time::Instant::now();
+        let script = find_script(&items.iter().map(|(i, u, p)| (*i, u.as_str(), *p)).collect::<Vec<_>>());
+        let out = crate::env::wsl_sh_in(&distro, &script).expect("wsl.exe");
+        let listed = parse_listing(&out).expect("listing");
+        println!("one find in WSL: {} files in {:?}", listed.values().map(Vec::len).sum::<usize>(), t.elapsed());
+    }
+
+    /// A whole scan with the environment set to a WSL home:
+    /// `AGP_BENCH_DISTRO=Ubuntu AGP_BENCH_UNIX_HOME=/home/me/agp-bench cargo test --release bench_wsl_scan -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_wsl_scan() {
+        let (Ok(distro), Ok(unix_home)) = (std::env::var("AGP_BENCH_DISTRO"), std::env::var("AGP_BENCH_UNIX_HOME")) else { return };
+        crate::env::force(crate::env::Target::Wsl { distro, unix_home });
+        for label in ["first scan", "nothing changed", "nothing changed"] {
+            let t = std::time::Instant::now();
+            let s = scan_all();
+            let recs: usize = s.agents.iter().map(|(_, r)| r.len()).sum();
+            println!("{label}: {recs} records from {:?} in {:?}; errors {:?}", s.sources.iter().map(|x| (x.agent.as_str(), x.files)).collect::<Vec<_>>(), t.elapsed(), s.errors);
+        }
+        let t = std::time::Instant::now();
+        let s = scan_cached(std::time::Duration::from_secs(300));
+        println!("reused for a range switch: {} agents in {:?}", s.agents.len(), t.elapsed());
+        crate::env::force(crate::env::Target::Windows);
     }
 
     /// Scans the real logs of this machine: `cargo test real_usage -- --ignored --nocapture`.

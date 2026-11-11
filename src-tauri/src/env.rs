@@ -206,7 +206,15 @@ pub fn agent_var(name: &str) -> Option<String> {
 /// Runs a command inside the current WSL distro; None on failure or outside WSL.
 pub fn wsl_sh(script: &str) -> Option<String> {
     let Target::Wsl { distro, .. } = current() else { return None };
-    let out = wsl_run(&distro, script)?;
+    wsl_sh_in(&distro, script)
+}
+
+/// Runs a command inside `distro`; None on failure.
+pub fn wsl_sh_in(distro: &str, script: &str) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let out = wsl_run(distro, script)?;
     out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 

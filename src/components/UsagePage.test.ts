@@ -115,3 +115,13 @@ describe("findPrice", () => {
     expect(findPrice(list, "glm-5")).toBeNull();
   });
 });
+
+describe("isStale", () => {
+  it("re-reads logs scanned more than 15 seconds ago", async () => {
+    const { isStale } = await import("./UsagePage");
+    const now = 1_800_000_000_000;
+    expect(isStale(now / 1000 - 5, now)).toBe(false);
+    expect(isStale(now / 1000 - 15, now)).toBe(false);
+    expect(isStale(now / 1000 - 16, now)).toBe(true);
+  });
+});

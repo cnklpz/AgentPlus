@@ -546,7 +546,12 @@ async fn list_envs() -> Vec<env::EnvInfo> {
 
 #[tauri::command]
 async fn set_env(id: String) -> Result<(), String> {
-    blocking(move || env::set(&id)).await
+    blocking(move || env::set(&id)).await?;
+    // Read the new environment's logs in the background, so the usage page opens without waiting.
+    std::thread::spawn(|| {
+        usage::scan::scan_all();
+    });
+    Ok(())
 }
 
 #[tauri::command]
@@ -559,10 +564,11 @@ async fn set_agent_dir(agent: String, path: Option<String>) -> Result<(), String
     blocking_tx(move || adapters::set_dir(&agent, path.as_deref())).await
 }
 
-/// Token usage in [from, to) (Unix seconds), bucketed by "hour" or "day".
+/// Token usage in [from, to) (Unix seconds), bucketed by "hour" or "day"; the logs are read
+/// again unless a scan at most `max_age` seconds old exists (default 0: always).
 #[tauri::command]
-async fn usage_report(from: i64, to: i64, bucket: String) -> Result<usage::Report, String> {
-    blocking(move || usage::report(from, to, &bucket)).await
+async fn usage_report(from: i64, to: i64, bucket: String, max_age: Option<u64>) -> Result<usage::Report, String> {
+    blocking(move || usage::report(from, to, &bucket, max_age.unwrap_or(0))).await
 }
 
 #[tauri::command]
