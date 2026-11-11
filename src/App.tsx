@@ -12,6 +12,7 @@ import { AgentPage, EDIT_MODEL_EVENT, type EditModelDetail, type Tab } from "./c
 import { Aside } from "./components/Aside";
 import { CommandPalette, type Target } from "./components/CommandPalette";
 import { HistoryPage } from "./components/HistoryPage";
+import { UsagePage } from "./components/UsagePage";
 import { AgentIcon, Icon } from "./components/icons";
 import { type Latency, testUrl } from "./components/ProviderCard";
 import { ProviderDetail } from "./components/ProviderDetail";
@@ -129,7 +130,7 @@ export default function App() {
     setPage("settings");
   };
   // The page settings was opened from may have been switched off there.
-  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) || (beforeSettings === "wechat" && !prefs.showClaw) || (beforeSettings === "notify" && !prefs.showNotify) ? null : beforeSettings);
+  const closeSettings = () => setPage((beforeSettings === "mcp" && !prefs.showMcp) || (beforeSettings === "skills" && !prefs.showSkills) || (beforeSettings === "wechat" && !prefs.showClaw) || (beforeSettings === "notify" && !prefs.showNotify) || (beforeSettings === "usage" && !prefs.showUsage) ? null : beforeSettings);
   const [hubSel, setHubSel] = useState<string | null>(null);
   const [hubDialog, setHubDialog] = useState<HubDialog>(undefined);
   const [gateway, setGateway] = useState<GatewayStatus | null>(null);
@@ -197,6 +198,8 @@ export default function App() {
     () => sortByOrder(shown.filter((a) => !prefs.hiddenAgents.includes(a.id)), prefs.agentOrder),
     [shown, prefs.hiddenAgents, prefs.agentOrder],
   );
+  /** The usage page counts only the sidebar's agents. */
+  const usageAgents = useMemo(() => listed.map((a) => a.id), [listed]);
   const agentSt = listed.find((a) => a.id === selected) ?? listed[0];
   useEffect(() => { if (agentSt && agentSt.id !== selected) setSelected(agentSt.id); }, [agentSt?.id]);
   const projEntry = projects.find((p) => p.path === projPath);
@@ -1593,6 +1596,7 @@ export default function App() {
       ...(prefs.showMcp ? [{ label: t("sidebar.mcp"), icon: <Icon.plug size={13} />, disabled: page === "mcp", action: () => setPage("mcp") }] : []),
       ...(prefs.showSkills ? [{ label: t("sidebar.skills"), icon: <Icon.book size={13} />, disabled: page === "skills", action: () => setPage("skills") }] : []),
       { label: t("app.navGateway"), icon: <Icon.gateway size={13} />, disabled: page === "gateway", action: () => setPage("gateway") },
+      ...(prefs.showUsage ? [{ label: t("app.navUsage"), icon: <Icon.chart size={13} />, disabled: page === "usage", action: () => setPage("usage") }] : []),
       ...(prefs.showClaw ? [{ label: t("app.navWechat"), icon: <Icon.chat size={13} />, disabled: page === "wechat", action: () => setPage("wechat") }] : []),
       ...(prefs.showNotify ? [{ label: t("app.navNotify"), icon: <Icon.bell size={13} />, disabled: page === "notify", action: () => setPage("notify") }] : []),
       { label: t("app.navHistory"), icon: <Icon.history size={13} />, disabled: page === "history", action: () => setPage("history") },
@@ -1628,7 +1632,7 @@ export default function App() {
 
       <div className={`body${page === "settings" ? " solo" : page && !["providers", "mcp", "skills", "history", ...(gateway?.running ? ["gateway"] : []), ...(SYNC_ENABLED ? ["sync"] : []), ...(wechatAside ? ["wechat"] : []), ...(notifyAside ? ["notify"] : [])].includes(page) ? " wide" : ""}`}>
         {switching ? <main className="page"><div className="empty" role="status">{t("envSwitch.switching")}</div></main> : <>
-        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showClaw={prefs.showClaw} showNotify={prefs.showNotify}
+        {page !== "settings" && <Sidebar gateway={gateway} agents={listed} drafts={drafts} selected={page ? null : selected} page={page} onSelect={openAgent} onPage={setPage} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showClaw={prefs.showClaw} showNotify={prefs.showNotify} showUsage={prefs.showUsage}
           onReorder={(ids) => setPrefs({ ...prefsRef.current, agentOrder: mergeOrder(ids, prefsRef.current.agentOrder) })} />}
 
         {page === "providers" && (
@@ -1702,6 +1706,7 @@ export default function App() {
         )}
         {page === "skills" && prefs.showSkills && <SkillsPage agents={listed} flash={flash} />}
         {page === "history" && <HistoryPage flash={flash} onChanged={reloadConfigs} />}
+        {page === "usage" && prefs.showUsage && <UsagePage flash={flash} visible={usageAgents} />}
         {SYNC_ENABLED && page === "sync" && <SyncPage flash={flash} onAdopt={adoptSync} tick={syncTick} />}
         {page === "wechat" && prefs.showClaw && <WechatPage flash={flash} onAside={setWechatAside} />}
         {page === "notify" && prefs.showNotify && <NotifyPage flash={flash} onAside={setNotifyAside} agents={shown} />}
@@ -1821,7 +1826,7 @@ export default function App() {
       </div>
 
       {dialog && st && <ProviderDialog key={dialog.n} imported={dialog.imported} library={libOpen ? { groups: libGroups, onAdd: addFromLibrary } : undefined} st={st} draft={draft} editing={dialog.editing} gatewayRoute={routeOfProvider(dialog.editing)} gateway={gateway} ensureGateway={ensureGateway} onCreateCatalog={createCodexCatalog} onCommitCatalog={commitCodexCatalog} flash={flash} onSave={saveProvider} onClose={() => setDialog(null)} />}
-      {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showNotify={prefs.showNotify} />}
+      {palette && <CommandPalette agents={listed} onGo={goTo} onClose={() => setPalette(false)} showMcp={prefs.showMcp} showSkills={prefs.showSkills} showNotify={prefs.showNotify} showUsage={prefs.showUsage} />}
       {copyOpen && st && isProjectId(st.id) && <CopyProviderDialog target={st} agents={shown} lib={lib} onCopy={copyToProject} onClose={() => setCopyOpen(false)} />}
       {hubDialog !== undefined && <ServiceDialog key={hubDialog.n} agents={shown} group={hubDialog.group} prefill={hubDialog.prefill} imported={hubDialog.imported} others={hubDialog.others}
         onReplace={(g) => {

@@ -48,6 +48,7 @@ import format from "./format";
 import errorBoundary from "./errorBoundary";
 import wechatPage from "./wechatPage";
 import notifyPage from "./notifyPage";
+import usagePage from "./usagePage";
 
 const zh: typeof en = {
   common,
@@ -98,6 +99,7 @@ const zh: typeof en = {
   errorBoundary,
   wechatPage,
   notifyPage,
+  usagePage,
 };
 
 export default zh;

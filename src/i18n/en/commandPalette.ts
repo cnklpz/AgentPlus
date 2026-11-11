@@ -17,6 +17,8 @@ export default {
   historyHint: "Backups & rollback",
   notify: "Completion notifications",
   notifyHint: "Push to Bark, ntfy and more when an agent finishes",
+  usage: "Usage",
+  usageHint: "Tokens and API-equivalent cost of every agent",
   sync: "Multi-device sync",
   syncHint: "Export / import",
   settings: "AgentPlus settings",

@@ -19,6 +19,8 @@ const zh: typeof en = {
   historyHint: "备份和回滚",
   notify: "完成通知",
   notifyHint: "Agent 完成后推送到 Bark、ntfy 等",
+  usage: "用量统计",
+  usageHint: "各 Agent 的 token 用量和折合 API 费用",
   sync: "多设备同步",
   syncHint: "导出 / 导入",
   settings: "AgentPlus 设置",

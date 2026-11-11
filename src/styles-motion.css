@@ -214,3 +214,15 @@
 .ap-ghost :is(.modal, .palette) { animation: ap-out-pop .26s var(--ease-smooth) forwards !important; }
 .ap-ghost:is(.dd-menu, .ctx-menu) { animation: ap-out-menu .2s var(--ease-smooth) forwards !important; }
 .ap-ghost.toast { animation: ap-out-toast .3s var(--ease-smooth) forwards !important; }
+
+/* Usage page: tiles and sections rise one after another; bars spring up in a longer wave */
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > * { animation: ap-rise var(--t) var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 38ms); }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(2) { --i: 1; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(3) { --i: 2; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(4) { --i: 3; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(5) { --i: 4; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(6) { --i: 5; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(7) { --i: 6; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(8) { --i: 7; }
+:root[data-motion="rich"] :is(.usage-tiles, .page-body.usage) > :nth-child(9) { --i: 8; }
+:root[data-motion="rich"] .usage-seg { animation-delay: calc(var(--i, 0) * 22ms); }

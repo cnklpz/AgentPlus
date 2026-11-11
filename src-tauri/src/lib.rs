@@ -31,6 +31,7 @@ mod skills;
 mod sync;
 mod tray;
 mod update;
+mod usage;
 mod util;
 mod wechat;
 
@@ -558,6 +559,33 @@ async fn set_agent_dir(agent: String, path: Option<String>) -> Result<(), String
     blocking_tx(move || adapters::set_dir(&agent, path.as_deref())).await
 }
 
+/// Token usage in [from, to) (Unix seconds), bucketed by "hour" or "day".
+#[tauri::command]
+async fn usage_report(from: i64, to: i64, bucket: String) -> Result<usage::Report, String> {
+    blocking(move || usage::report(from, to, &bucket)).await
+}
+
+#[tauri::command]
+fn usage_prices() -> usage::price::Prices {
+    usage::price::list(&store::load())
+}
+
+/// Fetches prices from models.dev; returns how many models got one.
+#[tauri::command]
+async fn usage_fetch_prices() -> Result<usize, String> {
+    blocking(usage::price::fetch_models_dev).await
+}
+
+/// Sets the price of a model (per million tokens, USD); null goes back to the list price.
+#[tauri::command]
+async fn usage_set_price(model: String, price: Option<usage::price::Price>) -> Result<usage::price::Prices, String> {
+    blocking(move || {
+        store::update(|root| usage::price::set(root, &model, price))?;
+        Ok(usage::price::list(&store::load()))
+    })
+    .await
+}
+
 #[tauri::command]
 fn gateway_status() -> gateway::server::Status {
     gateway::server::status()
@@ -1052,6 +1080,11 @@ pub fn run() {
             std::thread::spawn(modelinfo::refresh_if_stale);
             // Sign-in tokens left in the logs of web UI servers that have stopped since.
             std::thread::spawn(process::forget_idle_tokens);
+            // Read the agents' logs once in the background, so the usage page opens without waiting.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(4));
+                usage::scan::scan_all();
+            });
             // The window starts hidden and the page shows it after its first render, so the
             // WebView's blank white never flashes. Fallback in case the page never gets there.
             if let Some(w) = app.get_webview_window("main") {
@@ -1152,6 +1185,10 @@ pub fn run() {
             codex_builtin_commit,
             codex_builtin_discard,
             gateway_status,
+            usage_report,
+            usage_prices,
+            usage_set_price,
+            usage_fetch_prices,
             gateway_set,
             gateway_save_route,
             gateway_delete_route,

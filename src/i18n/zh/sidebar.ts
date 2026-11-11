@@ -8,6 +8,7 @@ const zh: typeof en = {
   mcp: "MCP 服务器",
   skills: "技能",
   history: "历史与回滚",
+  usage: "用量统计",
   sync: "多设备同步",
   wechat: "Claw 接入",
   notify: "完成通知",

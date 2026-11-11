@@ -182,6 +182,12 @@ pub struct LogEntry {
     /// Agent whose gateway key the request carried ("agentplus" for AgentPlus's own test);
     /// None when it was refused.
     pub agent: Option<String>,
+    /// Of the input tokens, those read from the prompt cache.
+    #[serde(skip)]
+    pub cached: u64,
+    /// The client's conversation id (its session header or body field), for the usage ledger.
+    #[serde(skip)]
+    pub session: Option<String>,
 }
 
 /// One agent's share of a minute (or the whole minute's traffic).
@@ -1055,6 +1061,7 @@ impl Drop for Active {
 
 fn handle(mut s: TcpStream) {
     let t0 = Instant::now();
+    let t_start = chrono::Local::now().timestamp();
     CORS.with(|c| c.borrow_mut().clear());
     // A client that stops reading must not hold the thread forever.
     let _ = s.set_write_timeout(Some(Duration::from_secs(60)));
@@ -1132,8 +1139,10 @@ fn handle(mut s: TcpStream) {
             m.agents.entry(a.clone()).or_default().add(failed, usage);
         }
     });
-    push_log(log);
+    // The client has its answer before the ledger touches the disk.
     let _ = s.shutdown(Shutdown::Both);
+    crate::usage::ledger::record(t_start, &log);
+    push_log(log);
 }
 
 /// Where a forward sends requests.
@@ -1577,6 +1586,7 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
     let ctx = convert::req_ctx(inbound, &body);
     log.model = ctx.model.clone();
     log.stream = ctx.stream;
+    log.session = session::client_session(|h| req.header(h), original);
     log.converted = inbound != upstream;
 
     let mut upstream_body = if inbound == upstream {
@@ -1636,7 +1646,7 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         // Passthrough, streamed as it arrives (an unasked-for stream is collected below).
         let mut sniff = UsageSniff::new(is_sse);
         let st = pipe(s, body, status, &ct, &mut sniff, log);
-        log.usage = sniff.finish();
+        (log.usage, log.cached) = sniff.finish();
         return Ok(Attempt::Done(st));
     }
     if ctx.stream && is_sse {
@@ -1655,6 +1665,7 @@ fn attempt(s: &mut TcpStream, req: &Request, t: &Target, inbound: Proto, body: &
         convert::response_to_chat(upstream, &v).map_err(|e| fault(tr!("Can't parse the upstream response: {e:#}", "上游响应无法解析：{e:#}")))?
     };
     log.usage = convert::usage_tokens(&chat);
+    log.cached = convert::cached_tokens(&chat);
     if ctx.stream {
         // Client wanted a stream: replay the whole answer as one.
         if let Ok(mut out) = Chunked::start(s, 200, "text/event-stream") {
@@ -1750,13 +1761,14 @@ struct UsageSniff {
     sse: bool,
     buf: Vec<u8>,
     usage: Option<(u64, u64)>,
+    cached: u64,
 }
 
 impl UsageSniff {
     const MAX: usize = 8 * 1024 * 1024;
 
     fn new(sse: bool) -> Self {
-        UsageSniff { sse, buf: vec![], usage: None }
+        UsageSniff { sse, buf: vec![], usage: None, cached: 0 }
     }
 
     fn feed(&mut self, data: &[u8]) {
@@ -1790,16 +1802,18 @@ impl UsageSniff {
         if let Some((i, o)) = convert::usage_tokens(v) {
             let (a, b) = self.usage.unwrap_or_default();
             self.usage = Some((a.max(i), b.max(o)));
+            self.cached = self.cached.max(convert::cached_tokens(v));
         }
     }
 
-    fn finish(mut self) -> Option<(u64, u64)> {
+    /// (input, output) tokens and the cached share of the input.
+    fn finish(mut self) -> (Option<(u64, u64)>, u64) {
         if self.sse {
             self.line();
         } else if let Ok(v) = serde_json::from_slice::<Value>(&self.buf) {
             self.take(&v);
         }
-        self.usage
+        (self.usage, self.cached)
     }
 }
 
@@ -1930,6 +1944,7 @@ fn relay(out: &mut Chunked, down: &mut DownstreamStream, chunks: Vec<Value>, log
     for chunk in chunks {
         if let Some(u) = convert::usage_tokens(&chunk) {
             log.usage = Some(u);
+            log.cached = convert::cached_tokens(&chunk);
         }
         if !out.send_all(down.push(&chunk)) {
             return false;
@@ -2794,15 +2809,15 @@ mod tests {
         for part in sse.as_bytes().chunks(7) {
             s.feed(part);
         }
-        assert_eq!(s.finish(), Some((15, 42)));
+        assert_eq!(s.finish(), (Some((15, 42)), 5));
 
         let mut s = UsageSniff::new(true);
         s.feed(b"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}}");
-        assert_eq!(s.finish(), Some((3, 4)));
+        assert_eq!(s.finish(), (Some((3, 4)), 0));
 
         let mut s = UsageSniff::new(false);
         s.feed(b"{\n  \"choices\": [],\n  \"usage\": {\"prompt_tokens\": 8, \"completion_tokens\": 2}\n}");
-        assert_eq!(s.finish(), Some((8, 2)));
+        assert_eq!(s.finish(), (Some((8, 2)), 0));
     }
 
     #[test]

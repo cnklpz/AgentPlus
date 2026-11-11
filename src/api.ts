@@ -313,6 +313,68 @@ export interface GatewayAgentUse {
   outputTokens: number;
 }
 
+/** Where a token count comes from: the vendor's own service, a provider set up in the agent, or the local gateway. */
+export type UsageSource = "official" | "thirdParty" | "gateway";
+
+/** Usage of one time bucket × agent × source × model. */
+export interface UsageCell {
+  /** Unix seconds at the start of the bucket (local time). */
+  t: number;
+  agent: string;
+  source: UsageSource;
+  model: string;
+  requests: number;
+  /** Input tokens not read from or written to the cache. */
+  input: number;
+  /** Output tokens, reasoning included. */
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** API-equivalent cost in USD of the requests whose model has a price. */
+  cost: number;
+  /** Requests whose model has no price. */
+  unpriced: number;
+}
+
+export interface UsageReport {
+  from: number;
+  to: number;
+  bucket: "hour" | "day";
+  cells: UsageCell[];
+  /** Agent log records left out because the gateway counted them. */
+  dedupedRequests: number;
+  dedupedTokens: number;
+  /** Records repeated across log files (forks, resumes), counted once. */
+  repeatedRequests: number;
+  /** First request in the gateway's usage ledger (Unix seconds). */
+  ledgerSince: number | null;
+  sources: { agent: string; files: number; path: string }[];
+  errors: string[];
+}
+
+/** Price per million tokens, USD. */
+export interface UsagePriceValue {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface UsagePrice extends UsagePriceValue {
+  /** Normalized model id (lower case, no vendor prefix or date). */
+  model: string;
+  /** Where the price comes from: AgentPlus's list, models.dev, or the user. */
+  origin: "builtin" | "modelsDev" | "custom";
+  /** A custom price that replaces a built-in or models.dev one. */
+  hasDefault: boolean;
+}
+
+export interface UsagePrices {
+  entries: UsagePrice[];
+  /** Last fetch from models.dev (Unix seconds). */
+  modelsDevAt: number | null;
+}
+
 /** One minute of gateway traffic. */
 export interface GatewayMinute {
   /** Unix seconds at the start of the minute. */
@@ -1203,6 +1265,13 @@ const real = {
   notifyClearRecent: () => invoke<NotifyStatus>("notify_clear_recent"),
   /** Summarizes a sample reply with the summary settings as typed; returns the summary. */
   notifyTestSummary: (config: NotifyConfig) => invoke<string>("notify_test_summary", { config }),
+  /** Token usage in [from, to) (Unix seconds), from agent logs and the gateway ledger. */
+  usageReport: (from: number, to: number, bucket: "hour" | "day") => invoke<UsageReport>("usage_report", { from, to, bucket }),
+  usagePrices: () => invoke<UsagePrices>("usage_prices"),
+  /** Sets a model's price; null goes back to the list price (or removes an added model). */
+  usageSetPrice: (model: string, price: UsagePriceValue | null) => invoke<UsagePrices>("usage_set_price", { model, price }),
+  /** Fetches prices from models.dev; returns how many models got one. */
+  usageFetchPrices: () => invoke<number>("usage_fetch_prices"),
   gatewayStatus: () => invoke<GatewayStatus>("gateway_status"),
   gatewaySet: (enabled: boolean, port: number | null) => invoke<GatewayStatus>("gateway_set", { enabled, port }),
   gatewaySaveRoute: (route: GatewayRoute, oldId: string | null) => invoke<GatewayStatus>("gateway_save_route", { route, oldId }),
@@ -1309,6 +1378,62 @@ const demoLinks: LinkHandler = { supported: true, on: false, other: "CC Switch.e
 let demoTrayMono = false;
 const demoOfficial: OfficialFetch = { active: false, startedAt: "15:20:01", backupDir: "C:\\Users\\me\\.agentplus\\backups\\20260923-152001\\codex", cacheReady: false, cacheModels: 0, cachePath: "~/.codex/models_cache.json", catalogPath: "~/.codex/models.json", chatgptLogin: true };
 let demoOfficialAt = 0;
+
+const DEMO_PRICES: UsagePrice[] = [
+  { model: "claude-opus-5-5", input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, origin: "builtin", hasDefault: false },
+  { model: "claude-sonnet-5-5", input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, origin: "builtin", hasDefault: false },
+  { model: "gpt-5.1-codex", input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0, origin: "builtin", hasDefault: false },
+  { model: "gemini-2.5-pro", input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 0, origin: "modelsDev", hasDefault: false },
+];
+const demoPriceEdits: Record<string, UsagePriceValue | null> = {};
+let demoModelsDevAt: number | null = null;
+
+function demoPrices(): UsagePrices {
+  const out = new Map(DEMO_PRICES.map((p) => [p.model, { ...p }]));
+  for (const [model, v] of Object.entries(demoPriceEdits)) {
+    const base = DEMO_PRICES.find((p) => p.model === model);
+    if (v) out.set(model, { model, ...v, origin: "custom", hasDefault: !!base });
+    else if (base) out.set(model, { ...base });
+    else out.delete(model);
+  }
+  return { entries: [...out.values()].sort((a, b) => a.model.localeCompare(b.model)), modelsDevAt: demoModelsDevAt };
+}
+
+/** Made-up usage: a few agents and models, busier on weekdays and in the afternoon. */
+function demoUsage(from: number, to: number, bucket: "hour" | "day"): UsageReport {
+  const now = Math.floor(Date.now() / 1000);
+  const start = Math.max(from, now - 120 * 86400);
+  const step = bucket === "hour" ? 3600 : 86400;
+  const kinds: [string, UsageSource, string, number][] = [
+    ["claude", "official", "claude-opus-5-5", 1],
+    ["claude", "gateway", "glm-5", 0.4],
+    ["codex", "official", "gpt-5.1-codex", 0.8],
+    ["codex", "thirdParty", "deepseek-v4", 0.3],
+    ["gemini", "official", "gemini-2.5-pro", 0.15],
+  ];
+  const prices = demoPrices();
+  const cells: UsageCell[] = [];
+  const first = new Date(start * 1000);
+  if (bucket === "day") first.setHours(0, 0, 0, 0);
+  else first.setMinutes(0, 0, 0);
+  for (let t = Math.floor(first.getTime() / 1000), i = 0; t < Math.min(to, now); t += step, i++) {
+    const d = new Date(t * 1000);
+    const busy = (bucket === "hour" ? Math.max(0, Math.sin(((d.getHours() - 8) / 14) * Math.PI)) : d.getDay() % 6 ? 1 : 0.3) * (0.6 + 0.4 * Math.abs(Math.sin(i * 1.7)));
+    for (const [agent, source, model, w] of kinds) {
+      const requests = Math.round(busy * w * (bucket === "hour" ? 30 : 400));
+      if (!requests) continue;
+      const input = requests * 2400, output = requests * 900, cacheRead = requests * 42000, cacheWrite = source === "official" && agent === "claude" ? requests * 3000 : 0;
+      const p = prices.entries.find((x) => x.model === model);
+      const cost = p ? (input * p.input + output * p.output + cacheRead * p.cacheRead + cacheWrite * (p.cacheWrite || p.input)) / 1e6 : 0;
+      cells.push({ t, agent, source, model, requests, input, output, cacheRead, cacheWrite, cost, unpriced: p ? 0 : requests });
+    }
+  }
+  return {
+    from, to, bucket, cells, dedupedRequests: 312, dedupedTokens: 14_800_000, repeatedRequests: 41, ledgerSince: now - 20 * 86400,
+    sources: [{ agent: "codex", files: 76, path: "~/.codex/sessions" }, { agent: "claude", files: 541, path: "~/.claude/projects" }, { agent: "gemini", files: 16, path: "~/.gemini/tmp" }],
+    errors: [],
+  };
+}
 const demoGateway: { enabled: boolean; port: number; routes: GatewayRoute[]; breaker: GatewayBreaker; timezone: string | null; cleared: string[] } = {
   enabled: false, port: 18650, routes: [], breaker: { enabled: true, threshold: 3, cooldownSecs: 60 }, timezone: null, cleared: [],
 };
@@ -1715,6 +1840,13 @@ const demo: typeof real = {
   codexBuiltinPreview: async () => { await sleep(400); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
   codexBuiltinCommit: async () => { await sleep(200); return ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5"].map((slug) => ({ slug, name: slug.toUpperCase(), visible: true })); },
   codexBuiltinDiscard: async () => undefined,
+  usageReport: async (from, to, bucket) => { await sleep(300); return demoUsage(from, to, bucket); },
+  usagePrices: async () => demoPrices(),
+  usageSetPrice: async (model, price) => {
+    demoPriceEdits[model] = price;
+    return demoPrices();
+  },
+  usageFetchPrices: async () => { await sleep(900); demoModelsDevAt = Math.floor(Date.now() / 1000); return 2841; },
   gatewayStatus: async () => demoGw(),
   gatewaySet: async (enabled, port) => { demoGateway.enabled = enabled; if (port) demoGateway.port = port; return demoGw(); },
   gatewaySaveRoute: async (route, oldId) => { demoGateway.routes = [...demoGateway.routes.filter((r) => r.id !== (oldId ?? route.id)), route]; return demoGw(); },

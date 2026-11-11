@@ -147,6 +147,7 @@ export default {
   navWechat: "Claw bridge",
   navNotify: "Completion notifications",
   navHistory: "History & rollback",
+  navUsage: "Usage",
   navSettings: "AgentPlus settings",
   privacyOnToast: "Privacy mode on",
   updateToast: "AgentPlus {version} is out; update it in Settings › About",

@@ -29,6 +29,13 @@ const CLIENT_HEADERS: &[&str] = &[HEADER, "x-session-id", "x-claude-code-session
 /// of how the conversation starts (system prompt and messages up to the first user turn),
 /// which every later turn of the conversation resends unchanged.
 pub fn session_id<'a>(header: impl Fn(&str) -> Option<&'a str>, inbound: Proto, body: &Value) -> String {
+    client_session(header, body).unwrap_or_else(|| format!("agp-{:016x}", hash(&opening(inbound, body))))
+}
+
+/// The conversation id the client itself sent (header or body field), unchanged apart
+/// from `clean`; None when it sent none (no hash fallback: the usage ledger matches it
+/// against the agent's own session logs).
+pub fn client_session<'a>(header: impl Fn(&str) -> Option<&'a str>, body: &Value) -> Option<String> {
     CLIENT_HEADERS
         .iter()
         .filter_map(|h| header(h))
@@ -36,7 +43,6 @@ pub fn session_id<'a>(header: impl Fn(&str) -> Option<&'a str>, inbound: Proto, 
         .map(str::trim)
         .find(|v| !v.is_empty())
         .map(clean)
-        .unwrap_or_else(|| format!("agp-{:016x}", hash(&opening(inbound, body))))
 }
 
 /// A session id found in the body.

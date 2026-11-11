@@ -46,6 +46,7 @@ export default {
   pagePlugins: "Plugins",
   pageClaw: "Claw bridge",
   pageNotify: "Completion notifications",
+  pageUsage: "Usage",
   closeAction: "When closing the window",
   closeActionHint: "Quitting also stops the local gateway.",
   closeActionHintMac: "⌘Q always quits. Quitting also stops the local gateway.",

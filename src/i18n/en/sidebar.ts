@@ -6,6 +6,7 @@ export default {
   mcp: "MCP servers",
   skills: "Skills",
   history: "History & rollback",
+  usage: "Usage",
   sync: "Multi-device sync",
   wechat: "Claw bridge",
   notify: "Notifications",

@@ -48,6 +48,7 @@ const zh: typeof en = {
   pagePlugins: "插件",
   pageClaw: "Claw 接入",
   pageNotify: "完成通知",
+  pageUsage: "用量统计",
   closeAction: "关闭窗口时",
   closeActionHint: "退出应用也会停止本地网关。",
   closeActionHintMac: "⌘Q 始终直接退出。退出应用也会停止本地网关。",

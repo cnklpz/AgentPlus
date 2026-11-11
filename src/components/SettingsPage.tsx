@@ -69,12 +69,13 @@ const CLOSE_ACTIONS: { v: CloseAction; label: TKey }[] = isMac ? [
 ];
 
 /** Pages and agent tabs that can be hidden (display only: what they run keeps running). */
-const PAGES: { key: "showMcp" | "showSkills" | "showPlugins" | "showClaw" | "showNotify"; label: TKey; icon: React.ReactNode }[] = [
+const PAGES: { key: "showMcp" | "showSkills" | "showPlugins" | "showClaw" | "showNotify" | "showUsage"; label: TKey; icon: React.ReactNode }[] = [
   { key: "showMcp", label: "settingsPage.pageMcp", icon: <Icon.plug size={13} /> },
   { key: "showSkills", label: "settingsPage.pageSkills", icon: <Icon.book size={13} /> },
   { key: "showPlugins", label: "settingsPage.pagePlugins", icon: <Icon.layers size={13} /> },
   { key: "showClaw", label: "settingsPage.pageClaw", icon: <Icon.chat size={13} /> },
   { key: "showNotify", label: "settingsPage.pageNotify", icon: <Icon.bell size={13} /> },
+  { key: "showUsage", label: "settingsPage.pageUsage", icon: <Icon.chart size={13} /> },
 ];
 
 /** AgentPlus's own settings (top-right gear): general options and agent detection. */

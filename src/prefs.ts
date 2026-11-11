@@ -43,10 +43,12 @@ export interface Prefs {
   showClaw: boolean;
   /** Show the completion notifications page. Display only: notifications keep being sent. */
   showNotify: boolean;
+  /** Show the usage page. Display only: the gateway keeps recording usage. */
+  showUsage: boolean;
 }
 
 const KEY = "agentplus.prefs";
-const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true, showPlugins: true, showClaw: true, showNotify: true };
+const DEFAULTS: Prefs = { motion: "full", autoLatency: true, hiddenAgents: [], agentOrder: [], lang: "auto", theme: "auto", restartProgress: "dialog", closeAction: "ask", privacy: false, autoUpdate: true, hints: "full", showMcp: true, showSkills: true, showPlugins: true, showClaw: true, showNotify: true, showUsage: true };
 
 export function loadPrefs(): Prefs {
   try {
@@ -83,6 +85,7 @@ export function normalizePrefs(v: unknown): Prefs {
     showPlugins: bool(o.showPlugins, DEFAULTS.showPlugins),
     showClaw: bool(o.showClaw, DEFAULTS.showClaw),
     showNotify: bool(o.showNotify, DEFAULTS.showNotify),
+    showUsage: bool(o.showUsage, DEFAULTS.showUsage),
   };
 }
 

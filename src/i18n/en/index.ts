@@ -47,6 +47,7 @@ import format from "./format";
 import errorBoundary from "./errorBoundary";
 import wechatPage from "./wechatPage";
 import notifyPage from "./notifyPage";
+import usagePage from "./usagePage";
 
 export default {
   common,
@@ -97,4 +98,5 @@ export default {
   errorBoundary,
   wechatPage,
   notifyPage,
+  usagePage,
 };

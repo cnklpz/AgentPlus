@@ -521,6 +521,15 @@ fn usage_from_anthropic(u: &Value) -> Usage {
 /// top-level `usage`, or nested in `response` / `message` (Responses and Anthropic events), or
 /// in the first choice (some chat providers, e.g. Moonshot, put it there).
 pub fn usage_tokens(v: &Value) -> Option<(u64, u64)> {
+    usage_of(v).map(|x| (x.input, x.output))
+}
+
+/// Of the input tokens `usage_tokens` reports, those read from the prompt cache.
+pub fn cached_tokens(v: &Value) -> u64 {
+    usage_of(v).map_or(0, |x| x.cached)
+}
+
+fn usage_of(v: &Value) -> Option<Usage> {
     let u = [v.get("usage"), v.get("response").and_then(|r| r.get("usage")), v.get("message").and_then(|m| m.get("usage")), v.pointer("/choices/0/usage")]
         .into_iter()
         .flatten()
@@ -532,7 +541,7 @@ pub fn usage_tokens(v: &Value) -> Option<(u64, u64)> {
     } else {
         usage_from_responses(u)
     };
-    (x.input > 0 || x.output > 0).then_some((x.input, x.output))
+    (x.input > 0 || x.output > 0).then_some(x)
 }
 
 fn usage_to_anthropic(u: Usage) -> Value {

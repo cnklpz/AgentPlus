@@ -149,6 +149,7 @@ const zh: typeof en = {
   navWechat: "Claw 接入",
   navNotify: "完成通知",
   navHistory: "历史与回滚",
+  navUsage: "用量统计",
   navSettings: "AgentPlus 设置",
   privacyOnToast: "已开启隐私模式",
   updateToast: "AgentPlus {version} 已发布，可在「设置 › 关于」里更新",
