@@ -36,6 +36,8 @@
 - **模型列表**：拉取供应商提供的模型，再挑出每个 Agent 要显示的那些。
 - **改动预览**：没看过 diff 就不会写入，被替换的文件先存到 `~/.agentplus/backups/`，之后随时能还原。
 - **本地网关**：在 OpenAI Chat、OpenAI Responses、Anthropic Messages 之间互转，流式输出和工具调用都支持——Claude Code 要接一家只提供 OpenAI 接口的服务，靠的就是它。
+- **用量统计**：汇总 Codex、Claude Code、Gemini CLI、OpenCode、ZCode、Hermes 本机日志里的 token、请求数和缓存命中率；订阅用量按 API 价格折算费用（价格可从 models.dev 获取），经本地网关的请求只计一次。
+- **完成通知**：Agent 完成一轮任务后推送到 Bark、ntfy、Gotify、Server 酱或 Webhook，可附带回复内容或一两句总结。
 - **连接测试**：先测延迟，再发一个真实请求，地址、密钥、模型能不能用，切换之前就知道。
 - **WSL**：WSL 发行版里的 Agent 和 Windows 共用同一份供应商库。
 - **隐私模式**：`Ctrl+Shift+H` 遮住密钥、服务地址和用户名，截图或共享屏幕之前按一下。

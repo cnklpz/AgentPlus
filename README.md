@@ -36,6 +36,8 @@
 - **Model lists.** Fetch what a provider offers, then choose what each agent shows.
 - **Change preview.** Nothing is written until you've looked at the diff, and whatever gets replaced is saved to `~/.agentplus/backups/` first.
 - **Local gateway.** Converts between OpenAI Chat, OpenAI Responses and Anthropic Messages, streaming and tool calls included — which is how Claude Code can use a provider that only speaks OpenAI.
+- **Usage.** Tokens, requests and cache hit rate from the local logs of Codex, Claude Code, Gemini CLI, OpenCode, ZCode and Hermes. Subscription usage is priced at API rates (prices can come from models.dev), and requests through the local gateway are counted once.
+- **Completion notifications.** When an agent finishes a turn, a message goes to Bark, ntfy, Gotify, ServerChan or a webhook, optionally with the reply or a one-line summary.
 - **Connection tests.** Latency, plus a real request, so you know the URL, key and model work before you switch.
 - **WSL.** Agents inside a WSL distro share the same provider library as Windows.
 - **Privacy mode.** `Ctrl+Shift+H` hides keys, service URLs and usernames before a screenshot or a screen share.
