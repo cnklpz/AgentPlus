@@ -2,6 +2,30 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.6.0
+
+新增用量统计。
+
+- 新增「用量统计」页：汇总 Codex、Claude Code、Gemini CLI、OpenCode、ZCode、Hermes 本机日志里的 token、请求数、折合 API 费用和缓存命中率，可按今天、7/30/90 天、全部或自定义日期查看，按来源、智能体和模型细分
+- 本地网关开始记录每个请求的用量和会话；经过网关的请求只在「网关」下计一次，不和日志重复统计
+- 订阅（ChatGPT、Claude、Gemini）的用量按 API 价格折算费用：内置官方价，可从 models.dev 获取更多模型的价格，也可以在弹窗里为任意模型设置价格
+- 只统计侧边栏显示的 Agent；可在设置里隐藏这个页面
+- 各页面标题区统一为标题加一行说明，并精简了说明文字
+- 修复 Windows 上 Claude 桌面版自带的 Claude Code 显示「没有找到程序」
+- 修复完成通知在会话恢复或同一时刻多条更新时漏发、重复发送
+- 修复切换环境时，正在应用的修改可能写入新环境
+
+Adds usage statistics.
+
+- New Usage page: tokens, requests, API-equivalent cost and cache hit rate from the local logs of Codex, Claude Code, Gemini CLI, OpenCode, ZCode and Hermes, for today, 7/30/90 days, all time or a custom range, broken down by source, agent and model
+- The local gateway now records each request's usage and conversation; requests through it are counted once, under Gateway, never again from the logs
+- Subscription usage (ChatGPT, Claude, Gemini) is priced at API rates: built-in list prices, more models' prices from models.dev, and a dialog to set any model's price
+- Only the agents shown in the sidebar are counted; the page can be hidden in Settings
+- Every page header is now a title with one line of description, and long descriptions are shorter
+- Fixes Claude Code that comes with Claude Desktop on Windows showing "program not found"
+- Fixes completion notifications being missed or repeated when a session resumes or several updates share a timestamp
+- Fixes changes that were still being applied during an environment switch being written to the new environment
+
 ## 0.5.1
 
 适配 Codex 26.1103。
