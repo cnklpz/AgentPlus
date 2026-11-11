@@ -13,7 +13,7 @@ export default {
   forwardAdded: "Route added: {base}",
   // header / hero
   title: "Local gateway",
-  intro: "Forwards provider requests on this machine: clients can call it with Chat Completions, Responses or Anthropic Messages, and the gateway converts to the protocol the provider supports (including streaming and tool calls).",
+  intro: "Forwards provider requests on this machine, converting between Chat Completions, Responses and Anthropic Messages.",
   online: "Gateway online",
   notRunning: "Gateway not running",
   off: "Gateway off",

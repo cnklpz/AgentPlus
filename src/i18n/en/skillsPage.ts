@@ -1,7 +1,7 @@
 // src/components/SkillsPage.tsx
 export default {
   title: "Skills",
-  subtitle: "Agent Skills (folders with a SKILL.md) in each agent's user-level folders. Project folders aren't listed.",
+  subtitle: "Skills (folders with a SKILL.md) in each agent's user folders; project folders aren't listed.",
   filter: "Show",
   filterMine: "Mine",
   filterBuiltin: "Built in",

@@ -6,7 +6,7 @@ const zh: typeof en = {
   upToDate: "同步文件和本机一致，没有需要导入的",
   recordUpToDate: "这条同步记录里的内容本机都有",
   title: "多设备同步",
-  intro: "选一个会被同步的文件夹（网盘、NAS、U 盘都可以）。导出时写入供应商库、MCP 库、技能库和各 Agent 的供应商、模型列表（单个超过 5 MB 的技能不同步）。设置同步密码后文件会加密，还能连同 API Key（以及 MCP 的隐私值）一起同步。",
+  intro: "导出到会被同步的文件夹（网盘、NAS、U 盘），超过 5 MB 的技能不同步。设置同步密码后文件加密，并可同步 API Key。",
   folder: "同步文件夹",
   folderPlaceholder: "例如 D:\\OneDrive\\AgentPlus",
   fileFromMachine: "文件夹里有同步文件：来自 {machine}，导出于 {time}",

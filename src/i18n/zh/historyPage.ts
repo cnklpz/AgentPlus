@@ -13,7 +13,7 @@ const zh: typeof en = {
   confirmRollback: "确认回滚",
   rollbackBefore: "回滚到这之前",
   title: "历史与回滚",
-  subtitle: "AgentPlus 每次写入前都会备份原文件。回滚会把文件恢复到那次写入之前，回滚前的文件也会先备份。",
+  subtitle: "每次写入前自动备份，可回滚到任意一次写入之前。",
   empty: "还没有备份。应用过配置之后，这里会列出每一次写入。",
   detailTitle: "备份详情",
   detailHint: "点左边的一条记录，查看这次备份了哪些文件、原文件在哪，以及从那之后文件改了什么。",

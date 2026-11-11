@@ -4,7 +4,7 @@ export default {
   upToDate: "The sync file matches this device; nothing to import",
   recordUpToDate: "This device already has everything in that sync record",
   title: "Multi-device sync",
-  intro: "Choose a folder that gets synced (cloud drive, NAS or USB stick all work). Exports hold the provider, MCP and skill libraries and every agent's providers and model lists (skills over 5 MB stay out). Set a sync password to encrypt the file and carry the API keys (and MCP secrets) along.",
+  intro: "Export to a synced folder (cloud drive, NAS, USB); skills over 5 MB stay out. A sync password encrypts the file and carries the API keys along.",
   folder: "Sync folder",
   folderPlaceholder: "e.g. D:\\OneDrive\\AgentPlus",
   fileFromMachine: "The folder has a sync file from {machine}, exported {time}",

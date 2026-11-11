@@ -11,7 +11,7 @@ export default {
   confirmRollback: "Confirm rollback",
   rollbackBefore: "Roll back to before this",
   title: "History & rollback",
-  subtitle: "AgentPlus backs up the original files before every write. Rolling back restores the files to how they were before that write, and backs up the current files first.",
+  subtitle: "Files are backed up before every write; roll back to before any of them.",
   empty: "No backups yet. Once you've applied a configuration, every write is listed here.",
   detailTitle: "Backup details",
   detailHint: "Click an entry on the left to see which files were backed up, where the originals are, and what has changed since.",

@@ -15,7 +15,7 @@ const zh: typeof en = {
   forwardAdded: "已添加转发：{base}",
   // header / hero
   title: "本地网关",
-  intro: "在本机转发供应商请求：客户端用 Chat Completions、Responses、Anthropic Messages 任一协议访问，网关自动转换成供应商支持的协议（包括流式输出和工具调用）。",
+  intro: "在本机转发供应商请求，自动在 Chat Completions、Responses 和 Anthropic Messages 之间转换。",
   online: "网关在线",
   notRunning: "网关未运行",
   off: "网关已关闭",

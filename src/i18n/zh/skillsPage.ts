@@ -3,7 +3,7 @@ import type en from "../en/skillsPage";
 
 const zh: typeof en = {
   title: "技能",
-  subtitle: "各 Agent 用户级目录里的 Agent Skills（带 SKILL.md 的文件夹），不含项目目录。",
+  subtitle: "各 Agent 用户目录下的技能（带 SKILL.md 的文件夹），不含项目目录。",
   filter: "显示",
   filterMine: "我的",
   filterBuiltin: "内置",
