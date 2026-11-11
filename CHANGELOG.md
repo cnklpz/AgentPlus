@@ -2,6 +2,14 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.6.2
+
+- 用量统计在 WSL 环境下打开更快：日志没有变化时从 1–3 秒缩短到 0.2 秒左右，切换时间范围不再重新读取日志
+- 修复在 Windows 和 WSL 之间切换环境后，用量统计要重新解析全部日志
+
+- The Usage page opens faster in WSL: about 0.2 seconds instead of 1–3 when the logs haven't changed, and switching the time range no longer reads the logs again
+- Fixes the Usage page parsing every log again after switching between Windows and WSL
+
 ## 0.6.1
 
 - 修复选择 WSL 环境后，用量统计读取 OpenCode、ZCode、Hermes 时提示「database is locked」
