@@ -80,7 +80,7 @@ fn open_ro(p: &Path) -> Result<Connection> {
 
 /// SQLite cannot lock over the WSL file share, so WSL databases are read from a
 /// fresh copy (db + wal) on the Windows side.
-fn open_snapshot(p: &Path) -> Result<Connection> {
+pub(crate) fn open_snapshot(p: &Path) -> Result<Connection> {
     // One folder per call: the session list and the health check run at the same time, and
     // copying over a database another connection has open corrupts what it reads.
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

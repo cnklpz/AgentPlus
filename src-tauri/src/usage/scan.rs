@@ -539,8 +539,19 @@ fn opencode_msg(id: &str, session: &str, data: &str) -> Option<Rec> {
     (rec.tokens() > 0).then_some(rec)
 }
 
+/// Whether SQLite can't lock `p`: it is on the WSL file share (the WSL environment, or a
+/// folder picked there by hand).
+fn on_wsl_share(p: &Path) -> bool {
+    let s = p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    s.starts_with(r"\\wsl.localhost\") || s.starts_with(r"\\wsl$\")
+}
+
 fn open_db(p: &Path) -> anyhow::Result<rusqlite::Connection> {
     use rusqlite::{Connection, OpenFlags};
+    // Over the WSL share every open fails with "database is locked": read a copy instead.
+    if crate::env::is_wsl() || on_wsl_share(p) {
+        return crate::sessions::open_snapshot(p);
+    }
     let c = Connection::open_with_flags(p, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
     c.busy_timeout(std::time::Duration::from_secs(2))?;
     Ok(c)
@@ -813,6 +824,34 @@ mod tests {
         let a = d.replace("\"opencode\"", "\"anthropic\"");
         assert!(opencode_msg("msg_1", "ses_1", &a).unwrap().official);
         assert!(opencode_msg("m", "s", r#"{"role":"user","time":{"created":1}}"#).is_none());
+    }
+
+    #[test]
+    fn wsl_share_paths_are_read_from_a_copy() {
+        assert!(on_wsl_share(Path::new(r"\\wsl.localhost\Ubuntu\home\me\.zcode\cli\db\db.sqlite")));
+        assert!(on_wsl_share(Path::new(r"\\WSL$\Ubuntu\home\me\x.db")));
+        assert!(on_wsl_share(Path::new("//wsl.localhost/Ubuntu/home/me/x.db")));
+        assert!(!on_wsl_share(Path::new(r"C:\Users\me\.zcode\cli\db\db.sqlite")));
+        assert!(!on_wsl_share(Path::new(r"\\nas\share\x.db")));
+    }
+
+    /// A database opened through a snapshot reads the same rows, the WAL's included.
+    #[test]
+    fn snapshot_reads_what_the_database_holds() {
+        let h = crate::util::TestHome::new("usage-snapshot");
+        let db = h.0.join("db.sqlite");
+        let c = rusqlite::Connection::open(&db).unwrap();
+        c.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, data TEXT);").unwrap();
+        c.execute(
+            "INSERT INTO message VALUES ('m1', 's1', 1, ?1)",
+            [r#"{"role":"assistant","modelID":"glm-5","providerID":"x","time":{"created":5000},"tokens":{"input":7,"output":3,"reasoning":0,"cache":{"read":0,"write":0}}}"#],
+        )
+        .unwrap();
+        // The writer is still open (the row may sit in the WAL) while the snapshot is taken.
+        let snap = crate::sessions::open_snapshot(&db).unwrap();
+        let (id, s, d): (String, String, String) = snap.query_row("SELECT id, session_id, data FROM message", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        let rec = opencode_msg(&id, &s, &d).unwrap();
+        assert_eq!((rec.input, rec.output, rec.t), (7, 3, 5));
     }
 
     #[test]
