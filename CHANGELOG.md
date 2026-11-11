@@ -2,6 +2,12 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.6.1
+
+- 修复选择 WSL 环境后，用量统计读取 OpenCode、ZCode、Hermes 时提示「database is locked」
+
+- Fixes the Usage page reporting "database is locked" for OpenCode, ZCode and Hermes with the WSL environment selected
+
 ## 0.6.0
 
 新增用量统计。
