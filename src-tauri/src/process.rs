@@ -951,9 +951,41 @@ fn desktop_claude_code(app_data: &Path) -> Option<String> {
         .max_by_key(|n| version_key(Some(n)))
 }
 
+/// The newest Claude Code that Claude Desktop keeps for itself on Windows, with its version: the
+/// Store build under `%LOCALAPPDATA%\Claude-Data\claude_<publisher>\claude-code`, the classic
+/// one under `%APPDATA%\Claude\claude-code`. Each version folder holds `claude.exe`, directly
+/// or in a build folder (`2.1.321\d020ce1b5d30\claude.exe`); a folder without one is skipped.
+fn desktop_claude_code_win(local: &Path, roaming: &Path) -> Option<(PathBuf, String)> {
+    let mut roots = vec![roaming.join("Claude").join("claude-code")];
+    if let Ok(rd) = std::fs::read_dir(local.join("Claude-Data")) {
+        roots.extend(rd.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("claude_")).map(|e| e.path().join("claude-code")));
+    }
+    let exe_in = |ver: &Path| -> Option<PathBuf> {
+        let direct = ver.join("claude.exe");
+        if direct.is_file() {
+            return Some(direct);
+        }
+        std::fs::read_dir(ver).ok()?.flatten().map(|e| e.path().join("claude.exe")).find(|p| p.is_file())
+    };
+    roots
+        .iter()
+        .filter_map(|r| std::fs::read_dir(r).ok())
+        .flat_map(|rd| rd.flatten())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let v = e.file_name().to_string_lossy().to_string();
+            if !v.starts_with(|c: char| c.is_ascii_digit()) {
+                return None;
+            }
+            Some((exe_in(&e.path())?, v))
+        })
+        .max_by_key(|(_, v)| version_key(Some(v)))
+}
+
 /// Claude Code: npm global install, the native installer (~/.local/bin/claude[.exe]) or a
-/// `claude` on PATH (Homebrew); on macOS also Claude Desktop (Claude.app), which brings its
-/// own Claude Code reading the same ~/.claude. A CLI: `dir` stays None.
+/// `claude` on PATH (Homebrew); also Claude Desktop, which brings its own Claude Code reading
+/// the same ~/.claude (Claude.app on macOS, its own copy under app data on Windows). A CLI:
+/// `dir` stays None.
 pub(crate) fn detect_claude() -> Install {
     let mut inst = Install::default();
     let name = exe("claude");
@@ -967,6 +999,9 @@ pub(crate) fn detect_claude() -> Install {
     } else if !app_bundles(&["com.anthropic.claudefordesktop", "Claude.app"]).is_empty() {
         inst.installed = true;
         inst.version = dirs::config_dir().and_then(|d| desktop_claude_code(&d));
+    } else if let Some((_, v)) = if cfg!(windows) { dirs::data_local_dir().zip(dirs::config_dir()).and_then(|(l, r)| desktop_claude_code_win(&l, &r)) } else { None } {
+        inst.installed = true;
+        inst.version = Some(v);
     }
     // An npm install runs under node, so this only sees the native build. Case matters off
     // Windows: Claude Desktop's own process is "Claude".
@@ -2364,6 +2399,30 @@ mod any_os_tests {
         std::fs::create_dir_all(cc.join("tmp")).unwrap();
         std::fs::write(cc.join("9.9.9"), b"").unwrap();
         assert_eq!(desktop_claude_code(&h.0).as_deref(), Some("2.1.246"));
+    }
+
+    #[test]
+    fn finds_claude_desktops_own_claude_code_on_windows() {
+        let h = crate::util::TestHome::new("claude-desktop-win");
+        let (local, roaming) = (h.0.join("Local"), h.0.join("Roaming"));
+        assert_eq!(desktop_claude_code_win(&local, &roaming), None);
+        // Store build: version folder > build folder > claude.exe; a newer version without the exe
+        // (an unfinished download) doesn't count.
+        let store = local.join("Claude-Data").join("claude_pzs8sxrjxfjjc").join("claude-code");
+        for (v, build) in [("2.1.317", "aaa"), ("2.1.321", "d020ce1b5d30")] {
+            std::fs::create_dir_all(store.join(v).join(build)).unwrap();
+            std::fs::write(store.join(v).join(build).join("claude.exe"), b"").unwrap();
+        }
+        std::fs::create_dir_all(store.join("2.1.400").join("partial")).unwrap();
+        std::fs::create_dir_all(local.join("Claude-Data").join("other").join("claude-code").join("9.0.0")).unwrap();
+        let (exe, v) = desktop_claude_code_win(&local, &roaming).unwrap();
+        assert_eq!(v, "2.1.321");
+        assert!(exe.ends_with("2.1.321/d020ce1b5d30/claude.exe") || exe.ends_with("2.1.321\\d020ce1b5d30\\claude.exe"), "{exe:?}");
+        // Classic install: the exe right in the version folder; the newest of both wins.
+        let classic = roaming.join("Claude").join("claude-code").join("2.1.330");
+        std::fs::create_dir_all(&classic).unwrap();
+        std::fs::write(classic.join("claude.exe"), b"").unwrap();
+        assert_eq!(desktop_claude_code_win(&local, &roaming).unwrap().1, "2.1.330");
     }
 
     #[test]
