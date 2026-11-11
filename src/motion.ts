@@ -275,7 +275,8 @@ function shards(root: HTMLElement, box: DOMRect): { pieces: HTMLElement[]; shell
       }
       const r = c.getBoundingClientRect();
       if (r.width === 0 || r.height === 0 || r.bottom < box.top || r.top > box.bottom) continue;
-      if (r.height <= 96 || c.children.length === 0) pieces.push(c);
+      // A box holding only SVG or text (the usage chart) tears as one piece: walking into it finds nothing.
+      if (r.height <= 96 || ![...c.children].some((x) => x instanceof HTMLElement)) pieces.push(c);
       else {
         shells.push(c);
         walk(c);
