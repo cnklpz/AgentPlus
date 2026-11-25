@@ -46,7 +46,14 @@ const BUILTIN: &[(&str, Price)] = &[
     ("claude-haiku-4-5", p(1.0, 5.0, 0.1, 1.25)),
     ("claude-3-5-haiku", p(0.8, 4.0, 0.08, 1.0)),
     // OpenAI
-    ("gpt-5.2", p(1.75, 14.0, 0.175, 0.0)),
+    ("gpt-6.2-astra", p(8.0, 40.0, 0.4, 10.0)),
+    ("gpt-6.2-sol", p(2.0, 10.0, 0.1, 2.5)),
+    ("gpt-6.1-sol", p(2.0, 10.0, 0.1, 2.5)),
+    ("gpt-6.1-terra", p(1.0, 5.0, 0.05, 1.25)),
+    ("gpt-6-astra", p(10.0, 50.0, 1.0, 12.5)),
+    ("gpt-6-sol", p(2.0, 10.0, 0.2, 2.5)),
+    ("gpt-6-luna", p(0.1, 0.5, 0.01, 0.125)),
+    ("gpt-5.2",p(1.75, 14.0, 0.175, 0.0)),
     ("gpt-5.1-codex-mini", p(0.25, 2.0, 0.025, 0.0)),
     ("gpt-5.1", p(1.25, 10.0, 0.125, 0.0)),
     ("gpt-5-mini", p(0.25, 2.0, 0.025, 0.0)),
@@ -320,6 +327,18 @@ mod tests {
         assert!(t.find("claude-opus-5-7").is_none(), "a newer version is not priced like an older one");
         assert!(t.find("gpt-5.3").is_none());
         assert!(t.find("glm-5").is_none());
+    }
+
+    #[test]
+    fn gpt_6_point_releases_have_their_own_prices() {
+        let t = Table::builtin();
+        assert_eq!(t.find("gpt-6.2-astra").unwrap().input, 8.0);
+        assert_eq!(t.find("openai/GPT-6.2-Astra").unwrap().input, 8.0);
+        assert_eq!(t.find("gpt-6-astra").unwrap().input, 10.0, "6.2 is not priced like 6");
+        assert_eq!(t.find("gpt-6.2-sol").unwrap().cache_read, 0.1);
+        assert_eq!(t.find("gpt-6-sol").unwrap().cache_read, 0.2);
+        assert!(t.find("gpt-6.3-astra").is_none(), "a newer point release is not priced like 6.2");
+        assert!(t.find("gpt-6").is_none());
     }
 
     #[test]
