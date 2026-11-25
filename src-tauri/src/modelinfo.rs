@@ -340,6 +340,17 @@ mod tests {
         assert!(c.exact("glm-4.6").is_some() && c.exact("glm-4.6-air").is_none());
     }
 
+    /// A point release (`gpt-6.2-astra`) needs its own built-in row: `gpt-6-astra` is not
+    /// its family.
+    #[test]
+    fn builtin_knows_gpt_6_point_releases() {
+        let b = builtin();
+        for id in ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6.1-sol", "gpt-6.1-terra"] {
+            assert_eq!(b.exact(id).map(|i| i.id.as_str()), Some(id));
+        }
+        assert!(!in_family("gpt-6.2-astra", "gpt-6-astra"));
+    }
+
     #[test]
     fn reads_models_dev_rows() {
         let v = json!({
