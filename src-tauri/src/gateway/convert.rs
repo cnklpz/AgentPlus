@@ -457,17 +457,23 @@ fn chat_assistant_msg(t: &Turn) -> Value {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Usage {
+    /// All input tokens, cache reads and writes included.
     input: u64,
     output: u64,
+    /// Of the input, tokens read from the prompt cache.
     cached: u64,
+    /// Of the input, tokens written to the prompt cache.
+    cache_write: u64,
     reasoning: u64,
 }
 
 fn usage_from_chat(u: &Value) -> Usage {
+    let details = |k| u.get("prompt_tokens_details").map(|d| uget(d, k)).unwrap_or(0);
     Usage {
         input: uget(u, "prompt_tokens"),
         output: uget(u, "completion_tokens"),
-        cached: u.get("prompt_tokens_details").map(|d| uget(d, "cached_tokens")).unwrap_or(0),
+        cached: details("cached_tokens"),
+        cache_write: details("cache_write_tokens"),
         reasoning: u.get("completion_tokens_details").map(|d| uget(d, "reasoning_tokens")).unwrap_or(0),
     }
 }
@@ -478,8 +484,11 @@ fn usage_to_chat(u: Usage) -> Value {
         "completion_tokens": u.output,
         "total_tokens": u.input.saturating_add(u.output),
     });
-    if u.cached > 0 {
+    if u.cached > 0 || u.cache_write > 0 {
         v["prompt_tokens_details"] = json!({"cached_tokens": u.cached});
+    }
+    if u.cache_write > 0 {
+        v["prompt_tokens_details"]["cache_write_tokens"] = json!(u.cache_write);
     }
     if u.reasoning > 0 {
         v["completion_tokens_details"] = json!({"reasoning_tokens": u.reasoning});
@@ -488,31 +497,40 @@ fn usage_to_chat(u: Usage) -> Value {
 }
 
 fn usage_from_responses(u: &Value) -> Usage {
+    let details = |k| u.get("input_tokens_details").map(|d| uget(d, k)).unwrap_or(0);
     Usage {
         input: uget(u, "input_tokens"),
         output: uget(u, "output_tokens"),
-        cached: u.get("input_tokens_details").map(|d| uget(d, "cached_tokens")).unwrap_or(0),
+        cached: details("cached_tokens"),
+        cache_write: details("cache_write_tokens"),
         reasoning: u.get("output_tokens_details").map(|d| uget(d, "reasoning_tokens")).unwrap_or(0),
     }
 }
 
+/// Codex reads cache writes from `input_tokens_details.cache_write_tokens`.
 fn usage_to_responses(u: Usage) -> Value {
-    json!({
+    let mut v = json!({
         "input_tokens": u.input,
         "input_tokens_details": {"cached_tokens": u.cached},
         "output_tokens": u.output,
         "output_tokens_details": {"reasoning_tokens": u.reasoning},
         "total_tokens": u.input.saturating_add(u.output),
-    })
+    });
+    if u.cache_write > 0 {
+        v["input_tokens_details"]["cache_write_tokens"] = json!(u.cache_write);
+    }
+    v
 }
 
 /// Anthropic input_tokens excludes cache reads/writes; fold them into the total.
 fn usage_from_anthropic(u: &Value) -> Usage {
     let cache_read = uget(u, "cache_read_input_tokens");
+    let cache_write = uget(u, "cache_creation_input_tokens");
     Usage {
-        input: uget(u, "input_tokens").saturating_add(cache_read).saturating_add(uget(u, "cache_creation_input_tokens")),
+        input: uget(u, "input_tokens").saturating_add(cache_read).saturating_add(cache_write),
         output: uget(u, "output_tokens"),
         cached: cache_read,
+        cache_write,
         reasoning: 0,
     }
 }
@@ -544,10 +562,14 @@ fn usage_of(v: &Value) -> Option<Usage> {
     (x.input > 0 || x.output > 0).then_some(x)
 }
 
+/// Anthropic's input_tokens leaves out cache reads and writes, which have their own fields.
 fn usage_to_anthropic(u: Usage) -> Value {
-    let mut v = json!({"input_tokens": u.input.saturating_sub(u.cached), "output_tokens": u.output});
+    let mut v = json!({"input_tokens": u.input.saturating_sub(u.cached).saturating_sub(u.cache_write), "output_tokens": u.output});
     if u.cached > 0 {
         v["cache_read_input_tokens"] = json!(u.cached);
+    }
+    if u.cache_write > 0 {
+        v["cache_creation_input_tokens"] = json!(u.cache_write);
     }
     v
 }
@@ -1733,6 +1755,7 @@ impl UpstreamStream {
                         let nu = usage_from_anthropic(u);
                         cur.input = nu.input;
                         cur.cached = nu.cached;
+                        cur.cache_write = nu.cache_write;
                     }
                     self.usage = Some(cur);
                 }
@@ -3365,6 +3388,64 @@ mod tests {
         let u = Usage { input: u64::MAX, output: 1, ..Default::default() };
         assert_eq!(usage_to_chat(u)["total_tokens"], u64::MAX);
         assert_eq!(usage_to_responses(u)["total_tokens"], u64::MAX);
+    }
+
+    /// Cache writes survive every protocol hop: Codex reads them from
+    /// `input_tokens_details.cache_write_tokens`, Anthropic clients from
+    /// `cache_creation_input_tokens` (outside `input_tokens`).
+    #[test]
+    fn cache_writes_survive_conversion() {
+        let anthropic = json!({"input_tokens": 3, "cache_read_input_tokens": 7, "cache_creation_input_tokens": 90, "output_tokens": 2});
+        let u = usage_from_anthropic(&anthropic);
+        assert_eq!((u.input, u.cached, u.cache_write), (100, 7, 90));
+        let r = usage_to_responses(u);
+        assert_eq!(r["input_tokens"], 100);
+        assert_eq!(r["input_tokens_details"], json!({"cached_tokens": 7, "cache_write_tokens": 90}));
+        let c = usage_to_chat(usage_from_responses(&r));
+        assert_eq!(c["prompt_tokens_details"], json!({"cached_tokens": 7, "cache_write_tokens": 90}));
+        assert_eq!(usage_to_anthropic(usage_from_chat(&c)), anthropic);
+
+        // Writes without reads still get their details; no cache at all adds no fields.
+        let only_write = Usage { input: 50, cache_write: 40, ..Default::default() };
+        assert_eq!(usage_to_chat(only_write)["prompt_tokens_details"], json!({"cached_tokens": 0, "cache_write_tokens": 40}));
+        let none = Usage { input: 50, output: 1, ..Default::default() };
+        assert!(usage_to_chat(none).get("prompt_tokens_details").is_none());
+        assert_eq!(usage_to_responses(none)["input_tokens_details"], json!({"cached_tokens": 0}));
+        assert_eq!(usage_to_anthropic(none), json!({"input_tokens": 50, "output_tokens": 1}));
+
+        // A whole Anthropic reply handed to a Responses client (Codex).
+        let native = json!({"id": "msg_1", "type": "message", "role": "assistant", "model": "claude",
+            "content": [{"type": "text", "text": "Hi"}], "stop_reason": "end_turn", "stop_sequence": null, "usage": anthropic});
+        let chat = response_to_chat(Proto::Anthropic, &native).unwrap();
+        let resp = response_from_chat(Proto::Responses, &chat, &ReqCtx::default()).unwrap();
+        assert_eq!(resp["usage"]["input_tokens_details"]["cache_write_tokens"], 90);
+    }
+
+    #[test]
+    fn stream_cache_writes_reach_a_responses_client() {
+        let mut s = String::new();
+        s += &sse("message_start", json!({"type": "message_start", "message": {"id": "msg_c", "type": "message",
+            "role": "assistant", "model": "claude-up", "content": [], "stop_reason": null,
+            "usage": {"input_tokens": 3, "cache_read_input_tokens": 7, "cache_creation_input_tokens": 90, "output_tokens": 1}}}));
+        s += &sse("content_block_start", json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}));
+        s += &sse("content_block_delta", json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "OK"}}));
+        s += &sse("content_block_stop", json!({"type": "content_block_stop", "index": 0}));
+        s += &sse("message_delta", json!({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": null}, "usage": {"output_tokens": 5}}));
+        s += &sse("message_stop", json!({"type": "message_stop"}));
+        let mut up = UpstreamStream::new(Proto::Anthropic);
+        let chunks = feed_in_pieces(&mut up, &s, 11);
+        let ctx = ReqCtx { model: "gpt-client".into(), custom_tools: vec![], stream: true };
+        let mut down = DownstreamStream::new(Proto::Responses, ctx);
+        let mut out = Vec::new();
+        for c in &chunks {
+            out.extend(down.push(c));
+        }
+        out.extend(down.finish());
+        let fr = frames(&out);
+        let done = &fr.iter().find(|(e, _)| e == "response.completed").unwrap().1;
+        let u = &done["response"]["usage"];
+        assert_eq!((u["input_tokens"].as_u64(), u["output_tokens"].as_u64()), (Some(100), Some(5)));
+        assert_eq!(u["input_tokens_details"], json!({"cached_tokens": 7, "cache_write_tokens": 90}));
     }
 
     #[test]
