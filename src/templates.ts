@@ -192,7 +192,7 @@ export const TEMPLATES: Template[] = ([
   {
     id: "openrouter", icon: "openrouter", group: INTL, kind: "payg", vendor: "OpenRouter", plan: L("templates.planAggregator"), name: "OpenRouter",
     endpoints: { chat: "https://openrouter.ai/api/v1", responses: "https://openrouter.ai/api/v1", anthropic: "https://openrouter.ai/api/v1" },
-    api: "chat", models: ["anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5", "openai/gpt-6-sol", "deepseek/deepseek-v4-pro", "moonshotai/kimi-k3", "z-ai/glm-5.3"],
+    api: "chat", models: ["anthropic/claude-opus-5.5", "anthropic/claude-sonnet-5", "openai/gpt-6.2-sol", "deepseek/deepseek-v4-pro", "moonshotai/kimi-k3", "z-ai/glm-5.3"],
     keyUrl: "https://openrouter.ai/settings/keys",
   },
   // OpenCode serves each model on one protocol only (docs, 2026-09-25), so the model list
@@ -216,7 +216,7 @@ export const TEMPLATES: Template[] = ([
     api: "chat", models: ["kimi-k3", "glm-5.3", "deepseek-v4-pro", "minimax-m3", "qwen3.8-max", "big-pickle"],
     apiModels: {
       anthropic: ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5", "claude-haiku-4-5", "qwen3.7-max"],
-      responses: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "grok-4.7"],
+      responses: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol", "grok-4.7"],
     },
     keyUrl: "https://opencode.ai/auth",
     note: L("templates.noteOpencodeZen"),
@@ -224,7 +224,7 @@ export const TEMPLATES: Template[] = ([
   {
     id: "openai", icon: "openai", group: INTL, kind: "payg", vendor: "OpenAI", plan: L("templates.planOfficialApi"), name: "OpenAI",
     endpoints: { responses: "https://api.openai.com/v1", chat: "https://api.openai.com/v1" },
-    api: "responses", models: ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"],
+    api: "responses", models: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"],
     keyUrl: "https://platform.openai.com/api-keys",
   },
   {
