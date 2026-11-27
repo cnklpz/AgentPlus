@@ -2,6 +2,18 @@
 
 Each version gets one section headed `## <version>`. On release, the text of that section becomes the GitHub release notes and is shown in AgentPlus's in-app update prompt, so it is written in both English and Chinese.
 
+## 0.6.3
+
+- 内置模型信息新增 gpt-6.1 和 gpt-6.2；OpenAI 相关预设改为提供 gpt-6.2-sol 和 gpt-6.2-astra
+- 用量统计内置 GPT-6 系列的价格，获取不到 models.dev 价格时也能折算费用
+- 修复经网关转换协议后缓存写入丢失：Anthropic 上游的缓存写入不再算作普通输入，用量统计按缓存写入计费
+- 窗口隐藏或不在前台时，网关状态圆点停止闪烁，系统开启「减少动态效果」时也不再闪烁，降低后台的 GPU 占用
+
+- Adds gpt-6.1 and gpt-6.2 to the built-in model info; the OpenAI presets now offer gpt-6.2-sol and gpt-6.2-astra
+- Built-in prices for the GPT-6 family, so the Usage page shows costs even when models.dev prices can't be fetched
+- Fixes cache writes being lost when the gateway converts between protocols: an Anthropic upstream's cache writes are no longer counted as plain input, and the Usage page bills them as cache writes
+- The gateway's status dot stops pulsing while the window is hidden or in the background, and when the system asks for reduced motion, cutting background GPU use
+
 ## 0.6.2
 
 - 用量统计在 WSL 环境下打开更快：日志没有变化时从 1–3 秒缩短到 0.2 秒左右，切换时间范围不再重新读取日志
