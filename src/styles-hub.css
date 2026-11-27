@@ -300,7 +300,10 @@ html, body, #root, .app { overflow: hidden; }
 .gw-foot.on .gw-dot { background: var(--ok-dot); box-shadow: 0 0 0 0 rgba(22, 163, 74, .5); animation: gw-pulse 2s ease-out infinite; }
 .gw-foot.bad .gw-dot { background: var(--del); }
 @keyframes gw-pulse { 0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, .45); } 70% { box-shadow: 0 0 0 6px rgba(22, 163, 74, 0); } 100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); } }
-:root[data-motion="off"] .gw-dot { animation: none !important; }
+/* The pulse is decoration: it stops (a still dot) with motion off or reduced, and while the window is
+   hidden or in the background (data-idle, see idle.ts), so it doesn't keep the compositor busy. */
+:root[data-motion="off"] .gw-dot, :root[data-idle] .gw-dot { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { .gw-dot { animation: none !important; } }
 .gw-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 26px 16px; text-align: center; }
 .gw-base { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; border-radius: 9px; background: var(--accent-bg); border: 1px solid var(--accent-soft2); }
 .gw-paths { display: flex; flex-wrap: wrap; gap: 6px; }

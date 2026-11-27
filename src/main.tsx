@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { logClient } from "./api";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { installIdle } from "./idle";
 import { installMotion } from "./motion";
 import { applyPrefs, loadPrefs } from "./prefs";
 import { isMac } from "./platform";
@@ -18,6 +19,7 @@ window.addEventListener("unhandledrejection", (e) => { if (typeof e.reason !== "
 // Styles that differ on macOS (room for the traffic lights).
 if (isMac) document.documentElement.dataset.os = "mac";
 installMotion();
+installIdle();
 // Before the first paint: a dark start never flashes light, and Privacy mode masks from the start.
 applyPrefs(loadPrefs());
 
